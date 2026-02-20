@@ -2,12 +2,48 @@ import React, { useMemo } from 'react';
 import { View, Text, StyleSheet, ScrollView, Image, TouchableOpacity, Linking } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
-import { MapPin, Clock, Phone, Navigation, ChevronLeft } from 'lucide-react-native';
+import { MapPin, Clock, Phone, Navigation, ChevronLeft, Star, ShoppingBag } from 'lucide-react-native';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { PrimaryCTAButton } from '@/src/components/PrimaryCTAButton';
-import { DiscountBadge } from '@/src/components/DiscountBadge';
-import { Chip } from '@/src/components/Chip';
 import { mockBaskets } from '@/src/mocks/baskets';
+
+interface ReviewBarProps {
+  label: string;
+  value: number;
+  color: string;
+}
+
+function ReviewBar({ label, value, color }: ReviewBarProps) {
+  const theme = useTheme();
+  const percentage = (value / 5) * 100;
+
+  return (
+    <View style={reviewStyles.row}>
+      <Text style={[reviewStyles.label, { color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '500' as const }]}>
+        {label} <Text style={{ fontWeight: '700' as const }}>{value.toFixed(1)}</Text>
+      </Text>
+      <View style={[reviewStyles.barBg, { backgroundColor: theme.colors.divider, borderRadius: 4 }]}>
+        <View style={[reviewStyles.barFill, { width: `${percentage}%`, backgroundColor: color, borderRadius: 4 }]} />
+      </View>
+    </View>
+  );
+}
+
+const reviewStyles = StyleSheet.create({
+  row: {
+    marginBottom: 12,
+  },
+  label: {
+    marginBottom: 6,
+  },
+  barBg: {
+    height: 8,
+    width: '100%',
+  },
+  barFill: {
+    height: 8,
+  },
+});
 
 export default function BasketDetailsScreen() {
   const { id } = useLocalSearchParams();
@@ -22,7 +58,7 @@ export default function BasketDetailsScreen() {
   }
 
   const handleReserve = () => {
-    router.push({ pathname: '/reserve', params: { basketId: basket.id } });
+    router.push({ pathname: '/reserve' as any, params: { basketId: basket.id } });
   };
 
   const handleCall = () => {
@@ -34,6 +70,10 @@ export default function BasketDetailsScreen() {
     Linking.openURL(url);
   };
 
+  const overallRating = basket.reviews
+    ? ((basket.reviews.service + basket.reviews.quantite + basket.reviews.qualite + basket.reviews.variete) / 4).toFixed(1)
+    : basket.merchantRating?.toFixed(1) ?? '0.0';
+
   return (
     <View style={[styles.container, { backgroundColor: theme.colors.bg }]}>
       <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
@@ -41,50 +81,61 @@ export default function BasketDetailsScreen() {
           {basket.imageUrl ? (
             <Image source={{ uri: basket.imageUrl }} style={styles.heroImage} />
           ) : (
-            <View style={[styles.heroPlaceholder, { backgroundColor: theme.colors.primaryLight }]} />
+            <View style={[styles.heroPlaceholder, { backgroundColor: theme.colors.bagsLeftBg }]} />
           )}
-          <View style={[styles.badgeOverlay, { top: 60, left: theme.spacing.xl }]}>
-            <DiscountBadge percentage={basket.discountPercentage} />
-          </View>
+          <View style={styles.heroOverlay} />
           <TouchableOpacity
-            style={[
-              styles.backButton,
-              { top: 60, left: theme.spacing.xl, backgroundColor: theme.colors.surface, ...theme.shadows.shadowMd },
-            ]}
+            style={[styles.backButton, { backgroundColor: 'rgba(255,255,255,0.9)', ...theme.shadows.shadowMd }]}
             onPress={() => router.back()}
           >
-            <ChevronLeft size={24} color={theme.colors.textPrimary} />
+            <ChevronLeft size={22} color={theme.colors.textPrimary} />
           </TouchableOpacity>
+
+          <View style={[styles.heroBottomInfo, { paddingHorizontal: theme.spacing.xl }]}>
+            <View style={[styles.bagsChip, { backgroundColor: theme.colors.primary, borderRadius: theme.radii.r8 }]}>
+              <ShoppingBag size={13} color="#fff" />
+              <Text style={[{ color: '#fff', ...theme.typography.caption, fontWeight: '700' as const, marginLeft: 4 }]}>
+                {basket.quantityLeft} {t('basket.quantity', { count: basket.quantityLeft })}
+              </Text>
+            </View>
+          </View>
         </View>
 
-        <View style={[styles.content, { padding: theme.spacing.xl }]}>
+        <View style={[styles.content, { paddingHorizontal: theme.spacing.xl, paddingTop: theme.spacing.lg }]}>
           <View style={styles.merchantRow}>
             {basket.merchantLogo ? (
               <Image source={{ uri: basket.merchantLogo }} style={styles.merchantLogo} />
             ) : (
               <View style={[styles.merchantLogo, { backgroundColor: theme.colors.divider }]} />
             )}
-            <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.body }]}>
-              {basket.merchantName}
-            </Text>
+            <View style={{ flex: 1 }}>
+              <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h2 }]}>
+                {basket.merchantName}
+              </Text>
+              <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.bodySm, marginTop: 2 }]}>
+                {basket.name}
+              </Text>
+            </View>
           </View>
 
-          <Text
-            style={[
-              styles.basketName,
-              { color: theme.colors.textPrimary, ...theme.typography.h1, marginTop: theme.spacing.md },
-            ]}
-          >
-            {basket.name}
-          </Text>
-
-          <View style={[styles.chipsRow, { marginTop: theme.spacing.lg }]}>
-            <Chip
-              label={`${basket.pickupWindow.start} - ${basket.pickupWindow.end}`}
-              icon={<Clock size={14} color={theme.colors.textSecondary} />}
-            />
-            <Chip label={`${basket.quantityLeft} ${t('basket.quantity', { count: basket.quantityLeft })}`} />
-            <Chip label={t('basket.payOnPickup')} variant="filled" />
+          <View style={[styles.quickInfoRow, { marginTop: theme.spacing.md }]}>
+            <View style={[styles.infoChip, { backgroundColor: theme.colors.surface, borderRadius: theme.radii.pill, ...theme.shadows.shadowSm }]}>
+              <Clock size={13} color={theme.colors.primary} />
+              <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.caption, fontWeight: '500' as const, marginLeft: 4 }]}>
+                {basket.pickupWindow.start} - {basket.pickupWindow.end}
+              </Text>
+            </View>
+            <View style={[styles.infoChip, { backgroundColor: theme.colors.surface, borderRadius: theme.radii.pill, ...theme.shadows.shadowSm }]}>
+              <MapPin size={13} color={theme.colors.primary} />
+              <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.caption, fontWeight: '500' as const, marginLeft: 4 }]}>
+                {basket.distance}km
+              </Text>
+            </View>
+            <View style={[styles.infoChip, { backgroundColor: theme.colors.bagsLeftBg, borderRadius: theme.radii.pill }]}>
+              <Text style={[{ color: theme.colors.primary, ...theme.typography.caption, fontWeight: '600' as const }]}>
+                {t('basket.payOnPickup')}
+              </Text>
+            </View>
           </View>
 
           <View
@@ -93,60 +144,45 @@ export default function BasketDetailsScreen() {
               {
                 backgroundColor: theme.colors.surface,
                 borderRadius: theme.radii.r16,
-                padding: theme.spacing.xl,
-                marginTop: theme.spacing.xl,
-                ...theme.shadows.shadowMd,
+                padding: theme.spacing.lg,
+                marginTop: theme.spacing.lg,
+                ...theme.shadows.shadowSm,
               },
             ]}
           >
             <View style={styles.priceRow}>
               <View>
-                <Text style={[{ color: theme.colors.muted, ...theme.typography.bodySm }]}>
+                <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption }]}>
                   {t('basket.pickupWindow')}
                 </Text>
-                <Text
-                  style={[
-                    {
-                      color: theme.colors.textPrimary,
-                      ...theme.typography.h3,
-                      marginTop: theme.spacing.xs,
-                    },
-                  ]}
-                >
+                <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.body, fontWeight: '600' as const, marginTop: 2 }]}>
                   {basket.pickupWindow.start} - {basket.pickupWindow.end}
                 </Text>
               </View>
               <View style={styles.priceRight}>
-                <Text
-                  style={[
-                    {
-                      color: theme.colors.muted,
-                      ...theme.typography.body,
-                      textDecorationLine: 'line-through',
-                      textAlign: 'right',
-                    },
-                  ]}
-                >
+                <Text style={[{ color: theme.colors.muted, ...theme.typography.bodySm, textDecorationLine: 'line-through', textAlign: 'right' }]}>
                   {basket.originalPrice} TND
                 </Text>
-                <Text
-                  style={[
-                    {
-                      color: theme.colors.primary,
-                      ...theme.typography.h1,
-                      fontWeight: '700' as const,
-                      textAlign: 'right',
-                    },
-                  ]}
-                >
+                <Text style={[{ color: theme.colors.primary, ...theme.typography.h1, fontWeight: '700' as const, textAlign: 'right' }]}>
                   {basket.discountedPrice} TND
                 </Text>
               </View>
             </View>
           </View>
 
-          <View style={[styles.section, { marginTop: theme.spacing.xxl }]}>
-            <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, marginBottom: theme.spacing.md }]}>
+          {basket.description ? (
+            <View style={[styles.section, { marginTop: theme.spacing.lg }]}>
+              <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, marginBottom: theme.spacing.sm }]}>
+                {t('basket.description')}
+              </Text>
+              <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.body, lineHeight: 22 }]}>
+                {basket.description}
+              </Text>
+            </View>
+          ) : null}
+
+          <View style={[styles.section, { marginTop: theme.spacing.lg }]}>
+            <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, marginBottom: theme.spacing.sm }]}>
               {t('basket.whatYouMightGet')}
             </Text>
             <View style={styles.itemsGrid}>
@@ -158,7 +194,8 @@ export default function BasketDetailsScreen() {
                     {
                       backgroundColor: theme.colors.surface,
                       borderRadius: theme.radii.r8,
-                      padding: theme.spacing.md,
+                      paddingHorizontal: theme.spacing.md,
+                      paddingVertical: theme.spacing.sm,
                       ...theme.shadows.shadowSm,
                     },
                   ]}
@@ -168,21 +205,14 @@ export default function BasketDetailsScreen() {
               ))}
             </View>
             <Text
-              style={[
-                {
-                  color: theme.colors.textSecondary,
-                  ...theme.typography.bodySm,
-                  marginTop: theme.spacing.md,
-                  fontStyle: 'italic',
-                },
-              ]}
+              style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, marginTop: theme.spacing.sm, fontStyle: 'italic' }]}
             >
               {t('basket.surpriseNote')}
             </Text>
           </View>
 
-          <View style={[styles.section, { marginTop: theme.spacing.xxl }]}>
-            <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, marginBottom: theme.spacing.md }]}>
+          <View style={[styles.section, { marginTop: theme.spacing.lg }]}>
+            <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, marginBottom: theme.spacing.sm }]}>
               {t('basket.merchantInfo')}
             </Text>
             <View
@@ -191,54 +221,38 @@ export default function BasketDetailsScreen() {
                 {
                   backgroundColor: theme.colors.surface,
                   borderRadius: theme.radii.r16,
-                  padding: theme.spacing.xl,
+                  padding: theme.spacing.lg,
                   ...theme.shadows.shadowSm,
                 },
               ]}
             >
-              <View style={[styles.infoRow, { marginBottom: theme.spacing.lg }]}>
-                <MapPin size={20} color={theme.colors.textSecondary} />
+              <View style={[styles.infoRow, { marginBottom: theme.spacing.md }]}>
+                <MapPin size={18} color={theme.colors.primary} />
                 <View style={styles.infoText}>
-                  <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.bodySm }]}>
+                  <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption }]}>
                     {t('basket.address')}
                   </Text>
-                  <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.body, marginTop: theme.spacing.xs }]}>
+                  <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.bodySm, marginTop: 2 }]}>
                     {basket.address}
                   </Text>
                 </View>
               </View>
               <View style={styles.actionsRow}>
                 <TouchableOpacity
-                  style={[
-                    styles.actionButton,
-                    {
-                      backgroundColor: theme.colors.bg,
-                      borderRadius: theme.radii.r12,
-                      padding: theme.spacing.md,
-                      flex: 1,
-                    },
-                  ]}
+                  style={[styles.actionButton, { backgroundColor: theme.colors.bg, borderRadius: theme.radii.r12, padding: theme.spacing.md, flex: 1 }]}
                   onPress={handleCall}
                 >
-                  <Phone size={20} color={theme.colors.primary} />
-                  <Text style={[{ color: theme.colors.primary, ...theme.typography.bodySm, marginTop: theme.spacing.xs }]}>
+                  <Phone size={18} color={theme.colors.primary} />
+                  <Text style={[{ color: theme.colors.primary, ...theme.typography.caption, fontWeight: '600' as const, marginTop: 4 }]}>
                     {t('basket.call')}
                   </Text>
                 </TouchableOpacity>
                 <TouchableOpacity
-                  style={[
-                    styles.actionButton,
-                    {
-                      backgroundColor: theme.colors.bg,
-                      borderRadius: theme.radii.r12,
-                      padding: theme.spacing.md,
-                      flex: 1,
-                    },
-                  ]}
+                  style={[styles.actionButton, { backgroundColor: theme.colors.bg, borderRadius: theme.radii.r12, padding: theme.spacing.md, flex: 1 }]}
                   onPress={handleDirections}
                 >
-                  <Navigation size={20} color={theme.colors.primary} />
-                  <Text style={[{ color: theme.colors.primary, ...theme.typography.bodySm, marginTop: theme.spacing.xs }]}>
+                  <Navigation size={18} color={theme.colors.primary} />
+                  <Text style={[{ color: theme.colors.primary, ...theme.typography.caption, fontWeight: '600' as const, marginTop: 4 }]}>
                     {t('basket.directions')}
                   </Text>
                 </TouchableOpacity>
@@ -246,20 +260,37 @@ export default function BasketDetailsScreen() {
             </View>
           </View>
 
-          <View style={[styles.partnerBadge, { marginTop: theme.spacing.xl, marginBottom: theme.spacing.xxl }]}>
-            <Text
-              style={[
-                {
-                  color: theme.colors.secondary,
-                  ...theme.typography.bodySm,
-                  textAlign: 'center',
-                  fontWeight: '600' as const,
-                },
-              ]}
-            >
-              ✓ {t('basket.partnerBadge')}
-            </Text>
-          </View>
+          {basket.reviews && (
+            <View style={[styles.section, { marginTop: theme.spacing.lg }]}>
+              <View style={styles.reviewHeader}>
+                <View>
+                  <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3 }]}>
+                    {t('basket.overallExperience')}
+                  </Text>
+                  {basket.reviewCount != null && (
+                    <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, marginTop: 2 }]}>
+                      {t('basket.basedOnReviews', { count: basket.reviewCount })}
+                    </Text>
+                  )}
+                </View>
+                <View style={[styles.overallBadge, { backgroundColor: theme.colors.primary, borderRadius: theme.radii.r12 }]}>
+                  <Star size={16} color="#fff" fill="#fff" />
+                  <Text style={[{ color: '#fff', ...theme.typography.h3, fontWeight: '700' as const, marginLeft: 4 }]}>
+                    {overallRating}
+                  </Text>
+                </View>
+              </View>
+
+              <View style={[styles.reviewBarsContainer, { backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, padding: theme.spacing.lg, marginTop: theme.spacing.md, ...theme.shadows.shadowSm }]}>
+                <ReviewBar label={t('basket.reviewService')} value={basket.reviews.service} color={theme.colors.primary} />
+                <ReviewBar label={t('basket.reviewQualite')} value={basket.reviews.qualite} color={theme.colors.primary} />
+                <ReviewBar label={t('basket.reviewVariete')} value={basket.reviews.variete} color={theme.colors.secondary} />
+                <ReviewBar label={t('basket.reviewQuantite')} value={basket.reviews.quantite} color={theme.colors.secondary} />
+              </View>
+            </View>
+          )}
+
+          <View style={{ height: theme.spacing.xxl }} />
         </View>
       </ScrollView>
 
@@ -269,7 +300,7 @@ export default function BasketDetailsScreen() {
           {
             backgroundColor: theme.colors.surface,
             paddingHorizontal: theme.spacing.xl,
-            paddingVertical: theme.spacing.lg,
+            paddingVertical: theme.spacing.md,
             borderTopWidth: 1,
             borderTopColor: theme.colors.divider,
             ...theme.shadows.shadowLg,
@@ -296,7 +327,7 @@ const styles = StyleSheet.create({
   heroContainer: {
     position: 'relative',
     width: '100%',
-    height: 300,
+    height: 240,
   },
   heroImage: {
     width: '100%',
@@ -306,16 +337,32 @@ const styles = StyleSheet.create({
     width: '100%',
     height: '100%',
   },
-  badgeOverlay: {
-    position: 'absolute',
+  heroOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.15)',
   },
   backButton: {
     position: 'absolute',
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    top: 52,
+    left: 16,
+    width: 38,
+    height: 38,
+    borderRadius: 19,
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  heroBottomInfo: {
+    position: 'absolute',
+    bottom: 12,
+    left: 0,
+    right: 0,
+    flexDirection: 'row',
+  },
+  bagsChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
   },
   content: {},
   merchantRow: {
@@ -323,16 +370,21 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   merchantLogo: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     marginRight: 12,
   },
-  basketName: {},
-  chipsRow: {
+  quickInfoRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 8,
+  },
+  infoChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
   },
   priceBlock: {},
   priceRow: {
@@ -355,16 +407,27 @@ const styles = StyleSheet.create({
   },
   infoText: {
     flex: 1,
-    marginLeft: 12,
+    marginLeft: 10,
   },
   actionsRow: {
     flexDirection: 'row',
-    gap: 12,
+    gap: 10,
   },
   actionButton: {
     alignItems: 'center',
     justifyContent: 'center',
   },
-  partnerBadge: {},
+  reviewHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  overallBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  reviewBarsContainer: {},
   footer: {},
 });

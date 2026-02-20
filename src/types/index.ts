@@ -1,9 +1,19 @@
+export interface ReviewRatings {
+  service: number;
+  quantite: number;
+  qualite: number;
+  variete: number;
+}
+
 export interface Basket {
   id: string;
   merchantId: string;
   merchantName: string;
   merchantLogo?: string;
   merchantRating?: number;
+  reviewCount?: number;
+  reviews?: ReviewRatings;
+  description?: string;
   name: string;
   category: string;
   originalPrice: number;

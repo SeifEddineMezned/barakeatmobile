@@ -79,6 +79,7 @@
     "distance": "de distance",
     "quantity": "{{count}} restant",
     "payOnPickup": "Paiement sur Place",
+    "description": "Description",
     "whatYouMightGet": "Ce que vous pourriez obtenir",
     "surpriseNote": "Le contenu est une surprise et dépend des articles invendus du jour.",
     "merchantInfo": "Info Commerçant",
@@ -89,7 +90,13 @@
     "reserveBasket": "Réserver Panier",
     "soldOut": "Épuisé",
     "notifyMe": "Me Notifier",
-    "partnerBadge": "Partenaire engagé contre le gaspillage alimentaire"
+    "partnerBadge": "Partenaire engagé contre le gaspillage alimentaire",
+    "overallExperience": "Expérience Générale",
+    "basedOnReviews": "Basé sur {{count}} avis récents",
+    "reviewService": "Service",
+    "reviewQuantite": "Quantité",
+    "reviewQualite": "Qualité",
+    "reviewVariete": "Variété"
   },
   "reserve": {
     "title": "Réserver Panier",

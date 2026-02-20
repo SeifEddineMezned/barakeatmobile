@@ -79,6 +79,7 @@
     "distance": "بعيدًا",
     "quantity": "{{count}} متبقي",
     "payOnPickup": "الدفع عند الاستلام",
+    "description": "الوصف",
     "whatYouMightGet": "ما قد تحصل عليه",
     "surpriseNote": "المحتوى مفاجأة ويعتمد على المنتجات غير المباعة اليوم.",
     "merchantInfo": "معلومات التاجر",
@@ -89,7 +90,13 @@
     "reserveBasket": "احجز السلة",
     "soldOut": "نفذت الكمية",
     "notifyMe": "أعلمني",
-    "partnerBadge": "شريك ملتزم ضد هدر الطعام"
+    "partnerBadge": "شريك ملتزم ضد هدر الطعام",
+    "overallExperience": "التجربة العامة",
+    "basedOnReviews": "بناءً على {{count}} تقييم حديث",
+    "reviewService": "الخدمة",
+    "reviewQuantite": "الكمية",
+    "reviewQualite": "الجودة",
+    "reviewVariete": "التنوع"
   },
   "reserve": {
     "title": "حجز سلة",

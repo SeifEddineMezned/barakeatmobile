@@ -1,37 +1,41 @@
 export const tokens = {
   colors: {
-    primary: '#E67E22',
-    primaryDark: '#D35400',
-    primaryLight: '#F39C12',
-    secondary: '#27AE60',
-    secondaryDark: '#229954',
-    
-    accentWarm: '#E74C3C',
-    accentFresh: '#16A085',
-    
-    bg: '#FAFAFA',
+    primary: '#114b3c',
+    primaryDark: '#003d24',
+    primaryLight: '#1a6b54',
+    secondary: '#c0cf43',
+    secondaryDark: '#a8b83a',
+
+    accentWarm: '#e8a838',
+    accentFresh: '#2d8a6e',
+
+    bg: '#f5f5f0',
     surface: '#FFFFFF',
     surfaceElevated: '#FFFFFF',
-    
-    textPrimary: '#2C3E50',
-    textSecondary: '#7F8C8D',
-    muted: '#BDC3C7',
-    divider: '#ECF0F1',
-    
-    success: '#27AE60',
-    warning: '#F39C12',
-    error: '#E74C3C',
-    
+
+    textPrimary: '#1a1a1a',
+    textSecondary: '#6b6b6b',
+    muted: '#a0a0a0',
+    divider: '#e8e8e3',
+
+    success: '#2d8a6e',
+    warning: '#e8a838',
+    error: '#d94f4f',
+
     overlay: 'rgba(0, 0, 0, 0.5)',
     overlayLight: 'rgba(0, 0, 0, 0.2)',
-    
-    discount: '#E74C3C',
-    discountBg: '#FADBD8',
-    
-    gradientStart: '#E67E22',
-    gradientEnd: '#F39C12',
+
+    discount: '#d94f4f',
+    discountBg: '#fde8e8',
+
+    starYellow: '#f5a623',
+    bagsLeft: '#114b3c',
+    bagsLeftBg: 'rgba(17, 75, 60, 0.12)',
+
+    gradientStart: '#114b3c',
+    gradientEnd: '#c0cf43',
   },
-  
+
   radii: {
     r4: 4,
     r8: 8,
@@ -41,7 +45,7 @@ export const tokens = {
     r24: 24,
     pill: 9999,
   },
-  
+
   spacing: {
     xs: 4,
     sm: 8,
@@ -51,78 +55,86 @@ export const tokens = {
     xxl: 24,
     xxxl: 32,
   },
-  
+
   typography: {
     display: {
       fontSize: 32,
       lineHeight: 40,
       fontWeight: '700' as const,
       letterSpacing: -0.5,
+      fontFamily: 'Poppins_700Bold',
     },
     h1: {
-      fontSize: 28,
-      lineHeight: 36,
+      fontSize: 26,
+      lineHeight: 34,
       fontWeight: '700' as const,
       letterSpacing: -0.3,
+      fontFamily: 'Poppins_700Bold',
     },
     h2: {
-      fontSize: 22,
+      fontSize: 20,
       lineHeight: 28,
       fontWeight: '600' as const,
       letterSpacing: -0.2,
+      fontFamily: 'Poppins_600SemiBold',
     },
     h3: {
-      fontSize: 18,
+      fontSize: 17,
       lineHeight: 24,
       fontWeight: '600' as const,
       letterSpacing: 0,
+      fontFamily: 'Poppins_600SemiBold',
     },
     body: {
-      fontSize: 16,
-      lineHeight: 24,
+      fontSize: 15,
+      lineHeight: 22,
       fontWeight: '400' as const,
       letterSpacing: 0,
+      fontFamily: 'Poppins_400Regular',
     },
     bodySm: {
-      fontSize: 14,
-      lineHeight: 20,
+      fontSize: 13,
+      lineHeight: 19,
       fontWeight: '400' as const,
       letterSpacing: 0,
+      fontFamily: 'Poppins_400Regular',
     },
     caption: {
-      fontSize: 12,
+      fontSize: 11,
       lineHeight: 16,
       fontWeight: '400' as const,
       letterSpacing: 0.2,
+      fontFamily: 'Poppins_400Regular',
     },
     button: {
-      fontSize: 16,
-      lineHeight: 24,
+      fontSize: 15,
+      lineHeight: 22,
       fontWeight: '600' as const,
       letterSpacing: 0.3,
+      fontFamily: 'Poppins_600SemiBold',
     },
   },
-  
+
   shadows: {
     shadowSm: {
       shadowColor: '#000',
-      shadowOffset: { width: 0, height: 2 },
-      shadowOpacity: 0.08,
-      shadowRadius: 4,
+      shadowOffset: { width: 0, height: 1 },
+      shadowOpacity: 0.06,
+      shadowRadius: 3,
       elevation: 2,
     },
     shadowMd: {
       shadowColor: '#000',
-      shadowOffset: { width: 0, height: 4 },
-      shadowOpacity: 0.12,
-      shadowRadius: 8,
+      shadowOffset: { width: 0, height: 3 },
+      shadowOpacity: 0.1,
+      shadowRadius: 6,
       elevation: 4,
     },
     shadowLg: {
       shadowColor: '#000',
-      shadowOffset: { width: 0, height: 8 },
-      shadowOpacity: 0.16,
-      shadowRadius: 16,
+      shadowOffset: { width: 0, height: 6 },
+      shadowOpacity: 0.14,
+      shadowRadius: 12,
       elevation: 8,
     },
   },

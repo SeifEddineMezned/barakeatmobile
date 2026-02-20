@@ -1,12 +1,10 @@
 import React, { useCallback } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Animated, Image } from 'react-native';
 import { useRouter } from 'expo-router';
-import { Heart, MapPin, Clock } from 'lucide-react-native';
+import { Heart, Clock, MapPin, Star, ShoppingBag } from 'lucide-react-native';
 import * as Haptics from 'expo-haptics';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { Basket } from '@/src/types';
-import { DiscountBadge } from './DiscountBadge';
-import { Chip } from './Chip';
 
 interface BasketCardProps {
   basket: Basket;
@@ -23,7 +21,7 @@ export function BasketCard({ basket, onFavoritePress, isFavorite = false }: Bask
   const handlePressIn = useCallback(() => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     Animated.spring(scaleAnim, {
-      toValue: 0.98,
+      toValue: 0.97,
       useNativeDriver: true,
     }).start();
   }, [scaleAnim]);
@@ -38,7 +36,7 @@ export function BasketCard({ basket, onFavoritePress, isFavorite = false }: Bask
   }, [scaleAnim]);
 
   const handlePress = useCallback(() => {
-    router.push(`/basket/${basket.id}`);
+    router.push(`/basket/${basket.id}` as any);
   }, [basket.id, router]);
 
   const handleFavoritePress = useCallback(() => {
@@ -62,7 +60,7 @@ export function BasketCard({ basket, onFavoritePress, isFavorite = false }: Bask
         onPress={handlePress}
         onPressIn={handlePressIn}
         onPressOut={handlePressOut}
-        activeOpacity={0.9}
+        activeOpacity={0.95}
         style={[
           styles.card,
           {
@@ -74,106 +72,92 @@ export function BasketCard({ basket, onFavoritePress, isFavorite = false }: Bask
       >
         <View style={styles.imageContainer}>
           {basket.imageUrl ? (
-            <Image source={{ uri: basket.imageUrl }} style={styles.image} />
+            <Image source={{ uri: basket.imageUrl }} style={[styles.image, { borderTopLeftRadius: theme.radii.r16, borderTopRightRadius: theme.radii.r16 }]} />
           ) : (
             <View
               style={[
                 styles.imagePlaceholder,
-                { backgroundColor: theme.colors.primaryLight, borderTopLeftRadius: theme.radii.r16, borderTopRightRadius: theme.radii.r16 },
+                { backgroundColor: theme.colors.bagsLeftBg, borderTopLeftRadius: theme.radii.r16, borderTopRightRadius: theme.radii.r16 },
               ]}
             />
           )}
-          <View style={styles.badgeContainer}>
-            <DiscountBadge percentage={basket.discountPercentage} />
+
+          <View style={[styles.bagsLeftBadge, { backgroundColor: theme.colors.primary, borderRadius: theme.radii.r8 }]}>
+            <ShoppingBag size={12} color="#fff" />
+            <Text style={[styles.bagsLeftText, { color: '#fff', ...theme.typography.caption, fontWeight: '700' as const, marginLeft: 4 }]}>
+              {basket.quantityLeft}
+            </Text>
           </View>
+
+          {basket.merchantRating != null && (
+            <View style={[styles.ratingBadge, { backgroundColor: 'rgba(0,0,0,0.6)', borderRadius: theme.radii.r8 }]}>
+              <Star size={12} color={theme.colors.starYellow} fill={theme.colors.starYellow} />
+              <Text style={[{ color: '#fff', ...theme.typography.caption, fontWeight: '700' as const, marginLeft: 3 }]}>
+                {basket.merchantRating.toFixed(1)}
+              </Text>
+            </View>
+          )}
+
           <TouchableOpacity
             onPress={handleFavoritePress}
             style={[
               styles.favoriteButton,
-              { backgroundColor: theme.colors.surface, ...theme.shadows.shadowSm },
+              { backgroundColor: 'rgba(255,255,255,0.9)', ...theme.shadows.shadowSm },
             ]}
           >
             <Animated.View style={{ transform: [{ scale: favoriteAnim }] }}>
               <Heart
-                size={20}
-                color={isFavorite ? theme.colors.discount : theme.colors.textSecondary}
-                fill={isFavorite ? theme.colors.discount : 'transparent'}
+                size={18}
+                color={isFavorite ? theme.colors.error : theme.colors.textSecondary}
+                fill={isFavorite ? theme.colors.error : 'transparent'}
               />
             </Animated.View>
           </TouchableOpacity>
         </View>
 
-        <View style={[styles.content, { padding: theme.spacing.lg }]}>
+        <View style={[styles.content, { padding: theme.spacing.md }]}>
           <View style={styles.merchantRow}>
             {basket.merchantLogo ? (
               <Image source={{ uri: basket.merchantLogo }} style={styles.merchantLogo} />
             ) : (
-              <View
-                style={[
-                  styles.merchantLogo,
-                  { backgroundColor: theme.colors.divider },
-                ]}
-              />
+              <View style={[styles.merchantLogo, { backgroundColor: theme.colors.divider }]} />
             )}
-            <Text
-              style={[
-                styles.merchantName,
-                { color: theme.colors.textSecondary, ...theme.typography.bodySm },
-              ]}
-              numberOfLines={1}
-            >
-              {basket.merchantName}
-            </Text>
-          </View>
-
-          <Text
-            style={[
-              styles.basketName,
-              { color: theme.colors.textPrimary, ...theme.typography.h3, marginTop: theme.spacing.xs },
-            ]}
-            numberOfLines={2}
-          >
-            {basket.name}
-          </Text>
-
-          <View style={[styles.chipsRow, { marginTop: theme.spacing.md }]}>
-            <Chip
-              label={`${basket.pickupWindow.start} - ${basket.pickupWindow.end}`}
-              icon={<Clock size={12} color={theme.colors.textSecondary} />}
-              size="sm"
-            />
-            <Chip
-              label={`${basket.distance}km`}
-              icon={<MapPin size={12} color={theme.colors.textSecondary} />}
-              size="sm"
-            />
-            <Chip
-              label={`${basket.quantityLeft} left`}
-              size="sm"
-              variant="filled"
-            />
-          </View>
-
-          <View style={[styles.priceRow, { marginTop: theme.spacing.lg }]}>
-            <View>
+            <View style={styles.merchantInfo}>
               <Text
-                style={[
-                  styles.originalPrice,
-                  {
-                    color: theme.colors.muted,
-                    ...theme.typography.bodySm,
-                    textDecorationLine: 'line-through',
-                  },
-                ]}
+                style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, fontSize: 15 }]}
+                numberOfLines={1}
               >
-                {basket.originalPrice} TND
+                {basket.merchantName}
               </Text>
               <Text
-                style={[
-                  styles.discountedPrice,
-                  { color: theme.colors.primary, ...theme.typography.h2, fontWeight: '700' as const },
-                ]}
+                style={[{ color: theme.colors.textSecondary, ...theme.typography.caption }]}
+                numberOfLines={1}
               >
+                {basket.name}
+              </Text>
+            </View>
+          </View>
+
+          <View style={[styles.detailsRow, { marginTop: theme.spacing.sm }]}>
+            <View style={styles.chipRow}>
+              <View style={[styles.inlineChip, { backgroundColor: theme.colors.bg, borderRadius: theme.radii.pill, paddingHorizontal: 8, paddingVertical: 3 }]}>
+                <Clock size={11} color={theme.colors.textSecondary} />
+                <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, marginLeft: 3 }]}>
+                  {basket.pickupWindow.start}-{basket.pickupWindow.end}
+                </Text>
+              </View>
+              <View style={[styles.inlineChip, { backgroundColor: theme.colors.bg, borderRadius: theme.radii.pill, paddingHorizontal: 8, paddingVertical: 3 }]}>
+                <MapPin size={11} color={theme.colors.textSecondary} />
+                <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, marginLeft: 3 }]}>
+                  {basket.distance}km
+                </Text>
+              </View>
+            </View>
+            <View style={styles.priceBlock}>
+              <Text style={[{ color: theme.colors.muted, ...theme.typography.caption, textDecorationLine: 'line-through' }]}>
+                {basket.originalPrice} TND
+              </Text>
+              <Text style={[{ color: theme.colors.primary, ...theme.typography.h3, fontWeight: '700' as const }]}>
                 {basket.discountedPrice} TND
               </Text>
             </View>
@@ -186,13 +170,13 @@ export function BasketCard({ basket, onFavoritePress, isFavorite = false }: Bask
 
 const styles = StyleSheet.create({
   card: {
-    marginBottom: 16,
+    marginBottom: 14,
     overflow: 'hidden',
   },
   imageContainer: {
     position: 'relative',
     width: '100%',
-    height: 180,
+    height: 160,
   },
   image: {
     width: '100%',
@@ -202,18 +186,32 @@ const styles = StyleSheet.create({
     width: '100%',
     height: '100%',
   },
-  badgeContainer: {
+  bagsLeftBadge: {
     position: 'absolute',
-    top: 12,
-    left: 12,
+    top: 10,
+    left: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  bagsLeftText: {},
+  ratingBadge: {
+    position: 'absolute',
+    top: 10,
+    right: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
   },
   favoriteButton: {
     position: 'absolute',
-    top: 12,
-    right: 12,
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    bottom: 10,
+    right: 10,
+    width: 34,
+    height: 34,
+    borderRadius: 17,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -223,25 +221,28 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   merchantLogo: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    marginRight: 8,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    marginRight: 10,
   },
-  merchantName: {
+  merchantInfo: {
     flex: 1,
   },
-  basketName: {},
-  chipsRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-  },
-  priceRow: {
+  detailsRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'flex-end',
   },
-  originalPrice: {},
-  discountedPrice: {},
+  chipRow: {
+    flexDirection: 'row',
+    gap: 6,
+  },
+  inlineChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  priceBlock: {
+    alignItems: 'flex-end',
+  },
 });

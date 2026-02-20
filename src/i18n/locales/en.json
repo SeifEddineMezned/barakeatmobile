@@ -79,6 +79,7 @@
     "distance": "away",
     "quantity": "{{count}} left",
     "payOnPickup": "Pay on Pickup",
+    "description": "Description",
     "whatYouMightGet": "What you might get",
     "surpriseNote": "Contents are a surprise and depend on today's unsold items.",
     "merchantInfo": "Merchant Info",
@@ -89,7 +90,13 @@
     "reserveBasket": "Reserve Basket",
     "soldOut": "Sold Out",
     "notifyMe": "Notify Me",
-    "partnerBadge": "Engaged partner against food waste"
+    "partnerBadge": "Engaged partner against food waste",
+    "overallExperience": "Overall Experience",
+    "basedOnReviews": "Based on {{count}} recent reviews",
+    "reviewService": "Service",
+    "reviewQuantite": "Quantity",
+    "reviewQualite": "Quality",
+    "reviewVariete": "Variety"
   },
   "reserve": {
     "title": "Reserve Basket",
