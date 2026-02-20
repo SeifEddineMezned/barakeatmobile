@@ -79,13 +79,13 @@ export default function OnboardingScreen() {
       flatListRef.current?.scrollToIndex({ index: currentIndex + 1 });
     } else {
       completeOnboarding();
-      router.replace('/auth/sign-in');
+      router.replace('/auth/sign-in' as never);
     }
   }, [currentIndex, slides.length, completeOnboarding, router]);
 
   const handleSkip = useCallback(() => {
     completeOnboarding();
-    router.replace('/auth/sign-in');
+    router.replace('/auth/sign-in' as never);
   }, [completeOnboarding, router]);
 
   const changeLanguage = useCallback((lang: string) => {

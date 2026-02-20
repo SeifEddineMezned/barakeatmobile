@@ -84,7 +84,7 @@ export default function ReserveScreen() {
   };
 
   const handleViewOrder = () => {
-    router.replace('/(tabs)/orders');
+    router.replace('/(tabs)/orders' as never);
   };
 
   if (showSuccess) {

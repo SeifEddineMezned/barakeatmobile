@@ -120,7 +120,7 @@ export default function SignInScreen() {
                 <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.body }]}>
                   {t('auth.noAccount')}{' '}
                 </Text>
-                <TouchableOpacity onPress={() => router.push('/auth/sign-up')}>
+                <TouchableOpacity onPress={() => router.push('/auth/sign-up' as never)}>
                   <Text style={[{ color: theme.colors.primary, ...theme.typography.body, fontWeight: '600' as const }]}>
                     {t('auth.signUp')}
                   </Text>

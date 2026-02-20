@@ -3,7 +3,7 @@ import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Modal, I18nManage
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import { useRouter } from 'expo-router';
-import * as Updates from 'expo-updates';
+
 import { ChevronRight, Globe, HelpCircle, Info, LogOut } from 'lucide-react-native';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { useAuthStore } from '@/src/stores/authStore';
@@ -17,7 +17,7 @@ export default function ProfileScreen() {
 
   const handleSignOut = useCallback(() => {
     signOut();
-    router.replace('/auth/sign-in');
+    router.replace('/auth/sign-in' as never);
   }, [signOut, router]);
 
   const changeLanguage = useCallback(async (lang: string) => {

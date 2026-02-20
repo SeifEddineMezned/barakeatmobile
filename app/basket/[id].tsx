@@ -58,7 +58,7 @@ export default function BasketDetailsScreen() {
   }
 
   const handleReserve = () => {
-    router.push({ pathname: '/reserve' as any, params: { basketId: basket.id } });
+    router.push({ pathname: '/reserve', params: { basketId: basket.id } } as any);
   };
 
   const handleCall = () => {
