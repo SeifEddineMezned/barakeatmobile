@@ -1,0 +1,153 @@
+{
+  "common": {
+    "cancel": "Annuler",
+    "confirm": "Confirmer",
+    "continue": "Continuer",
+    "skip": "Passer",
+    "close": "Fermer",
+    "save": "Enregistrer",
+    "loading": "Chargement...",
+    "error": "Erreur",
+    "success": "Succès",
+    "retry": "Réessayer",
+    "done": "Terminé",
+    "ok": "OK"
+  },
+  "onboarding": {
+    "slide1": {
+      "title": "Économisez, Sauvez la Nourriture et Luttez Contre le Gaspillage!",
+      "description": "Découvrez des paniers surprise de nourriture invendue de commerçants locaux à des prix incroyables."
+    },
+    "slide2": {
+      "title": "Paniers Surprise, Grandes Économies",
+      "description": "Réservez des paniers mystère avec des articles délicieux jusqu'à -50%. Le contenu varie quotidiennement."
+    },
+    "slide3": {
+      "title": "Près de Chez Vous, Retrait Facile",
+      "description": "Trouvez des paniers de commerçants à proximité. Choisissez votre créneau de retrait et récupérez votre surprise!"
+    },
+    "slide4": {
+      "title": "Paiement sur Place, Aidez la Planète",
+      "description": "Aucun paiement en ligne nécessaire. Payez à votre arrivée et faites une vraie différence contre le gaspillage."
+    },
+    "getStarted": "Commencer"
+  },
+  "auth": {
+    "signIn": "Se Connecter",
+    "signUp": "S'inscrire",
+    "email": "Email",
+    "password": "Mot de passe",
+    "name": "Nom Complet",
+    "phone": "Numéro de Téléphone",
+    "forgotPassword": "Mot de passe oublié?",
+    "noAccount": "Pas de compte?",
+    "haveAccount": "Déjà un compte?",
+    "createAccount": "Créer un Compte",
+    "welcome": "Bienvenue chez Barakeat",
+    "welcomeBack": "Content de vous revoir"
+  },
+  "home": {
+    "greeting": "Bonjour",
+    "searchPlaceholder": "Rechercher paniers, commerçants...",
+    "valueProps": {
+      "discount": "Repas à -50%",
+      "nearby": "Près de Chez Vous",
+      "impact": "Aidez la Planète"
+    },
+    "partnersTitle": "Ils Nous Font Confiance",
+    "filters": {
+      "all": "Tous",
+      "category": "Catégorie",
+      "pickup": "Heure de Retrait",
+      "price": "Prix",
+      "distance": "Distance",
+      "discountOnly": "Seulement -50%",
+      "clearAll": "Tout effacer"
+    },
+    "emptyState": {
+      "noBaskets": "Aucun panier à proximité",
+      "exploreMap": "Explorer la Carte",
+      "tooStrict": "Filtres trop stricts?",
+      "resetFilters": "Réinitialiser"
+    },
+    "offline": "Vous êtes hors ligne. Vérifiez votre connexion.",
+    "searchArea": "Rechercher dans cette zone"
+  },
+  "basket": {
+    "surpriseBasket": "Panier Surprise",
+    "pickupWindow": "Retrait",
+    "distance": "de distance",
+    "quantity": "{{count}} restant",
+    "payOnPickup": "Paiement sur Place",
+    "whatYouMightGet": "Ce que vous pourriez obtenir",
+    "surpriseNote": "Le contenu est une surprise et dépend des articles invendus du jour.",
+    "merchantInfo": "Info Commerçant",
+    "address": "Adresse",
+    "hours": "Horaires",
+    "call": "Appeler",
+    "directions": "Itinéraire",
+    "reserveBasket": "Réserver Panier",
+    "soldOut": "Épuisé",
+    "notifyMe": "Me Notifier",
+    "partnerBadge": "Partenaire engagé contre le gaspillage alimentaire"
+  },
+  "reserve": {
+    "title": "Réserver Panier",
+    "quantity": "Quantité",
+    "basketsLeft": "{{count}} paniers restants",
+    "selectPickup": "Choisir Heure de Retrait",
+    "summary": "Résumé",
+    "total": "Total",
+    "paymentMethod": "Méthode de Paiement",
+    "payOnPickupNote": "Vous paierez le commerçant à votre arrivée.",
+    "pickupInstructions": "Instructions de Retrait",
+    "confirmReservation": "Confirmer Réservation",
+    "success": {
+      "title": "Réservation Confirmée!",
+      "pickupCode": "Code de Retrait",
+      "showThisCode": "Montrez ce code à votre arrivée",
+      "addToCalendar": "Ajouter au Calendrier",
+      "viewOrder": "Voir Commande"
+    }
+  },
+  "orders": {
+    "title": "Commandes",
+    "upcoming": "À Venir",
+    "past": "Passées",
+    "pickupCode": "Code de Retrait",
+    "status": {
+      "reserved": "Réservé",
+      "ready": "Prêt",
+      "collected": "Collecté",
+      "cancelled": "Annulé"
+    },
+    "cancelOrder": "Annuler",
+    "orderDetails": "Détails",
+    "emptyState": "Aucune commande"
+  },
+  "favorites": {
+    "title": "Favoris",
+    "baskets": "Paniers",
+    "merchants": "Commerçants",
+    "emptyState": "Appuyez sur le cœur pour enregistrer"
+  },
+  "profile": {
+    "title": "Profil",
+    "account": "Compte",
+    "language": "Langue",
+    "selectLanguage": "Sélectionner la langue",
+    "languageChanged": "Langue modifiée",
+    "restartRequired": "L'application doit redémarrer pour appliquer la nouvelle langue.",
+    "faq": "FAQ",
+    "faqContent": "Questions fréquemment posées\n\n• Comment réserver un panier ?\nParcourez les paniers disponibles, sélectionnez-en un, choisissez la quantité et l'heure de retrait, puis confirmez.\n\n• Qu'est-ce qu'un panier surprise ?\nUn panier surprise contient une variété d'articles invendus du commerçant. Le contenu varie quotidiennement selon la disponibilité.\n\n• Comment fonctionnent les créneaux de retrait ?\nSélectionnez un créneau horaire qui vous convient. Arrivez pendant ce créneau pour récupérer votre panier.\n\n• Quels modes de paiement sont acceptés ?\nPayez directement au commerçant lors du retrait de votre panier (espèces ou carte sur place).",
+    "about": "À Propos",
+    "mission": "Notre mission est de lutter contre le gaspillage alimentaire en connectant les gens avec des paniers surprise de commerçants locaux.",
+    "motto": "Parce que la bonne nourriture mérite une seconde chance",
+    "availability": "Disponible à Grand Tunis pour le lancement",
+    "signOut": "Déconnexion"
+  },
+  "map": {
+    "title": "À Proximité",
+    "viewDetails": "Voir Détails"
+  }
+}

@@ -1,0 +1,153 @@
+{
+  "common": {
+    "cancel": "Cancel",
+    "confirm": "Confirm",
+    "continue": "Continue",
+    "skip": "Skip",
+    "close": "Close",
+    "save": "Save",
+    "loading": "Loading...",
+    "error": "Error",
+    "success": "Success",
+    "retry": "Retry",
+    "done": "Done",
+    "ok": "OK"
+  },
+  "onboarding": {
+    "slide1": {
+      "title": "Save Good Food, Save Money, and Fight Food Waste!",
+      "description": "Discover surprise baskets of unsold food from local merchants at amazing discounts."
+    },
+    "slide2": {
+      "title": "Surprise Baskets, Big Savings",
+      "description": "Reserve mystery baskets with delicious items at up to -50% off. Contents vary daily based on what's available."
+    },
+    "slide3": {
+      "title": "Near You, Easy Pickup",
+      "description": "Find baskets from merchants nearby. Choose your pickup window and collect your surprise!"
+    },
+    "slide4": {
+      "title": "Pay on Pickup, Help the Planet",
+      "description": "No online payment needed. Pay when you arrive and make a real impact against food waste."
+    },
+    "getStarted": "Get Started"
+  },
+  "auth": {
+    "signIn": "Sign In",
+    "signUp": "Sign Up",
+    "email": "Email",
+    "password": "Password",
+    "name": "Full Name",
+    "phone": "Phone Number",
+    "forgotPassword": "Forgot Password?",
+    "noAccount": "Don't have an account?",
+    "haveAccount": "Already have an account?",
+    "createAccount": "Create Account",
+    "welcome": "Welcome to Barakeat",
+    "welcomeBack": "Welcome Back"
+  },
+  "home": {
+    "greeting": "Hello",
+    "searchPlaceholder": "Search baskets, merchants...",
+    "valueProps": {
+      "discount": "Meals at -50%",
+      "nearby": "Near You",
+      "impact": "Help the Planet"
+    },
+    "partnersTitle": "They Trust Us",
+    "filters": {
+      "all": "All",
+      "category": "Category",
+      "pickup": "Pickup Time",
+      "price": "Price",
+      "distance": "Distance",
+      "discountOnly": "Only -50%",
+      "clearAll": "Clear all"
+    },
+    "emptyState": {
+      "noBaskets": "No baskets nearby",
+      "exploreMap": "Explore on Map",
+      "tooStrict": "Filters too strict?",
+      "resetFilters": "Reset filters"
+    },
+    "offline": "You're offline. Please check your connection.",
+    "searchArea": "Search this area"
+  },
+  "basket": {
+    "surpriseBasket": "Surprise Basket",
+    "pickupWindow": "Pickup",
+    "distance": "away",
+    "quantity": "{{count}} left",
+    "payOnPickup": "Pay on Pickup",
+    "whatYouMightGet": "What you might get",
+    "surpriseNote": "Contents are a surprise and depend on today's unsold items.",
+    "merchantInfo": "Merchant Info",
+    "address": "Address",
+    "hours": "Hours",
+    "call": "Call",
+    "directions": "Directions",
+    "reserveBasket": "Reserve Basket",
+    "soldOut": "Sold Out",
+    "notifyMe": "Notify Me",
+    "partnerBadge": "Engaged partner against food waste"
+  },
+  "reserve": {
+    "title": "Reserve Basket",
+    "quantity": "Quantity",
+    "basketsLeft": "{{count}} baskets left",
+    "selectPickup": "Select Pickup Time",
+    "summary": "Summary",
+    "total": "Total",
+    "paymentMethod": "Payment Method",
+    "payOnPickupNote": "You will pay the merchant when you arrive.",
+    "pickupInstructions": "Pickup Instructions",
+    "confirmReservation": "Confirm Reservation",
+    "success": {
+      "title": "Reservation Confirmed!",
+      "pickupCode": "Pickup Code",
+      "showThisCode": "Show this code when you arrive",
+      "addToCalendar": "Add to Calendar",
+      "viewOrder": "View Order"
+    }
+  },
+  "orders": {
+    "title": "Orders",
+    "upcoming": "Upcoming",
+    "past": "Past",
+    "pickupCode": "Pickup Code",
+    "status": {
+      "reserved": "Reserved",
+      "ready": "Ready",
+      "collected": "Collected",
+      "cancelled": "Cancelled"
+    },
+    "cancelOrder": "Cancel Order",
+    "orderDetails": "Order Details",
+    "emptyState": "No orders yet"
+  },
+  "favorites": {
+    "title": "Favorites",
+    "baskets": "Baskets",
+    "merchants": "Merchants",
+    "emptyState": "Tap the heart to save favorites"
+  },
+  "profile": {
+    "title": "Profile",
+    "account": "Account",
+    "language": "Language",
+    "selectLanguage": "Select Language",
+    "languageChanged": "Language Changed",
+    "restartRequired": "The app needs to restart to apply the new language.",
+    "faq": "FAQ",
+    "faqContent": "Frequently Asked Questions\n\n• How do I reserve a basket?\nBrowse available baskets, select one, choose quantity and pickup time, then confirm.\n\n• What is a surprise basket?\nA surprise basket contains a variety of unsold items from the merchant. Contents vary daily based on availability.\n\n• How do pickup windows work?\nSelect a pickup time window that works for you. Arrive during that time to collect your basket.\n\n• What payment methods are accepted?\nPay directly to the merchant when you pick up your basket (cash or card at the store).",
+    "about": "About Barakeat",
+    "mission": "Our mission is to fight food waste by connecting people with delicious surprise baskets from local merchants.",
+    "motto": "Because good food deserves a second chance",
+    "availability": "Available in Grand Tunis for launch",
+    "signOut": "Sign Out"
+  },
+  "map": {
+    "title": "Nearby",
+    "viewDetails": "View Details"
+  }
+}
