@@ -1,5 +1,5 @@
 import { Tabs } from "expo-router";
-import { Home, MapPin, ShoppingBag, Heart, User } from "lucide-react-native";
+import { Home, ShoppingBag, Heart, User } from "lucide-react-native";
 import React from "react";
 import { useTranslation } from "react-i18next";
 import { useTheme } from "@/src/theme/ThemeProvider";
@@ -31,8 +31,7 @@ export default function TabLayout() {
       <Tabs.Screen
         name="nearby"
         options={{
-          title: t('map.title'),
-          tabBarIcon: ({ color, size }) => <MapPin size={size} color={color} />,
+          href: null,
         }}
       />
       <Tabs.Screen
