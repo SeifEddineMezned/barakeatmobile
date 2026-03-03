@@ -156,5 +156,87 @@
   "map": {
     "title": "À Proximité",
     "viewDetails": "Voir Détails"
+  },
+  "business": {
+    "dashboard": {
+      "title": "Tableau de bord",
+      "greeting": "Bonjour",
+      "todayOverview": "Aperçu du jour",
+      "basketsSold": "Paniers vendus",
+      "revenue": "Revenus",
+      "activeBaskets": "Paniers actifs",
+      "pendingOrders": "Commandes en attente",
+      "mealsRescued": "Repas sauvés",
+      "avgRating": "Note moyenne",
+      "recentOrders": "Commandes récentes",
+      "viewAll": "Voir tout",
+      "noOrders": "Aucune commande"
+    },
+    "baskets": {
+      "title": "Mes Paniers",
+      "addBasket": "Ajouter un panier",
+      "editBasket": "Modifier le panier",
+      "active": "Actif",
+      "inactive": "Inactif",
+      "soldOut": "Épuisé",
+      "available": "disponible(s)",
+      "of": "sur",
+      "noBaskets": "Aucun panier",
+      "createFirst": "Créez votre premier panier surprise",
+      "deleteConfirm": "Supprimer ce panier ?",
+      "deleteMessage": "Cette action est irréversible.",
+      "delete": "Supprimer"
+    },
+    "orders": {
+      "title": "Commandes",
+      "incoming": "En cours",
+      "completed": "Terminées",
+      "markReady": "Marquer prêt",
+      "markCollected": "Collecté",
+      "cancelOrder": "Annuler",
+      "pickupCode": "Code de retrait",
+      "customer": "Client",
+      "noOrders": "Aucune commande",
+      "callCustomer": "Appeler"
+    },
+    "profile": {
+      "title": "Profil Commerce",
+      "businessInfo": "Infos Commerce",
+      "name": "Nom du commerce",
+      "address": "Adresse",
+      "phone": "Téléphone",
+      "hours": "Horaires d'ouverture",
+      "category": "Catégorie",
+      "description": "Description",
+      "switchToCustomer": "Vue client",
+      "signOut": "Déconnexion"
+    },
+    "createBasket": {
+      "title": "Nouveau Panier",
+      "editTitle": "Modifier le Panier",
+      "name": "Nom du panier",
+      "namePlaceholder": "ex. Panier Surprise Boulangerie",
+      "description": "Description",
+      "descriptionPlaceholder": "Décrivez ce que les clients pourraient trouver...",
+      "category": "Catégorie",
+      "originalPrice": "Prix original (TND)",
+      "discountedPrice": "Prix réduit (TND)",
+      "quantity": "Quantité totale",
+      "pickupStart": "Début du retrait",
+      "pickupEnd": "Fin du retrait",
+      "exampleItems": "Exemples d'articles (séparés par virgule)",
+      "exampleItemsPlaceholder": "ex. Pain, Croissants, Pâtisseries",
+      "save": "Enregistrer",
+      "create": "Créer le panier"
+    },
+    "auth": {
+      "businessSignIn": "Connexion Commerce",
+      "businessSignUp": "Inscrire Commerce",
+      "switchToCustomer": "Je suis client",
+      "switchToBusiness": "Je suis commerçant",
+      "businessName": "Nom du commerce",
+      "businessAddress": "Adresse du commerce",
+      "businessCategory": "Catégorie"
+    }
   }
 }

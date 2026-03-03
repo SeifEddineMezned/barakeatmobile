@@ -156,5 +156,87 @@
   "map": {
     "title": "Nearby",
     "viewDetails": "View Details"
+  },
+  "business": {
+    "dashboard": {
+      "title": "Dashboard",
+      "greeting": "Hello",
+      "todayOverview": "Today's Overview",
+      "basketsSold": "Baskets Sold",
+      "revenue": "Revenue",
+      "activeBaskets": "Active Baskets",
+      "pendingOrders": "Pending Orders",
+      "mealsRescued": "Meals Rescued",
+      "avgRating": "Avg Rating",
+      "recentOrders": "Recent Orders",
+      "viewAll": "View All",
+      "noOrders": "No orders yet"
+    },
+    "baskets": {
+      "title": "My Baskets",
+      "addBasket": "Add Basket",
+      "editBasket": "Edit Basket",
+      "active": "Active",
+      "inactive": "Inactive",
+      "soldOut": "Sold Out",
+      "available": "available",
+      "of": "of",
+      "noBaskets": "No baskets yet",
+      "createFirst": "Create your first surprise basket",
+      "deleteConfirm": "Delete this basket?",
+      "deleteMessage": "This action cannot be undone.",
+      "delete": "Delete"
+    },
+    "orders": {
+      "title": "Orders",
+      "incoming": "Incoming",
+      "completed": "Completed",
+      "markReady": "Mark Ready",
+      "markCollected": "Collected",
+      "cancelOrder": "Cancel",
+      "pickupCode": "Pickup Code",
+      "customer": "Customer",
+      "noOrders": "No orders",
+      "callCustomer": "Call"
+    },
+    "profile": {
+      "title": "Business Profile",
+      "businessInfo": "Business Info",
+      "name": "Business Name",
+      "address": "Address",
+      "phone": "Phone",
+      "hours": "Opening Hours",
+      "category": "Category",
+      "description": "Description",
+      "switchToCustomer": "Switch to Customer View",
+      "signOut": "Sign Out"
+    },
+    "createBasket": {
+      "title": "New Basket",
+      "editTitle": "Edit Basket",
+      "name": "Basket Name",
+      "namePlaceholder": "e.g. Surprise Bakery Basket",
+      "description": "Description",
+      "descriptionPlaceholder": "Describe what customers might find...",
+      "category": "Category",
+      "originalPrice": "Original Price (TND)",
+      "discountedPrice": "Discounted Price (TND)",
+      "quantity": "Total Quantity",
+      "pickupStart": "Pickup Start",
+      "pickupEnd": "Pickup End",
+      "exampleItems": "Example Items (comma separated)",
+      "exampleItemsPlaceholder": "e.g. Bread, Croissants, Pastries",
+      "save": "Save Basket",
+      "create": "Create Basket"
+    },
+    "auth": {
+      "businessSignIn": "Business Sign In",
+      "businessSignUp": "Register Business",
+      "switchToCustomer": "I'm a customer",
+      "switchToBusiness": "I'm a business",
+      "businessName": "Business Name",
+      "businessAddress": "Business Address",
+      "businessCategory": "Category"
+    }
   }
 }

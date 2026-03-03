@@ -25,8 +25,10 @@ function RootLayoutNav() {
       <Stack.Screen name="auth/sign-in" options={{ headerShown: false }} />
       <Stack.Screen name="auth/sign-up" options={{ headerShown: false }} />
       <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+      <Stack.Screen name="(business)" options={{ headerShown: false }} />
       <Stack.Screen name="basket/[id]" options={{ headerShown: false }} />
       <Stack.Screen name="reserve" options={{ presentation: "modal", headerShown: false }} />
+      <Stack.Screen name="business/create-basket" options={{ presentation: "modal", headerShown: false }} />
     </Stack>
   );
 }

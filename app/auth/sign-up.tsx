@@ -3,9 +3,11 @@ import { View, Text, StyleSheet, TextInput, TouchableOpacity, KeyboardAvoidingVi
 import { useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { Store, User } from 'lucide-react-native';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { PrimaryCTAButton } from '@/src/components/PrimaryCTAButton';
 import { useAuthStore } from '@/src/stores/authStore';
+import type { UserRole } from '@/src/types';
 
 export default function SignUpScreen() {
   const { t } = useTranslation();
@@ -18,18 +20,27 @@ export default function SignUpScreen() {
   const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
+  const [role, setRole] = useState<UserRole>('customer');
+
+  const [businessName, setBusinessName] = useState('');
+  const [businessAddress, setBusinessAddress] = useState('');
 
   const handleSignUp = async () => {
     setLoading(true);
     setTimeout(() => {
       signIn({
         id: '1',
-        name,
+        name: role === 'business' ? businessName || name : name,
         email,
         phone,
+        role,
       });
       setLoading(false);
-      router.replace('/(tabs)');
+      if (role === 'business') {
+        router.replace('/(business)/dashboard' as never);
+      } else {
+        router.replace('/(tabs)');
+      }
     }, 1000);
   };
 
@@ -52,52 +63,124 @@ export default function SignUpScreen() {
             <Text
               style={[
                 styles.subtitle,
-                { color: theme.colors.textSecondary, ...theme.typography.body, marginBottom: theme.spacing.xxl },
+                { color: theme.colors.textSecondary, ...theme.typography.body, marginBottom: theme.spacing.xl },
               ]}
             >
               {t('auth.createAccount')}
             </Text>
 
-            <View style={styles.form}>
-              <View style={[styles.inputContainer, { marginBottom: theme.spacing.lg }]}>
-                <Text style={[styles.label, { color: theme.colors.textPrimary, ...theme.typography.bodySm }]}>
-                  {t('auth.name')}
-                </Text>
-                <TextInput
+            <View style={[styles.roleSelector, { marginBottom: theme.spacing.xl }]}>
+              <TouchableOpacity
+                style={[
+                  styles.roleOption,
+                  {
+                    flex: 1,
+                    paddingVertical: theme.spacing.md,
+                    borderRadius: theme.radii.r12,
+                    backgroundColor: role === 'customer' ? theme.colors.primary : theme.colors.surface,
+                    marginRight: theme.spacing.sm,
+                    ...(role === 'customer' ? {} : theme.shadows.shadowSm),
+                  },
+                ]}
+                onPress={() => setRole('customer')}
+                activeOpacity={0.8}
+              >
+                <User size={20} color={role === 'customer' ? '#fff' : theme.colors.textSecondary} />
+                <Text
                   style={[
-                    styles.input,
                     {
-                      backgroundColor: theme.colors.surface,
-                      borderColor: theme.colors.divider,
-                      borderRadius: theme.radii.r12,
-                      color: theme.colors.textPrimary,
-                      ...theme.typography.body,
-                      ...theme.shadows.shadowSm,
+                      color: role === 'customer' ? '#fff' : theme.colors.textPrimary,
+                      ...theme.typography.caption,
+                      fontWeight: '600' as const,
+                      marginTop: 4,
                     },
                   ]}
-                  value={name}
-                  onChangeText={setName}
-                  placeholder="John Doe"
-                  placeholderTextColor={theme.colors.muted}
-                />
-              </View>
+                >
+                  {t('business.auth.switchToCustomer')}
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.roleOption,
+                  {
+                    flex: 1,
+                    paddingVertical: theme.spacing.md,
+                    borderRadius: theme.radii.r12,
+                    backgroundColor: role === 'business' ? theme.colors.primary : theme.colors.surface,
+                    marginLeft: theme.spacing.sm,
+                    ...(role === 'business' ? {} : theme.shadows.shadowSm),
+                  },
+                ]}
+                onPress={() => setRole('business')}
+                activeOpacity={0.8}
+              >
+                <Store size={20} color={role === 'business' ? '#fff' : theme.colors.textSecondary} />
+                <Text
+                  style={[
+                    {
+                      color: role === 'business' ? '#fff' : theme.colors.textPrimary,
+                      ...theme.typography.caption,
+                      fontWeight: '600' as const,
+                      marginTop: 4,
+                    },
+                  ]}
+                >
+                  {t('business.auth.switchToBusiness')}
+                </Text>
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.form}>
+              {role === 'customer' && (
+                <View style={[styles.inputContainer, { marginBottom: theme.spacing.lg }]}>
+                  <Text style={[styles.label, { color: theme.colors.textPrimary, ...theme.typography.bodySm }]}>
+                    {t('auth.name')}
+                  </Text>
+                  <TextInput
+                    style={[styles.input, { backgroundColor: theme.colors.surface, borderColor: theme.colors.divider, borderRadius: theme.radii.r12, color: theme.colors.textPrimary, ...theme.typography.body, ...theme.shadows.shadowSm }]}
+                    value={name}
+                    onChangeText={setName}
+                    placeholder="John Doe"
+                    placeholderTextColor={theme.colors.muted}
+                  />
+                </View>
+              )}
+
+              {role === 'business' && (
+                <>
+                  <View style={[styles.inputContainer, { marginBottom: theme.spacing.lg }]}>
+                    <Text style={[styles.label, { color: theme.colors.textPrimary, ...theme.typography.bodySm }]}>
+                      {t('business.auth.businessName')}
+                    </Text>
+                    <TextInput
+                      style={[styles.input, { backgroundColor: theme.colors.surface, borderColor: theme.colors.divider, borderRadius: theme.radii.r12, color: theme.colors.textPrimary, ...theme.typography.body, ...theme.shadows.shadowSm }]}
+                      value={businessName}
+                      onChangeText={setBusinessName}
+                      placeholder="Mon Commerce"
+                      placeholderTextColor={theme.colors.muted}
+                    />
+                  </View>
+                  <View style={[styles.inputContainer, { marginBottom: theme.spacing.lg }]}>
+                    <Text style={[styles.label, { color: theme.colors.textPrimary, ...theme.typography.bodySm }]}>
+                      {t('business.auth.businessAddress')}
+                    </Text>
+                    <TextInput
+                      style={[styles.input, { backgroundColor: theme.colors.surface, borderColor: theme.colors.divider, borderRadius: theme.radii.r12, color: theme.colors.textPrimary, ...theme.typography.body, ...theme.shadows.shadowSm }]}
+                      value={businessAddress}
+                      onChangeText={setBusinessAddress}
+                      placeholder="Avenue Habib Bourguiba, Tunis"
+                      placeholderTextColor={theme.colors.muted}
+                    />
+                  </View>
+                </>
+              )}
 
               <View style={[styles.inputContainer, { marginBottom: theme.spacing.lg }]}>
                 <Text style={[styles.label, { color: theme.colors.textPrimary, ...theme.typography.bodySm }]}>
                   {t('auth.email')}
                 </Text>
                 <TextInput
-                  style={[
-                    styles.input,
-                    {
-                      backgroundColor: theme.colors.surface,
-                      borderColor: theme.colors.divider,
-                      borderRadius: theme.radii.r12,
-                      color: theme.colors.textPrimary,
-                      ...theme.typography.body,
-                      ...theme.shadows.shadowSm,
-                    },
-                  ]}
+                  style={[styles.input, { backgroundColor: theme.colors.surface, borderColor: theme.colors.divider, borderRadius: theme.radii.r12, color: theme.colors.textPrimary, ...theme.typography.body, ...theme.shadows.shadowSm }]}
                   value={email}
                   onChangeText={setEmail}
                   placeholder="you@example.com"
@@ -113,17 +196,7 @@ export default function SignUpScreen() {
                   {t('auth.phone')}
                 </Text>
                 <TextInput
-                  style={[
-                    styles.input,
-                    {
-                      backgroundColor: theme.colors.surface,
-                      borderColor: theme.colors.divider,
-                      borderRadius: theme.radii.r12,
-                      color: theme.colors.textPrimary,
-                      ...theme.typography.body,
-                      ...theme.shadows.shadowSm,
-                    },
-                  ]}
+                  style={[styles.input, { backgroundColor: theme.colors.surface, borderColor: theme.colors.divider, borderRadius: theme.radii.r12, color: theme.colors.textPrimary, ...theme.typography.body, ...theme.shadows.shadowSm }]}
                   value={phone}
                   onChangeText={setPhone}
                   placeholder="+216 XX XXX XXX"
@@ -137,17 +210,7 @@ export default function SignUpScreen() {
                   {t('auth.password')}
                 </Text>
                 <TextInput
-                  style={[
-                    styles.input,
-                    {
-                      backgroundColor: theme.colors.surface,
-                      borderColor: theme.colors.divider,
-                      borderRadius: theme.radii.r12,
-                      color: theme.colors.textPrimary,
-                      ...theme.typography.body,
-                      ...theme.shadows.shadowSm,
-                    },
-                  ]}
+                  style={[styles.input, { backgroundColor: theme.colors.surface, borderColor: theme.colors.divider, borderRadius: theme.radii.r12, color: theme.colors.textPrimary, ...theme.typography.body, ...theme.shadows.shadowSm }]}
                   value={password}
                   onChangeText={setPassword}
                   placeholder="••••••••"
@@ -156,8 +219,12 @@ export default function SignUpScreen() {
                 />
               </View>
 
-              <View style={[styles.buttonContainer, { marginTop: theme.spacing.xxl }]}>
-                <PrimaryCTAButton onPress={handleSignUp} title={t('auth.createAccount')} loading={loading} />
+              <View style={[styles.buttonContainer, { marginTop: theme.spacing.xl }]}>
+                <PrimaryCTAButton
+                  onPress={handleSignUp}
+                  title={role === 'business' ? t('business.auth.businessSignUp') : t('auth.createAccount')}
+                  loading={loading}
+                />
               </View>
 
               <View style={[styles.footer, { marginTop: theme.spacing.xxl }]}>
@@ -197,6 +264,13 @@ const styles = StyleSheet.create({
   },
   subtitle: {
     textAlign: 'center',
+  },
+  roleSelector: {
+    flexDirection: 'row',
+  },
+  roleOption: {
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   form: {},
   inputContainer: {},

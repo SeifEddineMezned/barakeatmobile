@@ -33,14 +33,7 @@ export default function ProfileScreen() {
       Alert.alert(
         t('profile.languageChanged'),
         t('profile.restartRequired'),
-        [
-          {
-            text: t('common.ok'),
-            onPress: async () => {
-              await Updates.reloadAsync();
-            },
-          },
-        ]
+        [{ text: t('common.ok') }]
       );
     }
   }, [i18n, t]);
@@ -181,7 +174,7 @@ export default function ProfileScreen() {
               },
             ]}
           >
-            "{t('profile.motto')}"
+            {`"${t('profile.motto')}"`}
           </Text>
           <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.bodySm }]}>
             {t('profile.availability')}

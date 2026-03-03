@@ -156,5 +156,87 @@
   "map": {
     "title": "القريبة",
     "viewDetails": "عرض التفاصيل"
+  },
+  "business": {
+    "dashboard": {
+      "title": "لوحة التحكم",
+      "greeting": "مرحبًا",
+      "todayOverview": "نظرة عامة اليوم",
+      "basketsSold": "سلال مباعة",
+      "revenue": "الإيرادات",
+      "activeBaskets": "سلال نشطة",
+      "pendingOrders": "طلبات معلقة",
+      "mealsRescued": "وجبات منقذة",
+      "avgRating": "متوسط التقييم",
+      "recentOrders": "الطلبات الأخيرة",
+      "viewAll": "عرض الكل",
+      "noOrders": "لا توجد طلبات"
+    },
+    "baskets": {
+      "title": "سلالي",
+      "addBasket": "إضافة سلة",
+      "editBasket": "تعديل السلة",
+      "active": "نشط",
+      "inactive": "غير نشط",
+      "soldOut": "نفذت",
+      "available": "متاح",
+      "of": "من",
+      "noBaskets": "لا توجد سلال",
+      "createFirst": "أنشئ أول سلة مفاجأة",
+      "deleteConfirm": "حذف هذه السلة؟",
+      "deleteMessage": "لا يمكن التراجع عن هذا الإجراء.",
+      "delete": "حذف"
+    },
+    "orders": {
+      "title": "الطلبات",
+      "incoming": "الواردة",
+      "completed": "المكتملة",
+      "markReady": "جاهز",
+      "markCollected": "تم الاستلام",
+      "cancelOrder": "إلغاء",
+      "pickupCode": "رمز الاستلام",
+      "customer": "العميل",
+      "noOrders": "لا توجد طلبات",
+      "callCustomer": "اتصال"
+    },
+    "profile": {
+      "title": "ملف التجارة",
+      "businessInfo": "معلومات التجارة",
+      "name": "اسم التجارة",
+      "address": "العنوان",
+      "phone": "الهاتف",
+      "hours": "ساعات العمل",
+      "category": "الفئة",
+      "description": "الوصف",
+      "switchToCustomer": "عرض العميل",
+      "signOut": "تسجيل الخروج"
+    },
+    "createBasket": {
+      "title": "سلة جديدة",
+      "editTitle": "تعديل السلة",
+      "name": "اسم السلة",
+      "namePlaceholder": "مثال: سلة مفاجأة المخبز",
+      "description": "الوصف",
+      "descriptionPlaceholder": "وصف ما قد يجده العملاء...",
+      "category": "الفئة",
+      "originalPrice": "السعر الأصلي (د.ت)",
+      "discountedPrice": "السعر المخفض (د.ت)",
+      "quantity": "الكمية الإجمالية",
+      "pickupStart": "بداية الاستلام",
+      "pickupEnd": "نهاية الاستلام",
+      "exampleItems": "أمثلة المنتجات (مفصولة بفواصل)",
+      "exampleItemsPlaceholder": "مثال: خبز، كرواسون، معجنات",
+      "save": "حفظ",
+      "create": "إنشاء السلة"
+    },
+    "auth": {
+      "businessSignIn": "دخول التجارة",
+      "businessSignUp": "تسجيل التجارة",
+      "switchToCustomer": "أنا عميل",
+      "switchToBusiness": "أنا تاجر",
+      "businessName": "اسم التجارة",
+      "businessAddress": "عنوان التجارة",
+      "businessCategory": "الفئة"
+    }
   }
 }

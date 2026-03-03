@@ -23,6 +23,8 @@ export const mockBaskets: Basket[] = [
     longitude: 10.1815,
     exampleItems: ['Pain frais', 'Croissants', 'Pâtisseries', 'Sandwiches'],
     imageUrl: 'https://images.unsplash.com/photo-1509440159596-0249088772ff?w=400&h=300&fit=crop',
+    quantityTotal: 6,
+    isActive: true,
   },
   {
     id: '2',
@@ -46,6 +48,8 @@ export const mockBaskets: Basket[] = [
     longitude: 10.1835,
     exampleItems: ['Grillades', 'Salades', 'Accompagnements', 'Desserts'],
     imageUrl: 'https://images.unsplash.com/photo-1552566626-52f8b828add9?w=400&h=300&fit=crop',
+    quantityTotal: 8,
+    isActive: true,
   },
   {
     id: '3',
@@ -69,6 +73,8 @@ export const mockBaskets: Basket[] = [
     longitude: 10.1825,
     exampleItems: ['Sandwiches', 'Pâtisseries', 'Salades', 'Café'],
     imageUrl: 'https://images.unsplash.com/photo-1554118811-1e0d58224f24?w=400&h=300&fit=crop',
+    quantityTotal: 4,
+    isActive: true,
   },
   {
     id: '4',
@@ -92,6 +98,8 @@ export const mockBaskets: Basket[] = [
     longitude: 10.1805,
     exampleItems: ['Baklava', 'Makroud', 'Zlebia', 'Assortiment sucré'],
     imageUrl: 'https://images.unsplash.com/photo-1586985289688-ca3cf47d3e6e?w=400&h=300&fit=crop',
+    quantityTotal: 7,
+    isActive: true,
   },
   {
     id: '5',
@@ -115,6 +123,8 @@ export const mockBaskets: Basket[] = [
     longitude: 10.1795,
     exampleItems: ['Parts de pizza', 'Pâtes', 'Salades', 'Desserts'],
     imageUrl: 'https://images.unsplash.com/photo-1513104890138-7c749659a591?w=400&h=300&fit=crop',
+    quantityTotal: 10,
+    isActive: true,
   },
 ];
 

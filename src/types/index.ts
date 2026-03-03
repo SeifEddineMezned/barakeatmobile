@@ -1,3 +1,5 @@
+export type UserRole = 'customer' | 'business';
+
 export interface ReviewRatings {
   service: number;
   quantite: number;
@@ -24,12 +26,14 @@ export interface Basket {
     end: string;
   };
   quantityLeft: number;
+  quantityTotal: number;
   distance: number;
   address: string;
   latitude: number;
   longitude: number;
   exampleItems: string[];
   imageUrl?: string;
+  isActive: boolean;
 }
 
 export interface Merchant {
@@ -57,6 +61,8 @@ export interface Order {
   pickupCode: string;
   status: 'reserved' | 'ready' | 'collected' | 'cancelled';
   createdAt: string;
+  customerName?: string;
+  customerPhone?: string;
 }
 
 export interface User {
@@ -64,6 +70,30 @@ export interface User {
   name: string;
   email: string;
   phone?: string;
+  role: UserRole;
+}
+
+export interface BusinessProfile {
+  id: string;
+  name: string;
+  email: string;
+  phone?: string;
+  address: string;
+  category: string;
+  description?: string;
+  logo?: string;
+  hours?: string;
+  latitude: number;
+  longitude: number;
+}
+
+export interface BusinessStats {
+  totalBasketsSold: number;
+  totalRevenue: number;
+  activeBaskets: number;
+  pendingOrders: number;
+  mealsRescued: number;
+  averageRating: number;
 }
 
 export interface Partner {
