@@ -2,37 +2,38 @@ import React, { useState, useCallback } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Modal, Dimensions } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
-import { TrendingUp, ShoppingBag, DollarSign, Clock, Leaf, Star, X } from 'lucide-react-native';
+import { TrendingUp, ShoppingBag, DollarSign, Clock, Leaf, Star, X, Package, AlertCircle } from 'lucide-react-native';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { useBusinessStore } from '@/src/stores/businessStore';
 import { useAuthStore } from '@/src/stores/authStore';
+import { LineChart } from '@/src/components/LineChart';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
 
-function SimpleBarChart({ data, labels, color, maxVal }: { data: number[]; labels: string[]; color: string; maxVal?: number }) {
+function SimpleBarChart({ data, labels, color, stackData, stackColor }: { data: number[]; labels: string[]; color: string; stackData?: number[]; stackColor?: string }) {
   const theme = useTheme();
-  const max = maxVal ?? Math.max(...data, 1);
-  const barWidth = Math.min(32, (SCREEN_WIDTH - 120) / data.length - 8);
+  const allMax = Math.max(...data.map((v, i) => v + (stackData?.[i] ?? 0)), 1);
+  const barWidth = Math.min(28, (SCREEN_WIDTH - 140) / data.length - 10);
 
   return (
     <View style={chartStyles.container}>
       <View style={chartStyles.barsRow}>
         {data.map((val, i) => {
-          const height = Math.max(4, (val / max) * 100);
+          const stackVal = stackData?.[i] ?? 0;
+          const total = val + stackVal;
+          const height = Math.max(6, (total / allMax) * 110);
+          const mainH = total > 0 ? (val / total) * height : 0;
+          const stackH = total > 0 ? (stackVal / total) * height : 0;
           return (
             <View key={i} style={chartStyles.barCol}>
-              <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.caption, fontWeight: '600' as const, marginBottom: 4 }]}>
-                {val}
-              </Text>
-              <View style={[chartStyles.barBg, { backgroundColor: theme.colors.divider, borderRadius: 4, width: barWidth }]}>
-                <View
-                  style={[
-                    chartStyles.barFill,
-                    { height: `${height}%`, backgroundColor: color, borderRadius: 4, width: barWidth },
-                  ]}
-                />
+              <View style={[chartStyles.barBg, { height: 120, width: barWidth, borderRadius: 6, backgroundColor: 'transparent' }]}>
+                <View style={{ flex: 1 }} />
+                {stackData && (
+                  <View style={{ height: stackH, backgroundColor: stackColor ?? theme.colors.secondary, borderTopLeftRadius: 6, borderTopRightRadius: 6, width: barWidth }} />
+                )}
+                <View style={{ height: mainH, backgroundColor: color, borderBottomLeftRadius: 6, borderBottomRightRadius: 6, borderTopLeftRadius: stackData ? 0 : 6, borderTopRightRadius: stackData ? 0 : 6, width: barWidth }} />
               </View>
-              <Text style={[{ color: theme.colors.muted, ...theme.typography.caption, marginTop: 4 }]}>
+              <Text style={[{ color: theme.colors.muted, fontSize: 10, marginTop: 6, fontFamily: 'Poppins_400Regular' }]}>
                 {labels[i] ?? ''}
               </Text>
             </View>
@@ -56,12 +57,8 @@ const chartStyles = StyleSheet.create({
     alignItems: 'center',
   },
   barBg: {
-    height: 100,
     justifyContent: 'flex-end',
     overflow: 'hidden',
-  },
-  barFill: {
-    width: '100%',
   },
 });
 
@@ -69,17 +66,46 @@ function ReviewBar({ label, value, color }: { label: string; value: number; colo
   const theme = useTheme();
   const pct = (value / 5) * 100;
   return (
-    <View style={{ marginBottom: 10 }}>
-      <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
+    <View style={{ marginBottom: 12 }}>
+      <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
         <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.bodySm }]}>{label}</Text>
         <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '600' as const }]}>{value.toFixed(1)}</Text>
       </View>
-      <View style={{ height: 6, backgroundColor: theme.colors.divider, borderRadius: 3 }}>
-        <View style={{ height: 6, width: `${pct}%`, backgroundColor: color, borderRadius: 3 }} />
+      <View style={{ height: 8, backgroundColor: theme.colors.divider, borderRadius: 4 }}>
+        <View style={{ height: 8, width: `${pct}%`, backgroundColor: color, borderRadius: 4 }} />
       </View>
     </View>
   );
 }
+
+function StatMiniCard({ icon: Icon, value, label, suffix, color, theme }: any) {
+  return (
+    <View style={[miniStyles.card, { backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, ...theme.shadows.shadowSm }]}>
+      <View style={[miniStyles.iconWrap, { backgroundColor: color + '14', borderRadius: 10 }]}>
+        <Icon size={16} color={color} />
+      </View>
+      <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, marginTop: 8 }]}>
+        {value}{suffix ? ` ${suffix}` : ''}
+      </Text>
+      <Text style={[{ color: theme.colors.muted, fontSize: 10, marginTop: 2, fontFamily: 'Poppins_400Regular' }]} numberOfLines={1}>
+        {label}
+      </Text>
+    </View>
+  );
+}
+
+const miniStyles = StyleSheet.create({
+  card: {
+    flex: 1,
+    padding: 14,
+  },
+  iconWrap: {
+    width: 32,
+    height: 32,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+});
 
 export default function BusinessDashboard() {
   const { t } = useTranslation();
@@ -91,37 +117,69 @@ export default function BusinessDashboard() {
   const activeBasket = baskets.find((b) => b.isActive && b.reviews);
   const reviews = activeBasket?.reviews ?? { service: 4.7, quantite: 4.5, qualite: 4.8, variete: 4.4 };
 
-  const dayLabels = ['L', 'M', 'M', 'J', 'V', 'S', 'D'];
+  const dayLabels = ['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim'];
   const weekLabels = ['S1', 'S2', 'S3', 'S4'];
-
-  const topStats = [
-    { label: t('business.dashboard.revenue'), value: `${stats.totalRevenue}`, suffix: 'TND', icon: DollarSign, color: theme.colors.secondary },
-    { label: t('business.dashboard.basketsSold'), value: stats.totalBasketsSold.toString(), suffix: '', icon: ShoppingBag, color: theme.colors.primary },
-    { label: t('business.dashboard.pendingOrders'), value: stats.pendingOrders.toString(), suffix: '', icon: Clock, color: theme.colors.accentWarm },
-    { label: t('business.dashboard.mealsRescued'), value: stats.mealsRescued.toString(), suffix: '', icon: Leaf, color: theme.colors.accentFresh },
-  ];
 
   const handleRatingPress = useCallback(() => {
     setShowRatingModal(true);
   }, []);
 
+  const chartWidth = Math.min(SCREEN_WIDTH - 80, 320);
+
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]} edges={['top']}>
       <ScrollView showsVerticalScrollIndicator={false}>
         <View style={[styles.header, { paddingHorizontal: theme.spacing.xl, paddingTop: theme.spacing.xl }]}>
-          <View>
-            <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.bodySm }]}>
-              {t('business.dashboard.greeting')} 👋
+          <View style={styles.headerLeft}>
+            <Text style={[{ color: theme.colors.muted, fontSize: 12, fontFamily: 'Poppins_400Regular' }]}>
+              {t('business.dashboard.greeting')}
             </Text>
             <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h1, marginTop: 2 }]}>
               {user?.name ?? 'Mon Commerce'}
             </Text>
           </View>
-          <View style={[styles.liveBadge, { backgroundColor: theme.colors.primary + '15', borderRadius: theme.radii.pill, paddingHorizontal: 12, paddingVertical: 6 }]}>
+          <View style={[styles.liveBadge, { backgroundColor: theme.colors.success + '18', borderRadius: theme.radii.pill, paddingHorizontal: 12, paddingVertical: 6 }]}>
             <View style={[styles.liveDot, { backgroundColor: theme.colors.success }]} />
-            <Text style={[{ color: theme.colors.primary, ...theme.typography.caption, fontWeight: '600' as const, marginLeft: 6 }]}>
+            <Text style={[{ color: theme.colors.success, fontSize: 11, fontWeight: '600' as const, marginLeft: 6, fontFamily: 'Poppins_600SemiBold' }]}>
               En ligne
             </Text>
+          </View>
+        </View>
+
+        <View style={[styles.summaryBanner, {
+          backgroundColor: theme.colors.primary,
+          marginHorizontal: theme.spacing.xl,
+          marginTop: theme.spacing.xl,
+          borderRadius: theme.radii.r20,
+          padding: theme.spacing.lg,
+        }]}>
+          <Text style={[{ color: 'rgba(255,255,255,0.7)', fontSize: 12, fontFamily: 'Poppins_400Regular' }]}>
+            Résumé de la journée
+          </Text>
+          <View style={styles.summaryRow}>
+            <View style={styles.summaryItem}>
+              <DollarSign size={14} color={theme.colors.secondary} />
+              <Text style={[styles.summaryVal, { color: '#fff' }]}>{stats.totalRevenue}</Text>
+              <Text style={[styles.summarySuffix, { color: 'rgba(255,255,255,0.7)' }]}>TND</Text>
+            </View>
+            <View style={[styles.summaryDivider, { backgroundColor: 'rgba(255,255,255,0.2)' }]} />
+            <View style={styles.summaryItem}>
+              <ShoppingBag size={14} color={theme.colors.secondary} />
+              <Text style={[styles.summaryVal, { color: '#fff' }]}>{stats.totalBasketsSold}</Text>
+              <Text style={[styles.summarySuffix, { color: 'rgba(255,255,255,0.7)' }]}>vendus</Text>
+            </View>
+            <View style={[styles.summaryDivider, { backgroundColor: 'rgba(255,255,255,0.2)' }]} />
+            <View style={styles.summaryItem}>
+              <Clock size={14} color={theme.colors.secondary} />
+              <Text style={[styles.summaryVal, { color: '#fff' }]}>{stats.pendingOrders}</Text>
+              <Text style={[styles.summarySuffix, { color: 'rgba(255,255,255,0.7)' }]}>en att.</Text>
+            </View>
+            <View style={[styles.summaryDivider, { backgroundColor: 'rgba(255,255,255,0.2)' }]} />
+            <View style={styles.summaryItem}>
+              <Package size={14} color={theme.colors.secondary} />
+              <Text style={[styles.summaryVal, { color: '#fff' }]}>{stats.mealsRescued}</Text>
+              <Text style={[styles.summarySuffix, { color: 'rgba(255,255,255,0.7)' }]}>sauvés</Text>
+            </View>
           </View>
         </View>
 
@@ -129,66 +187,48 @@ export default function BusinessDashboard() {
           onPress={handleRatingPress}
           activeOpacity={0.8}
           style={[styles.ratingCard, {
-            backgroundColor: theme.colors.primary,
+            backgroundColor: theme.colors.surface,
             marginHorizontal: theme.spacing.xl,
-            marginTop: theme.spacing.xl,
+            marginTop: theme.spacing.lg,
             borderRadius: theme.radii.r16,
             padding: theme.spacing.lg,
-            ...theme.shadows.shadowMd,
+            ...theme.shadows.shadowSm,
           }]}
         >
           <View style={styles.ratingRow}>
             <View style={styles.ratingLeft}>
-              <Star size={24} color={theme.colors.secondary} fill={theme.colors.secondary} />
-              <Text style={[{ color: '#fff', ...theme.typography.display, marginLeft: 12 }]}>
-                {stats.averageRating.toFixed(1)}
-              </Text>
+              <View style={[styles.ratingStarBg, { backgroundColor: theme.colors.starYellow + '18' }]}>
+                <Star size={20} color={theme.colors.starYellow} fill={theme.colors.starYellow} />
+              </View>
+              <View style={{ marginLeft: 12 }}>
+                <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h2 }]}>
+                  {stats.averageRating.toFixed(1)}
+                </Text>
+                <Text style={[{ color: theme.colors.muted, fontSize: 11, fontFamily: 'Poppins_400Regular' }]}>
+                  {t('business.dashboard.avgRating')}
+                </Text>
+              </View>
             </View>
-            <View style={styles.ratingRight}>
-              <Text style={[{ color: 'rgba(255,255,255,0.8)', ...theme.typography.bodySm }]}>
-                {t('business.dashboard.avgRating')}
-              </Text>
-              <Text style={[{ color: 'rgba(255,255,255,0.6)', ...theme.typography.caption, marginTop: 2 }]}>
-                Appuyez pour voir les détails →
-              </Text>
+            <View style={[styles.ratingArrow, { backgroundColor: theme.colors.bg }]}>
+              <Text style={[{ color: theme.colors.primary, fontSize: 12, fontFamily: 'Poppins_600SemiBold' }]}>Détails →</Text>
             </View>
           </View>
         </TouchableOpacity>
 
-        <View style={[styles.statsSection, { paddingHorizontal: theme.spacing.xl, marginTop: theme.spacing.xl }]}>
+        <View style={[styles.statsGrid, { paddingHorizontal: theme.spacing.xl, marginTop: theme.spacing.xl }]}>
           <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, marginBottom: theme.spacing.md }]}>
-            {t('business.dashboard.todayOverview')}
+            Performance globale
           </Text>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 10 }}>
-            {topStats.map((stat, index) => {
-              const IconComponent = stat.icon;
-              return (
-                <View
-                  key={index}
-                  style={[
-                    styles.statCard,
-                    {
-                      backgroundColor: theme.colors.surface,
-                      borderRadius: theme.radii.r16,
-                      padding: theme.spacing.lg,
-                      minWidth: 140,
-                      ...theme.shadows.shadowSm,
-                    },
-                  ]}
-                >
-                  <View style={[styles.statIconWrap, { backgroundColor: stat.color + '18', borderRadius: theme.radii.r12, width: 36, height: 36 }]}>
-                    <IconComponent size={18} color={stat.color} />
-                  </View>
-                  <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h2, marginTop: theme.spacing.sm }]}>
-                    {stat.value}{stat.suffix ? ` ${stat.suffix}` : ''}
-                  </Text>
-                  <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, marginTop: 2 }]} numberOfLines={1}>
-                    {stat.label}
-                  </Text>
-                </View>
-              );
-            })}
-          </ScrollView>
+          <View style={styles.statsRow}>
+            <StatMiniCard icon={TrendingUp} value={stats.activeBaskets} label={t('business.dashboard.activeBaskets')} color={theme.colors.primary} theme={theme} />
+            <View style={{ width: 10 }} />
+            <StatMiniCard icon={Leaf} value={`${(stats.mealsRescued * 2.5).toFixed(0)}kg`} label="CO₂ économisé" color={theme.colors.accentFresh} theme={theme} />
+          </View>
+          <View style={[styles.statsRow, { marginTop: 10 }]}>
+            <StatMiniCard icon={DollarSign} value={stats.totalRevenue} suffix="TND" label={t('business.dashboard.revenue')} color={theme.colors.accentWarm} theme={theme} />
+            <View style={{ width: 10 }} />
+            <StatMiniCard icon={AlertCircle} value={stats.pendingOrders} label={t('business.dashboard.pendingOrders')} color={theme.colors.error} theme={theme} />
+          </View>
         </View>
 
         <View style={[styles.chartSection, { paddingHorizontal: theme.spacing.xl, marginTop: theme.spacing.xxl }]}>
@@ -196,14 +236,22 @@ export default function BusinessDashboard() {
             {t('business.dashboard.salesChart')}
           </Text>
           <View style={[styles.chartCard, { backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, padding: theme.spacing.lg, ...theme.shadows.shadowSm }]}>
-            <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, marginBottom: 4 }]}>
-              {t('business.dashboard.dailySales')}
-            </Text>
-            <SimpleBarChart
-              data={stats.dailySales}
-              labels={dayLabels}
-              color={theme.colors.primary}
-            />
+            <View style={styles.chartLegend}>
+              <View style={styles.legendItem}>
+                <View style={[styles.legendDot, { backgroundColor: theme.colors.primary }]} />
+                <Text style={[{ color: theme.colors.muted, fontSize: 10, fontFamily: 'Poppins_400Regular' }]}>Ventes</Text>
+              </View>
+            </View>
+            <View style={{ alignItems: 'center' }}>
+              <LineChart
+                data={stats.dailySales}
+                labels={dayLabels}
+                color={theme.colors.primary}
+                gradientColor={theme.colors.accentFresh}
+                width={chartWidth}
+                height={150}
+              />
+            </View>
           </View>
         </View>
 
@@ -212,40 +260,23 @@ export default function BusinessDashboard() {
             {t('business.dashboard.avgSalesChart')}
           </Text>
           <View style={[styles.chartCard, { backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, padding: theme.spacing.lg, ...theme.shadows.shadowSm }]}>
-            <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, marginBottom: 4 }]}>
-              {t('business.dashboard.weeklySales')}
-            </Text>
+            <View style={styles.chartLegend}>
+              <View style={styles.legendItem}>
+                <View style={[styles.legendDot, { backgroundColor: theme.colors.primary }]} />
+                <Text style={[{ color: theme.colors.muted, fontSize: 10, fontFamily: 'Poppins_400Regular' }]}>Paniers</Text>
+              </View>
+              <View style={[styles.legendItem, { marginLeft: 12 }]}>
+                <View style={[styles.legendDot, { backgroundColor: theme.colors.secondary }]} />
+                <Text style={[{ color: theme.colors.muted, fontSize: 10, fontFamily: 'Poppins_400Regular' }]}>Revenus</Text>
+              </View>
+            </View>
             <SimpleBarChart
               data={stats.weeklySales}
               labels={weekLabels}
-              color={theme.colors.accentFresh}
+              color={theme.colors.primary}
+              stackData={[18, 22, 20, 25]}
+              stackColor={theme.colors.secondary}
             />
-          </View>
-        </View>
-
-        <View style={[styles.perfSection, { paddingHorizontal: theme.spacing.xl, marginTop: theme.spacing.xxl }]}>
-          <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, marginBottom: theme.spacing.md }]}>
-            {t('business.dashboard.performance')}
-          </Text>
-          <View style={[styles.perfGrid]}>
-            <View style={[styles.perfCard, { backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, padding: theme.spacing.lg, ...theme.shadows.shadowSm }]}>
-              <TrendingUp size={20} color={theme.colors.primary} />
-              <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h2, marginTop: 8 }]}>
-                {stats.activeBaskets}
-              </Text>
-              <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption }]}>
-                {t('business.dashboard.activeBaskets')}
-              </Text>
-            </View>
-            <View style={[styles.perfCard, { backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, padding: theme.spacing.lg, ...theme.shadows.shadowSm }]}>
-              <Leaf size={20} color={theme.colors.accentFresh} />
-              <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h2, marginTop: 8 }]}>
-                {(stats.mealsRescued * 2.5).toFixed(0)} kg
-              </Text>
-              <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption }]}>
-                CO₂ économisé
-              </Text>
-            </View>
           </View>
         </View>
 
@@ -254,13 +285,14 @@ export default function BusinessDashboard() {
 
       <Modal visible={showRatingModal} transparent animationType="slide" onRequestClose={() => setShowRatingModal(false)}>
         <View style={styles.modalOverlay}>
-          <View style={[styles.modalContent, { backgroundColor: theme.colors.surface, borderTopLeftRadius: theme.radii.r24, borderTopRightRadius: theme.radii.r24, padding: theme.spacing.xl, ...theme.shadows.shadowLg }]}>
+          <View style={[styles.modalContent, { backgroundColor: theme.colors.surface, borderTopLeftRadius: 28, borderTopRightRadius: 28, padding: theme.spacing.xl, ...theme.shadows.shadowLg }]}>
+            <View style={[styles.modalHandle, { backgroundColor: theme.colors.divider, alignSelf: 'center', marginBottom: theme.spacing.lg }]} />
             <View style={styles.modalHeader}>
               <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h2 }]}>
                 {t('business.dashboard.ratingDetails')}
               </Text>
-              <TouchableOpacity onPress={() => setShowRatingModal(false)}>
-                <X size={22} color={theme.colors.textSecondary} />
+              <TouchableOpacity onPress={() => setShowRatingModal(false)} style={[styles.modalCloseBtn, { backgroundColor: theme.colors.bg }]}>
+                <X size={18} color={theme.colors.textSecondary} />
               </TouchableOpacity>
             </View>
 
@@ -269,21 +301,21 @@ export default function BusinessDashboard() {
               <Text style={[{ color: '#fff', ...theme.typography.display, marginLeft: 12 }]}>
                 {stats.averageRating.toFixed(1)}
               </Text>
-              <Text style={[{ color: 'rgba(255,255,255,0.7)', ...theme.typography.bodySm, marginLeft: 12 }]}>/5</Text>
+              <Text style={[{ color: 'rgba(255,255,255,0.6)', fontSize: 18, marginLeft: 4, fontFamily: 'Poppins_400Regular' }]}>/5</Text>
             </View>
 
             <View style={{ marginTop: theme.spacing.xl }}>
               <ReviewBar label="Service" value={reviews.service} color={theme.colors.primary} />
               <ReviewBar label="Quantité" value={reviews.quantite} color={theme.colors.accentFresh} />
-              <ReviewBar label="Qualité" value={reviews.qualite} color={theme.colors.primary} />
-              <ReviewBar label="Variété" value={reviews.variete} color={theme.colors.accentFresh} />
+              <ReviewBar label="Qualité" value={reviews.qualite} color={theme.colors.accentWarm} />
+              <ReviewBar label="Variété" value={reviews.variete} color={theme.colors.secondary} />
             </View>
 
             <TouchableOpacity
               onPress={() => setShowRatingModal(false)}
-              style={[{ backgroundColor: theme.colors.bg, borderRadius: theme.radii.r12, padding: theme.spacing.lg, marginTop: theme.spacing.xl }]}
+              style={[{ backgroundColor: theme.colors.primary, borderRadius: theme.radii.r12, padding: theme.spacing.lg, marginTop: theme.spacing.xl }]}
             >
-              <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.body, textAlign: 'center' as const, fontWeight: '600' as const }]}>
+              <Text style={[{ color: '#fff', ...theme.typography.button, textAlign: 'center' as const }]}>
                 {t('common.close')}
               </Text>
             </TouchableOpacity>
@@ -303,6 +335,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
   },
+  headerLeft: {},
   liveBadge: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -311,6 +344,32 @@ const styles = StyleSheet.create({
     width: 8,
     height: 8,
     borderRadius: 4,
+  },
+  summaryBanner: {},
+  summaryRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 14,
+  },
+  summaryItem: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  summaryVal: {
+    fontSize: 20,
+    fontWeight: '700' as const,
+    marginTop: 4,
+    fontFamily: 'Poppins_700Bold',
+  },
+  summarySuffix: {
+    fontSize: 10,
+    marginTop: 2,
+    fontFamily: 'Poppins_400Regular',
+  },
+  summaryDivider: {
+    width: 1,
+    height: 36,
   },
   ratingCard: {},
   ratingRow: {
@@ -322,36 +381,61 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
   },
-  ratingRight: {
-    alignItems: 'flex-end',
-  },
-  statsSection: {},
-  statCard: {},
-  statIconWrap: {
+  ratingStarBg: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
     justifyContent: 'center',
     alignItems: 'center',
   },
+  ratingArrow: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 20,
+  },
+  statsGrid: {},
+  statsRow: {
+    flexDirection: 'row',
+  },
   chartSection: {},
   chartCard: {},
-  perfSection: {},
-  perfGrid: {
+  chartLegend: {
     flexDirection: 'row',
-    gap: 12,
+    marginBottom: 8,
   },
-  perfCard: {
-    flex: 1,
+  legendItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  legendDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    marginRight: 4,
   },
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
+    backgroundColor: 'rgba(0,0,0,0.45)',
     justifyContent: 'flex-end',
   },
   modalContent: {
-    maxHeight: '80%',
+    maxHeight: '85%',
+  },
+  modalHandle: {
+    width: 40,
+    height: 4,
+    borderRadius: 2,
   },
   modalHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  modalCloseBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    justifyContent: 'center',
     alignItems: 'center',
   },
   overallRatingBlock: {

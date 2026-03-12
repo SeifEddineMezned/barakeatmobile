@@ -1,14 +1,27 @@
 import React, { useState, useCallback, useMemo } from 'react';
-import { View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity, Modal } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity, Modal, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
-import { Search, Compass, MapPin } from 'lucide-react-native';
+import { Search, Compass, MapPin, X, Navigation } from 'lucide-react-native';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { BasketCard } from '@/src/components/BasketCard';
 import { mockBaskets, CATEGORIES } from '@/src/mocks/baskets';
 import { useFavoritesStore } from '@/src/stores/favoritesStore';
 import { useAuthStore } from '@/src/stores/authStore';
-import MapView, { Marker, Circle } from 'react-native-maps';
+import { MapFallback } from '@/src/components/MapFallback';
+
+let MapView: any = null;
+let MapMarker: any = null;
+let MapCircle: any = null;
+
+if (Platform.OS !== 'web') {
+  const maps = require('react-native-maps');
+  MapView = maps.default;
+  MapMarker = maps.Marker;
+  MapCircle = maps.Circle;
+}
+
+const RADIUS_OPTIONS = [1, 2, 3, 5, 10, 15, 20];
 
 export default function HomeScreen() {
   const { t } = useTranslation();
@@ -44,6 +57,15 @@ export default function HomeScreen() {
 
   const firstName = user?.firstName ?? user?.name?.split(' ')[0] ?? '';
 
+  const mapMarkers = mockBaskets
+    .filter((b) => b.distance <= radius)
+    .map((b) => ({ id: b.id, name: b.merchantName, lat: b.latitude, lng: b.longitude }));
+
+  const sliderProgress = useMemo(() => {
+    const idx = RADIUS_OPTIONS.indexOf(radius);
+    return idx >= 0 ? (idx / (RADIUS_OPTIONS.length - 1)) * 100 : 50;
+  }, [radius]);
+
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]} edges={['top']}>
       <View style={[styles.header, { paddingHorizontal: theme.spacing.xl, paddingTop: theme.spacing.lg }]}>
@@ -61,11 +83,11 @@ export default function HomeScreen() {
           </View>
           <TouchableOpacity
             onPress={() => setShowRadiusModal(true)}
-            style={[styles.radiusChip, { backgroundColor: theme.colors.bagsLeftBg, paddingHorizontal: 10, paddingVertical: 5, borderRadius: theme.radii.pill }]}
+            style={[styles.radiusChip, { backgroundColor: theme.colors.primary + '12', paddingHorizontal: 12, paddingVertical: 6, borderRadius: theme.radii.pill }]}
           >
-            <MapPin size={13} color={theme.colors.primary} />
-            <Text style={[{ color: theme.colors.primary, ...theme.typography.caption, fontWeight: '600' as const, marginLeft: 3 }]}>
-              {radius} {t('home.km')}
+            <MapPin size={14} color={theme.colors.primary} />
+            <Text style={[{ color: theme.colors.primary, ...theme.typography.caption, fontWeight: '600' as const, marginLeft: 4 }]}>
+              {radius} km
             </Text>
           </TouchableOpacity>
         </View>
@@ -158,97 +180,128 @@ export default function HomeScreen() {
 
       <Modal visible={showRadiusModal} transparent animationType="slide" onRequestClose={() => setShowRadiusModal(false)}>
         <View style={styles.radiusModalOverlay}>
-          <View style={[styles.radiusModalContent, { backgroundColor: theme.colors.surface, borderTopLeftRadius: theme.radii.r24, borderTopRightRadius: theme.radii.r24, ...theme.shadows.shadowLg }]}>
-            <View style={[styles.radiusModalHeader, { padding: theme.spacing.xl }]}>
-              <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h2 }]}>
+          <View style={[styles.radiusModalContent, { backgroundColor: theme.colors.surface, borderTopLeftRadius: 28, borderTopRightRadius: 28, ...theme.shadows.shadowLg }]}>
+            <View style={[styles.modalHandle, { backgroundColor: theme.colors.divider }]} />
+
+            <View style={[styles.radiusModalHeader, { paddingHorizontal: theme.spacing.xl, paddingTop: theme.spacing.lg }]}>
+              <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h2, flex: 1 }]}>
                 {t('home.selectRadius')}
               </Text>
-              <TouchableOpacity onPress={() => setShowRadiusModal(false)}>
-                <Text style={[{ color: theme.colors.primary, ...theme.typography.body, fontWeight: '600' as const }]}>
-                  {t('common.done')}
-                </Text>
+              <TouchableOpacity
+                onPress={() => setShowRadiusModal(false)}
+                style={[styles.closeBtn, { backgroundColor: theme.colors.bg }]}
+              >
+                <X size={18} color={theme.colors.textPrimary} />
               </TouchableOpacity>
             </View>
 
-            <View style={[styles.mapContainer, { marginHorizontal: theme.spacing.xl }]}>
-              <MapView
-                style={styles.mapView}
-                initialRegion={{
-                  latitude: 36.8065,
-                  longitude: 10.1815,
-                  latitudeDelta: radius * 0.02,
-                  longitudeDelta: radius * 0.02,
-                }}
-                region={{
-                  latitude: 36.8065,
-                  longitude: 10.1815,
-                  latitudeDelta: Math.max(0.02, radius * 0.015),
-                  longitudeDelta: Math.max(0.02, radius * 0.015),
-                }}
-              >
-                <Circle
-                  center={{ latitude: 36.8065, longitude: 10.1815 }}
-                  radius={radius * 1000}
-                  fillColor="rgba(17, 75, 60, 0.12)"
-                  strokeColor={theme.colors.primary}
-                  strokeWidth={2}
-                />
-                {mockBaskets.filter(b => b.distance <= radius).map((basket) => (
-                  <Marker
-                    key={basket.id}
-                    coordinate={{ latitude: basket.latitude, longitude: basket.longitude }}
-                    title={basket.merchantName}
-                  />
-                ))}
-              </MapView>
+            <View style={[styles.mapContainer, { marginHorizontal: theme.spacing.xl, marginTop: theme.spacing.lg }]}>
+              {Platform.OS !== 'web' && MapView ? (
+                <MapView
+                  style={styles.mapView}
+                  initialRegion={{
+                    latitude: 36.8065,
+                    longitude: 10.1815,
+                    latitudeDelta: radius * 0.02,
+                    longitudeDelta: radius * 0.02,
+                  }}
+                  region={{
+                    latitude: 36.8065,
+                    longitude: 10.1815,
+                    latitudeDelta: Math.max(0.02, radius * 0.015),
+                    longitudeDelta: Math.max(0.02, radius * 0.015),
+                  }}
+                >
+                  {MapCircle && (
+                    <MapCircle
+                      center={{ latitude: 36.8065, longitude: 10.1815 }}
+                      radius={radius * 1000}
+                      fillColor="rgba(17, 75, 60, 0.12)"
+                      strokeColor={theme.colors.primary}
+                      strokeWidth={2}
+                    />
+                  )}
+                  {mockBaskets.filter(b => b.distance <= radius).map((basket) => (
+                    MapMarker ? (
+                      <MapMarker
+                        key={basket.id}
+                        coordinate={{ latitude: basket.latitude, longitude: basket.longitude }}
+                        title={basket.merchantName}
+                      />
+                    ) : null
+                  ))}
+                </MapView>
+              ) : (
+                <MapFallback markers={mapMarkers} radius={radius} style={styles.mapView} />
+              )}
             </View>
 
-            <View style={[styles.sliderSection, { paddingHorizontal: theme.spacing.xl, paddingVertical: theme.spacing.lg }]}>
-              <View style={styles.sliderHeader}>
+            <View style={[styles.sliderSection, { paddingHorizontal: theme.spacing.xl, paddingTop: theme.spacing.xl }]}>
+              <View style={styles.sliderLabelRow}>
                 <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.bodySm }]}>
                   {t('home.radiusFilter')}
                 </Text>
-                <Text style={[{ color: theme.colors.primary, ...theme.typography.h3 }]}>
-                  {radius} {t('home.km')}
-                </Text>
+                <View style={[styles.distanceBadge, { backgroundColor: theme.colors.primary + '12' }]}>
+                  <Text style={[{ color: theme.colors.primary, ...theme.typography.h3 }]}>
+                    {radius} km
+                  </Text>
+                </View>
               </View>
 
-              <View style={styles.sliderTrack}>
-                {[1, 2, 3, 5, 10, 15, 20].map((val) => (
-                  <TouchableOpacity
-                    key={val}
-                    onPress={() => setRadius(val)}
-                    style={[
-                      styles.sliderDot,
-                      {
-                        backgroundColor: val <= radius ? theme.colors.primary : theme.colors.divider,
-                        width: val === radius ? 28 : 20,
-                        height: val === radius ? 28 : 20,
-                        borderRadius: val === radius ? 14 : 10,
-                        borderWidth: val === radius ? 3 : 0,
-                        borderColor: theme.colors.secondary,
-                      },
-                    ]}
-                  >
-                    <Text style={[{
-                      color: val <= radius ? '#fff' : theme.colors.muted,
-                      ...theme.typography.caption,
-                      fontWeight: '700' as const,
-                      fontSize: 9,
-                    }]}>
-                      {val}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
+              <View style={styles.sliderContainer}>
+                <View style={[styles.sliderTrackBg, { backgroundColor: theme.colors.divider }]}>
+                  <View style={[styles.sliderTrackFill, { backgroundColor: theme.colors.primary, width: `${sliderProgress}%` }]} />
+                </View>
+                <View style={styles.dotsRow}>
+                  {RADIUS_OPTIONS.map((val) => {
+                    const isSelected = val === radius;
+                    const isInRange = val <= radius;
+                    return (
+                      <TouchableOpacity
+                        key={val}
+                        onPress={() => setRadius(val)}
+                        style={[
+                          styles.sliderDotOuter,
+                          {
+                            backgroundColor: isSelected ? theme.colors.primary : isInRange ? theme.colors.primary + '60' : theme.colors.divider,
+                            width: isSelected ? 32 : 24,
+                            height: isSelected ? 32 : 24,
+                            borderRadius: isSelected ? 16 : 12,
+                            borderWidth: isSelected ? 3 : 0,
+                            borderColor: theme.colors.secondary,
+                          },
+                        ]}
+                      >
+                        <Text style={[{
+                          color: isInRange ? '#fff' : theme.colors.muted,
+                          fontSize: isSelected ? 11 : 9,
+                          fontWeight: '700' as const,
+                          fontFamily: 'Poppins_600SemiBold',
+                        }]}>
+                          {val}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
               </View>
             </View>
 
             <TouchableOpacity
+              style={[styles.useLocationBtn, { borderColor: theme.colors.primary }]}
+              activeOpacity={0.7}
+            >
+              <Navigation size={16} color={theme.colors.primary} />
+              <Text style={[{ color: theme.colors.primary, ...theme.typography.bodySm, fontWeight: '600' as const, marginLeft: 8 }]}>
+                Utiliser ma position actuelle
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
               onPress={() => setShowRadiusModal(false)}
-              style={[{
+              activeOpacity={0.8}
+              style={[styles.confirmBtn, {
                 backgroundColor: theme.colors.primary,
-                borderRadius: theme.radii.r12,
-                padding: theme.spacing.lg,
                 marginHorizontal: theme.spacing.xl,
                 marginBottom: theme.spacing.xxl,
               }]}
@@ -303,17 +356,30 @@ const styles = StyleSheet.create({
   },
   radiusModalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
+    backgroundColor: 'rgba(0,0,0,0.45)',
     justifyContent: 'flex-end',
   },
   radiusModalContent: {},
+  modalHandle: {
+    width: 40,
+    height: 4,
+    borderRadius: 2,
+    alignSelf: 'center',
+    marginTop: 10,
+  },
   radiusModalHeader: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  closeBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    justifyContent: 'center',
     alignItems: 'center',
   },
   mapContainer: {
-    height: 240,
+    height: 260,
     borderRadius: 16,
     overflow: 'hidden',
   },
@@ -321,20 +387,56 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   sliderSection: {},
-  sliderHeader: {
+  sliderLabelRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 16,
+    marginBottom: 20,
   },
-  sliderTrack: {
+  distanceBadge: {
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+    borderRadius: 20,
+  },
+  sliderContainer: {
+    position: 'relative',
+    paddingVertical: 8,
+  },
+  sliderTrackBg: {
+    height: 4,
+    borderRadius: 2,
+    position: 'absolute',
+    top: '50%',
+    left: 0,
+    right: 0,
+    marginTop: -2,
+  },
+  sliderTrackFill: {
+    height: 4,
+    borderRadius: 2,
+  },
+  dotsRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingHorizontal: 4,
   },
-  sliderDot: {
+  sliderDotOuter: {
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  useLocationBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1.5,
+    borderRadius: 12,
+    paddingVertical: 12,
+    marginHorizontal: 20,
+    marginTop: 16,
+    marginBottom: 12,
+  },
+  confirmBtn: {
+    borderRadius: 14,
+    paddingVertical: 16,
   },
 });
