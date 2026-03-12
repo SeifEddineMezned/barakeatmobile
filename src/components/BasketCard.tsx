@@ -19,7 +19,7 @@ export function BasketCard({ basket, onFavoritePress, isFavorite = false }: Bask
   const favoriteAnim = React.useRef(new Animated.Value(1)).current;
 
   const handlePressIn = useCallback(() => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     Animated.spring(scaleAnim, {
       toValue: 0.97,
       useNativeDriver: true,
@@ -40,7 +40,7 @@ export function BasketCard({ basket, onFavoritePress, isFavorite = false }: Bask
   }, [basket.id, router]);
 
   const handleFavoritePress = useCallback(() => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     Animated.sequence([
       Animated.spring(favoriteAnim, {
         toValue: 1.3,
@@ -53,6 +53,10 @@ export function BasketCard({ basket, onFavoritePress, isFavorite = false }: Bask
     ]).start();
     onFavoritePress?.();
   }, [favoriteAnim, onFavoritePress]);
+
+  const isLowStock = basket.quantityLeft > 0 && basket.quantityLeft < 3;
+  const bagsCountColor = isLowStock ? '#1a1a1a' : '#fff';
+  const bagsBgColor = isLowStock ? theme.colors.secondary : theme.colors.primary;
 
   return (
     <Animated.View style={{ transform: [{ scale: scaleAnim }] }}>
@@ -82,15 +86,15 @@ export function BasketCard({ basket, onFavoritePress, isFavorite = false }: Bask
             />
           )}
 
-          <View style={[styles.bagsLeftBadge, { backgroundColor: theme.colors.primary, borderRadius: theme.radii.r8 }]}>
-            <ShoppingBag size={12} color="#fff" />
-            <Text style={[styles.bagsLeftText, { color: '#fff', ...theme.typography.caption, fontWeight: '700' as const, marginLeft: 4 }]}>
+          <View style={[styles.bagsLeftBadge, { backgroundColor: bagsBgColor, borderRadius: theme.radii.r12 }]}>
+            <ShoppingBag size={16} color={bagsCountColor} />
+            <Text style={[styles.bagsLeftText, { color: bagsCountColor, ...theme.typography.bodySm, fontWeight: '700' as const, marginLeft: 5 }]}>
               {basket.quantityLeft}
             </Text>
           </View>
 
           {basket.merchantRating != null && (
-            <View style={[styles.ratingBadge, { backgroundColor: 'rgba(0,0,0,0.6)', borderRadius: theme.radii.r8 }]}>
+            <View style={[styles.ratingBadge, { backgroundColor: 'rgba(0,0,0,0.65)', borderRadius: theme.radii.r8 }]}>
               <Star size={12} color={theme.colors.starYellow} fill={theme.colors.starYellow} />
               <Text style={[{ color: '#fff', ...theme.typography.caption, fontWeight: '700' as const, marginLeft: 3 }]}>
                 {basket.merchantRating.toFixed(1)}
@@ -128,12 +132,6 @@ export function BasketCard({ basket, onFavoritePress, isFavorite = false }: Bask
                 numberOfLines={1}
               >
                 {basket.merchantName}
-              </Text>
-              <Text
-                style={[{ color: theme.colors.textSecondary, ...theme.typography.caption }]}
-                numberOfLines={1}
-              >
-                {basket.name}
               </Text>
             </View>
           </View>
@@ -192,8 +190,8 @@ const styles = StyleSheet.create({
     left: 10,
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
   },
   bagsLeftText: {},
   ratingBadge: {

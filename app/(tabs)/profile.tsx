@@ -1,59 +1,54 @@
-import React, { useCallback, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Modal, I18nManager, Alert } from 'react-native';
+import React, { useCallback, useState, useMemo } from 'react';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Modal, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import { useRouter } from 'expo-router';
-
-import { ChevronRight, Globe, HelpCircle, Info, LogOut } from 'lucide-react-native';
+import {
+  ChevronRight, HelpCircle, Info, LogOut, User, Mail, Phone,
+  CreditCard, Leaf, DollarSign, ShoppingBag, FileText, Headphones
+} from 'lucide-react-native';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { useAuthStore } from '@/src/stores/authStore';
+import { useOrdersStore } from '@/src/stores/ordersStore';
 
 export default function ProfileScreen() {
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
   const theme = useTheme();
   const router = useRouter();
   const { user, signOut } = useAuthStore();
-  const [showLanguageModal, setShowLanguageModal] = useState(false);
+  const orders = useOrdersStore((state) => state.orders);
+  const [showFaqModal, setShowFaqModal] = useState(false);
+  const [showLegalModal, setShowLegalModal] = useState<string | null>(null);
+
+  const stats = useMemo(() => {
+    const completedOrders = orders.filter((o) => o.status === 'collected');
+    const basketsBought = completedOrders.reduce((sum, o) => sum + o.quantity, 0);
+    const moneySaved = completedOrders.reduce((sum, o) => sum + (o.basket.originalPrice - o.basket.discountedPrice) * o.quantity, 0);
+    const co2Saved = basketsBought * 2.5;
+    return { basketsBought, moneySaved, co2Saved };
+  }, [orders]);
 
   const handleSignOut = useCallback(() => {
     signOut();
     router.replace('/auth/sign-in' as never);
   }, [signOut, router]);
 
-  const changeLanguage = useCallback(async (lang: string) => {
-    const currentLang = i18n.language;
-    const wasRTL = currentLang === 'ar';
-    const willBeRTL = lang === 'ar';
-
-    await i18n.changeLanguage(lang);
-    setShowLanguageModal(false);
-
-    if (wasRTL !== willBeRTL) {
-      I18nManager.forceRTL(willBeRTL);
-      Alert.alert(
-        t('profile.languageChanged'),
-        t('profile.restartRequired'),
-        [{ text: t('common.ok') }]
-      );
-    }
-  }, [i18n, t]);
-
-  const handleLanguagePress = useCallback(() => {
-    setShowLanguageModal(true);
-  }, []);
-
   const handleFAQPress = useCallback(() => {
-    Alert.alert(
-      t('profile.faq'),
-      t('profile.faqContent') || 'FAQ content coming soon!\n\n• How do I reserve a basket?\n• What is a surprise basket?\n• How do pickup windows work?\n• What payment methods are accepted?',
-      [{ text: t('common.ok') }]
-    );
-  }, [t]);
+    setShowFaqModal(true);
+  }, []);
 
   const handleAboutPress = useCallback(() => {
     Alert.alert(
       t('profile.about'),
       `${t('profile.mission')}\n\n"${t('profile.motto')}"\n\n${t('profile.availability')}`,
+      [{ text: t('common.ok') }]
+    );
+  }, [t]);
+
+  const handleSupportPress = useCallback(() => {
+    Alert.alert(
+      t('profile.customerSupport'),
+      'support@barakeat.tn',
       [{ text: t('common.ok') }]
     );
   }, [t]);
@@ -64,23 +59,120 @@ export default function ProfileScreen() {
         <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h2 }]}>{t('profile.title')}</Text>
       </View>
 
-      <ScrollView style={styles.content} contentContainerStyle={[{ padding: theme.spacing.xl }]}>
+      <ScrollView style={styles.content} contentContainerStyle={[{ padding: theme.spacing.xl }]} showsVerticalScrollIndicator={false}>
         <View
           style={[
-            styles.section,
+            styles.userCard,
+            {
+              backgroundColor: theme.colors.primary,
+              borderRadius: theme.radii.r16,
+              padding: theme.spacing.xl,
+              marginBottom: theme.spacing.lg,
+            },
+          ]}
+        >
+          <View style={[styles.userAvatar, { backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 28, width: 56, height: 56 }]}>
+            <User size={28} color="#fff" />
+          </View>
+          <View style={styles.userInfo}>
+            <Text style={[{ color: '#fff', ...theme.typography.h2 }]}>
+              {user?.name ?? 'Utilisateur'}
+            </Text>
+            <Text style={[{ color: 'rgba(255,255,255,0.7)', ...theme.typography.bodySm, marginTop: 2 }]}>
+              {user?.email ?? ''}
+            </Text>
+          </View>
+        </View>
+
+        <View style={[styles.statsRow, { marginBottom: theme.spacing.lg }]}>
+          <View style={[styles.statItem, { backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, padding: theme.spacing.lg, ...theme.shadows.shadowSm }]}>
+            <View style={[styles.statIcon, { backgroundColor: theme.colors.primary + '15', borderRadius: theme.radii.r12, width: 36, height: 36 }]}>
+              <DollarSign size={18} color={theme.colors.primary} />
+            </View>
+            <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, marginTop: 8 }]}>
+              {stats.moneySaved.toFixed(0)} TND
+            </Text>
+            <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption }]}>
+              {t('profile.moneySaved')}
+            </Text>
+          </View>
+          <View style={[styles.statItem, { backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, padding: theme.spacing.lg, ...theme.shadows.shadowSm }]}>
+            <View style={[styles.statIcon, { backgroundColor: theme.colors.accentFresh + '15', borderRadius: theme.radii.r12, width: 36, height: 36 }]}>
+              <Leaf size={18} color={theme.colors.accentFresh} />
+            </View>
+            <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, marginTop: 8 }]}>
+              {stats.co2Saved.toFixed(1)} kg
+            </Text>
+            <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption }]}>
+              {t('profile.co2Saved')}
+            </Text>
+          </View>
+          <View style={[styles.statItem, { backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, padding: theme.spacing.lg, ...theme.shadows.shadowSm }]}>
+            <View style={[styles.statIcon, { backgroundColor: theme.colors.secondary + '30', borderRadius: theme.radii.r12, width: 36, height: 36 }]}>
+              <ShoppingBag size={18} color={theme.colors.primaryDark} />
+            </View>
+            <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, marginTop: 8 }]}>
+              {stats.basketsBought}
+            </Text>
+            <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption }]}>
+              {t('profile.basketsBought')}
+            </Text>
+          </View>
+        </View>
+
+        <View
+          style={[
+            styles.infoSection,
             {
               backgroundColor: theme.colors.surface,
               borderRadius: theme.radii.r16,
-              padding: theme.spacing.xl,
               marginBottom: theme.spacing.lg,
               ...theme.shadows.shadowSm,
             },
           ]}
         >
-          <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, marginBottom: theme.spacing.xs }]}>
-            {user?.name}
+          <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, padding: theme.spacing.lg, paddingBottom: theme.spacing.sm }]}>
+            {t('profile.personalInfo')}
           </Text>
-          <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.body }]}>{user?.email}</Text>
+          {[
+            { icon: User, label: t('profile.name'), value: user?.name ?? '-' },
+            { icon: Mail, label: t('profile.email'), value: user?.email ?? '-' },
+            { icon: Phone, label: t('profile.phone'), value: user?.phone ?? '-' },
+          ].map((item, index) => {
+            const IconComp = item.icon;
+            return (
+              <View
+                key={index}
+                style={[styles.infoRow, {
+                  paddingHorizontal: theme.spacing.lg,
+                  paddingVertical: theme.spacing.md,
+                  borderTopWidth: 1,
+                  borderTopColor: theme.colors.divider,
+                }]}
+              >
+                <View style={styles.infoRowLeft}>
+                  <IconComp size={18} color={theme.colors.textSecondary} />
+                  <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.bodySm, marginLeft: 10 }]}>
+                    {item.label}
+                  </Text>
+                </View>
+                <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '500' as const }]}>
+                  {item.value}
+                </Text>
+              </View>
+            );
+          })}
+          <View style={[styles.infoRow, { paddingHorizontal: theme.spacing.lg, paddingVertical: theme.spacing.md, borderTopWidth: 1, borderTopColor: theme.colors.divider }]}>
+            <View style={styles.infoRowLeft}>
+              <CreditCard size={18} color={theme.colors.textSecondary} />
+              <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.bodySm, marginLeft: 10 }]}>
+                {t('profile.cardInfo')}
+              </Text>
+            </View>
+            <Text style={[{ color: theme.colors.muted, ...theme.typography.caption }]}>
+              {t('profile.cardInfoSoon')}
+            </Text>
+          </View>
         </View>
 
         <View
@@ -95,27 +187,6 @@ export default function ProfileScreen() {
           ]}
         >
           <TouchableOpacity
-            style={[
-              styles.menuItem,
-              { padding: theme.spacing.lg, borderBottomWidth: 1, borderBottomColor: theme.colors.divider },
-            ]}
-            onPress={handleLanguagePress}
-          >
-            <View style={styles.menuItemLeft}>
-              <Globe size={20} color={theme.colors.textSecondary} />
-              <Text style={[styles.menuItemText, { color: theme.colors.textPrimary, ...theme.typography.body }]}>
-                {t('profile.language')}
-              </Text>
-            </View>
-            <View style={styles.menuItemRight}>
-              <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.bodySm }]}>
-                {i18n.language.toUpperCase()}
-              </Text>
-              <ChevronRight size={20} color={theme.colors.muted} />
-            </View>
-          </TouchableOpacity>
-
-          <TouchableOpacity
             style={[styles.menuItem, { padding: theme.spacing.lg, borderBottomWidth: 1, borderBottomColor: theme.colors.divider }]}
             onPress={handleFAQPress}
           >
@@ -123,6 +194,19 @@ export default function ProfileScreen() {
               <HelpCircle size={20} color={theme.colors.textSecondary} />
               <Text style={[styles.menuItemText, { color: theme.colors.textPrimary, ...theme.typography.body }]}>
                 {t('profile.faq')}
+              </Text>
+            </View>
+            <ChevronRight size={20} color={theme.colors.muted} />
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.menuItem, { padding: theme.spacing.lg, borderBottomWidth: 1, borderBottomColor: theme.colors.divider }]}
+            onPress={handleSupportPress}
+          >
+            <View style={styles.menuItemLeft}>
+              <Headphones size={20} color={theme.colors.textSecondary} />
+              <Text style={[styles.menuItemText, { color: theme.colors.textPrimary, ...theme.typography.body }]}>
+                {t('profile.customerSupport')}
               </Text>
             </View>
             <ChevronRight size={20} color={theme.colors.muted} />
@@ -144,41 +228,41 @@ export default function ProfileScreen() {
 
         <View
           style={[
-            styles.aboutSection,
+            styles.legalSection,
             {
               backgroundColor: theme.colors.surface,
               borderRadius: theme.radii.r16,
-              padding: theme.spacing.xl,
               marginBottom: theme.spacing.lg,
               ...theme.shadows.shadowSm,
             },
           ]}
         >
-          <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, marginBottom: theme.spacing.md }]}>
-            {t('profile.about')}
+          <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, padding: theme.spacing.lg, paddingBottom: theme.spacing.sm }]}>
+            {t('profile.legalMentions')}
           </Text>
-          <Text
-            style={[
-              { color: theme.colors.textSecondary, ...theme.typography.body, marginBottom: theme.spacing.md },
-            ]}
-          >
-            {t('profile.mission')}
-          </Text>
-          <Text
-            style={[
-              {
-                color: theme.colors.primary,
-                ...theme.typography.body,
-                fontStyle: 'italic',
-                marginBottom: theme.spacing.md,
-              },
-            ]}
-          >
-            {`"${t('profile.motto')}"`}
-          </Text>
-          <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.bodySm }]}>
-            {t('profile.availability')}
-          </Text>
+          {[
+            { label: t('profile.termsAndConditions'), key: 'terms' },
+            { label: t('profile.cookies'), key: 'cookies' },
+            { label: t('profile.privacyPolicy'), key: 'privacy' },
+          ].map((item) => (
+            <TouchableOpacity
+              key={item.key}
+              style={[styles.menuItem, {
+                padding: theme.spacing.lg,
+                borderTopWidth: 1,
+                borderTopColor: theme.colors.divider,
+              }]}
+              onPress={() => setShowLegalModal(item.key)}
+            >
+              <View style={styles.menuItemLeft}>
+                <FileText size={18} color={theme.colors.textSecondary} />
+                <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.bodySm, marginLeft: 10 }]}>
+                  {item.label}
+                </Text>
+              </View>
+              <ChevronRight size={18} color={theme.colors.muted} />
+            </TouchableOpacity>
+          ))}
         </View>
 
         <TouchableOpacity
@@ -198,88 +282,54 @@ export default function ProfileScreen() {
             {t('profile.signOut')}
           </Text>
         </TouchableOpacity>
+
+        <View style={{ height: 30 }} />
       </ScrollView>
 
-      <Modal
-        visible={showLanguageModal}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setShowLanguageModal(false)}
-      >
-        <TouchableOpacity
-          style={styles.modalOverlay}
-          activeOpacity={1}
-          onPress={() => setShowLanguageModal(false)}
-        >
-          <View
-            style={[
-              styles.modalContent,
-              {
-                backgroundColor: theme.colors.surface,
-                borderRadius: theme.radii.r24,
-                padding: theme.spacing.xl,
-                ...theme.shadows.shadowMd,
-              },
-            ]}
-            onStartShouldSetResponder={() => true}
-          >
-            <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, marginBottom: theme.spacing.lg }]}>
-              {t('profile.selectLanguage')}
-            </Text>
-
-            {[
-              { code: 'en', name: 'English', nativeName: 'English' },
-              { code: 'fr', name: 'Français', nativeName: 'Français' },
-              { code: 'ar', name: 'العربية', nativeName: 'العربية' },
-            ].map((lang, index) => (
-              <TouchableOpacity
-                key={lang.code}
-                style={[
-                  styles.languageOption,
-                  {
-                    padding: theme.spacing.lg,
-                    borderRadius: theme.radii.r12,
-                    marginBottom: index < 2 ? theme.spacing.sm : 0,
-                    backgroundColor:
-                      i18n.language === lang.code ? theme.colors.primary + '15' : theme.colors.bg,
-                    borderWidth: i18n.language === lang.code ? 2 : 0,
-                    borderColor: theme.colors.primary,
-                  },
-                ]}
-                onPress={() => changeLanguage(lang.code)}
-              >
-                <Text
-                  style={[
-                    {
-                      color: i18n.language === lang.code ? theme.colors.primary : theme.colors.textPrimary,
-                      ...theme.typography.body,
-                      fontWeight: i18n.language === lang.code ? '600' : '400',
-                    },
-                  ]}
-                >
-                  {lang.nativeName}
+      <Modal visible={showFaqModal} transparent animationType="slide" onRequestClose={() => setShowFaqModal(false)}>
+        <View style={styles.faqModalOverlay}>
+          <View style={[styles.faqModalContent, { backgroundColor: theme.colors.surface, borderTopLeftRadius: theme.radii.r24, borderTopRightRadius: theme.radii.r24, ...theme.shadows.shadowLg }]}>
+            <View style={[styles.faqHeader, { padding: theme.spacing.xl }]}>
+              <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h2 }]}>
+                {t('profile.faq')}
+              </Text>
+              <TouchableOpacity onPress={() => setShowFaqModal(false)}>
+                <Text style={[{ color: theme.colors.primary, ...theme.typography.body, fontWeight: '600' as const }]}>
+                  {t('common.close')}
                 </Text>
               </TouchableOpacity>
-            ))}
-
-            <TouchableOpacity
-              style={[
-                styles.modalCloseButton,
-                {
-                  marginTop: theme.spacing.lg,
-                  padding: theme.spacing.md,
-                  borderRadius: theme.radii.r12,
-                  backgroundColor: theme.colors.bg,
-                },
-              ]}
-              onPress={() => setShowLanguageModal(false)}
-            >
-              <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.body, textAlign: 'center' }]}>
-                {t('common.cancel')}
+            </View>
+            <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingHorizontal: theme.spacing.xl, paddingBottom: 40 }}>
+              <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.body, lineHeight: 24 }]}>
+                {t('profile.faqContent')}
               </Text>
-            </TouchableOpacity>
+            </ScrollView>
           </View>
-        </TouchableOpacity>
+        </View>
+      </Modal>
+
+      <Modal visible={showLegalModal !== null} transparent animationType="slide" onRequestClose={() => setShowLegalModal(null)}>
+        <View style={styles.faqModalOverlay}>
+          <View style={[styles.faqModalContent, { backgroundColor: theme.colors.surface, borderTopLeftRadius: theme.radii.r24, borderTopRightRadius: theme.radii.r24, ...theme.shadows.shadowLg }]}>
+            <View style={[styles.faqHeader, { padding: theme.spacing.xl }]}>
+              <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h2 }]}>
+                {showLegalModal === 'terms' ? t('profile.termsAndConditions') :
+                 showLegalModal === 'cookies' ? t('profile.cookies') :
+                 t('profile.privacyPolicy')}
+              </Text>
+              <TouchableOpacity onPress={() => setShowLegalModal(null)}>
+                <Text style={[{ color: theme.colors.primary, ...theme.typography.body, fontWeight: '600' as const }]}>
+                  {t('common.close')}
+                </Text>
+              </TouchableOpacity>
+            </View>
+            <View style={{ padding: theme.spacing.xl }}>
+              <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.body, textAlign: 'center' as const }]}>
+                {t('profile.legalContentSoon')}
+              </Text>
+            </View>
+          </View>
+        </View>
       </Modal>
     </SafeAreaView>
   );
@@ -293,7 +343,40 @@ const styles = StyleSheet.create({
   content: {
     flex: 1,
   },
-  section: {},
+  userCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  userAvatar: {
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  userInfo: {
+    flex: 1,
+    marginLeft: 16,
+  },
+  statsRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  statItem: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  statIcon: {
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  infoSection: {},
+  infoRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  infoRowLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
   menuSection: {},
   menuItem: {
     flexDirection: 'row',
@@ -306,12 +389,7 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   menuItemText: {},
-  menuItemRight: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  aboutSection: {},
+  legalSection: {},
   signOutButton: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -319,17 +397,18 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   signOutText: {},
-  modalOverlay: {
+  faqModalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
-    justifyContent: 'center',
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'flex-end',
+  },
+  faqModalContent: {
+    maxHeight: '85%',
+    flex: 1,
+  },
+  faqHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
     alignItems: 'center',
-    padding: 24,
   },
-  modalContent: {
-    width: '100%',
-    maxWidth: 400,
-  },
-  languageOption: {},
-  modalCloseButton: {},
 });

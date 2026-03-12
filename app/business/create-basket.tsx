@@ -3,15 +3,12 @@ import { View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity, Keyboa
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
-import { X, ChevronDown } from 'lucide-react-native';
+import { X, AlertCircle } from 'lucide-react-native';
 import * as Haptics from 'expo-haptics';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { useBusinessStore } from '@/src/stores/businessStore';
 import { PrimaryCTAButton } from '@/src/components/PrimaryCTAButton';
-import { CATEGORIES } from '@/src/mocks/baskets';
 import type { Basket } from '@/src/types';
-
-const CATEGORY_OPTIONS = CATEGORIES.filter((c) => c !== 'Tous');
 
 export default function CreateBasketScreen() {
   const { editId } = useLocalSearchParams<{ editId?: string }>();
@@ -25,25 +22,50 @@ export default function CreateBasketScreen() {
 
   const [name, setName] = useState(existingBasket?.name ?? '');
   const [description, setDescription] = useState(existingBasket?.description ?? '');
-  const [category, setCategory] = useState(existingBasket?.category ?? CATEGORY_OPTIONS[0]);
   const [originalPrice, setOriginalPrice] = useState(existingBasket?.originalPrice?.toString() ?? '');
   const [discountedPrice, setDiscountedPrice] = useState(existingBasket?.discountedPrice?.toString() ?? '');
-  const [quantity, setQuantity] = useState(existingBasket?.quantityTotal?.toString() ?? '');
-  const [pickupStart, setPickupStart] = useState(existingBasket?.pickupWindow?.start ?? '18:00');
-  const [pickupEnd, setPickupEnd] = useState(existingBasket?.pickupWindow?.end ?? '19:00');
-  const [exampleItems, setExampleItems] = useState(existingBasket?.exampleItems?.join(', ') ?? '');
-  const [showCategoryPicker, setShowCategoryPicker] = useState(false);
+  const [basketContents, setBasketContents] = useState(existingBasket?.exampleItems?.join(', ') ?? '');
   const [loading, setLoading] = useState(false);
+  const [priceError, setPriceError] = useState('');
+
+  const validatePrice = (orig: string, disc: string) => {
+    const o = parseFloat(orig);
+    const d = parseFloat(disc);
+    if (o > 0 && d > 0 && d > o * 0.5) {
+      setPriceError(t('business.createBasket.priceError'));
+      return false;
+    }
+    setPriceError('');
+    return true;
+  };
+
+  const handleDiscountedPriceChange = (val: string) => {
+    setDiscountedPrice(val);
+    if (originalPrice && val) {
+      validatePrice(originalPrice, val);
+    } else {
+      setPriceError('');
+    }
+  };
+
+  const handleOriginalPriceChange = (val: string) => {
+    setOriginalPrice(val);
+    if (val && discountedPrice) {
+      validatePrice(val, discountedPrice);
+    } else {
+      setPriceError('');
+    }
+  };
 
   const handleSave = () => {
-    if (!name.trim() || !originalPrice || !discountedPrice || !quantity) return;
+    if (!name.trim() || !originalPrice || !discountedPrice) return;
+    if (!validatePrice(originalPrice, discountedPrice)) return;
 
     setLoading(true);
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
 
     const orig = parseFloat(originalPrice);
     const disc = parseFloat(discountedPrice);
-    const qty = parseInt(quantity, 10);
     const discount = orig > 0 ? Math.round(((orig - disc) / orig) * 100) : 0;
 
     setTimeout(() => {
@@ -51,14 +73,10 @@ export default function CreateBasketScreen() {
         updateBasket(editId, {
           name: name.trim(),
           description: description.trim(),
-          category,
           originalPrice: orig,
           discountedPrice: disc,
           discountPercentage: discount,
-          quantityTotal: qty,
-          quantityLeft: Math.min(existingBasket?.quantityLeft ?? qty, qty),
-          pickupWindow: { start: pickupStart, end: pickupEnd },
-          exampleItems: exampleItems.split(',').map((s) => s.trim()).filter(Boolean),
+          exampleItems: basketContents.split(',').map((s) => s.trim()).filter(Boolean),
         });
       } else {
         const newBasket: Basket = {
@@ -71,19 +89,19 @@ export default function CreateBasketScreen() {
           reviews: { service: 0, quantite: 0, qualite: 0, variete: 0 },
           description: description.trim(),
           name: name.trim(),
-          category,
+          category: profile?.category ?? 'Patisseries/Boulangeries',
           originalPrice: orig,
           discountedPrice: disc,
           discountPercentage: discount,
-          pickupWindow: { start: pickupStart, end: pickupEnd },
-          quantityLeft: qty,
-          quantityTotal: qty,
+          pickupWindow: { start: profile?.hours?.split(' - ')[0] ?? '18:00', end: profile?.hours?.split(' - ')[1] ?? '19:00' },
+          quantityLeft: 5,
+          quantityTotal: 5,
           distance: 0,
           address: profile?.address ?? '',
           latitude: profile?.latitude ?? 36.8065,
           longitude: profile?.longitude ?? 10.1815,
-          exampleItems: exampleItems.split(',').map((s) => s.trim()).filter(Boolean),
-          isActive: true,
+          exampleItems: basketContents.split(',').map((s) => s.trim()).filter(Boolean),
+          isActive: false,
         };
         addBasket(newBasket);
       }
@@ -130,44 +148,9 @@ export default function CreateBasketScreen() {
               placeholder={t('business.createBasket.descriptionPlaceholder')}
               placeholderTextColor={theme.colors.muted}
               multiline
-              numberOfLines={3}
+              numberOfLines={4}
               textAlignVertical="top"
             />
-          </View>
-
-          <View style={[styles.field, { marginBottom: theme.spacing.xl }]}>
-            <Text style={[styles.label, { color: theme.colors.textPrimary, ...theme.typography.bodySm, marginBottom: theme.spacing.sm }]}>
-              {t('business.createBasket.category')}
-            </Text>
-            <TouchableOpacity
-              style={[styles.input, styles.pickerButton, { backgroundColor: theme.colors.surface, borderColor: theme.colors.divider, borderRadius: theme.radii.r12, ...theme.shadows.shadowSm }]}
-              onPress={() => setShowCategoryPicker(!showCategoryPicker)}
-            >
-              <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.body }]}>{category}</Text>
-              <ChevronDown size={18} color={theme.colors.muted} />
-            </TouchableOpacity>
-            {showCategoryPicker && (
-              <View style={[styles.pickerDropdown, { backgroundColor: theme.colors.surface, borderRadius: theme.radii.r12, marginTop: 4, ...theme.shadows.shadowMd }]}>
-                {CATEGORY_OPTIONS.map((cat) => (
-                  <TouchableOpacity
-                    key={cat}
-                    style={[styles.pickerItem, {
-                      padding: theme.spacing.md,
-                      backgroundColor: category === cat ? theme.colors.primary + '12' : 'transparent',
-                    }]}
-                    onPress={() => { setCategory(cat); setShowCategoryPicker(false); }}
-                  >
-                    <Text style={[{
-                      color: category === cat ? theme.colors.primary : theme.colors.textPrimary,
-                      ...theme.typography.body,
-                      fontWeight: category === cat ? ('600' as const) : ('400' as const),
-                    }]}>
-                      {cat}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-            )}
           </View>
 
           <View style={[styles.row, { marginBottom: theme.spacing.xl }]}>
@@ -178,7 +161,7 @@ export default function CreateBasketScreen() {
               <TextInput
                 style={[styles.input, { backgroundColor: theme.colors.surface, borderColor: theme.colors.divider, borderRadius: theme.radii.r12, color: theme.colors.textPrimary, ...theme.typography.body, ...theme.shadows.shadowSm }]}
                 value={originalPrice}
-                onChangeText={setOriginalPrice}
+                onChangeText={handleOriginalPriceChange}
                 placeholder="20"
                 placeholderTextColor={theme.colors.muted}
                 keyboardType="numeric"
@@ -189,9 +172,16 @@ export default function CreateBasketScreen() {
                 {t('business.createBasket.discountedPrice')}
               </Text>
               <TextInput
-                style={[styles.input, { backgroundColor: theme.colors.surface, borderColor: theme.colors.divider, borderRadius: theme.radii.r12, color: theme.colors.textPrimary, ...theme.typography.body, ...theme.shadows.shadowSm }]}
+                style={[styles.input, {
+                  backgroundColor: theme.colors.surface,
+                  borderColor: priceError ? theme.colors.error : theme.colors.divider,
+                  borderRadius: theme.radii.r12,
+                  color: theme.colors.textPrimary,
+                  ...theme.typography.body,
+                  ...theme.shadows.shadowSm,
+                }]}
                 value={discountedPrice}
-                onChangeText={setDiscountedPrice}
+                onChangeText={handleDiscountedPriceChange}
                 placeholder="10"
                 placeholderTextColor={theme.colors.muted}
                 keyboardType="numeric"
@@ -199,57 +189,28 @@ export default function CreateBasketScreen() {
             </View>
           </View>
 
-          <View style={[styles.field, { marginBottom: theme.spacing.xl }]}>
-            <Text style={[styles.label, { color: theme.colors.textPrimary, ...theme.typography.bodySm, marginBottom: theme.spacing.sm }]}>
-              {t('business.createBasket.quantity')}
-            </Text>
-            <TextInput
-              style={[styles.input, { backgroundColor: theme.colors.surface, borderColor: theme.colors.divider, borderRadius: theme.radii.r12, color: theme.colors.textPrimary, ...theme.typography.body, ...theme.shadows.shadowSm }]}
-              value={quantity}
-              onChangeText={setQuantity}
-              placeholder="5"
-              placeholderTextColor={theme.colors.muted}
-              keyboardType="numeric"
-            />
-          </View>
-
-          <View style={[styles.row, { marginBottom: theme.spacing.xl }]}>
-            <View style={[styles.halfField, { marginRight: theme.spacing.md }]}>
-              <Text style={[styles.label, { color: theme.colors.textPrimary, ...theme.typography.bodySm, marginBottom: theme.spacing.sm }]}>
-                {t('business.createBasket.pickupStart')}
+          {priceError !== '' && (
+            <View style={[styles.errorRow, { marginBottom: theme.spacing.lg, marginTop: -theme.spacing.md }]}>
+              <AlertCircle size={14} color={theme.colors.error} />
+              <Text style={[{ color: theme.colors.error, ...theme.typography.caption, marginLeft: 6, flex: 1 }]}>
+                {priceError}
               </Text>
-              <TextInput
-                style={[styles.input, { backgroundColor: theme.colors.surface, borderColor: theme.colors.divider, borderRadius: theme.radii.r12, color: theme.colors.textPrimary, ...theme.typography.body, ...theme.shadows.shadowSm }]}
-                value={pickupStart}
-                onChangeText={setPickupStart}
-                placeholder="18:00"
-                placeholderTextColor={theme.colors.muted}
-              />
             </View>
-            <View style={styles.halfField}>
-              <Text style={[styles.label, { color: theme.colors.textPrimary, ...theme.typography.bodySm, marginBottom: theme.spacing.sm }]}>
-                {t('business.createBasket.pickupEnd')}
-              </Text>
-              <TextInput
-                style={[styles.input, { backgroundColor: theme.colors.surface, borderColor: theme.colors.divider, borderRadius: theme.radii.r12, color: theme.colors.textPrimary, ...theme.typography.body, ...theme.shadows.shadowSm }]}
-                value={pickupEnd}
-                onChangeText={setPickupEnd}
-                placeholder="19:00"
-                placeholderTextColor={theme.colors.muted}
-              />
-            </View>
-          </View>
+          )}
 
           <View style={[styles.field, { marginBottom: theme.spacing.xl }]}>
             <Text style={[styles.label, { color: theme.colors.textPrimary, ...theme.typography.bodySm, marginBottom: theme.spacing.sm }]}>
-              {t('business.createBasket.exampleItems')}
+              {t('business.createBasket.basketContents')}
             </Text>
             <TextInput
-              style={[styles.input, { backgroundColor: theme.colors.surface, borderColor: theme.colors.divider, borderRadius: theme.radii.r12, color: theme.colors.textPrimary, ...theme.typography.body, ...theme.shadows.shadowSm }]}
-              value={exampleItems}
-              onChangeText={setExampleItems}
-              placeholder={t('business.createBasket.exampleItemsPlaceholder')}
+              style={[styles.textArea, { backgroundColor: theme.colors.surface, borderColor: theme.colors.divider, borderRadius: theme.radii.r12, color: theme.colors.textPrimary, ...theme.typography.body, ...theme.shadows.shadowSm }]}
+              value={basketContents}
+              onChangeText={setBasketContents}
+              placeholder={t('business.createBasket.contentsPlaceholder')}
               placeholderTextColor={theme.colors.muted}
+              multiline
+              numberOfLines={3}
+              textAlignVertical="top"
             />
           </View>
         </ScrollView>
@@ -259,6 +220,7 @@ export default function CreateBasketScreen() {
             onPress={handleSave}
             title={isEditing ? t('business.createBasket.save') : t('business.createBasket.create')}
             loading={loading}
+            disabled={!!priceError}
           />
         </View>
       </KeyboardAvoidingView>
@@ -286,7 +248,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
   },
   textArea: {
-    height: 100,
+    minHeight: 100,
     borderWidth: 1,
     paddingHorizontal: 16,
     paddingTop: 14,
@@ -297,14 +259,9 @@ const styles = StyleSheet.create({
   halfField: {
     flex: 1,
   },
-  pickerButton: {
+  errorRow: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
   },
-  pickerDropdown: {
-    overflow: 'hidden',
-  },
-  pickerItem: {},
   footer: {},
 });

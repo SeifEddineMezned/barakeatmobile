@@ -1,5 +1,5 @@
 import { Tabs } from "expo-router";
-import { Home, ShoppingBag, Heart, User } from "lucide-react-native";
+import { Compass, ShoppingBag, Heart, User } from "lucide-react-native";
 import React from "react";
 import { useTranslation } from "react-i18next";
 import { useTheme } from "@/src/theme/ThemeProvider";
@@ -24,8 +24,8 @@ export default function TabLayout() {
       <Tabs.Screen
         name="index"
         options={{
-          title: t('home.greeting'),
-          tabBarIcon: ({ color, size }) => <Home size={size} color={color} />,
+          title: t('home.discover'),
+          tabBarIcon: ({ color, size }) => <Compass size={size} color={color} />,
         }}
       />
       <Tabs.Screen

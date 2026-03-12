@@ -1,5 +1,25 @@
 export type UserRole = 'customer' | 'business';
 
+export type TeamRole = 'admin' | 'restricted' | 'custom';
+
+export interface TeamPermission {
+  dashboard: boolean;
+  baskets: boolean;
+  orders: boolean;
+  profile: boolean;
+  team: boolean;
+  financial: boolean;
+}
+
+export interface TeamMember {
+  id: string;
+  name: string;
+  email: string;
+  role: TeamRole;
+  permissions: TeamPermission;
+  addedAt: string;
+}
+
 export interface ReviewRatings {
   service: number;
   quantite: number;
@@ -34,6 +54,7 @@ export interface Basket {
   exampleItems: string[];
   imageUrl?: string;
   isActive: boolean;
+  isSupermarket?: boolean;
 }
 
 export interface Merchant {
@@ -68,6 +89,7 @@ export interface Order {
 export interface User {
   id: string;
   name: string;
+  firstName?: string;
   email: string;
   phone?: string;
   role: UserRole;
@@ -82,9 +104,12 @@ export interface BusinessProfile {
   category: string;
   description?: string;
   logo?: string;
+  coverPhoto?: string;
   hours?: string;
   latitude: number;
   longitude: number;
+  iban?: string;
+  isSupermarket?: boolean;
 }
 
 export interface BusinessStats {
@@ -94,6 +119,8 @@ export interface BusinessStats {
   pendingOrders: number;
   mealsRescued: number;
   averageRating: number;
+  dailySales: number[];
+  weeklySales: number[];
 }
 
 export interface Partner {

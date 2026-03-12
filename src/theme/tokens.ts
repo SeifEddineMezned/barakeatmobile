@@ -3,8 +3,8 @@ export const tokens = {
     primary: '#114b3c',
     primaryDark: '#003d24',
     primaryLight: '#1a6b54',
-    secondary: '#c0cf43',
-    secondaryDark: '#a8b83a',
+    secondary: '#e3ff5c',
+    secondaryDark: '#c8e04a',
 
     accentWarm: '#e8a838',
     accentFresh: '#2d8a6e',
@@ -31,9 +31,14 @@ export const tokens = {
     starYellow: '#f5a623',
     bagsLeft: '#114b3c',
     bagsLeftBg: 'rgba(17, 75, 60, 0.12)',
+    bagsLeftWarning: '#e3ff5c',
 
     gradientStart: '#114b3c',
-    gradientEnd: '#c0cf43',
+    gradientEnd: '#e3ff5c',
+
+    chartGreen: '#2d8a6e',
+    chartYellow: '#e3ff5c',
+    chartBar: '#114b3c',
   },
 
   radii: {

@@ -1,19 +1,6 @@
 import { create } from 'zustand';
-import { Basket, Order, BusinessStats, BusinessProfile } from '@/src/types';
-
-interface BusinessState {
-  profile: BusinessProfile | null;
-  baskets: Basket[];
-  orders: Order[];
-  stats: BusinessStats;
-  setProfile: (profile: BusinessProfile) => void;
-  addBasket: (basket: Basket) => void;
-  updateBasket: (id: string, updates: Partial<Basket>) => void;
-  deleteBasket: (id: string) => void;
-  toggleBasketActive: (id: string) => void;
-  addIncomingOrder: (order: Order) => void;
-  updateOrderStatus: (orderId: string, status: Order['status']) => void;
-}
+import { combine } from 'zustand/middleware';
+import { Basket, Order, BusinessStats, BusinessProfile, TeamMember, TeamPermission } from '@/src/types';
 
 const initialStats: BusinessStats = {
   totalBasketsSold: 47,
@@ -22,6 +9,8 @@ const initialStats: BusinessStats = {
   pendingOrders: 2,
   mealsRescued: 47,
   averageRating: 4.6,
+  dailySales: [5, 8, 6, 12, 9, 7, 10],
+  weeklySales: [32, 41, 38, 47],
 };
 
 const defaultBusinessBaskets: Basket[] = [
@@ -73,7 +62,7 @@ const defaultBusinessBaskets: Basket[] = [
     longitude: 10.1815,
     exampleItems: ['Sandwiches', 'Salades', 'Jus frais'],
     imageUrl: 'https://images.unsplash.com/photo-1554118811-1e0d58224f24?w=400&h=300&fit=crop',
-    isActive: true,
+    isActive: false,
   },
   {
     id: 'b3',
@@ -144,67 +133,123 @@ const defaultOrders: Order[] = [
   },
 ];
 
-export const useBusinessStore = create<BusinessState>((set) => ({
-  profile: {
-    id: 'biz1',
-    name: 'Mon Commerce',
-    email: 'commerce@barakeat.tn',
-    phone: '+216 71 123 456',
-    address: 'Avenue Habib Bourguiba, Tunis',
-    category: 'Patisseries/Boulangeries',
-    description: 'Boulangerie artisanale depuis 1998',
-    logo: 'https://images.unsplash.com/photo-1509440159596-0249088772ff?w=100&h=100&fit=crop',
-    hours: '07:00 - 20:00',
-    latitude: 36.8065,
-    longitude: 10.1815,
+const defaultTeam: TeamMember[] = [
+  {
+    id: 'tm1',
+    name: 'Admin Principal',
+    email: 'admin@barakeat.tn',
+    role: 'admin',
+    permissions: { dashboard: true, baskets: true, orders: true, profile: true, team: true, financial: true },
+    addedAt: new Date().toISOString(),
   },
-  baskets: defaultBusinessBaskets,
-  orders: defaultOrders,
-  stats: initialStats,
-  setProfile: (profile) => set({ profile }),
-  addBasket: (basket) =>
-    set((state) => ({
-      baskets: [basket, ...state.baskets],
-      stats: { ...state.stats, activeBaskets: state.stats.activeBaskets + 1 },
-    })),
-  updateBasket: (id, updates) =>
-    set((state) => ({
-      baskets: state.baskets.map((b) => (b.id === id ? { ...b, ...updates } : b)),
-    })),
-  deleteBasket: (id) =>
-    set((state) => ({
-      baskets: state.baskets.filter((b) => b.id !== id),
-    })),
-  toggleBasketActive: (id) =>
-    set((state) => ({
-      baskets: state.baskets.map((b) =>
-        b.id === id ? { ...b, isActive: !b.isActive } : b
-      ),
-    })),
-  addIncomingOrder: (order) =>
-    set((state) => ({
-      orders: [order, ...state.orders],
-      stats: { ...state.stats, pendingOrders: state.stats.pendingOrders + 1 },
-    })),
-  updateOrderStatus: (orderId, status) =>
-    set((state) => ({
-      orders: state.orders.map((o) =>
-        o.id === orderId ? { ...o, status } : o
-      ),
-      stats: {
-        ...state.stats,
-        pendingOrders:
-          status === 'collected' || status === 'cancelled'
-            ? Math.max(0, state.stats.pendingOrders - 1)
-            : state.stats.pendingOrders,
-        totalBasketsSold:
-          status === 'collected'
-            ? state.stats.totalBasketsSold + 1
-            : state.stats.totalBasketsSold,
-        mealsRescued:
-          status === 'collected'
-            ? state.stats.mealsRescued + 1
-            : state.stats.mealsRescued,
-      },
-    })),
-}));
+];
+
+const DEFAULT_PERMISSIONS: Record<string, TeamPermission> = {
+  admin: { dashboard: true, baskets: true, orders: true, profile: true, team: true, financial: true },
+  restricted: { dashboard: true, baskets: false, orders: true, profile: false, team: false, financial: false },
+  custom: { dashboard: true, baskets: true, orders: true, profile: false, team: false, financial: false },
+};
+
+export { DEFAULT_PERMISSIONS };
+
+export const useBusinessStore = create(
+  combine(
+    {
+      profile: {
+        id: 'biz1',
+        name: 'Mon Commerce',
+        email: 'commerce@barakeat.tn',
+        phone: '+216 71 123 456',
+        address: 'Avenue Habib Bourguiba, Tunis',
+        category: 'Patisseries/Boulangeries',
+        description: 'Boulangerie artisanale depuis 1998',
+        logo: 'https://images.unsplash.com/photo-1509440159596-0249088772ff?w=100&h=100&fit=crop',
+        coverPhoto: 'https://images.unsplash.com/photo-1509440159596-0249088772ff?w=800&h=300&fit=crop',
+        hours: '07:00 - 20:00',
+        latitude: 36.8065,
+        longitude: 10.1815,
+        isSupermarket: false,
+      } as BusinessProfile | null,
+      baskets: defaultBusinessBaskets as Basket[],
+      orders: defaultOrders as Order[],
+      stats: initialStats as BusinessStats,
+      team: defaultTeam as TeamMember[],
+    },
+    (set) => ({
+      setProfile: (profile: BusinessProfile) => set({ profile }),
+      addBasket: (basket: Basket) =>
+        set((state) => ({
+          baskets: [basket, ...state.baskets],
+          stats: { ...state.stats, activeBaskets: state.stats.activeBaskets + 1 },
+        })),
+      updateBasket: (id: string, updates: Partial<Basket>) =>
+        set((state) => ({
+          baskets: state.baskets.map((b) => (b.id === id ? { ...b, ...updates } : b)),
+        })),
+      deleteBasket: (id: string) =>
+        set((state) => ({
+          baskets: state.baskets.filter((b) => b.id !== id),
+        })),
+      toggleBasketActive: (id: string) =>
+        set((state) => {
+          const target = state.baskets.find((b) => b.id === id);
+          if (!target) return state;
+          const willBeActive = !target.isActive;
+          const isSupermarket = state.profile?.isSupermarket ?? false;
+
+          if (willBeActive && !isSupermarket) {
+            return {
+              baskets: state.baskets.map((b) =>
+                b.id === id ? { ...b, isActive: true } : { ...b, isActive: false }
+              ),
+            };
+          }
+          return {
+            baskets: state.baskets.map((b) =>
+              b.id === id ? { ...b, isActive: willBeActive } : b
+            ),
+          };
+        }),
+      addIncomingOrder: (order: Order) =>
+        set((state) => ({
+          orders: [order, ...state.orders],
+          stats: { ...state.stats, pendingOrders: state.stats.pendingOrders + 1 },
+        })),
+      updateOrderStatus: (orderId: string, status: Order['status']) =>
+        set((state) => ({
+          orders: state.orders.map((o) =>
+            o.id === orderId ? { ...o, status } : o
+          ),
+          stats: {
+            ...state.stats,
+            pendingOrders:
+              status === 'collected' || status === 'cancelled'
+                ? Math.max(0, state.stats.pendingOrders - 1)
+                : state.stats.pendingOrders,
+            totalBasketsSold:
+              status === 'collected'
+                ? state.stats.totalBasketsSold + 1
+                : state.stats.totalBasketsSold,
+            mealsRescued:
+              status === 'collected'
+                ? state.stats.mealsRescued + 1
+                : state.stats.mealsRescued,
+          },
+        })),
+      addTeamMember: (member: TeamMember) =>
+        set((state) => ({
+          team: [...state.team, member],
+        })),
+      removeTeamMember: (memberId: string) =>
+        set((state) => ({
+          team: state.team.filter((m) => m.id !== memberId),
+        })),
+      updateTeamMemberRole: (memberId: string, role: TeamMember['role'], permissions: TeamPermission) =>
+        set((state) => ({
+          team: state.team.map((m) =>
+            m.id === memberId ? { ...m, role, permissions } : m
+          ),
+        })),
+    })
+  )
+);

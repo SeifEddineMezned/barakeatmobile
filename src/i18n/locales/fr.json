@@ -11,7 +11,11 @@
     "success": "Succès",
     "retry": "Réessayer",
     "done": "Terminé",
-    "ok": "OK"
+    "ok": "OK",
+    "add": "Ajouter",
+    "remove": "Supprimer",
+    "edit": "Modifier",
+    "delete": "Supprimer"
   },
   "onboarding": {
     "slide1": {
@@ -47,31 +51,22 @@
     "welcomeBack": "Content de vous revoir"
   },
   "home": {
-    "greeting": "Bonjour",
+    "discover": "Découvrir",
+    "greeting": "Découvrir",
     "searchPlaceholder": "Rechercher paniers, commerçants...",
-    "valueProps": {
-      "discount": "Repas à -50%",
-      "nearby": "Près de Chez Vous",
-      "impact": "Aidez la Planète"
-    },
-    "partnersTitle": "Ils Nous Font Confiance",
-    "filters": {
-      "all": "Tous",
-      "category": "Catégorie",
-      "pickup": "Heure de Retrait",
-      "price": "Prix",
-      "distance": "Distance",
-      "discountOnly": "Seulement -50%",
-      "clearAll": "Tout effacer"
-    },
     "emptyState": {
-      "noBaskets": "Aucun panier à proximité",
+      "noBaskets": "Désolé, de nouveaux partenaires arrivent très bientôt près de chez vous.",
       "exploreMap": "Explorer la Carte",
       "tooStrict": "Filtres trop stricts?",
       "resetFilters": "Réinitialiser"
     },
     "offline": "Vous êtes hors ligne. Vérifiez votre connexion.",
-    "searchArea": "Rechercher dans cette zone"
+    "searchArea": "Rechercher dans cette zone",
+    "radiusFilter": "Rayon de recherche",
+    "selectRadius": "Sélectionner le rayon",
+    "useMyLocation": "Utiliser ma position actuelle",
+    "chooseLocation": "Choisir cette position",
+    "km": "km"
   },
   "basket": {
     "surpriseBasket": "Panier Surprise",
@@ -146,12 +141,28 @@
     "languageChanged": "Langue modifiée",
     "restartRequired": "L'application doit redémarrer pour appliquer la nouvelle langue.",
     "faq": "FAQ",
-    "faqContent": "Questions fréquemment posées\n\n• Comment réserver un panier ?\nParcourez les paniers disponibles, sélectionnez-en un, choisissez la quantité et l'heure de retrait, puis confirmez.\n\n• Qu'est-ce qu'un panier surprise ?\nUn panier surprise contient une variété d'articles invendus du commerçant. Le contenu varie quotidiennement selon la disponibilité.\n\n• Comment fonctionnent les créneaux de retrait ?\nSélectionnez un créneau horaire qui vous convient. Arrivez pendant ce créneau pour récupérer votre panier.\n\n• Quels modes de paiement sont acceptés ?\nPayez directement au commerçant lors du retrait de votre panier (espèces ou carte sur place).",
+    "faqContent": "Questions fréquemment posées\n\n• Comment réserver un panier ?\nParcourez les paniers disponibles, sélectionnez-en un, choisissez la quantité et l'heure de retrait, puis confirmez.\n\n• Qu'est-ce qu'un panier surprise ?\nUn panier surprise contient une variété d'articles invendus du commerçant. Le contenu varie quotidiennement selon la disponibilité.\n\n• Comment fonctionnent les créneaux de retrait ?\nSélectionnez un créneau horaire qui vous convient. Arrivez pendant ce créneau pour récupérer votre panier.\n\n• Quels modes de paiement sont acceptés ?\nPayez directement au commerçant lors du retrait de votre panier (espèces ou carte sur place).\n\n• Comment annuler une réservation ?\nRendez-vous dans l'onglet Commandes, sélectionnez votre commande et appuyez sur Annuler.\n\n• Les paniers sont-ils les mêmes chaque jour ?\nNon, le contenu varie selon les invendus du jour. C'est ce qui fait la surprise !",
     "about": "À Propos",
     "mission": "Notre mission est de lutter contre le gaspillage alimentaire en connectant les gens avec des paniers surprise de commerçants locaux.",
     "motto": "Parce que la bonne nourriture mérite une seconde chance",
     "availability": "Disponible à Grand Tunis pour le lancement",
-    "signOut": "Déconnexion"
+    "signOut": "Déconnexion",
+    "personalInfo": "Informations personnelles",
+    "name": "Nom",
+    "email": "Email",
+    "phone": "Téléphone",
+    "cardInfo": "Informations de carte",
+    "cardInfoSoon": "Bientôt disponible",
+    "stats": "Mes statistiques",
+    "moneySaved": "Argent économisé",
+    "co2Saved": "CO₂ économisé",
+    "basketsBought": "Paniers achetés",
+    "legalMentions": "Mentions légales",
+    "termsAndConditions": "Conditions générales",
+    "cookies": "Cookies",
+    "privacyPolicy": "Politique de confidentialité",
+    "legalContentSoon": "Le contenu sera ajouté prochainement.",
+    "customerSupport": "Support client"
   },
   "map": {
     "title": "À Proximité",
@@ -161,20 +172,26 @@
     "dashboard": {
       "title": "Tableau de bord",
       "greeting": "Bonjour",
-      "todayOverview": "Aperçu du jour",
+      "todayOverview": "Résumé du jour",
       "basketsSold": "Paniers vendus",
       "revenue": "Revenus",
       "activeBaskets": "Paniers actifs",
-      "pendingOrders": "Commandes en attente",
+      "pendingOrders": "En attente",
       "mealsRescued": "Repas sauvés",
       "avgRating": "Note moyenne",
       "recentOrders": "Commandes récentes",
       "viewAll": "Voir tout",
-      "noOrders": "Aucune commande"
+      "noOrders": "Aucune commande",
+      "performance": "Performance générale",
+      "salesChart": "Ventes",
+      "avgSalesChart": "Moyenne des ventes",
+      "ratingDetails": "Détail des notes",
+      "dailySales": "7 derniers jours",
+      "weeklySales": "4 dernières semaines"
     },
     "baskets": {
       "title": "Mes Paniers",
-      "addBasket": "Ajouter un panier",
+      "addBasket": "Ajouter",
       "editBasket": "Modifier le panier",
       "active": "Actif",
       "inactive": "Inactif",
@@ -185,7 +202,10 @@
       "createFirst": "Créez votre premier panier surprise",
       "deleteConfirm": "Supprimer ce panier ?",
       "deleteMessage": "Cette action est irréversible.",
-      "delete": "Supprimer"
+      "delete": "Supprimer",
+      "onlyOneActive": "Un seul panier peut être actif à la fois",
+      "quantityAvailable": "Quantité disponible",
+      "saveChanges": "Enregistrer les modifications"
     },
     "orders": {
       "title": "Commandes",
@@ -209,25 +229,40 @@
       "category": "Catégorie",
       "description": "Description",
       "switchToCustomer": "Vue client",
-      "signOut": "Déconnexion"
+      "signOut": "Déconnexion",
+      "coverPhoto": "Photo de couverture",
+      "profilePicture": "Photo de profil",
+      "pickupTime": "Horaire de retrait",
+      "financialInfo": "Informations financières",
+      "iban": "IBAN",
+      "paymentHistory": "Historique des paiements",
+      "teamManagement": "Gestion d'équipe",
+      "addMember": "Ajouter un membre",
+      "removeMember": "Retirer",
+      "memberRole": "Rôle",
+      "admin": "Administrateur",
+      "restricted": "Utilisateur restreint",
+      "custom": "Permissions personnalisées",
+      "permissions": "Permissions",
+      "customerSupport": "Support client",
+      "customerSupportDesc": "Contactez notre équipe pour toute question",
+      "memberName": "Nom du membre",
+      "memberEmail": "Email du membre"
     },
     "createBasket": {
       "title": "Nouveau Panier",
       "editTitle": "Modifier le Panier",
       "name": "Nom du panier",
       "namePlaceholder": "ex. Panier Surprise Boulangerie",
-      "description": "Description",
-      "descriptionPlaceholder": "Décrivez ce que les clients pourraient trouver...",
-      "category": "Catégorie",
+      "description": "Description du panier",
+      "descriptionPlaceholder": "Décrivez ce que les clients pourraient trouver dans ce panier...",
       "originalPrice": "Prix original (TND)",
       "discountedPrice": "Prix réduit (TND)",
-      "quantity": "Quantité totale",
-      "pickupStart": "Début du retrait",
-      "pickupEnd": "Fin du retrait",
-      "exampleItems": "Exemples d'articles (séparés par virgule)",
-      "exampleItemsPlaceholder": "ex. Pain, Croissants, Pâtisseries",
+      "priceError": "Le prix réduit doit être au moins 50% inférieur au prix original.",
       "save": "Enregistrer",
-      "create": "Créer le panier"
+      "create": "Créer le panier",
+      "basketContents": "Contenu du panier",
+      "contentsPlaceholder": "Décrivez les types d'articles que le client pourrait trouver..."
     },
     "auth": {
       "businessSignIn": "Connexion Commerce",
