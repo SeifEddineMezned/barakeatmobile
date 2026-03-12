@@ -26,12 +26,12 @@ export default function IncomingOrdersScreen() {
   const displayedOrders = activeTab === 'incoming' ? incomingOrders : completedOrders;
 
   const handleMarkReady = useCallback((orderId: string) => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     updateOrderStatus(orderId, 'ready');
   }, [updateOrderStatus]);
 
   const handleMarkCollected = useCallback((orderId: string) => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     updateOrderStatus(orderId, 'collected');
   }, [updateOrderStatus]);
 
@@ -45,7 +45,7 @@ export default function IncomingOrdersScreen() {
           text: t('common.confirm'),
           style: 'destructive',
           onPress: () => {
-            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+            void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
             updateOrderStatus(orderId, 'cancelled');
           },
         },
@@ -55,20 +55,20 @@ export default function IncomingOrdersScreen() {
 
   const handleCall = useCallback((phone?: string) => {
     if (phone) {
-      Linking.openURL(`tel:${phone}`);
+      void Linking.openURL(`tel:${phone}`);
     }
   }, []);
 
   const getStatusConfig = (status: string) => {
     switch (status) {
       case 'reserved':
-        return { color: theme.colors.accentWarm, bg: theme.colors.accentWarm + '18', icon: Clock, label: 'Réservé' };
+        return { color: theme.colors.accentWarm, bg: theme.colors.accentWarm + '18', icon: Clock, label: t('business.orders.statusReserved') };
       case 'ready':
-        return { color: theme.colors.success, bg: theme.colors.success + '18', icon: Package, label: 'Prêt' };
+        return { color: theme.colors.success, bg: theme.colors.success + '18', icon: Package, label: t('business.orders.statusReady') };
       case 'collected':
-        return { color: theme.colors.primary, bg: theme.colors.primary + '18', icon: CheckCircle, label: 'Collecté' };
+        return { color: theme.colors.primary, bg: theme.colors.primary + '18', icon: CheckCircle, label: t('business.orders.statusCollected') };
       case 'cancelled':
-        return { color: theme.colors.error, bg: theme.colors.error + '18', icon: XCircle, label: 'Annulé' };
+        return { color: theme.colors.error, bg: theme.colors.error + '18', icon: XCircle, label: t('business.orders.statusCancelled') };
       default:
         return { color: theme.colors.muted, bg: theme.colors.bg, icon: Clock, label: status };
     }

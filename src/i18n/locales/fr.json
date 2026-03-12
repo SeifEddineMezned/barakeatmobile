@@ -15,7 +15,11 @@
     "add": "Ajouter",
     "remove": "Supprimer",
     "edit": "Modifier",
-    "delete": "Supprimer"
+    "delete": "Supprimer",
+    "back": "Retour",
+    "search": "Rechercher",
+    "noPermission": "Vous n'avez pas la permission pour cette action",
+    "adminRequired": "Accès administrateur requis"
   },
   "onboarding": {
     "slide1": {
@@ -63,9 +67,9 @@
     "offline": "Vous êtes hors ligne. Vérifiez votre connexion.",
     "searchArea": "Rechercher dans cette zone",
     "radiusFilter": "Rayon de recherche",
-    "selectRadius": "Sélectionner le rayon",
+    "selectRadius": "Choisir le rayon",
     "useMyLocation": "Utiliser ma position actuelle",
-    "chooseLocation": "Choisir cette position",
+    "chooseLocation": "Choisir cette localisation",
     "km": "km"
   },
   "basket": {
@@ -151,7 +155,7 @@
     "name": "Nom",
     "email": "Email",
     "phone": "Téléphone",
-    "cardInfo": "Informations de carte",
+    "cardInfo": "Carte bancaire",
     "cardInfoSoon": "Bientôt disponible",
     "stats": "Mes statistiques",
     "moneySaved": "Argent économisé",
@@ -162,7 +166,11 @@
     "cookies": "Cookies",
     "privacyPolicy": "Politique de confidentialité",
     "legalContentSoon": "Le contenu sera ajouté prochainement.",
-    "customerSupport": "Support client"
+    "customerSupport": "Support client",
+    "demoMode": "Mode démo",
+    "demoAdmin": "Administrateur",
+    "demoRestricted": "Utilisateur restreint",
+    "switchRole": "Changer de rôle démo"
   },
   "map": {
     "title": "À Proximité",
@@ -184,10 +192,20 @@
       "noOrders": "Aucune commande",
       "performance": "Performance générale",
       "salesChart": "Ventes",
-      "avgSalesChart": "Moyenne des ventes",
+      "avgSalesChart": "Panier moyen",
       "ratingDetails": "Détail des notes",
       "dailySales": "7 derniers jours",
-      "weeklySales": "4 dernières semaines"
+      "weeklySales": "4 dernières semaines",
+      "online": "En ligne",
+      "daySummary": "Résumé de la journée",
+      "sold": "vendus",
+      "pending": "en att.",
+      "rescued": "sauvés",
+      "co2Saved": "CO₂ économisé",
+      "details": "Détails",
+      "salesLegend": "Ventes",
+      "basketsLegend": "Paniers",
+      "revenueLegend": "Revenus"
     },
     "baskets": {
       "title": "Mes Paniers",
@@ -205,7 +223,8 @@
       "delete": "Supprimer",
       "onlyOneActive": "Un seul panier peut être actif à la fois",
       "quantityAvailable": "Quantité disponible",
-      "saveChanges": "Enregistrer les modifications"
+      "saveChanges": "Enregistrer les modifications",
+      "willDeactivate": "sera désactivé."
     },
     "orders": {
       "title": "Commandes",
@@ -217,7 +236,11 @@
       "pickupCode": "Code de retrait",
       "customer": "Client",
       "noOrders": "Aucune commande",
-      "callCustomer": "Appeler"
+      "callCustomer": "Appeler",
+      "statusReserved": "Réservé",
+      "statusReady": "Prêt",
+      "statusCollected": "Collecté",
+      "statusCancelled": "Annulé"
     },
     "profile": {
       "title": "Profil Commerce",
@@ -247,7 +270,13 @@
       "customerSupport": "Support client",
       "customerSupportDesc": "Contactez notre équipe pour toute question",
       "memberName": "Nom du membre",
-      "memberEmail": "Email du membre"
+      "memberEmail": "Email du membre",
+      "permCanManageBaskets": "Gérer les paniers",
+      "permCanViewOrders": "Voir les commandes",
+      "permCanEditProfile": "Modifier le profil",
+      "permCanManageTeam": "Gérer l'équipe",
+      "permCanViewDashboard": "Voir le tableau de bord",
+      "permCanViewFinancial": "Voir les informations financières"
     },
     "createBasket": {
       "title": "Nouveau Panier",

@@ -5,11 +5,18 @@ import { useTranslation } from 'react-i18next';
 import { useRouter } from 'expo-router';
 import {
   ChevronRight, HelpCircle, Info, LogOut, User, Mail, Phone,
-  CreditCard, Leaf, DollarSign, ShoppingBag, FileText, Headphones
+  CreditCard, Leaf, DollarSign, ShoppingBag, FileText, Headphones, Globe, Shield
 } from 'lucide-react-native';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { useAuthStore } from '@/src/stores/authStore';
 import { useOrdersStore } from '@/src/stores/ordersStore';
+import i18n from '@/src/i18n';
+
+const LANGUAGES = [
+  { code: 'en', label: 'English', flag: '🇬🇧' },
+  { code: 'fr', label: 'Français', flag: '🇫🇷' },
+  { code: 'ar', label: 'العربية', flag: '🇹🇳' },
+];
 
 export default function ProfileScreen() {
   const { t } = useTranslation();
@@ -19,6 +26,9 @@ export default function ProfileScreen() {
   const orders = useOrdersStore((state) => state.orders);
   const [showFaqModal, setShowFaqModal] = useState(false);
   const [showLegalModal, setShowLegalModal] = useState<string | null>(null);
+  const [showLanguageModal, setShowLanguageModal] = useState(false);
+  const [currentLang, setCurrentLang] = useState(i18n.language ?? 'en');
+  const [demoRole, setDemoRole] = useState<'admin' | 'restricted'>('admin');
 
   const stats = useMemo(() => {
     const completedOrders = orders.filter((o) => o.status === 'collected');
@@ -52,6 +62,26 @@ export default function ProfileScreen() {
       [{ text: t('common.ok') }]
     );
   }, [t]);
+
+  const handleLanguageChange = useCallback((langCode: string) => {
+    void i18n.changeLanguage(langCode);
+    setCurrentLang(langCode);
+    setShowLanguageModal(false);
+    console.log('[Profile] Language changed to:', langCode);
+  }, []);
+
+  const handleDemoRoleSwitch = useCallback(() => {
+    const newRole = demoRole === 'admin' ? 'restricted' : 'admin';
+    setDemoRole(newRole);
+    console.log('[Profile] Demo role switched to:', newRole);
+    Alert.alert(
+      t('profile.demoMode'),
+      newRole === 'admin' ? t('profile.demoAdmin') : t('profile.demoRestricted'),
+      [{ text: t('common.ok') }]
+    );
+  }, [demoRole, t]);
+
+  const currentLangObj = LANGUAGES.find((l) => l.code === currentLang) ?? LANGUAGES[0];
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]} edges={['top']}>
@@ -188,6 +218,54 @@ export default function ProfileScreen() {
         >
           <TouchableOpacity
             style={[styles.menuItem, { padding: theme.spacing.lg, borderBottomWidth: 1, borderBottomColor: theme.colors.divider }]}
+            onPress={() => setShowLanguageModal(true)}
+          >
+            <View style={styles.menuItemLeft}>
+              <Globe size={20} color={theme.colors.textSecondary} />
+              <Text style={[styles.menuItemText, { color: theme.colors.textPrimary, ...theme.typography.body }]}>
+                {t('profile.language')}
+              </Text>
+            </View>
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              <Text style={[{ color: theme.colors.muted, ...theme.typography.bodySm, marginRight: 6 }]}>
+                {currentLangObj.flag} {currentLangObj.label}
+              </Text>
+              <ChevronRight size={20} color={theme.colors.muted} />
+            </View>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.menuItem, { padding: theme.spacing.lg, borderBottomWidth: 1, borderBottomColor: theme.colors.divider }]}
+            onPress={handleDemoRoleSwitch}
+          >
+            <View style={styles.menuItemLeft}>
+              <Shield size={20} color={theme.colors.textSecondary} />
+              <Text style={[styles.menuItemText, { color: theme.colors.textPrimary, ...theme.typography.body }]}>
+                {t('profile.demoMode')}
+              </Text>
+            </View>
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              <View style={[{
+                backgroundColor: demoRole === 'admin' ? theme.colors.primary + '18' : theme.colors.accentWarm + '18',
+                borderRadius: theme.radii.pill,
+                paddingHorizontal: 10,
+                paddingVertical: 4,
+                marginRight: 6,
+              }]}>
+                <Text style={[{
+                  color: demoRole === 'admin' ? theme.colors.primary : theme.colors.accentWarm,
+                  ...theme.typography.caption,
+                  fontWeight: '600' as const,
+                }]}>
+                  {demoRole === 'admin' ? t('profile.demoAdmin') : t('profile.demoRestricted')}
+                </Text>
+              </View>
+              <ChevronRight size={20} color={theme.colors.muted} />
+            </View>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.menuItem, { padding: theme.spacing.lg, borderBottomWidth: 1, borderBottomColor: theme.colors.divider }]}
             onPress={handleFAQPress}
           >
             <View style={styles.menuItemLeft}>
@@ -285,6 +363,59 @@ export default function ProfileScreen() {
 
         <View style={{ height: 30 }} />
       </ScrollView>
+
+      <Modal visible={showLanguageModal} transparent animationType="fade" onRequestClose={() => setShowLanguageModal(false)}>
+        <TouchableOpacity style={styles.langModalOverlay} activeOpacity={1} onPress={() => setShowLanguageModal(false)}>
+          <View
+            style={[styles.langModalContent, { backgroundColor: theme.colors.surface, borderRadius: theme.radii.r24, padding: theme.spacing.xl, ...theme.shadows.shadowLg }]}
+            onStartShouldSetResponder={() => true}
+          >
+            <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, marginBottom: theme.spacing.lg }]}>
+              {t('profile.selectLanguage')}
+            </Text>
+            {LANGUAGES.map((lang) => {
+              const isSelected = lang.code === currentLang;
+              return (
+                <TouchableOpacity
+                  key={lang.code}
+                  onPress={() => handleLanguageChange(lang.code)}
+                  style={[{
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    padding: theme.spacing.lg,
+                    borderRadius: theme.radii.r12,
+                    marginBottom: theme.spacing.sm,
+                    backgroundColor: isSelected ? theme.colors.primary + '12' : theme.colors.bg,
+                    borderWidth: isSelected ? 1.5 : 0,
+                    borderColor: theme.colors.primary,
+                  }]}
+                >
+                  <Text style={{ fontSize: 22, marginRight: 12 }}>{lang.flag}</Text>
+                  <Text style={[{
+                    color: isSelected ? theme.colors.primary : theme.colors.textPrimary,
+                    ...theme.typography.body,
+                    fontWeight: isSelected ? ('600' as const) : ('400' as const),
+                    flex: 1,
+                  }]}>
+                    {lang.label}
+                  </Text>
+                  {isSelected && (
+                    <View style={[{ width: 8, height: 8, borderRadius: 4, backgroundColor: theme.colors.primary }]} />
+                  )}
+                </TouchableOpacity>
+              );
+            })}
+            <TouchableOpacity
+              onPress={() => setShowLanguageModal(false)}
+              style={[{ padding: theme.spacing.md, marginTop: theme.spacing.sm }]}
+            >
+              <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.body, textAlign: 'center' as const }]}>
+                {t('common.cancel')}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      </Modal>
 
       <Modal visible={showFaqModal} transparent animationType="slide" onRequestClose={() => setShowFaqModal(false)}>
         <View style={styles.faqModalOverlay}>
@@ -397,6 +528,17 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   signOutText: {},
+  langModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  langModalContent: {
+    width: '100%',
+    maxWidth: 360,
+  },
   faqModalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.5)',

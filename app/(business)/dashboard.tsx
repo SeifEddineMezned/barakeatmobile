@@ -141,7 +141,7 @@ export default function BusinessDashboard() {
           <View style={[styles.liveBadge, { backgroundColor: theme.colors.success + '18', borderRadius: theme.radii.pill, paddingHorizontal: 12, paddingVertical: 6 }]}>
             <View style={[styles.liveDot, { backgroundColor: theme.colors.success }]} />
             <Text style={[{ color: theme.colors.success, fontSize: 11, fontWeight: '600' as const, marginLeft: 6, fontFamily: 'Poppins_600SemiBold' }]}>
-              En ligne
+              {t('business.dashboard.online')}
             </Text>
           </View>
         </View>
@@ -154,31 +154,31 @@ export default function BusinessDashboard() {
           padding: theme.spacing.lg,
         }]}>
           <Text style={[{ color: 'rgba(255,255,255,0.7)', fontSize: 12, fontFamily: 'Poppins_400Regular' }]}>
-            Résumé de la journée
+            {t('business.dashboard.daySummary')}
           </Text>
           <View style={styles.summaryRow}>
             <View style={styles.summaryItem}>
               <DollarSign size={14} color={theme.colors.secondary} />
               <Text style={[styles.summaryVal, { color: '#fff' }]}>{stats.totalRevenue}</Text>
-              <Text style={[styles.summarySuffix, { color: 'rgba(255,255,255,0.7)' }]}>TND</Text>
+              <Text style={[styles.summarySuffix, { color: 'rgba(255,255,255,0.7)' }]}>{'TND'}</Text>
             </View>
             <View style={[styles.summaryDivider, { backgroundColor: 'rgba(255,255,255,0.2)' }]} />
             <View style={styles.summaryItem}>
               <ShoppingBag size={14} color={theme.colors.secondary} />
               <Text style={[styles.summaryVal, { color: '#fff' }]}>{stats.totalBasketsSold}</Text>
-              <Text style={[styles.summarySuffix, { color: 'rgba(255,255,255,0.7)' }]}>vendus</Text>
+              <Text style={[styles.summarySuffix, { color: 'rgba(255,255,255,0.7)' }]}>{t('business.dashboard.sold')}</Text>
             </View>
             <View style={[styles.summaryDivider, { backgroundColor: 'rgba(255,255,255,0.2)' }]} />
             <View style={styles.summaryItem}>
               <Clock size={14} color={theme.colors.secondary} />
               <Text style={[styles.summaryVal, { color: '#fff' }]}>{stats.pendingOrders}</Text>
-              <Text style={[styles.summarySuffix, { color: 'rgba(255,255,255,0.7)' }]}>en att.</Text>
+              <Text style={[styles.summarySuffix, { color: 'rgba(255,255,255,0.7)' }]}>{t('business.dashboard.pending')}</Text>
             </View>
             <View style={[styles.summaryDivider, { backgroundColor: 'rgba(255,255,255,0.2)' }]} />
             <View style={styles.summaryItem}>
               <Package size={14} color={theme.colors.secondary} />
               <Text style={[styles.summaryVal, { color: '#fff' }]}>{stats.mealsRescued}</Text>
-              <Text style={[styles.summarySuffix, { color: 'rgba(255,255,255,0.7)' }]}>sauvés</Text>
+              <Text style={[styles.summarySuffix, { color: 'rgba(255,255,255,0.7)' }]}>{t('business.dashboard.rescued')}</Text>
             </View>
           </View>
         </View>
@@ -210,19 +210,19 @@ export default function BusinessDashboard() {
               </View>
             </View>
             <View style={[styles.ratingArrow, { backgroundColor: theme.colors.bg }]}>
-              <Text style={[{ color: theme.colors.primary, fontSize: 12, fontFamily: 'Poppins_600SemiBold' }]}>Détails →</Text>
+              <Text style={[{ color: theme.colors.primary, fontSize: 12, fontFamily: 'Poppins_600SemiBold' }]}>{t('business.dashboard.details')} →</Text>
             </View>
           </View>
         </TouchableOpacity>
 
         <View style={[styles.statsGrid, { paddingHorizontal: theme.spacing.xl, marginTop: theme.spacing.xl }]}>
           <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, marginBottom: theme.spacing.md }]}>
-            Performance globale
+            {t('business.dashboard.performance')}
           </Text>
           <View style={styles.statsRow}>
             <StatMiniCard icon={TrendingUp} value={stats.activeBaskets} label={t('business.dashboard.activeBaskets')} color={theme.colors.primary} theme={theme} />
             <View style={{ width: 10 }} />
-            <StatMiniCard icon={Leaf} value={`${(stats.mealsRescued * 2.5).toFixed(0)}kg`} label="CO₂ économisé" color={theme.colors.accentFresh} theme={theme} />
+            <StatMiniCard icon={Leaf} value={`${(stats.mealsRescued * 2.5).toFixed(0)}kg`} label={t('business.dashboard.co2Saved')} color={theme.colors.accentFresh} theme={theme} />
           </View>
           <View style={[styles.statsRow, { marginTop: 10 }]}>
             <StatMiniCard icon={DollarSign} value={stats.totalRevenue} suffix="TND" label={t('business.dashboard.revenue')} color={theme.colors.accentWarm} theme={theme} />
@@ -239,7 +239,7 @@ export default function BusinessDashboard() {
             <View style={styles.chartLegend}>
               <View style={styles.legendItem}>
                 <View style={[styles.legendDot, { backgroundColor: theme.colors.primary }]} />
-                <Text style={[{ color: theme.colors.muted, fontSize: 10, fontFamily: 'Poppins_400Regular' }]}>Ventes</Text>
+                <Text style={[{ color: theme.colors.muted, fontSize: 10, fontFamily: 'Poppins_400Regular' }]}>{t('business.dashboard.salesLegend')}</Text>
               </View>
             </View>
             <View style={{ alignItems: 'center' }}>
@@ -263,11 +263,11 @@ export default function BusinessDashboard() {
             <View style={styles.chartLegend}>
               <View style={styles.legendItem}>
                 <View style={[styles.legendDot, { backgroundColor: theme.colors.primary }]} />
-                <Text style={[{ color: theme.colors.muted, fontSize: 10, fontFamily: 'Poppins_400Regular' }]}>Paniers</Text>
+                <Text style={[{ color: theme.colors.muted, fontSize: 10, fontFamily: 'Poppins_400Regular' }]}>{t('business.dashboard.basketsLegend')}</Text>
               </View>
               <View style={[styles.legendItem, { marginLeft: 12 }]}>
                 <View style={[styles.legendDot, { backgroundColor: theme.colors.secondary }]} />
-                <Text style={[{ color: theme.colors.muted, fontSize: 10, fontFamily: 'Poppins_400Regular' }]}>Revenus</Text>
+                <Text style={[{ color: theme.colors.muted, fontSize: 10, fontFamily: 'Poppins_400Regular' }]}>{t('business.dashboard.revenueLegend')}</Text>
               </View>
             </View>
             <SimpleBarChart
@@ -305,10 +305,10 @@ export default function BusinessDashboard() {
             </View>
 
             <View style={{ marginTop: theme.spacing.xl }}>
-              <ReviewBar label="Service" value={reviews.service} color={theme.colors.primary} />
-              <ReviewBar label="Quantité" value={reviews.quantite} color={theme.colors.accentFresh} />
-              <ReviewBar label="Qualité" value={reviews.qualite} color={theme.colors.accentWarm} />
-              <ReviewBar label="Variété" value={reviews.variete} color={theme.colors.secondary} />
+              <ReviewBar label={t('basket.reviewService')} value={reviews.service} color={theme.colors.primary} />
+              <ReviewBar label={t('basket.reviewQuantite')} value={reviews.quantite} color={theme.colors.accentFresh} />
+              <ReviewBar label={t('basket.reviewQualite')} value={reviews.qualite} color={theme.colors.accentWarm} />
+              <ReviewBar label={t('basket.reviewVariete')} value={reviews.variete} color={theme.colors.secondary} />
             </View>
 
             <TouchableOpacity

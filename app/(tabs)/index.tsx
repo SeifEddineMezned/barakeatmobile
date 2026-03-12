@@ -216,9 +216,9 @@ export default function HomeScreen() {
                     <MapCircle
                       center={{ latitude: 36.8065, longitude: 10.1815 }}
                       radius={radius * 1000}
-                      fillColor="rgba(17, 75, 60, 0.12)"
-                      strokeColor={theme.colors.primary}
-                      strokeWidth={2}
+                      fillColor="rgba(255, 0, 0, 0.12)"
+                      strokeColor="red"
+                      strokeWidth={3}
                     />
                   )}
                   {mockBaskets.filter(b => b.distance <= radius).map((basket) => (
@@ -239,7 +239,7 @@ export default function HomeScreen() {
             <View style={[styles.sliderSection, { paddingHorizontal: theme.spacing.xl, paddingTop: theme.spacing.xl }]}>
               <View style={styles.sliderLabelRow}>
                 <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.bodySm }]}>
-                  {t('home.radiusFilter')}
+                  {t('home.radiusFilter') as string}
                 </Text>
                 <View style={[styles.distanceBadge, { backgroundColor: theme.colors.primary + '12' }]}>
                   <Text style={[{ color: theme.colors.primary, ...theme.typography.h3 }]}>
@@ -250,7 +250,7 @@ export default function HomeScreen() {
 
               <View style={styles.sliderContainer}>
                 <View style={[styles.sliderTrackBg, { backgroundColor: theme.colors.divider }]}>
-                  <View style={[styles.sliderTrackFill, { backgroundColor: theme.colors.primary, width: `${sliderProgress}%` }]} />
+                  <View style={[styles.sliderTrackFill, { backgroundColor: 'red', width: `${sliderProgress}%` }]} />
                 </View>
                 <View style={styles.dotsRow}>
                   {RADIUS_OPTIONS.map((val) => {
@@ -263,12 +263,12 @@ export default function HomeScreen() {
                         style={[
                           styles.sliderDotOuter,
                           {
-                            backgroundColor: isSelected ? theme.colors.primary : isInRange ? theme.colors.primary + '60' : theme.colors.divider,
+                            backgroundColor: isSelected ? 'red' : isInRange ? 'rgba(255,0,0,0.5)' : theme.colors.divider,
                             width: isSelected ? 32 : 24,
                             height: isSelected ? 32 : 24,
                             borderRadius: isSelected ? 16 : 12,
                             borderWidth: isSelected ? 3 : 0,
-                            borderColor: theme.colors.secondary,
+                            borderColor: '#ff4444',
                           },
                         ]}
                       >
@@ -293,7 +293,7 @@ export default function HomeScreen() {
             >
               <Navigation size={16} color={theme.colors.primary} />
               <Text style={[{ color: theme.colors.primary, ...theme.typography.bodySm, fontWeight: '600' as const, marginLeft: 8 }]}>
-                Utiliser ma position actuelle
+                  {t('home.useMyLocation') as string}
               </Text>
             </TouchableOpacity>
 

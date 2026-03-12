@@ -1,6 +1,7 @@
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { MapPin } from 'lucide-react-native';
+import { useTranslation } from 'react-i18next';
 import { useTheme } from '@/src/theme/ThemeProvider';
 
 interface MapFallbackProps {
@@ -11,6 +12,7 @@ interface MapFallbackProps {
 
 export function MapFallback({ markers = [], radius, style }: MapFallbackProps) {
   const theme = useTheme();
+  const { t } = useTranslation();
 
   return (
     <View style={[styles.container, { backgroundColor: '#e8efe8', borderRadius: 16 }, style]}>
@@ -28,7 +30,7 @@ export function MapFallback({ markers = [], radius, style }: MapFallbackProps) {
       </View>
 
       <View style={[styles.radiusCircle, {
-        borderColor: theme.colors.primary + '40',
+        borderColor: 'rgba(255,0,0,0.5)',
         width: radius ? Math.min(radius * 30, 200) : 120,
         height: radius ? Math.min(radius * 30, 200) : 120,
         borderRadius: radius ? Math.min(radius * 15, 100) : 60,
@@ -63,7 +65,7 @@ export function MapFallback({ markers = [], radius, style }: MapFallbackProps) {
       )}
 
       <Text style={[styles.hint, { color: theme.colors.textSecondary, fontFamily: 'Poppins_400Regular' }]}>
-        Carte disponible sur mobile
+        {t('map.title')}
       </Text>
     </View>
   );

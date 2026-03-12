@@ -1,5 +1,5 @@
 import React, { useCallback, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Modal, Alert, Image, TextInput } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Modal, Alert, Image, TextInput, Switch } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import { useRouter } from 'expo-router';
@@ -20,6 +20,7 @@ export default function BusinessProfileScreen() {
   const { profile, team, addTeamMember, removeTeamMember, updateTeamMemberRole } = useBusinessStore();
   const [showAddMemberModal, setShowAddMemberModal] = useState(false);
   const [showRoleModal, setShowRoleModal] = useState<string | null>(null);
+  const [showPermissionsModal, setShowPermissionsModal] = useState<string | null>(null);
   const [newMemberName, setNewMemberName] = useState('');
   const [newMemberEmail, setNewMemberEmail] = useState('');
   const [newMemberRole, setNewMemberRole] = useState<TeamRole>('restricted');
@@ -68,6 +69,13 @@ export default function BusinessProfileScreen() {
     setShowRoleModal(null);
   }, [updateTeamMemberRole]);
 
+  const handleTogglePermission = useCallback((memberId: string, permKey: keyof TeamPermission) => {
+    const member = team.find((m) => m.id === memberId);
+    if (!member) return;
+    const newPerms: TeamPermission = { ...member.permissions, [permKey]: !member.permissions[permKey] };
+    updateTeamMemberRole(memberId, 'custom', newPerms);
+  }, [team, updateTeamMemberRole]);
+
   const roleLabel = (role: TeamRole) => {
     switch (role) {
       case 'admin': return t('business.profile.admin');
@@ -85,6 +93,17 @@ export default function BusinessProfileScreen() {
       default: return theme.colors.muted;
     }
   };
+
+  const permissionLabels: { key: keyof TeamPermission; label: string }[] = [
+    { key: 'dashboard', label: t('business.profile.permCanViewDashboard') },
+    { key: 'baskets', label: t('business.profile.permCanManageBaskets') },
+    { key: 'orders', label: t('business.profile.permCanViewOrders') },
+    { key: 'profile', label: t('business.profile.permCanEditProfile') },
+    { key: 'team', label: t('business.profile.permCanManageTeam') },
+    { key: 'financial', label: t('business.profile.permCanViewFinancial') },
+  ];
+
+  const selectedMemberForPerms = showPermissionsModal ? team.find((m) => m.id === showPermissionsModal) : null;
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]} edges={['top']}>
@@ -244,11 +263,18 @@ export default function BusinessProfileScreen() {
               </View>
               <TouchableOpacity
                 onPress={() => setShowRoleModal(member.id)}
-                style={[{ backgroundColor: roleColor(member.role) + '15', borderRadius: theme.radii.pill, paddingHorizontal: 10, paddingVertical: 4, marginRight: 8 }]}
+                style={[{ backgroundColor: roleColor(member.role) + '15', borderRadius: theme.radii.pill, paddingHorizontal: 10, paddingVertical: 4, marginRight: 6 }]}
               >
                 <Text style={[{ color: roleColor(member.role), ...theme.typography.caption, fontWeight: '600' as const }]}>
                   {roleLabel(member.role)}
                 </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => setShowPermissionsModal(member.id)}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                style={{ marginRight: 8 }}
+              >
+                <Shield size={16} color={theme.colors.primary} />
               </TouchableOpacity>
               {index > 0 && (
                 <TouchableOpacity onPress={() => handleRemoveMember(member.id)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
@@ -348,7 +374,7 @@ export default function BusinessProfileScreen() {
             <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.bodySm, marginTop: theme.spacing.lg, marginBottom: theme.spacing.sm }]}>
               {t('business.profile.memberRole')}
             </Text>
-            {(['admin', 'restricted', 'custom'] as TeamRole[]).map((role) => (
+            {(['admin', 'restricted'] as TeamRole[]).map((role) => (
               <TouchableOpacity
                 key={role}
                 onPress={() => setNewMemberRole(role)}
@@ -389,9 +415,9 @@ export default function BusinessProfileScreen() {
             onStartShouldSetResponder={() => true}
           >
             <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, marginBottom: theme.spacing.lg }]}>
-              {t('business.profile.permissions')}
+              {t('business.profile.memberRole')}
             </Text>
-            {(['admin', 'restricted', 'custom'] as TeamRole[]).map((role) => (
+            {(['admin', 'restricted'] as TeamRole[]).map((role) => (
               <TouchableOpacity
                 key={role}
                 onPress={() => showRoleModal && handleChangeRole(showRoleModal, role)}
@@ -416,6 +442,70 @@ export default function BusinessProfileScreen() {
             >
               <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.body, textAlign: 'center' as const }]}>
                 {t('common.cancel')}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
+      <Modal visible={showPermissionsModal !== null} transparent animationType="fade" onRequestClose={() => setShowPermissionsModal(null)}>
+        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setShowPermissionsModal(null)}>
+          <View
+            style={[styles.modalContent, { backgroundColor: theme.colors.surface, borderRadius: theme.radii.r24, padding: theme.spacing.xl, ...theme.shadows.shadowLg }]}
+            onStartShouldSetResponder={() => true}
+          >
+            <View style={styles.modalHeader}>
+              <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3 }]}>
+                {t('business.profile.permissions')}
+              </Text>
+              <TouchableOpacity onPress={() => setShowPermissionsModal(null)}>
+                <X size={20} color={theme.colors.textSecondary} />
+              </TouchableOpacity>
+            </View>
+
+            {selectedMemberForPerms && (
+              <View style={{ marginTop: theme.spacing.md }}>
+                <View style={[{ backgroundColor: theme.colors.bg, borderRadius: theme.radii.r12, padding: theme.spacing.md, marginBottom: theme.spacing.lg }]}>
+                  <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '600' as const }]}>
+                    {selectedMemberForPerms.name}
+                  </Text>
+                  <Text style={[{ color: roleColor(selectedMemberForPerms.role), ...theme.typography.caption, marginTop: 2 }]}>
+                    {roleLabel(selectedMemberForPerms.role)}
+                  </Text>
+                </View>
+
+                {permissionLabels.map(({ key, label }) => (
+                  <View
+                    key={key}
+                    style={[{
+                      flexDirection: 'row',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      paddingVertical: theme.spacing.md,
+                      borderBottomWidth: 1,
+                      borderBottomColor: theme.colors.divider,
+                    }]}
+                  >
+                    <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.bodySm, flex: 1 }]}>
+                      {label}
+                    </Text>
+                    <Switch
+                      value={selectedMemberForPerms.permissions[key]}
+                      onValueChange={() => handleTogglePermission(selectedMemberForPerms.id, key)}
+                      trackColor={{ false: theme.colors.divider, true: theme.colors.primary + '50' }}
+                      thumbColor={selectedMemberForPerms.permissions[key] ? theme.colors.primary : theme.colors.muted}
+                    />
+                  </View>
+                ))}
+              </View>
+            )}
+
+            <TouchableOpacity
+              onPress={() => setShowPermissionsModal(null)}
+              style={[{ backgroundColor: theme.colors.primary, borderRadius: theme.radii.r12, padding: theme.spacing.lg, marginTop: theme.spacing.xl }]}
+            >
+              <Text style={[{ color: '#fff', ...theme.typography.button, textAlign: 'center' as const }]}>
+                {t('common.done')}
               </Text>
             </TouchableOpacity>
           </View>
