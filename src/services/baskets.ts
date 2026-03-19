@@ -37,22 +37,29 @@ export interface BasketFromAPI {
 }
 
 export async function fetchBaskets(): Promise<BasketFromAPI[]> {
-  console.log('[Baskets] Fetching all baskets');
-  const res = await apiClient.get<BasketFromAPI[] | { baskets: BasketFromAPI[] } | { data: BasketFromAPI[] }>('/api/baskets');
-  const data = res.data;
-  let baskets: BasketFromAPI[];
-  if (Array.isArray(data)) {
-    baskets = data;
-  } else if (data && typeof data === 'object' && 'baskets' in data && Array.isArray((data as any).baskets)) {
-    baskets = (data as any).baskets;
-  } else if (data && typeof data === 'object' && 'data' in data && Array.isArray((data as any).data)) {
-    baskets = (data as any).data;
-  } else {
-    console.log('[Baskets] Unexpected response shape:', JSON.stringify(data).substring(0, 200));
-    baskets = [];
+  console.log('[Baskets] Fetching all baskets from:', apiClient.defaults.baseURL + '/api/baskets');
+  try {
+    const res = await apiClient.get<BasketFromAPI[] | { baskets: BasketFromAPI[] } | { data: BasketFromAPI[] }>('/api/baskets');
+    const data = res.data;
+    console.log('[Baskets] Response status:', res.status, 'type:', typeof data, 'isArray:', Array.isArray(data));
+    let baskets: BasketFromAPI[];
+    if (Array.isArray(data)) {
+      baskets = data;
+    } else if (data && typeof data === 'object' && 'baskets' in data && Array.isArray((data as any).baskets)) {
+      baskets = (data as any).baskets;
+    } else if (data && typeof data === 'object' && 'data' in data && Array.isArray((data as any).data)) {
+      baskets = (data as any).data;
+    } else {
+      console.log('[Baskets] Unexpected response shape:', JSON.stringify(data).substring(0, 500));
+      baskets = [];
+    }
+    console.log('[Baskets] Fetched', baskets.length, 'baskets');
+    return baskets;
+  } catch (err: unknown) {
+    const errObj = err as any;
+    console.log('[Baskets] Fetch failed:', errObj?.status, errObj?.message, JSON.stringify(errObj?.data ?? '').substring(0, 500));
+    throw err;
   }
-  console.log('[Baskets] Fetched', baskets.length, 'baskets');
-  return baskets;
 }
 
 export async function fetchBasketById(id: string): Promise<BasketFromAPI> {
