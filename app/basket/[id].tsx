@@ -6,37 +6,10 @@ import { useQuery } from '@tanstack/react-query';
 import { MapPin, Clock, Phone, Navigation, ChevronLeft, Star, ShoppingBag, RefreshCw } from 'lucide-react-native';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { PrimaryCTAButton } from '@/src/components/PrimaryCTAButton';
-import { fetchBasketById } from '@/src/services/baskets';
-import type { Basket } from '@/src/types';
+import { fetchRestaurantById } from '@/src/services/restaurants';
+import { normalizeRestaurantToBasket } from '@/src/utils/normalizeRestaurant';
 
-function normalizeBasket(raw: any): Basket {
-  return {
-    id: String(raw.id ?? raw._id ?? ''),
-    merchantId: raw.merchantId ?? raw.merchant_id ?? '',
-    merchantName: raw.merchantName ?? raw.merchant_name ?? raw.businessName ?? raw.business_name ?? 'Unknown',
-    merchantLogo: raw.merchantLogo ?? raw.merchant_logo ?? raw.logo ?? undefined,
-    merchantRating: raw.merchantRating ?? raw.merchant_rating ?? raw.rating ?? undefined,
-    reviewCount: raw.reviewCount ?? raw.review_count ?? undefined,
-    reviews: raw.reviews ?? undefined,
-    description: raw.description ?? undefined,
-    name: raw.name ?? raw.title ?? 'Basket',
-    category: raw.category ?? raw.type ?? '',
-    originalPrice: Number(raw.originalPrice ?? raw.original_price ?? raw.price ?? 0),
-    discountedPrice: Number(raw.discountedPrice ?? raw.discounted_price ?? raw.salePrice ?? raw.sale_price ?? 0),
-    discountPercentage: Number(raw.discountPercentage ?? raw.discount_percentage ?? 50),
-    pickupWindow: raw.pickupWindow ?? raw.pickup_window ?? { start: '18:00', end: '19:00' },
-    quantityLeft: Number(raw.quantityLeft ?? raw.quantity_left ?? raw.quantity ?? 0),
-    quantityTotal: Number(raw.quantityTotal ?? raw.quantity_total ?? raw.totalQuantity ?? 0),
-    distance: Number(raw.distance ?? 0),
-    address: raw.address ?? raw.location?.address ?? '',
-    latitude: Number(raw.latitude ?? raw.location?.latitude ?? raw.lat ?? 36.8065),
-    longitude: Number(raw.longitude ?? raw.location?.longitude ?? raw.lng ?? 10.1815),
-    exampleItems: raw.exampleItems ?? raw.example_items ?? raw.items ?? [],
-    imageUrl: raw.imageUrl ?? raw.image_url ?? raw.image ?? raw.coverImage ?? undefined,
-    isActive: raw.isActive ?? raw.is_active ?? true,
-    isSupermarket: raw.isSupermarket ?? raw.is_supermarket ?? false,
-  };
-}
+
 
 interface ReviewBarProps {
   label: string;
@@ -82,16 +55,16 @@ export default function BasketDetailsScreen() {
   const theme = useTheme();
   const router = useRouter();
 
-  const basketQuery = useQuery({
-    queryKey: ['basket', id],
-    queryFn: () => fetchBasketById(String(id)),
+  const restaurantQuery = useQuery({
+    queryKey: ['restaurant', id],
+    queryFn: () => fetchRestaurantById(String(id)),
     enabled: !!id,
     retry: 2,
   });
 
-  const basket = basketQuery.data ? normalizeBasket(basketQuery.data) : null;
+  const basket = restaurantQuery.data ? normalizeRestaurantToBasket(restaurantQuery.data) : null;
 
-  if (basketQuery.isLoading) {
+  if (restaurantQuery.isLoading) {
     return (
       <View style={[styles.container, { backgroundColor: theme.colors.bg, justifyContent: 'center', alignItems: 'center' }]}>
         <TouchableOpacity
@@ -108,7 +81,7 @@ export default function BasketDetailsScreen() {
     );
   }
 
-  if (basketQuery.isError || !basket) {
+  if (restaurantQuery.isError || !basket) {
     return (
       <View style={[styles.container, { backgroundColor: theme.colors.bg, justifyContent: 'center', alignItems: 'center' }]}>
         <TouchableOpacity
@@ -121,7 +94,7 @@ export default function BasketDetailsScreen() {
           {t('common.errorOccurred')}
         </Text>
         <TouchableOpacity
-          onPress={() => basketQuery.refetch()}
+          onPress={() => restaurantQuery.refetch()}
           style={[{ flexDirection: 'row', alignItems: 'center', backgroundColor: theme.colors.primary, borderRadius: theme.radii.r12, paddingHorizontal: 20, paddingVertical: 12 }]}
         >
           <RefreshCw size={16} color="#fff" />

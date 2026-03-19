@@ -1,21 +1,28 @@
 import { apiClient } from '@/src/lib/api';
 
 export interface CreateReservationRequest {
-  basketId: string;
+  restaurant_id: number;
   quantity: number;
 }
 
 export interface ReservationFromAPI {
   id: string;
+  restaurant_id?: number;
   basketId?: string;
   basket?: {
     id: string;
     name?: string;
     merchantName?: string;
+    merchant_name?: string;
     merchantLogo?: string;
+    image_url?: string;
     originalPrice?: number;
+    original_price?: string;
     discountedPrice?: number;
+    price_tier?: string;
     pickupWindow?: { start: string; end: string };
+    pickup_start_time?: string;
+    pickup_end_time?: string;
     address?: string;
     latitude?: number;
     longitude?: number;
@@ -24,22 +31,41 @@ export interface ReservationFromAPI {
     imageUrl?: string;
     [key: string]: unknown;
   };
+  restaurant?: {
+    id: number;
+    name?: string;
+    address?: string;
+    image_url?: string;
+    price_tier?: string;
+    original_price?: string;
+    pickup_start_time?: string;
+    pickup_end_time?: string;
+    latitude?: number;
+    longitude?: number;
+    [key: string]: unknown;
+  };
   quantity?: number;
   total?: number;
+  total_price?: string;
   pickupWindow?: {
     start: string;
     end: string;
   };
   pickupCode?: string;
+  pickup_code?: string;
   qrCode?: string;
   status?: string;
   createdAt?: string;
+  created_at?: string;
   [key: string]: unknown;
 }
 
 export async function createReservation(data: CreateReservationRequest): Promise<ReservationFromAPI> {
-  console.log('[Reservations] Creating reservation for basket:', data.basketId, 'qty:', data.quantity);
-  const res = await apiClient.post<ReservationFromAPI | { reservation: ReservationFromAPI } | { data: ReservationFromAPI }>('/api/reservations', data);
+  console.log('[Reservations] Creating reservation for restaurant:', data.restaurant_id, 'qty:', data.quantity);
+  const res = await apiClient.post<ReservationFromAPI | { reservation: ReservationFromAPI } | { data: ReservationFromAPI }>('/api/reservations', {
+    restaurant_id: data.restaurant_id,
+    quantity: data.quantity,
+  });
   const resData = res.data;
   let reservation: ReservationFromAPI;
   if (resData && typeof resData === 'object' && 'reservation' in resData) {

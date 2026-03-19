@@ -7,39 +7,10 @@ import * as Haptics from 'expo-haptics';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { PrimaryCTAButton } from '@/src/components/PrimaryCTAButton';
-import { fetchBasketById } from '@/src/services/baskets';
+import { fetchRestaurantById } from '@/src/services/restaurants';
+import { normalizeRestaurantToBasket } from '@/src/utils/normalizeRestaurant';
 import { createReservation, fetchReservationQRCode } from '@/src/services/reservations';
 import { getErrorMessage } from '@/src/lib/api';
-import type { Basket } from '@/src/types';
-
-function normalizeBasket(raw: any): Basket {
-  return {
-    id: String(raw.id ?? raw._id ?? ''),
-    merchantId: raw.merchantId ?? raw.merchant_id ?? '',
-    merchantName: raw.merchantName ?? raw.merchant_name ?? raw.businessName ?? 'Unknown',
-    merchantLogo: raw.merchantLogo ?? raw.merchant_logo ?? undefined,
-    merchantRating: raw.merchantRating ?? raw.merchant_rating ?? undefined,
-    reviewCount: raw.reviewCount ?? raw.review_count ?? undefined,
-    reviews: raw.reviews ?? undefined,
-    description: raw.description ?? undefined,
-    name: raw.name ?? raw.title ?? 'Basket',
-    category: raw.category ?? '',
-    originalPrice: Number(raw.originalPrice ?? raw.original_price ?? raw.price ?? 0),
-    discountedPrice: Number(raw.discountedPrice ?? raw.discounted_price ?? raw.salePrice ?? 0),
-    discountPercentage: Number(raw.discountPercentage ?? raw.discount_percentage ?? 50),
-    pickupWindow: raw.pickupWindow ?? raw.pickup_window ?? { start: '18:00', end: '19:00' },
-    quantityLeft: Number(raw.quantityLeft ?? raw.quantity_left ?? raw.quantity ?? 0),
-    quantityTotal: Number(raw.quantityTotal ?? raw.quantity_total ?? 0),
-    distance: Number(raw.distance ?? 0),
-    address: raw.address ?? '',
-    latitude: Number(raw.latitude ?? 36.8065),
-    longitude: Number(raw.longitude ?? 10.1815),
-    exampleItems: raw.exampleItems ?? raw.example_items ?? [],
-    imageUrl: raw.imageUrl ?? raw.image_url ?? undefined,
-    isActive: raw.isActive ?? true,
-    isSupermarket: raw.isSupermarket ?? false,
-  };
-}
 
 export default function ReserveScreen() {
   const { basketId } = useLocalSearchParams();
@@ -53,16 +24,16 @@ export default function ReserveScreen() {
 
   const confettiAnim = React.useRef(new Animated.Value(0)).current;
 
-  const basketQuery = useQuery({
-    queryKey: ['basket', basketId],
-    queryFn: () => fetchBasketById(String(basketId)),
+  const restaurantQuery = useQuery({
+    queryKey: ['restaurant', basketId],
+    queryFn: () => fetchRestaurantById(String(basketId)),
     enabled: !!basketId,
   });
 
-  const basket = basketQuery.data ? normalizeBasket(basketQuery.data) : null;
+  const basket = restaurantQuery.data ? normalizeRestaurantToBasket(restaurantQuery.data) : null;
 
   const reserveMutation = useMutation({
-    mutationFn: () => createReservation({ basketId: String(basketId), quantity }),
+    mutationFn: () => createReservation({ restaurant_id: Number(basketId), quantity }),
     onSuccess: async (data) => {
       console.log('[Reserve] Reservation created:', data.id);
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -84,8 +55,8 @@ export default function ReserveScreen() {
       setShowSuccess(true);
 
       void queryClient.invalidateQueries({ queryKey: ['reservations'] });
-      void queryClient.invalidateQueries({ queryKey: ['baskets'] });
-      void queryClient.invalidateQueries({ queryKey: ['basket', basketId] });
+      void queryClient.invalidateQueries({ queryKey: ['restaurants'] });
+      void queryClient.invalidateQueries({ queryKey: ['restaurant', basketId] });
 
       Animated.sequence([
         Animated.timing(confettiAnim, {
@@ -130,7 +101,7 @@ export default function ReserveScreen() {
     router.replace('/(tabs)/orders' as never);
   };
 
-  if (basketQuery.isLoading) {
+  if (restaurantQuery.isLoading) {
     return (
       <View style={[styles.container, { backgroundColor: theme.colors.bg, justifyContent: 'center', alignItems: 'center' }]}>
         <ActivityIndicator size="large" color={theme.colors.primary} />
