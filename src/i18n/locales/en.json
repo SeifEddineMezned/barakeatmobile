@@ -19,7 +19,9 @@
     "back": "Back",
     "search": "Search",
     "noPermission": "You do not have permission for this action",
-    "adminRequired": "Admin access required"
+    "adminRequired": "Admin access required",
+    "errorOccurred": "An error occurred. Please try again.",
+    "goBack": "Go back"
   },
   "onboarding": {
     "slide1": {
@@ -52,7 +54,9 @@
     "haveAccount": "Already have an account?",
     "createAccount": "Create Account",
     "welcome": "Welcome to Barakeat",
-    "welcomeBack": "Welcome Back"
+    "welcomeBack": "Welcome Back",
+    "error": "Error",
+    "fillAllFields": "Please fill in all required fields."
   },
   "home": {
     "discover": "Discover",
@@ -108,6 +112,7 @@
     "payOnPickupNote": "You will pay the merchant when you arrive.",
     "pickupInstructions": "Pickup Instructions",
     "confirmReservation": "Confirm Reservation",
+    "error": "Reservation Failed",
     "success": {
       "title": "Reservation Confirmed!",
       "pickupCode": "Pickup Code",
@@ -129,7 +134,10 @@
     },
     "cancelOrder": "Cancel Order",
     "orderDetails": "Order Details",
-    "emptyState": "No orders yet"
+    "emptyState": "No orders yet",
+    "loginRequired": "Please sign in to view your orders.",
+    "cancelTitle": "Cancel Reservation",
+    "cancelConfirm": "Are you sure you want to cancel this reservation?"
   },
   "favorites": {
     "title": "Favorites",

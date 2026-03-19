@@ -13,8 +13,9 @@ import {
   Poppins_600SemiBold,
   Poppins_700Bold,
 } from '@expo-google-fonts/poppins';
+import { useAuthStore } from "@/src/stores/authStore";
 
-SplashScreen.preventAutoHideAsync();
+void SplashScreen.preventAutoHideAsync();
 
 const queryClient = new QueryClient();
 
@@ -41,13 +42,20 @@ export default function RootLayout() {
     Poppins_700Bold,
   });
 
-  useEffect(() => {
-    if (fontsLoaded) {
-      SplashScreen.hideAsync();
-    }
-  }, [fontsLoaded]);
+  const restoreSession = useAuthStore((s) => s.restoreSession);
+  const isRestoringSession = useAuthStore((s) => s.isRestoringSession);
 
-  if (!fontsLoaded) {
+  useEffect(() => {
+    void restoreSession();
+  }, [restoreSession]);
+
+  useEffect(() => {
+    if (fontsLoaded && !isRestoringSession) {
+      void SplashScreen.hideAsync();
+    }
+  }, [fontsLoaded, isRestoringSession]);
+
+  if (!fontsLoaded || isRestoringSession) {
     return (
       <View style={styles.loading}>
         <ActivityIndicator size="large" color="#114b3c" />

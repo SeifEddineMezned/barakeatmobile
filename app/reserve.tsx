@@ -1,73 +1,92 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Animated } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Animated, Alert, ActivityIndicator } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import { X, Minus, Plus, CreditCard, Check } from 'lucide-react-native';
 import * as Haptics from 'expo-haptics';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { PrimaryCTAButton } from '@/src/components/PrimaryCTAButton';
-import { mockBaskets } from '@/src/mocks/baskets';
-import { useOrdersStore } from '@/src/stores/ordersStore';
-import type { Order } from '@/src/types';
+import { fetchBasketById } from '@/src/services/baskets';
+import { createReservation, fetchReservationQRCode } from '@/src/services/reservations';
+import { getErrorMessage } from '@/src/lib/api';
+import type { Basket } from '@/src/types';
+
+function normalizeBasket(raw: any): Basket {
+  return {
+    id: String(raw.id ?? raw._id ?? ''),
+    merchantId: raw.merchantId ?? raw.merchant_id ?? '',
+    merchantName: raw.merchantName ?? raw.merchant_name ?? raw.businessName ?? 'Unknown',
+    merchantLogo: raw.merchantLogo ?? raw.merchant_logo ?? undefined,
+    merchantRating: raw.merchantRating ?? raw.merchant_rating ?? undefined,
+    reviewCount: raw.reviewCount ?? raw.review_count ?? undefined,
+    reviews: raw.reviews ?? undefined,
+    description: raw.description ?? undefined,
+    name: raw.name ?? raw.title ?? 'Basket',
+    category: raw.category ?? '',
+    originalPrice: Number(raw.originalPrice ?? raw.original_price ?? raw.price ?? 0),
+    discountedPrice: Number(raw.discountedPrice ?? raw.discounted_price ?? raw.salePrice ?? 0),
+    discountPercentage: Number(raw.discountPercentage ?? raw.discount_percentage ?? 50),
+    pickupWindow: raw.pickupWindow ?? raw.pickup_window ?? { start: '18:00', end: '19:00' },
+    quantityLeft: Number(raw.quantityLeft ?? raw.quantity_left ?? raw.quantity ?? 0),
+    quantityTotal: Number(raw.quantityTotal ?? raw.quantity_total ?? 0),
+    distance: Number(raw.distance ?? 0),
+    address: raw.address ?? '',
+    latitude: Number(raw.latitude ?? 36.8065),
+    longitude: Number(raw.longitude ?? 10.1815),
+    exampleItems: raw.exampleItems ?? raw.example_items ?? [],
+    imageUrl: raw.imageUrl ?? raw.image_url ?? undefined,
+    isActive: raw.isActive ?? true,
+    isSupermarket: raw.isSupermarket ?? false,
+  };
+}
 
 export default function ReserveScreen() {
   const { basketId } = useLocalSearchParams();
   const { t } = useTranslation();
   const theme = useTheme();
   const router = useRouter();
-  const addOrder = useOrdersStore((state) => state.addOrder);
+  const queryClient = useQueryClient();
   const [quantity, setQuantity] = useState(1);
-  const [loading, setLoading] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
-  const [pickupCode, setPickupCode] = useState('');
+  const [reservationResult, setReservationResult] = useState<{ id: string; pickupCode?: string; qrCode?: string } | null>(null);
 
   const confettiAnim = React.useRef(new Animated.Value(0)).current;
 
-  const basket = mockBaskets.find((b) => b.id === basketId);
+  const basketQuery = useQuery({
+    queryKey: ['basket', basketId],
+    queryFn: () => fetchBasketById(String(basketId)),
+    enabled: !!basketId,
+  });
 
-  if (!basket) {
-    return null;
-  }
+  const basket = basketQuery.data ? normalizeBasket(basketQuery.data) : null;
 
-  const handleIncrement = () => {
-    if (quantity < basket.quantityLeft) {
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-      setQuantity((prev) => prev + 1);
-    }
-  };
+  const reserveMutation = useMutation({
+    mutationFn: () => createReservation({ basketId: String(basketId), quantity }),
+    onSuccess: async (data) => {
+      console.log('[Reserve] Reservation created:', data.id);
+      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
 
-  const handleDecrement = () => {
-    if (quantity > 1) {
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-      setQuantity((prev) => prev - 1);
-    }
-  };
+      let qrCode = data.qrCode ?? '';
+      if (!qrCode && data.id) {
+        try {
+          qrCode = await fetchReservationQRCode(data.id);
+        } catch (err) {
+          console.log('[Reserve] Could not fetch QR code:', err);
+        }
+      }
 
-  const handleConfirm = async () => {
-    setLoading(true);
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    
-    setTimeout(() => {
-      const code = Math.random().toString(36).substring(2, 8).toUpperCase();
-      setPickupCode(code);
-      
-      const order: Order = {
-        id: Math.random().toString(36).substring(2, 9),
-        basketId: basket.id,
-        basket: basket,
-        quantity: quantity,
-        total: basket.discountedPrice * quantity,
-        pickupWindow: basket.pickupWindow,
-        pickupCode: code,
-        status: 'reserved',
-        createdAt: new Date().toISOString(),
-      };
-      
-      addOrder(order);
-      
-      setLoading(false);
+      setReservationResult({
+        id: data.id,
+        pickupCode: data.pickupCode ?? data.id?.substring(0, 6)?.toUpperCase(),
+        qrCode,
+      });
       setShowSuccess(true);
-      
+
+      void queryClient.invalidateQueries({ queryKey: ['reservations'] });
+      void queryClient.invalidateQueries({ queryKey: ['baskets'] });
+      void queryClient.invalidateQueries({ queryKey: ['basket', basketId] });
+
       Animated.sequence([
         Animated.timing(confettiAnim, {
           toValue: 1,
@@ -80,14 +99,57 @@ export default function ReserveScreen() {
           useNativeDriver: true,
         }),
       ]).start();
-    }, 1500);
+    },
+    onError: (err) => {
+      const msg = getErrorMessage(err);
+      console.log('[Reserve] Error:', msg);
+      Alert.alert(t('reserve.error'), msg);
+    },
+  });
+
+  const handleIncrement = () => {
+    if (basket && quantity < basket.quantityLeft) {
+      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      setQuantity((prev) => prev + 1);
+    }
+  };
+
+  const handleDecrement = () => {
+    if (quantity > 1) {
+      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      setQuantity((prev) => prev - 1);
+    }
+  };
+
+  const handleConfirm = () => {
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    reserveMutation.mutate();
   };
 
   const handleViewOrder = () => {
     router.replace('/(tabs)/orders' as never);
   };
 
-  if (showSuccess) {
+  if (basketQuery.isLoading) {
+    return (
+      <View style={[styles.container, { backgroundColor: theme.colors.bg, justifyContent: 'center', alignItems: 'center' }]}>
+        <ActivityIndicator size="large" color={theme.colors.primary} />
+      </View>
+    );
+  }
+
+  if (!basket) {
+    return (
+      <View style={[styles.container, { backgroundColor: theme.colors.bg, justifyContent: 'center', alignItems: 'center' }]}>
+        <Text style={[{ color: theme.colors.error, ...theme.typography.body }]}>{t('common.errorOccurred')}</Text>
+        <TouchableOpacity onPress={() => router.back()} style={{ marginTop: 16 }}>
+          <Text style={[{ color: theme.colors.primary, ...theme.typography.body }]}>{t('common.goBack')}</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
+  if (showSuccess && reservationResult) {
     return (
       <View style={[styles.container, { backgroundColor: theme.colors.bg }]}>
         <View style={styles.successContainer}>
@@ -96,7 +158,7 @@ export default function ReserveScreen() {
               <X size={24} color={theme.colors.textPrimary} />
             </TouchableOpacity>
           </View>
-          
+
           <View style={styles.successContent}>
             <Animated.View
               style={{
@@ -178,7 +240,7 @@ export default function ReserveScreen() {
                   },
                 ]}
               >
-                {pickupCode}
+                {reservationResult.pickupCode}
               </Text>
               <Text
                 style={[
@@ -382,7 +444,7 @@ export default function ReserveScreen() {
           },
         ]}
       >
-        <PrimaryCTAButton onPress={handleConfirm} title={t('reserve.confirmReservation')} loading={loading} />
+        <PrimaryCTAButton onPress={handleConfirm} title={t('reserve.confirmReservation')} loading={reserveMutation.isPending} />
       </View>
     </View>
   );

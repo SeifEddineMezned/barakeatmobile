@@ -1,14 +1,17 @@
 import React, { useState, useCallback, useMemo } from 'react';
-import { View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity, Modal, Platform } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity, Modal, Platform, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
-import { Search, Compass, MapPin, X, Navigation } from 'lucide-react-native';
+import { Search, Compass, MapPin, X, Navigation, RefreshCw } from 'lucide-react-native';
+import { useQuery } from '@tanstack/react-query';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { BasketCard } from '@/src/components/BasketCard';
-import { mockBaskets, CATEGORIES } from '@/src/mocks/baskets';
+import { CATEGORIES } from '@/src/mocks/baskets';
 import { useFavoritesStore } from '@/src/stores/favoritesStore';
 import { useAuthStore } from '@/src/stores/authStore';
 import { MapFallback } from '@/src/components/MapFallback';
+import { fetchBaskets } from '@/src/services/baskets';
+import type { Basket } from '@/src/types';
 
 let MapView: any = null;
 let MapMarker: any = null;
@@ -23,6 +26,35 @@ if (Platform.OS !== 'web') {
 
 const RADIUS_OPTIONS = [1, 2, 3, 5, 10, 15, 20];
 
+function normalizeBasket(raw: any): Basket {
+  return {
+    id: String(raw.id ?? raw._id ?? ''),
+    merchantId: raw.merchantId ?? raw.merchant_id ?? '',
+    merchantName: raw.merchantName ?? raw.merchant_name ?? raw.businessName ?? raw.business_name ?? 'Unknown',
+    merchantLogo: raw.merchantLogo ?? raw.merchant_logo ?? raw.logo ?? undefined,
+    merchantRating: raw.merchantRating ?? raw.merchant_rating ?? raw.rating ?? undefined,
+    reviewCount: raw.reviewCount ?? raw.review_count ?? undefined,
+    reviews: raw.reviews ?? undefined,
+    description: raw.description ?? undefined,
+    name: raw.name ?? raw.title ?? 'Basket',
+    category: raw.category ?? raw.type ?? 'Tous',
+    originalPrice: Number(raw.originalPrice ?? raw.original_price ?? raw.price ?? 0),
+    discountedPrice: Number(raw.discountedPrice ?? raw.discounted_price ?? raw.salePrice ?? raw.sale_price ?? 0),
+    discountPercentage: Number(raw.discountPercentage ?? raw.discount_percentage ?? 50),
+    pickupWindow: raw.pickupWindow ?? raw.pickup_window ?? { start: '18:00', end: '19:00' },
+    quantityLeft: Number(raw.quantityLeft ?? raw.quantity_left ?? raw.quantity ?? 0),
+    quantityTotal: Number(raw.quantityTotal ?? raw.quantity_total ?? raw.totalQuantity ?? 0),
+    distance: Number(raw.distance ?? 0),
+    address: raw.address ?? raw.location?.address ?? '',
+    latitude: Number(raw.latitude ?? raw.location?.latitude ?? raw.lat ?? 36.8065),
+    longitude: Number(raw.longitude ?? raw.location?.longitude ?? raw.lng ?? 10.1815),
+    exampleItems: raw.exampleItems ?? raw.example_items ?? raw.items ?? [],
+    imageUrl: raw.imageUrl ?? raw.image_url ?? raw.image ?? raw.coverImage ?? undefined,
+    isActive: raw.isActive ?? raw.is_active ?? true,
+    isSupermarket: raw.isSupermarket ?? raw.is_supermarket ?? false,
+  };
+}
+
 export default function HomeScreen() {
   const { t } = useTranslation();
   const theme = useTheme();
@@ -33,8 +65,20 @@ export default function HomeScreen() {
   const [showRadiusModal, setShowRadiusModal] = useState(false);
   const [radius, setRadius] = useState(5);
 
+  const basketsQuery = useQuery({
+    queryKey: ['baskets'],
+    queryFn: fetchBaskets,
+    staleTime: 60_000,
+    retry: 2,
+  });
+
+  const baskets = useMemo(() => {
+    if (!basketsQuery.data) return [];
+    return basketsQuery.data.map(normalizeBasket);
+  }, [basketsQuery.data]);
+
   const filteredBaskets = useMemo(() => {
-    let result = mockBaskets;
+    let result = baskets;
     if (activeCategory !== 'Tous') {
       result = result.filter((b) => b.category === activeCategory);
     }
@@ -49,7 +93,7 @@ export default function HomeScreen() {
     }
     result = result.filter((b) => b.distance <= radius);
     return result;
-  }, [activeCategory, searchQuery, radius]);
+  }, [baskets, activeCategory, searchQuery, radius]);
 
   const handleCategoryPress = useCallback((cat: string) => {
     setActiveCategory(cat);
@@ -57,7 +101,7 @@ export default function HomeScreen() {
 
   const firstName = user?.firstName ?? user?.name?.split(' ')[0] ?? '';
 
-  const mapMarkers = mockBaskets
+  const mapMarkers = baskets
     .filter((b) => b.distance <= radius)
     .map((b) => ({ id: b.id, name: b.merchantName, lat: b.latitude, lng: b.longitude }));
 
@@ -160,7 +204,29 @@ export default function HomeScreen() {
         contentContainerStyle={{ paddingHorizontal: theme.spacing.xl, paddingTop: theme.spacing.lg, paddingBottom: theme.spacing.xxl }}
         showsVerticalScrollIndicator={false}
       >
-        {filteredBaskets.length === 0 ? (
+        {basketsQuery.isLoading ? (
+          <View style={styles.centerState}>
+            <ActivityIndicator size="large" color={theme.colors.primary} />
+            <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.body, marginTop: 16 }]}>
+              {t('common.loading')}
+            </Text>
+          </View>
+        ) : basketsQuery.isError ? (
+          <View style={styles.centerState}>
+            <Text style={[{ color: theme.colors.error, ...theme.typography.body, textAlign: 'center' as const, marginBottom: 16 }]}>
+              {t('common.errorOccurred')}
+            </Text>
+            <TouchableOpacity
+              onPress={() => basketsQuery.refetch()}
+              style={[styles.retryButton, { backgroundColor: theme.colors.primary, borderRadius: theme.radii.r12 }]}
+            >
+              <RefreshCw size={16} color="#fff" />
+              <Text style={[{ color: '#fff', ...theme.typography.bodySm, fontWeight: '600' as const, marginLeft: 8 }]}>
+                {t('common.retry')}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        ) : filteredBaskets.length === 0 ? (
           <View style={styles.emptyState}>
             <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.body, textAlign: 'center' as const, marginTop: 40, paddingHorizontal: 20 }]}>
               {t('home.emptyState.noBaskets')}
@@ -221,7 +287,7 @@ export default function HomeScreen() {
                       strokeWidth={3}
                     />
                   )}
-                  {mockBaskets.filter(b => b.distance <= radius).map((basket) => (
+                  {baskets.filter(b => b.distance <= radius).map((basket) => (
                     MapMarker ? (
                       <MapMarker
                         key={basket.id}
@@ -348,6 +414,18 @@ const styles = StyleSheet.create({
   categoryPill: {},
   scrollView: {
     flex: 1,
+  },
+  centerState: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingTop: 60,
+  },
+  retryButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingVertical: 12,
   },
   emptyState: {
     flex: 1,

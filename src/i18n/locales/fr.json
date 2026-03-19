@@ -19,7 +19,9 @@
     "back": "Retour",
     "search": "Rechercher",
     "noPermission": "Vous n'avez pas la permission pour cette action",
-    "adminRequired": "Accès administrateur requis"
+    "adminRequired": "Accès administrateur requis",
+    "errorOccurred": "Une erreur est survenue. Veuillez réessayer.",
+    "goBack": "Retour"
   },
   "onboarding": {
     "slide1": {
@@ -52,7 +54,9 @@
     "haveAccount": "Déjà un compte?",
     "createAccount": "Créer un Compte",
     "welcome": "Bienvenue chez Barakeat",
-    "welcomeBack": "Content de vous revoir"
+    "welcomeBack": "Content de vous revoir",
+    "error": "Erreur",
+    "fillAllFields": "Veuillez remplir tous les champs obligatoires."
   },
   "home": {
     "discover": "Découvrir",
@@ -108,6 +112,7 @@
     "payOnPickupNote": "Vous paierez le commerçant à votre arrivée.",
     "pickupInstructions": "Instructions de Retrait",
     "confirmReservation": "Confirmer Réservation",
+    "error": "Échec de la réservation",
     "success": {
       "title": "Réservation Confirmée!",
       "pickupCode": "Code de Retrait",
@@ -129,7 +134,10 @@
     },
     "cancelOrder": "Annuler",
     "orderDetails": "Détails",
-    "emptyState": "Aucune commande"
+    "emptyState": "Aucune commande",
+    "loginRequired": "Veuillez vous connecter pour voir vos commandes.",
+    "cancelTitle": "Annuler la réservation",
+    "cancelConfirm": "Êtes-vous sûr de vouloir annuler cette réservation ?"
   },
   "favorites": {
     "title": "Favoris",

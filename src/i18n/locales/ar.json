@@ -19,7 +19,9 @@
     "back": "رجوع",
     "search": "بحث",
     "noPermission": "ليس لديك صلاحية لهذا الإجراء",
-    "adminRequired": "يتطلب صلاحيات المسؤول"
+    "adminRequired": "يتطلب صلاحيات المسؤول",
+    "errorOccurred": "حدث خطأ. يرجى المحاولة مرة أخرى.",
+    "goBack": "رجوع"
   },
   "onboarding": {
     "slide1": {
@@ -52,7 +54,9 @@
     "haveAccount": "لديك حساب بالفعل؟",
     "createAccount": "إنشاء حساب",
     "welcome": "مرحبًا بك في بركات",
-    "welcomeBack": "مرحبًا بعودتك"
+    "welcomeBack": "مرحبًا بعودتك",
+    "error": "خطأ",
+    "fillAllFields": "يرجى ملء جميع الحقول المطلوبة."
   },
   "home": {
     "discover": "اكتشف",
@@ -108,6 +112,7 @@
     "payOnPickupNote": "ستدفع للتاجر عند وصولك.",
     "pickupInstructions": "تعليمات الاستلام",
     "confirmReservation": "تأكيد الحجز",
+    "error": "فشل الحجز",
     "success": {
       "title": "تم تأكيد الحجز!",
       "pickupCode": "رمز الاستلام",
@@ -129,7 +134,10 @@
     },
     "cancelOrder": "إلغاء الطلب",
     "orderDetails": "تفاصيل الطلب",
-    "emptyState": "لا توجد طلبات بعد"
+    "emptyState": "لا توجد طلبات بعد",
+    "loginRequired": "يرجى تسجيل الدخول لعرض طلباتك.",
+    "cancelTitle": "إلغاء الحجز",
+    "cancelConfirm": "هل أنت متأكد أنك تريد إلغاء هذا الحجز؟"
   },
   "favorites": {
     "title": "المفضلة",

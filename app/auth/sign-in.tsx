@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, ScrollView } from 'react-native';
+import { View, Text, StyleSheet, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, ScrollView, Alert } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -7,7 +7,9 @@ import { Store, User } from 'lucide-react-native';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { PrimaryCTAButton } from '@/src/components/PrimaryCTAButton';
 import { useAuthStore } from '@/src/stores/authStore';
-import type { UserRole } from '@/src/types';
+import { login } from '@/src/services/auth';
+import { getErrorMessage } from '@/src/lib/api';
+import type { UserRole, User as UserType } from '@/src/types';
 
 export default function SignInScreen() {
   const { t } = useTranslation();
@@ -21,21 +23,35 @@ export default function SignInScreen() {
   const [role, setRole] = useState<UserRole>('customer');
 
   const handleSignIn = async () => {
+    if (!email.trim() || !password.trim()) {
+      Alert.alert(t('auth.error'), t('auth.fillAllFields'));
+      return;
+    }
     setLoading(true);
-    setTimeout(() => {
-      signIn({
-        id: '1',
-        name: role === 'business' ? 'Mon Commerce' : 'Demo User',
-        email,
-        role,
-      });
-      setLoading(false);
-      if (role === 'business') {
+    try {
+      const res = await login({ email: email.trim(), password });
+      const user: UserType = {
+        id: res.user.id,
+        name: res.user.name,
+        firstName: res.user.firstName,
+        email: res.user.email,
+        phone: res.user.phone,
+        role: (res.user.role as UserRole) || role,
+      };
+      signIn(user, res.token);
+      console.log('[SignIn] Success, navigating for role:', user.role);
+      if (user.role === 'business') {
         router.replace('/(business)/dashboard' as never);
       } else {
         router.replace('/(tabs)');
       }
-    }, 1000);
+    } catch (err) {
+      const msg = getErrorMessage(err);
+      console.log('[SignIn] Error:', msg);
+      Alert.alert(t('auth.error'), msg);
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (

@@ -3,13 +3,15 @@ import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Modal, Alert } fr
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import { useRouter } from 'expo-router';
+import { useQuery } from '@tanstack/react-query';
 import {
   ChevronRight, HelpCircle, Info, LogOut, User, Mail, Phone,
   CreditCard, Leaf, DollarSign, ShoppingBag, FileText, Headphones, Globe, Shield
 } from 'lucide-react-native';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { useAuthStore } from '@/src/stores/authStore';
-import { useOrdersStore } from '@/src/stores/ordersStore';
+import { fetchMyReservations } from '@/src/services/reservations';
+import { logout } from '@/src/services/auth';
 import i18n from '@/src/i18n';
 
 const LANGUAGES = [
@@ -22,24 +24,40 @@ export default function ProfileScreen() {
   const { t } = useTranslation();
   const theme = useTheme();
   const router = useRouter();
-  const { user, signOut } = useAuthStore();
-  const orders = useOrdersStore((state) => state.orders);
+  const { user, isAuthenticated } = useAuthStore();
+  const signOut = useAuthStore((s) => s.signOut);
   const [showFaqModal, setShowFaqModal] = useState(false);
   const [showLegalModal, setShowLegalModal] = useState<string | null>(null);
   const [showLanguageModal, setShowLanguageModal] = useState(false);
   const [currentLang, setCurrentLang] = useState(i18n.language ?? 'en');
   const [demoRole, setDemoRole] = useState<'admin' | 'restricted'>('admin');
 
+  const reservationsQuery = useQuery({
+    queryKey: ['reservations'],
+    queryFn: fetchMyReservations,
+    enabled: isAuthenticated,
+    staleTime: 60_000,
+  });
+
   const stats = useMemo(() => {
-    const completedOrders = orders.filter((o) => o.status === 'collected');
-    const basketsBought = completedOrders.reduce((sum, o) => sum + o.quantity, 0);
-    const moneySaved = completedOrders.reduce((sum, o) => sum + (o.basket.originalPrice - o.basket.discountedPrice) * o.quantity, 0);
+    const reservations = reservationsQuery.data ?? [];
+    const completedReservations = reservations.filter((r) => {
+      const status = (r.status ?? '').toLowerCase();
+      return status === 'collected' || status === 'completed';
+    });
+    const basketsBought = completedReservations.reduce((sum, r) => sum + (r.quantity ?? 1), 0);
+    const moneySaved = completedReservations.reduce((sum, r) => {
+      const orig = r.basket?.originalPrice ?? (r.basket as any)?.original_price ?? 0;
+      const disc = r.basket?.discountedPrice ?? (r.basket as any)?.discounted_price ?? 0;
+      return sum + (Number(orig) - Number(disc)) * (r.quantity ?? 1);
+    }, 0);
     const co2Saved = basketsBought * 2.5;
     return { basketsBought, moneySaved, co2Saved };
-  }, [orders]);
+  }, [reservationsQuery.data]);
 
-  const handleSignOut = useCallback(() => {
-    signOut();
+  const handleSignOut = useCallback(async () => {
+    await logout();
+    await signOut();
     router.replace('/auth/sign-in' as never);
   }, [signOut, router]);
 
@@ -353,7 +371,7 @@ export default function ProfileScreen() {
               ...theme.shadows.shadowSm,
             },
           ]}
-          onPress={handleSignOut}
+          onPress={() => void handleSignOut()}
         >
           <LogOut size={20} color={theme.colors.error} />
           <Text style={[styles.signOutText, { color: theme.colors.error, ...theme.typography.body }]}>
