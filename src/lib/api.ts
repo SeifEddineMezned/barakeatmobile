@@ -1,5 +1,6 @@
 import axios from 'axios';
 import * as SecureStore from 'expo-secure-store';
+import { mapErrorToI18nKey } from './errorMap';
 
 const API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL || 'https://barakeat-production.up.railway.app';
 const TOKEN_KEY = 'barakeat_auth_token';
@@ -64,11 +65,23 @@ export function isApiError(err: unknown): err is ApiError {
 }
 
 export function getErrorMessage(err: unknown): string {
+  let message = 'An unexpected error occurred';
   if (isApiError(err)) {
-    return err.message;
+    message = err.message;
+  } else if (err instanceof Error) {
+    message = err.message;
   }
-  if (err instanceof Error) {
-    return err.message;
+  // Try to find an i18n key for the message
+  const i18nKey = mapErrorToI18nKey(message);
+  if (i18nKey) {
+    // Import i18n lazily to avoid circular deps
+    try {
+      const i18n = require('@/src/i18n').default;
+      const translated = i18n.t(i18nKey);
+      if (translated !== i18nKey) return translated;
+    } catch {
+      // i18n not available, fall through
+    }
   }
-  return 'An unexpected error occurred';
+  return message;
 }

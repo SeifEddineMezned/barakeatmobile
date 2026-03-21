@@ -22,7 +22,8 @@
         "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
-      "package": "app.rork.barakeat_surprise_baskets"
+      "package": "app.rork.barakeat_surprise_baskets",
+      "softwareKeyboardLayoutMode": "pan"
     },
     "web": {
       "favicon": "./assets/images/favicon.png"
@@ -37,7 +38,26 @@
       "expo-font",
       "expo-web-browser",
       "expo-localization",
-      "expo-secure-store"
+      "expo-secure-store",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow Barakeat to access your photos to upload images.",
+          "cameraPermission": "Allow Barakeat to access your camera to take photos."
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Allow Barakeat to use your location to find nearby baskets."
+        }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow Barakeat to use your camera to scan QR codes for order pickup."
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true

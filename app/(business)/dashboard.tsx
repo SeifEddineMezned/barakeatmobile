@@ -1,14 +1,38 @@
 import React, { useState, useCallback } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Modal, Dimensions } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Modal, Dimensions, ActivityIndicator, Image, Platform, Animated as RNAnimated, StatusBar } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
-import { TrendingUp, ShoppingBag, DollarSign, Clock, Leaf, Star, X, Package, AlertCircle } from 'lucide-react-native';
+import { TrendingUp, ShoppingBag, Banknote, Clock, Leaf, Star, X, Package, AlertCircle, Store, Settings, Bell } from 'lucide-react-native';
+import { useQuery } from '@tanstack/react-query';
+import { useRouter } from 'expo-router';
 import { useTheme } from '@/src/theme/ThemeProvider';
-import { useBusinessStore } from '@/src/stores/businessStore';
 import { useAuthStore } from '@/src/stores/authStore';
+import { fetchStats, fetchTodayOrders, fetchAnalytics } from '@/src/services/business';
+import { apiClient } from '@/src/lib/api';
 import { LineChart } from '@/src/components/LineChart';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
+
+function AnimatedNumber({ value, suffix, duration = 800 }: { value: number; suffix?: string; duration?: number }) {
+  const animVal = React.useRef(new RNAnimated.Value(0)).current;
+  const [display, setDisplay] = React.useState(0);
+
+  React.useEffect(() => {
+    animVal.setValue(0);
+    RNAnimated.timing(animVal, {
+      toValue: value,
+      duration,
+      useNativeDriver: false,
+    }).start();
+
+    const listener = animVal.addListener(({ value: v }) => {
+      setDisplay(Math.round(v));
+    });
+    return () => animVal.removeListener(listener);
+  }, [value]);
+
+  return <>{display}{suffix ?? ''}</>;
+}
 
 function SimpleBarChart({ data, labels, color, stackData, stackColor }: { data: number[]; labels: string[]; color: string; stackData?: number[]; stackColor?: string }) {
   const theme = useTheme();
@@ -110,15 +134,85 @@ const miniStyles = StyleSheet.create({
 export default function BusinessDashboard() {
   const { t } = useTranslation();
   const theme = useTheme();
+  const router = useRouter();
   const { user } = useAuthStore();
-  const { stats, baskets } = useBusinessStore();
+
+  const statsQuery = useQuery({
+    queryKey: ['business-stats'],
+    queryFn: fetchStats,
+    staleTime: 60_000,
+    retry: 1,
+  });
+
+  const analyticsQuery = useQuery({
+    queryKey: ['business-analytics'],
+    queryFn: fetchAnalytics,
+    staleTime: 60_000,
+    retry: 1,
+  });
+
+  const todayQuery = useQuery({
+    queryKey: ['today-orders'],
+    queryFn: fetchTodayOrders,
+    staleTime: 30_000,
+    refetchInterval: 30_000,
+    retry: 1,
+  });
+
+  const profileQuery = useQuery({
+    queryKey: ['my-profile'],
+    queryFn: async () => {
+      const res = await apiClient.get('/api/restaurants/my/profile');
+      return res.data as any;
+    },
+    staleTime: 60_000,
+    retry: 1,
+  });
+
+  const reviewsQuery = useQuery({
+    queryKey: ['my-reviews'],
+    queryFn: async () => {
+      const profileData = profileQuery.data;
+      const restaurantId = profileData?.id;
+      if (!restaurantId) return null;
+      const res = await apiClient.get(`/api/reviews/restaurant/${restaurantId}`);
+      const data = res.data;
+      const reviews = Array.isArray(data) ? data : (data as any)?.reviews ?? [];
+      if (reviews.length === 0) return null;
+      const avgService = reviews.reduce((s: number, r: any) => s + (r.rating_service ?? 0), 0) / reviews.length;
+      const avgQuantity = reviews.reduce((s: number, r: any) => s + (r.rating_quantity ?? 0), 0) / reviews.length;
+      const avgQuality = reviews.reduce((s: number, r: any) => s + (r.rating_quality ?? 0), 0) / reviews.length;
+      const avgVariety = reviews.reduce((s: number, r: any) => s + (r.rating_variety ?? 0), 0) / reviews.length;
+      return { service: avgService, quantite: avgQuantity, qualite: avgQuality, variete: avgVariety };
+    },
+    enabled: !!profileQuery.data?.id,
+    staleTime: 60_000,
+    retry: 1,
+  });
+
+  const analytics = analyticsQuery.data;
+  const statsData = statsQuery.data;
+  const todayOrders = todayQuery.data ?? [];
+
+  const isLoading = statsQuery.isLoading && analyticsQuery.isLoading && todayQuery.isLoading && profileQuery.isLoading;
+
+  const stats = {
+    totalRevenue: analytics?.summary?.revenue_today ?? statsData?.today_revenue ?? 0,
+    totalBasketsSold: analytics?.summary?.baskets_sold_today ?? statsData?.today_baskets ?? 0,
+    pendingOrders: todayOrders.filter((o: any) => o.status === 'confirmed' || o.status === 'reserved' || o.status === 'pending').length,
+    mealsRescued: analytics?.summary?.pickups_today ?? 0,
+    activeBaskets: profileQuery.data?.available_quantity ?? 0,
+    averageRating: statsData?.average_rating ?? profileQuery.data?.average_rating ?? 0,
+    dailySales: (analytics?.weekly ?? []).map((d: any) => d.baskets_sold ?? 0),
+    dailyLabels: (analytics?.weekly ?? []).map((d: any) => d.dayName ?? ''),
+    weeklySales: (analytics?.monthly ?? []).map((m: any) => m.baskets_sold ?? 0),
+    weeklyLabels: (analytics?.monthly ?? []).map((m: any) => m.monthName ?? ''),
+    weeklyRevenue: (analytics?.monthly ?? []).map((m: any) => m.revenue ?? 0),
+  };
+
   const [showRatingModal, setShowRatingModal] = useState(false);
 
-  const activeBasket = baskets.find((b) => b.isActive && b.reviews);
-  const reviews = activeBasket?.reviews ?? { service: 4.7, quantite: 4.5, qualite: 4.8, variete: 4.4 };
-
-  const dayLabels = ['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim'];
-  const weekLabels = ['S1', 'S2', 'S3', 'S4'];
+  const reviews = reviewsQuery.data ?? { service: 0, quantite: 0, qualite: 0, variete: 0 };
 
   const handleRatingPress = useCallback(() => {
     setShowRatingModal(true);
@@ -126,110 +220,221 @@ export default function BusinessDashboard() {
 
   const chartWidth = Math.min(SCREEN_WIDTH - 80, 320);
 
+  // Staggered fade-in animations for dashboard sections
+  const fadeAnim1 = React.useRef(new RNAnimated.Value(0)).current;
+  const fadeAnim2 = React.useRef(new RNAnimated.Value(0)).current;
+  const fadeAnim3 = React.useRef(new RNAnimated.Value(0)).current;
+
+  React.useEffect(() => {
+    if (!isLoading) {
+      RNAnimated.stagger(150, [
+        RNAnimated.timing(fadeAnim1, { toValue: 1, duration: 400, useNativeDriver: true }),
+        RNAnimated.timing(fadeAnim2, { toValue: 1, duration: 400, useNativeDriver: true }),
+        RNAnimated.timing(fadeAnim3, { toValue: 1, duration: 400, useNativeDriver: true }),
+      ]).start();
+    }
+  }, [isLoading]);
+
+  if (isLoading) {
+    return (
+      <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg, justifyContent: 'center', alignItems: 'center' }]} edges={[]}>
+        <ActivityIndicator size="large" color={theme.colors.primary} />
+      </SafeAreaView>
+    );
+  }
+
   return (
-    <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]} edges={['top']}>
+    <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]} edges={[]}>
       <ScrollView showsVerticalScrollIndicator={false}>
-        <View style={[styles.header, { paddingHorizontal: theme.spacing.xl, paddingTop: theme.spacing.xl }]}>
-          <View style={styles.headerLeft}>
-            <Text style={[{ color: theme.colors.muted, fontSize: 12, fontFamily: 'Poppins_400Regular' }]}>
-              {t('business.dashboard.greeting')}
-            </Text>
-            <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h1, marginTop: 2 }]}>
-              {user?.name ?? 'Mon Commerce'}
-            </Text>
-          </View>
-          <View style={[styles.liveBadge, { backgroundColor: theme.colors.success + '18', borderRadius: theme.radii.pill, paddingHorizontal: 12, paddingVertical: 6 }]}>
-            <View style={[styles.liveDot, { backgroundColor: theme.colors.success }]} />
-            <Text style={[{ color: theme.colors.success, fontSize: 11, fontWeight: '600' as const, marginLeft: 6, fontFamily: 'Poppins_600SemiBold' }]}>
-              {t('business.dashboard.online')}
-            </Text>
-          </View>
-        </View>
-
-        <View style={[styles.summaryBanner, {
-          backgroundColor: theme.colors.primary,
-          marginHorizontal: theme.spacing.xl,
-          marginTop: theme.spacing.xl,
-          borderRadius: theme.radii.r20,
-          padding: theme.spacing.lg,
-        }]}>
-          <Text style={[{ color: 'rgba(255,255,255,0.7)', fontSize: 12, fontFamily: 'Poppins_400Regular' }]}>
-            {t('business.dashboard.daySummary')}
-          </Text>
-          <View style={styles.summaryRow}>
-            <View style={styles.summaryItem}>
-              <DollarSign size={14} color={theme.colors.secondary} />
-              <Text style={[styles.summaryVal, { color: '#fff' }]}>{stats.totalRevenue}</Text>
-              <Text style={[styles.summarySuffix, { color: 'rgba(255,255,255,0.7)' }]}>{'TND'}</Text>
-            </View>
-            <View style={[styles.summaryDivider, { backgroundColor: 'rgba(255,255,255,0.2)' }]} />
-            <View style={styles.summaryItem}>
-              <ShoppingBag size={14} color={theme.colors.secondary} />
-              <Text style={[styles.summaryVal, { color: '#fff' }]}>{stats.totalBasketsSold}</Text>
-              <Text style={[styles.summarySuffix, { color: 'rgba(255,255,255,0.7)' }]}>{t('business.dashboard.sold')}</Text>
-            </View>
-            <View style={[styles.summaryDivider, { backgroundColor: 'rgba(255,255,255,0.2)' }]} />
-            <View style={styles.summaryItem}>
-              <Clock size={14} color={theme.colors.secondary} />
-              <Text style={[styles.summaryVal, { color: '#fff' }]}>{stats.pendingOrders}</Text>
-              <Text style={[styles.summarySuffix, { color: 'rgba(255,255,255,0.7)' }]}>{t('business.dashboard.pending')}</Text>
-            </View>
-            <View style={[styles.summaryDivider, { backgroundColor: 'rgba(255,255,255,0.2)' }]} />
-            <View style={styles.summaryItem}>
-              <Package size={14} color={theme.colors.secondary} />
-              <Text style={[styles.summaryVal, { color: '#fff' }]}>{stats.mealsRescued}</Text>
-              <Text style={[styles.summarySuffix, { color: 'rgba(255,255,255,0.7)' }]}>{t('business.dashboard.rescued')}</Text>
-            </View>
-          </View>
-        </View>
-
-        <TouchableOpacity
-          onPress={handleRatingPress}
-          activeOpacity={0.8}
-          style={[styles.ratingCard, {
+        {/* Floating header - overlays the cover image */}
+        <View style={{
+          position: 'absolute',
+          top: Platform.OS === 'ios' ? 54 : 36,
+          left: 16,
+          right: 16,
+          zIndex: 10,
+          flexDirection: 'row',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+        }}>
+          {/* Barakeat logo pill */}
+          <View style={{
             backgroundColor: theme.colors.surface,
-            marginHorizontal: theme.spacing.xl,
-            marginTop: theme.spacing.lg,
-            borderRadius: theme.radii.r16,
-            padding: theme.spacing.lg,
-            ...theme.shadows.shadowSm,
-          }]}
-        >
-          <View style={styles.ratingRow}>
-            <View style={styles.ratingLeft}>
-              <View style={[styles.ratingStarBg, { backgroundColor: theme.colors.starYellow + '18' }]}>
-                <Star size={20} color={theme.colors.starYellow} fill={theme.colors.starYellow} />
-              </View>
-              <View style={{ marginLeft: 12 }}>
-                <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h2 }]}>
-                  {stats.averageRating.toFixed(1)}
-                </Text>
-                <Text style={[{ color: theme.colors.muted, fontSize: 11, fontFamily: 'Poppins_400Regular' }]}>
-                  {t('business.dashboard.avgRating')}
-                </Text>
-              </View>
-            </View>
-            <View style={[styles.ratingArrow, { backgroundColor: theme.colors.bg }]}>
-              <Text style={[{ color: theme.colors.primary, fontSize: 12, fontFamily: 'Poppins_600SemiBold' }]}>{t('business.dashboard.details')} →</Text>
-            </View>
+            borderRadius: 20,
+            paddingHorizontal: 14,
+            paddingVertical: 8,
+            flexDirection: 'row',
+            alignItems: 'baseline',
+            ...theme.shadows.shadowMd,
+          }}>
+            <Text style={{ color: theme.colors.primary, fontSize: 16, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
+              Barakeat
+            </Text>
+            <Text style={{ color: '#e3ff5c', fontSize: 16, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
+              .
+            </Text>
           </View>
-        </TouchableOpacity>
 
-        <View style={[styles.statsGrid, { paddingHorizontal: theme.spacing.xl, marginTop: theme.spacing.xl }]}>
-          <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, marginBottom: theme.spacing.md }]}>
-            {t('business.dashboard.performance')}
-          </Text>
-          <View style={styles.statsRow}>
-            <StatMiniCard icon={TrendingUp} value={stats.activeBaskets} label={t('business.dashboard.activeBaskets')} color={theme.colors.primary} theme={theme} />
-            <View style={{ width: 10 }} />
-            <StatMiniCard icon={Leaf} value={`${(stats.mealsRescued * 2.5).toFixed(0)}kg`} label={t('business.dashboard.co2Saved')} color={theme.colors.accentFresh} theme={theme} />
-          </View>
-          <View style={[styles.statsRow, { marginTop: 10 }]}>
-            <StatMiniCard icon={DollarSign} value={stats.totalRevenue} suffix="TND" label={t('business.dashboard.revenue')} color={theme.colors.accentWarm} theme={theme} />
-            <View style={{ width: 10 }} />
-            <StatMiniCard icon={AlertCircle} value={stats.pendingOrders} label={t('business.dashboard.pendingOrders')} color={theme.colors.error} theme={theme} />
+          {/* Settings + Notifications pills */}
+          <View style={{
+            backgroundColor: theme.colors.surface,
+            borderRadius: 20,
+            paddingHorizontal: 10,
+            paddingVertical: 8,
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: 12,
+            ...theme.shadows.shadowMd,
+          }}>
+            <TouchableOpacity onPress={() => router.push('/settings' as never)}>
+              <Settings size={18} color={theme.colors.textPrimary} />
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => router.push('/notifications' as never)}>
+              <Bell size={18} color={theme.colors.textPrimary} />
+            </TouchableOpacity>
           </View>
         </View>
+
+        {/* Cover photo - extends to absolute top of screen */}
+        <View style={{ position: 'relative', height: 200 + (StatusBar.currentHeight ?? (Platform.OS === 'ios' ? 54 : 36)), backgroundColor: theme.colors.primary + '20', overflow: 'visible', marginTop: 0 }}>
+          {profileQuery.data?.cover_image_url ? (
+            <Image source={{ uri: profileQuery.data.cover_image_url }} style={{ width: '100%', height: '100%' }} resizeMode="cover" />
+          ) : (
+            <View style={{ width: '100%', height: '100%', backgroundColor: theme.colors.primary + '15' }} />
+          )}
+        </View>
+
+        {/* Profile card overlay */}
+        <View style={{
+          backgroundColor: theme.colors.surface,
+          borderRadius: theme.radii.r16,
+          padding: theme.spacing.xl,
+          marginTop: -30,
+          marginHorizontal: theme.spacing.lg,
+          ...theme.shadows.shadowMd,
+          flexDirection: 'row',
+          alignItems: 'center',
+        }}>
+          <View style={{
+            width: 52,
+            height: 52,
+            borderRadius: 26,
+            borderWidth: 3,
+            borderColor: theme.colors.bg,
+            overflow: 'hidden',
+            backgroundColor: theme.colors.surface,
+          }}>
+            {profileQuery.data?.image_url ? (
+              <Image source={{ uri: profileQuery.data.image_url }} style={{ width: '100%', height: '100%' }} />
+            ) : (
+              <View style={{ width: '100%', height: '100%', backgroundColor: theme.colors.primary + '15', justifyContent: 'center', alignItems: 'center' }}>
+                <Store size={22} color={theme.colors.primary} />
+              </View>
+            )}
+          </View>
+          <View style={{ marginLeft: 14, flex: 1 }}>
+            <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3 }]}>
+              {profileQuery.data?.name ?? user?.name ?? ''}
+            </Text>
+            <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, marginTop: 2 }]}>
+              {profileQuery.data?.category ?? ''}
+            </Text>
+          </View>
+        </View>
+
+        <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h1, paddingHorizontal: theme.spacing.xl, marginTop: theme.spacing.sm }]}>
+          {t('business.dashboard.title')}
+        </Text>
+
+        <RNAnimated.View style={{ opacity: fadeAnim1, transform: [{ translateY: fadeAnim1.interpolate({ inputRange: [0, 1], outputRange: [20, 0] }) }] }}>
+          <View style={[styles.summaryBanner, {
+            backgroundColor: theme.colors.primary,
+            marginHorizontal: theme.spacing.xl,
+            marginTop: theme.spacing.xl,
+            borderRadius: theme.radii.r20,
+            padding: theme.spacing.lg,
+          }]}>
+            <Text style={[{ color: 'rgba(255,255,255,0.7)', fontSize: 12, fontFamily: 'Poppins_400Regular' }]}>
+              {t('business.dashboard.daySummary')}
+            </Text>
+            <View style={styles.summaryRow}>
+              <View style={styles.summaryItem}>
+                <Banknote size={14} color={theme.colors.secondary} />
+                <Text style={[styles.summaryVal, { color: '#fff' }]}><AnimatedNumber value={stats.totalRevenue} suffix=" TND" /></Text>
+              </View>
+              <View style={[styles.summaryDivider, { backgroundColor: 'rgba(255,255,255,0.2)' }]} />
+              <View style={styles.summaryItem}>
+                <ShoppingBag size={14} color={theme.colors.secondary} />
+                <Text style={[styles.summaryVal, { color: '#fff' }]}><AnimatedNumber value={stats.totalBasketsSold} /></Text>
+                <Text style={[styles.summarySuffix, { color: 'rgba(255,255,255,0.7)' }]}>{t('business.dashboard.sold')}</Text>
+              </View>
+              <View style={[styles.summaryDivider, { backgroundColor: 'rgba(255,255,255,0.2)' }]} />
+              <View style={styles.summaryItem}>
+                <Clock size={14} color={theme.colors.secondary} />
+                <Text style={[styles.summaryVal, { color: '#fff' }]}><AnimatedNumber value={stats.pendingOrders} /></Text>
+                <Text style={[styles.summarySuffix, { color: 'rgba(255,255,255,0.7)' }]}>{t('business.dashboard.pending')}</Text>
+              </View>
+              <View style={[styles.summaryDivider, { backgroundColor: 'rgba(255,255,255,0.2)' }]} />
+              <View style={styles.summaryItem}>
+                <Package size={14} color={theme.colors.secondary} />
+                <Text style={[styles.summaryVal, { color: '#fff' }]}><AnimatedNumber value={stats.mealsRescued} /></Text>
+                <Text style={[styles.summarySuffix, { color: 'rgba(255,255,255,0.7)' }]}>{t('business.dashboard.rescued')}</Text>
+              </View>
+            </View>
+          </View>
+        </RNAnimated.View>
+
+        <RNAnimated.View style={{ opacity: fadeAnim2, transform: [{ translateY: fadeAnim2.interpolate({ inputRange: [0, 1], outputRange: [20, 0] }) }] }}>
+          <TouchableOpacity
+            onPress={handleRatingPress}
+            activeOpacity={0.8}
+            style={[styles.ratingCard, {
+              backgroundColor: theme.colors.surface,
+              marginHorizontal: theme.spacing.xl,
+              marginTop: theme.spacing.lg,
+              borderRadius: theme.radii.r16,
+              padding: theme.spacing.lg,
+              ...theme.shadows.shadowSm,
+            }]}
+          >
+            <View style={styles.ratingRow}>
+              <View style={styles.ratingLeft}>
+                <View style={[styles.ratingStarBg, { backgroundColor: theme.colors.starYellow + '18' }]}>
+                  <Star size={20} color={theme.colors.starYellow} fill={theme.colors.starYellow} />
+                </View>
+                <View style={{ marginLeft: 12 }}>
+                  <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h2 }]}>
+                    {stats.averageRating > 0 ? stats.averageRating.toFixed(1) : '--'}
+                  </Text>
+                  <Text style={[{ color: theme.colors.muted, fontSize: 11, fontFamily: 'Poppins_400Regular' }]}>
+                    {t('business.dashboard.avgRating')}
+                  </Text>
+                </View>
+              </View>
+              <View style={[styles.ratingArrow, { backgroundColor: theme.colors.bg }]}>
+                <Text style={[{ color: theme.colors.primary, fontSize: 12, fontFamily: 'Poppins_600SemiBold' }]}>{t('business.dashboard.details')} →</Text>
+              </View>
+            </View>
+          </TouchableOpacity>
+        </RNAnimated.View>
+
+        <RNAnimated.View style={{ opacity: fadeAnim3, transform: [{ translateY: fadeAnim3.interpolate({ inputRange: [0, 1], outputRange: [20, 0] }) }] }}>
+          <View style={[styles.statsGrid, { paddingHorizontal: theme.spacing.xl, marginTop: theme.spacing.xl }]}>
+            <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, marginBottom: theme.spacing.md }]}>
+              {t('business.dashboard.performance')}
+            </Text>
+            <View style={styles.statsRow}>
+              <StatMiniCard icon={TrendingUp} value={stats.activeBaskets} label={t('business.dashboard.activeBaskets')} color={theme.colors.primary} theme={theme} />
+              <View style={{ width: 10 }} />
+              <StatMiniCard icon={Leaf} value={`${(stats.mealsRescued * 2.5).toFixed(0)} kg`} label={t('business.dashboard.co2Saved')} color={theme.colors.accentFresh} theme={theme} />
+            </View>
+            <View style={[styles.statsRow, { marginTop: 10 }]}>
+              <StatMiniCard icon={Banknote} value={stats.totalRevenue} suffix="TND" label={t('business.dashboard.revenue')} color={theme.colors.accentWarm} theme={theme} />
+              <View style={{ width: 10 }} />
+              <StatMiniCard icon={AlertCircle} value={stats.pendingOrders} label={t('business.dashboard.pendingOrders')} color={theme.colors.error} theme={theme} />
+            </View>
+          </View>
+        </RNAnimated.View>
 
         <View style={[styles.chartSection, { paddingHorizontal: theme.spacing.xl, marginTop: theme.spacing.xxl }]}>
           <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, marginBottom: theme.spacing.md }]}>
@@ -243,14 +448,22 @@ export default function BusinessDashboard() {
               </View>
             </View>
             <View style={{ alignItems: 'center' }}>
-              <LineChart
-                data={stats.dailySales}
-                labels={dayLabels}
-                color={theme.colors.primary}
-                gradientColor={theme.colors.accentFresh}
-                width={chartWidth}
-                height={150}
-              />
+              {stats.dailySales.length > 0 ? (
+                <LineChart
+                  data={stats.dailySales}
+                  labels={stats.dailyLabels}
+                  color={theme.colors.primary}
+                  gradientColor={theme.colors.accentFresh}
+                  width={chartWidth}
+                  height={150}
+                />
+              ) : (
+                <View style={{ height: 150, justifyContent: 'center', alignItems: 'center' }}>
+                  <Text style={{ color: theme.colors.muted, fontSize: 12, fontFamily: 'Poppins_400Regular' }}>
+                    {t('business.dashboard.noData', { defaultValue: 'No data available yet' })}
+                  </Text>
+                </View>
+              )}
             </View>
           </View>
         </View>
@@ -270,13 +483,21 @@ export default function BusinessDashboard() {
                 <Text style={[{ color: theme.colors.muted, fontSize: 10, fontFamily: 'Poppins_400Regular' }]}>{t('business.dashboard.revenueLegend')}</Text>
               </View>
             </View>
-            <SimpleBarChart
-              data={stats.weeklySales}
-              labels={weekLabels}
-              color={theme.colors.primary}
-              stackData={[18, 22, 20, 25]}
-              stackColor={theme.colors.secondary}
-            />
+            {stats.weeklySales.length > 0 ? (
+              <SimpleBarChart
+                data={stats.weeklySales}
+                labels={stats.weeklyLabels}
+                color={theme.colors.primary}
+                stackData={stats.weeklyRevenue}
+                stackColor={theme.colors.secondary}
+              />
+            ) : (
+              <View style={{ height: 120, justifyContent: 'center', alignItems: 'center' }}>
+                <Text style={{ color: theme.colors.muted, fontSize: 12, fontFamily: 'Poppins_400Regular' }}>
+                  {t('business.dashboard.noData', { defaultValue: 'No data available yet' })}
+                </Text>
+              </View>
+            )}
           </View>
         </View>
 
@@ -299,7 +520,7 @@ export default function BusinessDashboard() {
             <View style={[styles.overallRatingBlock, { backgroundColor: theme.colors.primary, borderRadius: theme.radii.r16, padding: theme.spacing.xl, marginTop: theme.spacing.lg }]}>
               <Star size={28} color={theme.colors.secondary} fill={theme.colors.secondary} />
               <Text style={[{ color: '#fff', ...theme.typography.display, marginLeft: 12 }]}>
-                {stats.averageRating.toFixed(1)}
+                {stats.averageRating > 0 ? stats.averageRating.toFixed(1) : '--'}
               </Text>
               <Text style={[{ color: 'rgba(255,255,255,0.6)', fontSize: 18, marginLeft: 4, fontFamily: 'Poppins_400Regular' }]}>/5</Text>
             </View>

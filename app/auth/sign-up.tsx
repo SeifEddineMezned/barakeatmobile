@@ -5,7 +5,6 @@ import { useTranslation } from 'react-i18next';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Store, User } from 'lucide-react-native';
 import { useTheme } from '@/src/theme/ThemeProvider';
-import { PrimaryCTAButton } from '@/src/components/PrimaryCTAButton';
 import { useAuthStore } from '@/src/stores/authStore';
 import { register } from '@/src/services/auth';
 import { getErrorMessage } from '@/src/lib/api';
@@ -67,7 +66,7 @@ export default function SignUpScreen() {
   };
 
   return (
-    <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]}>
+    <SafeAreaView style={[styles.container, { backgroundColor: '#114b3c' }]}>
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={styles.keyboardView}
@@ -77,7 +76,7 @@ export default function SignUpScreen() {
             <Text
               style={[
                 styles.title,
-                { color: theme.colors.textPrimary, ...theme.typography.h1, marginBottom: theme.spacing.sm },
+                { color: '#fff', ...theme.typography.h1, marginBottom: theme.spacing.sm },
               ]}
             >
               {t('auth.welcome')}
@@ -85,7 +84,7 @@ export default function SignUpScreen() {
             <Text
               style={[
                 styles.subtitle,
-                { color: theme.colors.textSecondary, ...theme.typography.body, marginBottom: theme.spacing.xl },
+                { color: 'rgba(255,255,255,0.7)', ...theme.typography.body, marginBottom: theme.spacing.xl },
               ]}
             >
               {t('auth.createAccount')}
@@ -99,19 +98,18 @@ export default function SignUpScreen() {
                     flex: 1,
                     paddingVertical: theme.spacing.md,
                     borderRadius: theme.radii.r12,
-                    backgroundColor: role === 'customer' ? theme.colors.primary : theme.colors.surface,
+                    backgroundColor: role === 'customer' ? '#e3ff5c' : 'rgba(255,255,255,0.12)',
                     marginRight: theme.spacing.sm,
-                    ...(role === 'customer' ? {} : theme.shadows.shadowSm),
                   },
                 ]}
                 onPress={() => setRole('customer')}
                 activeOpacity={0.8}
               >
-                <User size={20} color={role === 'customer' ? '#fff' : theme.colors.textSecondary} />
+                <User size={20} color={role === 'customer' ? '#114b3c' : '#fff'} />
                 <Text
                   style={[
                     {
-                      color: role === 'customer' ? '#fff' : theme.colors.textPrimary,
+                      color: role === 'customer' ? '#114b3c' : '#fff',
                       ...theme.typography.caption,
                       fontWeight: '600' as const,
                       marginTop: 4,
@@ -128,19 +126,18 @@ export default function SignUpScreen() {
                     flex: 1,
                     paddingVertical: theme.spacing.md,
                     borderRadius: theme.radii.r12,
-                    backgroundColor: role === 'business' ? theme.colors.primary : theme.colors.surface,
+                    backgroundColor: role === 'business' ? '#e3ff5c' : 'rgba(255,255,255,0.12)',
                     marginLeft: theme.spacing.sm,
-                    ...(role === 'business' ? {} : theme.shadows.shadowSm),
                   },
                 ]}
                 onPress={() => setRole('business')}
                 activeOpacity={0.8}
               >
-                <Store size={20} color={role === 'business' ? '#fff' : theme.colors.textSecondary} />
+                <Store size={20} color={role === 'business' ? '#114b3c' : '#fff'} />
                 <Text
                   style={[
                     {
-                      color: role === 'business' ? '#fff' : theme.colors.textPrimary,
+                      color: role === 'business' ? '#114b3c' : '#fff',
                       ...theme.typography.caption,
                       fontWeight: '600' as const,
                       marginTop: 4,
@@ -155,15 +152,15 @@ export default function SignUpScreen() {
             <View style={styles.form}>
               {role === 'customer' && (
                 <View style={[styles.inputContainer, { marginBottom: theme.spacing.lg }]}>
-                  <Text style={[styles.label, { color: theme.colors.textPrimary, ...theme.typography.bodySm }]}>
+                  <Text style={[styles.label, { color: '#fff', ...theme.typography.bodySm }]}>
                     {t('auth.name')}
                   </Text>
                   <TextInput
-                    style={[styles.input, { backgroundColor: theme.colors.surface, borderColor: theme.colors.divider, borderRadius: theme.radii.r12, color: theme.colors.textPrimary, ...theme.typography.body, ...theme.shadows.shadowSm }]}
+                    style={[styles.input, { backgroundColor: 'rgba(255,255,255,0.12)', borderColor: 'rgba(255,255,255,0.2)', borderRadius: theme.radii.r12, color: '#fff', ...theme.typography.body }]}
                     value={name}
                     onChangeText={setName}
                     placeholder="John Doe"
-                    placeholderTextColor={theme.colors.muted}
+                    placeholderTextColor="rgba(255,255,255,0.4)"
                   />
                 </View>
               )}
@@ -171,42 +168,42 @@ export default function SignUpScreen() {
               {role === 'business' && (
                 <>
                   <View style={[styles.inputContainer, { marginBottom: theme.spacing.lg }]}>
-                    <Text style={[styles.label, { color: theme.colors.textPrimary, ...theme.typography.bodySm }]}>
+                    <Text style={[styles.label, { color: '#fff', ...theme.typography.bodySm }]}>
                       {t('business.auth.businessName')}
                     </Text>
                     <TextInput
-                      style={[styles.input, { backgroundColor: theme.colors.surface, borderColor: theme.colors.divider, borderRadius: theme.radii.r12, color: theme.colors.textPrimary, ...theme.typography.body, ...theme.shadows.shadowSm }]}
+                      style={[styles.input, { backgroundColor: 'rgba(255,255,255,0.12)', borderColor: 'rgba(255,255,255,0.2)', borderRadius: theme.radii.r12, color: '#fff', ...theme.typography.body }]}
                       value={businessName}
                       onChangeText={setBusinessName}
                       placeholder="Mon Commerce"
-                      placeholderTextColor={theme.colors.muted}
+                      placeholderTextColor="rgba(255,255,255,0.4)"
                     />
                   </View>
                   <View style={[styles.inputContainer, { marginBottom: theme.spacing.lg }]}>
-                    <Text style={[styles.label, { color: theme.colors.textPrimary, ...theme.typography.bodySm }]}>
+                    <Text style={[styles.label, { color: '#fff', ...theme.typography.bodySm }]}>
                       {t('business.auth.businessAddress')}
                     </Text>
                     <TextInput
-                      style={[styles.input, { backgroundColor: theme.colors.surface, borderColor: theme.colors.divider, borderRadius: theme.radii.r12, color: theme.colors.textPrimary, ...theme.typography.body, ...theme.shadows.shadowSm }]}
+                      style={[styles.input, { backgroundColor: 'rgba(255,255,255,0.12)', borderColor: 'rgba(255,255,255,0.2)', borderRadius: theme.radii.r12, color: '#fff', ...theme.typography.body }]}
                       value={businessAddress}
                       onChangeText={setBusinessAddress}
                       placeholder="Avenue Habib Bourguiba, Tunis"
-                      placeholderTextColor={theme.colors.muted}
+                      placeholderTextColor="rgba(255,255,255,0.4)"
                     />
                   </View>
                 </>
               )}
 
               <View style={[styles.inputContainer, { marginBottom: theme.spacing.lg }]}>
-                <Text style={[styles.label, { color: theme.colors.textPrimary, ...theme.typography.bodySm }]}>
+                <Text style={[styles.label, { color: '#fff', ...theme.typography.bodySm }]}>
                   {t('auth.email')}
                 </Text>
                 <TextInput
-                  style={[styles.input, { backgroundColor: theme.colors.surface, borderColor: theme.colors.divider, borderRadius: theme.radii.r12, color: theme.colors.textPrimary, ...theme.typography.body, ...theme.shadows.shadowSm }]}
+                  style={[styles.input, { backgroundColor: 'rgba(255,255,255,0.12)', borderColor: 'rgba(255,255,255,0.2)', borderRadius: theme.radii.r12, color: '#fff', ...theme.typography.body }]}
                   value={email}
                   onChangeText={setEmail}
                   placeholder="you@example.com"
-                  placeholderTextColor={theme.colors.muted}
+                  placeholderTextColor="rgba(255,255,255,0.4)"
                   keyboardType="email-address"
                   autoCapitalize="none"
                   autoCorrect={false}
@@ -214,47 +211,60 @@ export default function SignUpScreen() {
               </View>
 
               <View style={[styles.inputContainer, { marginBottom: theme.spacing.lg }]}>
-                <Text style={[styles.label, { color: theme.colors.textPrimary, ...theme.typography.bodySm }]}>
+                <Text style={[styles.label, { color: '#fff', ...theme.typography.bodySm }]}>
                   {t('auth.phone')}
                 </Text>
                 <TextInput
-                  style={[styles.input, { backgroundColor: theme.colors.surface, borderColor: theme.colors.divider, borderRadius: theme.radii.r12, color: theme.colors.textPrimary, ...theme.typography.body, ...theme.shadows.shadowSm }]}
+                  style={[styles.input, { backgroundColor: 'rgba(255,255,255,0.12)', borderColor: 'rgba(255,255,255,0.2)', borderRadius: theme.radii.r12, color: '#fff', ...theme.typography.body }]}
                   value={phone}
                   onChangeText={setPhone}
                   placeholder="+216 XX XXX XXX"
-                  placeholderTextColor={theme.colors.muted}
+                  placeholderTextColor="rgba(255,255,255,0.4)"
                   keyboardType="phone-pad"
                 />
               </View>
 
               <View style={[styles.inputContainer, { marginBottom: theme.spacing.lg }]}>
-                <Text style={[styles.label, { color: theme.colors.textPrimary, ...theme.typography.bodySm }]}>
+                <Text style={[styles.label, { color: '#fff', ...theme.typography.bodySm }]}>
                   {t('auth.password')}
                 </Text>
                 <TextInput
-                  style={[styles.input, { backgroundColor: theme.colors.surface, borderColor: theme.colors.divider, borderRadius: theme.radii.r12, color: theme.colors.textPrimary, ...theme.typography.body, ...theme.shadows.shadowSm }]}
+                  style={[styles.input, { backgroundColor: 'rgba(255,255,255,0.12)', borderColor: 'rgba(255,255,255,0.2)', borderRadius: theme.radii.r12, color: '#fff', ...theme.typography.body }]}
                   value={password}
                   onChangeText={setPassword}
                   placeholder="••••••••"
-                  placeholderTextColor={theme.colors.muted}
+                  placeholderTextColor="rgba(255,255,255,0.4)"
                   secureTextEntry
                 />
               </View>
 
               <View style={[styles.buttonContainer, { marginTop: theme.spacing.xl }]}>
-                <PrimaryCTAButton
+                <TouchableOpacity
                   onPress={handleSignUp}
-                  title={role === 'business' ? t('business.auth.businessSignUp') : t('auth.createAccount')}
-                  loading={loading}
-                />
+                  disabled={loading}
+                  style={{
+                    height: 56,
+                    justifyContent: 'center',
+                    alignItems: 'center',
+                    paddingHorizontal: 32,
+                    backgroundColor: '#e3ff5c',
+                    borderRadius: theme.radii.pill,
+                    opacity: loading ? 0.5 : 1,
+                  }}
+                  activeOpacity={0.8}
+                >
+                  <Text style={{ color: '#114b3c', ...theme.typography.button, textAlign: 'center', fontWeight: '700' as const }}>
+                    {loading ? t('common.loading') : (role === 'business' ? t('business.auth.businessSignUp') : t('auth.createAccount'))}
+                  </Text>
+                </TouchableOpacity>
               </View>
 
               <View style={[styles.footer, { marginTop: theme.spacing.xxl }]}>
-                <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.body }]}>
+                <Text style={[{ color: 'rgba(255,255,255,0.7)', ...theme.typography.body }]}>
                   {t('auth.haveAccount')}{' '}
                 </Text>
                 <TouchableOpacity onPress={() => router.back()}>
-                  <Text style={[{ color: theme.colors.primary, ...theme.typography.body, fontWeight: '600' as const }]}>
+                  <Text style={[{ color: '#e3ff5c', ...theme.typography.body, fontWeight: '600' as const }]}>
                     {t('auth.signIn')}
                   </Text>
                 </TouchableOpacity>

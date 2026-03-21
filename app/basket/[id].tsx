@@ -1,13 +1,14 @@
-import React from 'react';
-import { View, Text, StyleSheet, ScrollView, Image, TouchableOpacity, Linking, ActivityIndicator } from 'react-native';
+import React, { useState } from 'react';
+import { View, Text, StyleSheet, ScrollView, Image, TouchableOpacity, Linking, ActivityIndicator, Alert, Modal, TextInput } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import { useQuery } from '@tanstack/react-query';
-import { MapPin, Clock, Phone, Navigation, ChevronLeft, Star, ShoppingBag, RefreshCw } from 'lucide-react-native';
+import { MapPin, Clock, Phone, Navigation, ChevronLeft, Star, ShoppingBag, RefreshCw, Flag } from 'lucide-react-native';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { PrimaryCTAButton } from '@/src/components/PrimaryCTAButton';
 import { fetchRestaurantById } from '@/src/services/restaurants';
 import { normalizeRestaurantToBasket } from '@/src/utils/normalizeRestaurant';
+import { submitReport } from '@/src/services/reports';
 
 
 
@@ -55,6 +56,12 @@ export default function BasketDetailsScreen() {
   const theme = useTheme();
   const router = useRouter();
 
+  // ALL hooks must be called before any early returns
+  const [showReportModal, setShowReportModal] = useState(false);
+  const [reportReason, setReportReason] = useState('');
+  const [reportDetails, setReportDetails] = useState('');
+  const [reportLoading, setReportLoading] = useState(false);
+
   const restaurantQuery = useQuery({
     queryKey: ['restaurant', id],
     queryFn: () => fetchRestaurantById(String(id)),
@@ -63,6 +70,10 @@ export default function BasketDetailsScreen() {
   });
 
   const basket = restaurantQuery.data ? normalizeRestaurantToBasket(restaurantQuery.data) : null;
+
+  const overallRating = basket?.reviews
+    ? ((basket.reviews.service + basket.reviews.quantite + basket.reviews.qualite + basket.reviews.variete) / 4).toFixed(1)
+    : basket?.merchantRating?.toFixed(1) ?? '0.0';
 
   if (restaurantQuery.isLoading) {
     return (
@@ -119,9 +130,21 @@ export default function BasketDetailsScreen() {
     void Linking.openURL(url);
   };
 
-  const overallRating = basket.reviews
-    ? ((basket.reviews.service + basket.reviews.quantite + basket.reviews.qualite + basket.reviews.variete) / 4).toFixed(1)
-    : basket.merchantRating?.toFixed(1) ?? '0.0';
+  const handleReport = async () => {
+    if (!reportReason.trim()) return;
+    setReportLoading(true);
+    try {
+      await submitReport({ restaurant_id: String(id), reason: reportReason.trim(), details: reportDetails.trim() || undefined });
+      Alert.alert(t('common.success'), t('report.success'));
+      setShowReportModal(false);
+      setReportReason('');
+      setReportDetails('');
+    } catch {
+      Alert.alert(t('common.error'), t('report.error'));
+    } finally {
+      setReportLoading(false);
+    }
+  };
 
   return (
     <View style={[styles.container, { backgroundColor: theme.colors.bg }]}>
@@ -138,6 +161,13 @@ export default function BasketDetailsScreen() {
             onPress={() => router.back()}
           >
             <ChevronLeft size={22} color={theme.colors.textPrimary} />
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            onPress={() => setShowReportModal(true)}
+            style={{ position: 'absolute', top: 52, right: 16, width: 36, height: 36, borderRadius: 18, backgroundColor: 'rgba(0,0,0,0.3)', justifyContent: 'center', alignItems: 'center' }}
+          >
+            <Flag size={18} color="#fff" />
           </TouchableOpacity>
 
           <View style={[styles.heroBottomInfo, { paddingHorizontal: theme.spacing.xl }]}>
@@ -364,6 +394,38 @@ export default function BasketDetailsScreen() {
           disabled={basket.quantityLeft === 0}
         />
       </View>
+
+      <Modal visible={showReportModal} transparent animationType="fade" onRequestClose={() => setShowReportModal(false)}>
+        <TouchableOpacity style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 24 }} activeOpacity={1} onPress={() => setShowReportModal(false)}>
+          <View style={{ width: '100%', maxWidth: 400, backgroundColor: theme.colors.surface, borderRadius: theme.radii.r24, padding: theme.spacing.xl, ...theme.shadows.shadowLg }} onStartShouldSetResponder={() => true}>
+            <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3, marginBottom: theme.spacing.lg }}>{t('report.title')}</Text>
+            <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm, marginBottom: theme.spacing.sm }}>{t('report.reasonLabel')}</Text>
+            <TextInput
+              style={{ height: 48, backgroundColor: theme.colors.bg, borderRadius: theme.radii.r12, paddingHorizontal: 16, color: theme.colors.textPrimary, ...theme.typography.body }}
+              value={reportReason}
+              onChangeText={setReportReason}
+              placeholder={t('report.reasonPlaceholder')}
+              placeholderTextColor={theme.colors.muted}
+            />
+            <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm, marginTop: theme.spacing.lg, marginBottom: theme.spacing.sm }}>{t('report.detailsLabel')}</Text>
+            <TextInput
+              style={{ height: 100, backgroundColor: theme.colors.bg, borderRadius: theme.radii.r12, paddingHorizontal: 16, paddingTop: 12, color: theme.colors.textPrimary, ...theme.typography.body, textAlignVertical: 'top' }}
+              value={reportDetails}
+              onChangeText={setReportDetails}
+              placeholder={t('report.detailsPlaceholder')}
+              placeholderTextColor={theme.colors.muted}
+              multiline
+            />
+            <TouchableOpacity
+              onPress={handleReport}
+              disabled={reportLoading || !reportReason.trim()}
+              style={{ backgroundColor: theme.colors.error, borderRadius: theme.radii.r12, padding: theme.spacing.lg, marginTop: theme.spacing.xl, opacity: reportLoading || !reportReason.trim() ? 0.5 : 1 }}
+            >
+              <Text style={{ color: '#fff', ...theme.typography.button, textAlign: 'center' }}>{reportLoading ? t('common.loading') : t('report.submit')}</Text>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      </Modal>
     </View>
   );
 }
@@ -390,7 +452,7 @@ const styles = StyleSheet.create({
   },
   heroOverlay: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0,0,0,0.15)',
+    backgroundColor: 'rgba(17,75,60,0.25)',
   },
   backButton: {
     position: 'absolute',

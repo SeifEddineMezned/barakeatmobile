@@ -36,7 +36,7 @@ export function BasketCard({ basket, onFavoritePress, isFavorite = false }: Bask
   }, [scaleAnim]);
 
   const handlePress = useCallback(() => {
-    router.push(`/basket/${basket.id}` as never);
+    router.push(`/business-detail/${basket.merchantId ?? basket.id}` as never);
   }, [basket.id, router]);
 
   const handleFavoritePress = useCallback(() => {
@@ -119,7 +119,7 @@ export function BasketCard({ basket, onFavoritePress, isFavorite = false }: Bask
           </TouchableOpacity>
         </View>
 
-        <View style={[styles.content, { padding: theme.spacing.md }]}>
+        <View style={[styles.content, { padding: theme.spacing.sm, paddingHorizontal: theme.spacing.md }]}>
           <View style={styles.merchantRow}>
             {basket.merchantLogo ? (
               <Image source={{ uri: basket.merchantLogo }} style={styles.merchantLogo} />
@@ -128,7 +128,7 @@ export function BasketCard({ basket, onFavoritePress, isFavorite = false }: Bask
             )}
             <View style={styles.merchantInfo}>
               <Text
-                style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, fontSize: 15 }]}
+                style={[{ color: theme.colors.textPrimary, ...theme.typography.body, fontWeight: '600' as const }]}
                 numberOfLines={1}
               >
                 {basket.merchantName}
@@ -136,7 +136,7 @@ export function BasketCard({ basket, onFavoritePress, isFavorite = false }: Bask
             </View>
           </View>
 
-          <View style={[styles.detailsRow, { marginTop: theme.spacing.sm }]}>
+          <View style={[styles.detailsRow, { marginTop: theme.spacing.xs }]}>
             <View style={styles.chipRow}>
               <View style={[styles.inlineChip, { backgroundColor: theme.colors.bg, borderRadius: theme.radii.pill, paddingHorizontal: 8, paddingVertical: 3 }]}>
                 <Clock size={11} color={theme.colors.textSecondary} />
@@ -155,7 +155,7 @@ export function BasketCard({ basket, onFavoritePress, isFavorite = false }: Bask
               <Text style={[{ color: theme.colors.muted, ...theme.typography.caption, textDecorationLine: 'line-through' }]}>
                 {basket.originalPrice} TND
               </Text>
-              <Text style={[{ color: theme.colors.primary, ...theme.typography.h3, fontWeight: '700' as const }]}>
+              <Text style={[{ color: theme.colors.primary, ...theme.typography.h2, fontWeight: '700' as const }]}>
                 {basket.discountedPrice} TND
               </Text>
             </View>
@@ -168,13 +168,13 @@ export function BasketCard({ basket, onFavoritePress, isFavorite = false }: Bask
 
 const styles = StyleSheet.create({
   card: {
-    marginBottom: 14,
+    marginBottom: 12,
     overflow: 'hidden',
   },
   imageContainer: {
     position: 'relative',
     width: '100%',
-    height: 160,
+    height: 120,
   },
   image: {
     width: '100%',
@@ -219,10 +219,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   merchantLogo: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    marginRight: 10,
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    marginRight: 8,
   },
   merchantInfo: {
     flex: 1,

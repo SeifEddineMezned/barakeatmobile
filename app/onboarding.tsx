@@ -1,4 +1,4 @@
-import React, { useRef, useState, useCallback } from 'react';
+import React, { useRef, useState, useCallback, useEffect } from 'react';
 import {
   View,
   Text,
@@ -34,6 +34,14 @@ export default function OnboardingScreen() {
   const [currentIndex, setCurrentIndex] = useState(0);
   const scrollX = useRef(new Animated.Value(0)).current;
   const completeOnboarding = useAuthStore((state) => state.completeOnboarding);
+  const hasCompletedOnboarding = useAuthStore((state) => state.hasCompletedOnboarding);
+  const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
+
+  useEffect(() => {
+    if (hasCompletedOnboarding || isAuthenticated) {
+      router.replace('/(tabs)' as never);
+    }
+  }, [hasCompletedOnboarding, isAuthenticated]);
 
   const slides: OnboardingSlide[] = [
     {

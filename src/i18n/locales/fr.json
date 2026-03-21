@@ -50,15 +50,37 @@
     "name": "Nom Complet",
     "phone": "Numéro de Téléphone",
     "forgotPassword": "Mot de passe oublié?",
+    "forgotPasswordTitle": "Mot de passe oublié",
+    "forgotPasswordDesc": "Entrez votre adresse email et nous vous enverrons un code pour réinitialiser votre mot de passe.",
+    "sendOtp": "Envoyer le code",
+    "otpSent": "Un code de réinitialisation a été envoyé à votre email.",
+    "enterOtp": "Entrez le code",
+    "otpSentTo": "Nous avons envoyé un code à 6 chiffres à {{email}}",
+    "otpCode": "Code de réinitialisation",
+    "verifyOtp": "Vérifier le code",
+    "resendOtp": "Renvoyer le code",
+    "resendIn": "Renvoyer dans {{seconds}}s",
+    "newPasswordTitle": "Nouveau mot de passe",
+    "newPasswordDesc": "Choisissez un nouveau mot de passe pour votre compte.",
+    "newPassword": "Nouveau mot de passe",
+    "confirmNewPassword": "Confirmer le mot de passe",
+    "resetPassword": "Réinitialiser",
+    "passwordMismatch": "Les mots de passe ne correspondent pas.",
+    "passwordTooShort": "Le mot de passe doit contenir au moins 6 caractères.",
+    "passwordResetSuccess": "Votre mot de passe a été réinitialisé avec succès. Veuillez vous connecter.",
     "noAccount": "Pas de compte?",
     "haveAccount": "Déjà un compte?",
     "createAccount": "Créer un Compte",
     "welcome": "Bienvenue chez Barakeat",
     "welcomeBack": "Content de vous revoir",
     "error": "Erreur",
-    "fillAllFields": "Veuillez remplir tous les champs obligatoires."
+    "fillAllFields": "Veuillez remplir tous les champs obligatoires.",
+    "notCustomerAccount": "Cet email est enregistré comme compte commerce, pas client. Veuillez passer au mode commerce ou créer un nouveau compte client.",
+    "notBusinessAccount": "Cet email est enregistré comme compte client, pas commerce. Veuillez passer au mode client."
   },
   "home": {
+    "search": "Rechercher",
+    "welcomeBack": "Content de vous revoir,",
     "discover": "Découvrir",
     "greeting": "Découvrir",
     "searchPlaceholder": "Rechercher paniers, commerçants...",
@@ -80,7 +102,7 @@
     "surpriseBasket": "Panier Surprise",
     "pickupWindow": "Retrait",
     "distance": "de distance",
-    "quantity": "{{count}} restant",
+    "quantity": "restant",
     "payOnPickup": "Paiement sur Place",
     "description": "Description",
     "whatYouMightGet": "Ce que vous pourriez obtenir",
@@ -137,13 +159,28 @@
     "emptyState": "Aucune commande",
     "loginRequired": "Veuillez vous connecter pour voir vos commandes.",
     "cancelTitle": "Annuler la réservation",
-    "cancelConfirm": "Êtes-vous sûr de vouloir annuler cette réservation ?"
+    "cancelConfirm": "Êtes-vous sûr de vouloir annuler cette réservation ?",
+    "showQrCode": "Montrez ce QR code au commerçant lors du retrait",
+    "leaveReview": "Avis"
+  },
+  "review": {
+    "title": "Laisser un avis",
+    "rateExperience": "Évaluez votre expérience",
+    "comment": "Commentaire (optionnel)",
+    "commentPlaceholder": "Racontez-nous votre expérience...",
+    "submit": "Envoyer l'avis",
+    "success": "Merci pour votre avis !",
+    "error": "Impossible d'envoyer l'avis"
   },
   "favorites": {
     "title": "Favoris",
     "baskets": "Paniers",
     "merchants": "Commerçants",
-    "emptyState": "Appuyez sur le cœur pour enregistrer"
+    "emptyState": "Appuyez sur le cœur pour enregistrer",
+    "emptyTitle": "Aucun favori ajouté",
+    "emptyDesc": "Appuyez sur l'icône cœur d'un commerce pour l'ajouter à vos favoris et il apparaîtra ici.",
+    "findBasket": "Trouver un Panier Surprise",
+    "count": "{{count}} favoris"
   },
   "profile": {
     "title": "Profil",
@@ -178,11 +215,37 @@
     "demoMode": "Mode démo",
     "demoAdmin": "Administrateur",
     "demoRestricted": "Utilisateur restreint",
-    "switchRole": "Changer de rôle démo"
+    "switchRole": "Changer de rôle démo",
+    "changePassword": "Changer le mot de passe",
+    "passwordChanged": "Mot de passe changé avec succès.",
+    "foodPreferences": "Préférences alimentaires",
+    "preferencesUpdated": "Préférences mises à jour.",
+    "currentPassword": "Mot de passe actuel",
+    "newPasswordLabel": "Nouveau mot de passe",
+    "confirmPasswordLabel": "Confirmer le mot de passe",
+    "profileUpdated": "Profil mis \u00e0 jour.",
+    "editProfile": "Modifier",
+    "businessesTried": "Commerces essayés"
+  },
+  "report": {
+    "title": "Signaler",
+    "reasonLabel": "Raison",
+    "reasonPlaceholder": "Sélectionnez une raison...",
+    "detailsLabel": "Détails (optionnel)",
+    "detailsPlaceholder": "Fournissez plus de détails...",
+    "submit": "Envoyer le signalement",
+    "success": "Signalement envoyé. Merci.",
+    "error": "Impossible d'envoyer le signalement."
   },
   "map": {
     "title": "À Proximité",
     "viewDetails": "Voir Détails"
+  },
+  "notifications": {
+    "title": "Notifications",
+    "markAllRead": "Tout marquer lu",
+    "empty": "Aucune notification",
+    "justNow": "À l'instant"
   },
   "business": {
     "dashboard": {
@@ -232,7 +295,9 @@
       "onlyOneActive": "Un seul panier peut être actif à la fois",
       "quantityAvailable": "Quantité disponible",
       "saveChanges": "Enregistrer les modifications",
-      "willDeactivate": "sera désactivé."
+      "willDeactivate": "sera désactivé.",
+      "todayQty": "Aujourd'hui",
+      "defaultQty": "Réinit. journalière"
     },
     "orders": {
       "title": "Commandes",
@@ -244,6 +309,8 @@
       "pickupCode": "Code de retrait",
       "customer": "Client",
       "noOrders": "Aucune commande",
+      "noOrdersToday": "Aucune commande aujourd'hui",
+      "noOrdersDesc": "Les commandes apparaîtront ici lorsque des clients réserveront vos paniers surprise.",
       "callCustomer": "Appeler",
       "statusReserved": "Réservé",
       "statusReady": "Prêt",
@@ -251,7 +318,7 @@
       "statusCancelled": "Annulé"
     },
     "profile": {
-      "title": "Profil Commerce",
+      "title": "Profil",
       "businessInfo": "Infos Commerce",
       "name": "Nom du commerce",
       "address": "Adresse",
@@ -284,7 +351,24 @@
       "permCanEditProfile": "Modifier le profil",
       "permCanManageTeam": "Gérer l'équipe",
       "permCanViewDashboard": "Voir le tableau de bord",
-      "permCanViewFinancial": "Voir les informations financières"
+      "permCanViewFinancial": "Voir les informations financières",
+      "menuItems": "Articles du menu",
+      "tempPassword": "Mot de passe temporaire",
+      "imageUpdated": "Image mise \u00e0 jour avec succ\u00e8s.",
+      "memberAdded": "Membre ajout\u00e9 avec succ\u00e8s."
+    },
+    "team": {
+      "members": "Membres",
+      "owner": "Propriétaire",
+      "locations": "Emplacements",
+      "assignLocation": "Assigner à un emplacement",
+      "tempPasswordLabel": "Mot de passe",
+      "membersCount": "{{count}} membres",
+      "addLocation": "Ajouter un emplacement",
+      "locationName": "Nom de l'emplacement",
+      "locationAddress": "Adresse",
+      "locationAdded": "Emplacement ajouté avec succès.",
+      "noLocations": "Aucun emplacement. Appuyez sur + pour en ajouter un."
     },
     "createBasket": {
       "title": "Nouveau Panier",
@@ -309,6 +393,86 @@
       "businessName": "Nom du commerce",
       "businessAddress": "Adresse du commerce",
       "businessCategory": "Catégorie"
+    },
+    "scan": {
+      "title": "Vérifier le retrait",
+      "enterCode": "Entrez le code de retrait",
+      "codePlaceholder": "ABC123",
+      "verify": "Vérifier le code",
+      "codeTooShort": "Le code doit contenir au moins 4 caractères.",
+      "codeNotFound": "Aucune commande trouvée pour ce code.",
+      "confirmed": "Retrait confirmé !",
+      "customerLabel": "Client",
+      "done": "Terminé",
+      "cameraUnavailable": "Scanner caméra non disponible. Veuillez entrer le code de retrait manuellement ci-dessous.",
+      "manualEntryTitle": "Entrer le code de retrait",
+      "manualEntryDesc": "Demandez au client son code de retrait affiché dans sa confirmation de commande."
+    },
+    "availability": {
+      "title": "Disponibilité",
+      "quantity": "Quantité quotidienne",
+      "pickupStart": "Début du retrait",
+      "pickupEnd": "Fin du retrait",
+      "paused": "Restaurant en pause",
+      "active": "Restaurant actif",
+      "save": "Enregistrer",
+      "saved": "Disponibilité mise à jour."
+    },
+    "menuItems": {
+      "title": "Articles du menu",
+      "addItem": "Ajouter",
+      "namePlaceholder": "Nom de l'article...",
+      "empty": "Aucun article",
+      "deleteConfirm": "Supprimer cet article ?",
+      "added": "Article ajouté.",
+      "deleted": "Article supprimé."
     }
+  },
+  "errors": {
+    "invalidEmail": "Format d'email invalide.",
+    "invalidCredentials": "Email ou mot de passe invalide.",
+    "emailExists": "Cet email est d\u00e9j\u00e0 enregistr\u00e9.",
+    "phoneExists": "Ce num\u00e9ro de t\u00e9l\u00e9phone est d\u00e9j\u00e0 enregistr\u00e9.",
+    "userNotFound": "Utilisateur non trouv\u00e9.",
+    "invalidPassword": "Mot de passe invalide.",
+    "invalidToken": "Session expir\u00e9e. Veuillez vous reconnecter.",
+    "invalidOtp": "Code de v\u00e9rification invalide.",
+    "otpExpired": "Code de v\u00e9rification expir\u00e9. Veuillez en demander un nouveau.",
+    "passwordTooShort": "Le mot de passe doit contenir au moins 6 caract\u00e8res.",
+    "emailNotVerified": "Veuillez d'abord v\u00e9rifier votre email.",
+    "restaurantPaused": "Ce restaurant est actuellement indisponible.",
+    "noBaskets": "Aucun panier disponible pour le moment.",
+    "alreadyReserved": "Vous avez d\u00e9j\u00e0 une r\u00e9servation pour aujourd'hui.",
+    "pickupExpired": "Le cr\u00e9neau de retrait a expir\u00e9.",
+    "reservationNotFound": "R\u00e9servation non trouv\u00e9e.",
+    "unauthorized": "Veuillez vous connecter pour continuer.",
+    "forbidden": "Vous n'avez pas la permission pour cette action.",
+    "notFound": "La ressource demand\u00e9e est introuvable.",
+    "serverError": "Quelque chose s'est mal pass\u00e9. Veuillez r\u00e9essayer.",
+    "networkError": "Pas de connexion internet. V\u00e9rifiez votre r\u00e9seau.",
+    "timeout": "D\u00e9lai d'attente d\u00e9pass\u00e9. Veuillez r\u00e9essayer."
+  },
+  "settings": {
+    "title": "Param\u00e8tres",
+    "notifications": "Notifications",
+    "pushNotifications": "Notifications push",
+    "support": "Support"
+  },
+  "impact": {
+    "title": "Mon Impact",
+    "level": "Niveau {{level}}",
+    "xpProgress": "{{current}} / {{next}} XP",
+    "mealsSaved": "Repas Sauvés",
+    "moneySaved": "Argent Économisé",
+    "co2Saved": "CO₂ Économisé",
+    "currentStreak": "Série Actuelle",
+    "days": "jours",
+    "badges": "Badges",
+    "locked": "Verrouillé",
+    "leaderboard": "Classement",
+    "rank": "#{{rank}}",
+    "meals": "repas",
+    "showMore": "Voir plus",
+    "viewImpact": "Voir Mon Impact"
   }
 }

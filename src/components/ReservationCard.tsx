@@ -1,10 +1,12 @@
-import React from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Animated } from 'react-native';
+import React, { useState } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, Animated, Image, ActivityIndicator, Linking } from 'react-native';
 import { useTranslation } from 'react-i18next';
-import { MapPin, Clock, Navigation, X as XIcon } from 'lucide-react-native';
+import { MapPin, Clock, Navigation, X as XIcon, QrCode, Star } from 'lucide-react-native';
+import { useRouter } from 'expo-router';
 import * as Haptics from 'expo-haptics';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import type { ReservationFromAPI } from '@/src/services/reservations';
+import { fetchReservationQRCode } from '@/src/services/reservations';
 
 interface ReservationCardProps {
   reservation: ReservationFromAPI;
@@ -15,7 +17,11 @@ interface ReservationCardProps {
 export function ReservationCard({ reservation, onCancel, onHide: _onHide }: ReservationCardProps) {
   const { t } = useTranslation();
   const theme = useTheme();
+  const router = useRouter();
   const scaleAnim = React.useRef(new Animated.Value(1)).current;
+  const [qrExpanded, setQrExpanded] = useState(false);
+  const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
+  const [qrLoading, setQrLoading] = useState(false);
 
   const basket = reservation.basket;
   const merchantName = basket?.merchantName ?? (basket as any)?.merchant_name ?? (basket as any)?.businessName ?? 'Unknown';
@@ -37,11 +43,32 @@ export function ReservationCard({ reservation, onCancel, onHide: _onHide }: Rese
     ]).start();
   };
 
+  const handleToggleQR = async () => {
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    if (qrExpanded) {
+      setQrExpanded(false);
+      return;
+    }
+    if (qrDataUrl) {
+      setQrExpanded(true);
+      return;
+    }
+    setQrLoading(true);
+    try {
+      const url = await fetchReservationQRCode(String(reservation.id));
+      setQrDataUrl(url || null);
+      setQrExpanded(true);
+    } catch {
+      console.log('[ReservationCard] Failed to fetch QR code');
+    } finally {
+      setQrLoading(false);
+    }
+  };
+
   const handleDirections = () => {
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     if (latitude && longitude) {
       const url = `https://www.google.com/maps/search/?api=1&query=${latitude},${longitude}`;
-      const Linking = require('react-native').Linking;
       void Linking.openURL(url);
     }
   };
@@ -56,6 +83,7 @@ export function ReservationCard({ reservation, onCancel, onHide: _onHide }: Rese
         return theme.colors.secondary;
       case 'collected':
       case 'completed':
+      case 'picked_up':
         return theme.colors.success;
       case 'cancelled':
       case 'expired':
@@ -75,6 +103,7 @@ export function ReservationCard({ reservation, onCancel, onHide: _onHide }: Rese
   };
 
   const isUpcoming = status === 'reserved' || status === 'ready' || status === 'pending' || status === 'confirmed';
+  const isPast = status === 'collected' || status === 'completed' || status === 'picked_up';
 
   return (
     <Animated.View
@@ -83,8 +112,8 @@ export function ReservationCard({ reservation, onCancel, onHide: _onHide }: Rese
         {
           backgroundColor: theme.colors.surface,
           borderRadius: theme.radii.r16,
-          padding: theme.spacing.xl,
-          marginBottom: theme.spacing.lg,
+          padding: theme.spacing.lg,
+          marginBottom: theme.spacing.md,
           ...theme.shadows.shadowMd,
           transform: [{ scale: scaleAnim }],
         },
@@ -124,7 +153,7 @@ export function ReservationCard({ reservation, onCancel, onHide: _onHide }: Rese
           )}
         </View>
 
-        <View style={[styles.divider, { marginVertical: theme.spacing.lg, backgroundColor: theme.colors.divider }]} />
+        <View style={[styles.divider, { marginVertical: theme.spacing.md, backgroundColor: theme.colors.divider }]} />
 
         <View style={styles.details}>
           {pickupWindow && (
@@ -160,14 +189,49 @@ export function ReservationCard({ reservation, onCancel, onHide: _onHide }: Rese
                 },
               ]}
             >
-              <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, marginBottom: theme.spacing.xs }]}>
-                {t('orders.pickupCode')}
-              </Text>
-              <Text
-                style={[{ color: theme.colors.primary, ...theme.typography.h2, fontWeight: '700' as const, letterSpacing: 2 }]}
-              >
-                {pickupCode}
-              </Text>
+              <View style={styles.pickupCodeRow}>
+                <View style={{ flex: 1 }}>
+                  <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, marginBottom: theme.spacing.xs }]}>
+                    {t('orders.pickupCode')}
+                  </Text>
+                  <Text
+                    style={[{ color: theme.colors.primary, ...theme.typography.h2, fontWeight: '700' as const, letterSpacing: 2 }]}
+                  >
+                    {pickupCode}
+                  </Text>
+                </View>
+                {isUpcoming && (
+                  <TouchableOpacity
+                    onPress={handleToggleQR}
+                    style={[
+                      styles.qrButton,
+                      {
+                        backgroundColor: theme.colors.primary + '20',
+                        borderRadius: theme.radii.r12,
+                        padding: theme.spacing.md,
+                      },
+                    ]}
+                  >
+                    {qrLoading ? (
+                      <ActivityIndicator size="small" color={theme.colors.primary} />
+                    ) : (
+                      <QrCode size={22} color={theme.colors.primary} />
+                    )}
+                  </TouchableOpacity>
+                )}
+              </View>
+              {qrExpanded && qrDataUrl ? (
+                <View style={[styles.qrContainer, { marginTop: theme.spacing.lg, alignItems: 'center' }]}>
+                  <Image
+                    source={{ uri: qrDataUrl }}
+                    style={{ width: 180, height: 180, borderRadius: theme.radii.r8 }}
+                    resizeMode="contain"
+                  />
+                  <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, marginTop: theme.spacing.sm, textAlign: 'center' }]}>
+                    {t('orders.showQrCode')}
+                  </Text>
+                </View>
+              ) : null}
             </View>
           ) : null}
 
@@ -179,7 +243,7 @@ export function ReservationCard({ reservation, onCancel, onHide: _onHide }: Rese
                 </Text>
               ) : null}
               {total > 0 && (
-                <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, marginTop: theme.spacing.xs }]}>
+                <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h2, fontWeight: '700' as const, marginTop: theme.spacing.xs }]}>
                   {total} TND
                 </Text>
               )}
@@ -205,6 +269,32 @@ export function ReservationCard({ reservation, onCancel, onHide: _onHide }: Rese
                   style={[{ color: theme.colors.surface, ...theme.typography.bodySm, fontWeight: '600' as const, marginLeft: theme.spacing.sm }]}
                 >
                   {t('basket.directions')}
+                </Text>
+              </TouchableOpacity>
+            )}
+
+            {isPast && (
+              <TouchableOpacity
+                style={[
+                  {
+                    backgroundColor: theme.colors.accentWarm,
+                    borderRadius: theme.radii.r12,
+                    paddingHorizontal: theme.spacing.lg,
+                    paddingVertical: theme.spacing.md,
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                  },
+                ]}
+                onPress={() => {
+                  const restaurantId = basket?.merchantId ?? (basket as any)?.restaurant_id ?? '';
+                  router.push(`/review?restaurantId=${restaurantId}&reservationId=${reservation.id}` as never);
+                }}
+              >
+                <Star size={16} color="#fff" fill="#fff" />
+                <Text
+                  style={[{ color: '#fff', ...theme.typography.bodySm, fontWeight: '600' as const, marginLeft: theme.spacing.sm }]}
+                >
+                  {t('orders.leaveReview')}
                 </Text>
               </TouchableOpacity>
             )}
@@ -235,6 +325,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   pickupCodeContainer: {},
+  pickupCodeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  qrButton: {},
+  qrContainer: {},
   footer: {
     flexDirection: 'row',
     justifyContent: 'space-between',

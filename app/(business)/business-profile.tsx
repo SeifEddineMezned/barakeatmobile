@@ -4,20 +4,111 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import { useRouter } from 'expo-router';
 import {
-  ChevronRight, MapPin, Clock, Phone, Store, LogOut, ArrowLeftRight,
-  Users, UserPlus, Trash2, Shield, CreditCard, Headphones, Camera, X
+  ChevronRight, MapPin, Clock, Phone, Store,
+  Users, UserPlus, Trash2, Shield, CreditCard, Camera, X, UtensilsCrossed
 } from 'lucide-react-native';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { useAuthStore } from '@/src/stores/authStore';
 import { useBusinessStore, DEFAULT_PERMISSIONS } from '@/src/stores/businessStore';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { fetchMyProfile } from '@/src/services/business';
+import { fetchMyContext, fetchOrganizationDetails, addMember as addMemberAPI, updateMember, removeMember as removeMemberAPI } from '@/src/services/teams';
+import * as ImagePicker from 'expo-image-picker';
 import type { TeamMember, TeamRole, TeamPermission } from '@/src/types';
 
 export default function BusinessProfileScreen() {
   const { t } = useTranslation();
   const theme = useTheme();
   const router = useRouter();
-  const { user, signOut } = useAuthStore();
-  const { profile, team, addTeamMember, removeTeamMember, updateTeamMemberRole } = useBusinessStore();
+  const { user } = useAuthStore();
+  const store = useBusinessStore();
+  const { team, addTeamMember, removeTeamMember, updateTeamMemberRole } = store;
+  const queryClient = useQueryClient();
+
+  const profileQuery = useQuery({
+    queryKey: ['my-profile'],
+    queryFn: fetchMyProfile,
+    staleTime: 60_000,
+    retry: 1,
+  });
+
+  const contextQuery = useQuery({
+    queryKey: ['team-context'],
+    queryFn: fetchMyContext,
+    staleTime: 60_000,
+  });
+
+  const orgDetailsQuery = useQuery({
+    queryKey: ['org-details', contextQuery.data?.organization_id],
+    queryFn: () => fetchOrganizationDetails(contextQuery.data!.organization_id!),
+    enabled: !!contextQuery.data?.organization_id,
+    staleTime: 60_000,
+  });
+
+  const teamMembers = orgDetailsQuery.data?.members ?? team.map((m: TeamMember) => ({
+    membership_id: m.id,
+    name: m.name,
+    email: m.email,
+    role: m.role === 'admin' ? 'admin' : 'member',
+    status: 'active',
+  }));
+
+  const addMemberMutation = useMutation({
+    mutationFn: async () => {
+      const orgId = contextQuery.data?.organization_id;
+      if (!orgId) throw new Error('No organization');
+      // Backend requires name, email, password as mandatory fields
+      const tempPassword = Math.random().toString(36).slice(-8);
+      return addMemberAPI(orgId, {
+        email: newMemberEmail.trim(),
+        name: newMemberName.trim(),
+        password: tempPassword,
+        role: newMemberRole === 'admin' ? 'admin' : 'member',
+      });
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['org-details'] });
+      setShowAddMemberModal(false);
+      setNewMemberName('');
+      setNewMemberEmail('');
+      Alert.alert(t('common.success'), t('business.profile.memberAdded'));
+    },
+    onError: (err: any) => {
+      Alert.alert(t('common.error'), err?.message ?? t('common.errorOccurred'));
+    },
+  });
+
+  const removeMemberMutation = useMutation({
+    mutationFn: async (memberId: string) => {
+      const orgId = contextQuery.data?.organization_id;
+      if (!orgId) throw new Error('No organization');
+      await removeMemberAPI(orgId, memberId);
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['org-details'] });
+    },
+  });
+
+  // Merge API profile data with store defaults
+  const profile = profileQuery.data
+    ? {
+        id: String(profileQuery.data.id),
+        name: profileQuery.data.name,
+        email: user?.email ?? '',
+        phone: profileQuery.data.phone ?? undefined,
+        address: profileQuery.data.address ?? '',
+        category: profileQuery.data.category ?? '',
+        description: profileQuery.data.description ?? undefined,
+        logo: profileQuery.data.image_url ?? undefined,
+        coverPhoto: profileQuery.data.cover_image_url ?? undefined,
+        hours: profileQuery.data.pickup_start_time && profileQuery.data.pickup_end_time
+          ? `${profileQuery.data.pickup_start_time.substring(0, 5)} - ${profileQuery.data.pickup_end_time.substring(0, 5)}`
+          : undefined,
+        latitude: profileQuery.data.latitude ?? 0,
+        longitude: profileQuery.data.longitude ?? 0,
+        isSupermarket: (profileQuery.data.category ?? '').toLowerCase() === 'supermarket',
+      }
+    : store.profile;
   const [showAddMemberModal, setShowAddMemberModal] = useState(false);
   const [showRoleModal, setShowRoleModal] = useState<string | null>(null);
   const [showPermissionsModal, setShowPermissionsModal] = useState<string | null>(null);
@@ -25,32 +116,10 @@ export default function BusinessProfileScreen() {
   const [newMemberEmail, setNewMemberEmail] = useState('');
   const [newMemberRole, setNewMemberRole] = useState<TeamRole>('restricted');
 
-  const handleSignOut = useCallback(() => {
-    signOut();
-    router.replace('/auth/sign-in' as never);
-  }, [signOut, router]);
-
-  const handleSwitchToCustomer = useCallback(() => {
-    signOut();
-    router.replace('/auth/sign-in' as never);
-  }, [signOut, router]);
-
   const handleAddMember = useCallback(() => {
     if (!newMemberName.trim() || !newMemberEmail.trim()) return;
-    const member: TeamMember = {
-      id: `tm_${Date.now()}`,
-      name: newMemberName.trim(),
-      email: newMemberEmail.trim(),
-      role: newMemberRole,
-      permissions: DEFAULT_PERMISSIONS[newMemberRole],
-      addedAt: new Date().toISOString(),
-    };
-    addTeamMember(member);
-    setNewMemberName('');
-    setNewMemberEmail('');
-    setNewMemberRole('restricted');
-    setShowAddMemberModal(false);
-  }, [newMemberName, newMemberEmail, newMemberRole, addTeamMember]);
+    addMemberMutation.mutate();
+  }, [newMemberName, newMemberEmail, addMemberMutation]);
 
   const handleRemoveMember = useCallback((memberId: string) => {
     Alert.alert(
@@ -58,10 +127,10 @@ export default function BusinessProfileScreen() {
       '',
       [
         { text: t('common.cancel'), style: 'cancel' },
-        { text: t('common.confirm'), style: 'destructive', onPress: () => removeTeamMember(memberId) },
+        { text: t('common.confirm'), style: 'destructive', onPress: () => removeMemberMutation.mutate(memberId) },
       ]
     );
-  }, [removeTeamMember, t]);
+  }, [removeMemberMutation, t]);
 
   const handleChangeRole = useCallback((memberId: string, role: TeamRole) => {
     const perms: TeamPermission = DEFAULT_PERMISSIONS[role];
@@ -75,6 +144,60 @@ export default function BusinessProfileScreen() {
     const newPerms: TeamPermission = { ...member.permissions, [permKey]: !member.permissions[permKey] };
     updateTeamMemberRole(memberId, 'custom', newPerms);
   }, [team, updateTeamMemberRole]);
+
+  const handleChangeCover = async () => {
+    try {
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        aspect: [16, 5],
+        quality: 0.8,
+      });
+      if (!result.canceled && result.assets[0]) {
+        const formData = new FormData();
+        const uri = result.assets[0].uri;
+        const filename = uri.split('/').pop() ?? 'cover.jpg';
+        formData.append('image', { uri, name: filename, type: 'image/jpeg' } as any);
+        try {
+          const { updateMyProfile } = await import('@/src/services/business');
+          await updateMyProfile(formData);
+          profileQuery.refetch();
+          Alert.alert(t('common.success'), t('business.profile.imageUpdated'));
+        } catch {
+          Alert.alert(t('common.error'), t('common.errorOccurred'));
+        }
+      }
+    } catch {
+      Alert.alert(t('common.error'), t('common.errorOccurred'));
+    }
+  };
+
+  const handleChangeLogo = async () => {
+    try {
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.8,
+      });
+      if (!result.canceled && result.assets[0]) {
+        const formData = new FormData();
+        const uri = result.assets[0].uri;
+        const filename = uri.split('/').pop() ?? 'logo.jpg';
+        formData.append('image', { uri, name: filename, type: 'image/jpeg' } as any);
+        try {
+          const { updateMyProfile } = await import('@/src/services/business');
+          await updateMyProfile(formData);
+          profileQuery.refetch();
+          Alert.alert(t('common.success'), t('business.profile.imageUpdated'));
+        } catch {
+          Alert.alert(t('common.error'), t('common.errorOccurred'));
+        }
+      }
+    } catch {
+      Alert.alert(t('common.error'), t('common.errorOccurred'));
+    }
+  };
 
   const roleLabel = (role: TeamRole) => {
     switch (role) {
@@ -106,8 +229,8 @@ export default function BusinessProfileScreen() {
   const selectedMemberForPerms = showPermissionsModal ? team.find((m) => m.id === showPermissionsModal) : null;
 
   return (
-    <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]} edges={['top']}>
-      <View style={[styles.header, { paddingHorizontal: theme.spacing.xl, paddingTop: theme.spacing.xl }]}>
+    <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]} edges={[]}>
+      <View style={[styles.header, { paddingHorizontal: theme.spacing.xl, paddingTop: theme.spacing.xs }]}>
         <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h1 }]}>
           {t('business.profile.title')}
         </Text>
@@ -121,7 +244,7 @@ export default function BusinessProfileScreen() {
             <View style={[styles.coverImage, { backgroundColor: theme.colors.primary + '20' }]} />
           )}
           <View style={[styles.coverOverlay, { backgroundColor: 'rgba(0,0,0,0.2)' }]} />
-          <TouchableOpacity style={[styles.coverEditBtn, { backgroundColor: 'rgba(255,255,255,0.9)', borderRadius: theme.radii.r8, padding: 6 }]}>
+          <TouchableOpacity onPress={handleChangeCover} style={[styles.coverEditBtn, { backgroundColor: 'rgba(255,255,255,0.9)', borderRadius: theme.radii.r8, padding: 6 }]}>
             <Camera size={16} color={theme.colors.textPrimary} />
           </TouchableOpacity>
         </View>
@@ -136,7 +259,7 @@ export default function BusinessProfileScreen() {
                   <Store size={32} color={theme.colors.primary} />
                 </View>
               )}
-              <TouchableOpacity style={[styles.logoEditBtn, { backgroundColor: theme.colors.primary, borderRadius: 12, width: 24, height: 24 }]}>
+              <TouchableOpacity onPress={handleChangeLogo} style={[styles.logoEditBtn, { backgroundColor: theme.colors.primary, borderRadius: 12, width: 24, height: 24 }]}>
                 <Camera size={12} color="#fff" />
               </TouchableOpacity>
             </View>
@@ -150,6 +273,41 @@ export default function BusinessProfileScreen() {
             </View>
           </View>
         </View>
+
+        {/* Team Management Card */}
+        <TouchableOpacity
+          onPress={() => router.push('/business/team' as never)}
+          style={[styles.infoCard, {
+            backgroundColor: theme.colors.surface,
+            borderRadius: theme.radii.r16,
+            marginTop: theme.spacing.lg,
+            padding: theme.spacing.lg,
+            ...theme.shadows.shadowSm,
+            flexDirection: 'row',
+            alignItems: 'center',
+          }]}
+          activeOpacity={0.7}
+        >
+          <View style={[{
+            backgroundColor: theme.colors.primary + '12',
+            borderRadius: theme.radii.r12,
+            width: 44,
+            height: 44,
+            justifyContent: 'center',
+            alignItems: 'center',
+          }]}>
+            <Users size={22} color={theme.colors.primary} />
+          </View>
+          <View style={{ flex: 1, marginLeft: 14 }}>
+            <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3 }]}>
+              {t('business.profile.teamManagement')}
+            </Text>
+            <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, marginTop: 2 }]}>
+              {teamMembers.length} {t('business.team.members')}
+            </Text>
+          </View>
+          <ChevronRight size={20} color={theme.colors.muted} />
+        </TouchableOpacity>
 
         <View style={[styles.infoCard, { backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, marginTop: theme.spacing.lg, ...theme.shadows.shadowSm }]}>
           <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, padding: theme.spacing.lg, paddingBottom: theme.spacing.sm }]}>
@@ -196,6 +354,19 @@ export default function BusinessProfileScreen() {
               </Text>
             </View>
           ) : null}
+
+          <TouchableOpacity
+            style={[styles.infoRow, { paddingHorizontal: theme.spacing.lg, paddingVertical: theme.spacing.md, borderTopWidth: 1, borderTopColor: theme.colors.divider }]}
+            onPress={() => router.push('/business/menu-items' as never)}
+          >
+            <View style={styles.infoRowLeft}>
+              <UtensilsCrossed size={18} color={theme.colors.textSecondary} />
+              <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.bodySm, marginLeft: 10 }]}>
+                {t('business.profile.menuItems')}
+              </Text>
+            </View>
+            <ChevronRight size={18} color={theme.colors.muted} />
+          </TouchableOpacity>
         </View>
 
         <View style={[styles.infoCard, { backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, marginTop: theme.spacing.lg, ...theme.shadows.shadowSm }]}>
@@ -223,118 +394,6 @@ export default function BusinessProfileScreen() {
             <ChevronRight size={18} color={theme.colors.muted} />
           </TouchableOpacity>
         </View>
-
-        <View style={[styles.teamSection, { backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, marginTop: theme.spacing.lg, ...theme.shadows.shadowSm }]}>
-          <View style={[styles.teamHeader, { padding: theme.spacing.lg }]}>
-            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-              <Users size={20} color={theme.colors.primary} />
-              <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, marginLeft: 10 }]}>
-                {t('business.profile.teamManagement')}
-              </Text>
-            </View>
-            <TouchableOpacity
-              onPress={() => setShowAddMemberModal(true)}
-              style={[{ backgroundColor: theme.colors.primary, borderRadius: theme.radii.r8, paddingHorizontal: 12, paddingVertical: 6, flexDirection: 'row', alignItems: 'center' }]}
-            >
-              <UserPlus size={14} color="#fff" />
-              <Text style={[{ color: '#fff', ...theme.typography.caption, fontWeight: '600' as const, marginLeft: 4 }]}>
-                {t('business.profile.addMember')}
-              </Text>
-            </TouchableOpacity>
-          </View>
-
-          {team.map((member, index) => (
-            <View
-              key={member.id}
-              style={[styles.teamMemberRow, {
-                paddingHorizontal: theme.spacing.lg,
-                paddingVertical: theme.spacing.md,
-                borderTopWidth: 1,
-                borderTopColor: theme.colors.divider,
-              }]}
-            >
-              <View style={{ flex: 1 }}>
-                <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '500' as const }]}>
-                  {member.name}
-                </Text>
-                <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, marginTop: 1 }]}>
-                  {member.email}
-                </Text>
-              </View>
-              <TouchableOpacity
-                onPress={() => setShowRoleModal(member.id)}
-                style={[{ backgroundColor: roleColor(member.role) + '15', borderRadius: theme.radii.pill, paddingHorizontal: 10, paddingVertical: 4, marginRight: 6 }]}
-              >
-                <Text style={[{ color: roleColor(member.role), ...theme.typography.caption, fontWeight: '600' as const }]}>
-                  {roleLabel(member.role)}
-                </Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                onPress={() => setShowPermissionsModal(member.id)}
-                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                style={{ marginRight: 8 }}
-              >
-                <Shield size={16} color={theme.colors.primary} />
-              </TouchableOpacity>
-              {index > 0 && (
-                <TouchableOpacity onPress={() => handleRemoveMember(member.id)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-                  <Trash2 size={16} color={theme.colors.error} />
-                </TouchableOpacity>
-              )}
-            </View>
-          ))}
-        </View>
-
-        <TouchableOpacity
-          style={[styles.supportCard, {
-            backgroundColor: theme.colors.surface,
-            borderRadius: theme.radii.r16,
-            padding: theme.spacing.lg,
-            marginTop: theme.spacing.lg,
-            ...theme.shadows.shadowSm,
-            flexDirection: 'row',
-            alignItems: 'center',
-          }]}
-          activeOpacity={0.7}
-        >
-          <View style={[{ backgroundColor: theme.colors.primary + '12', borderRadius: theme.radii.r12, width: 40, height: 40, justifyContent: 'center', alignItems: 'center' }]}>
-            <Headphones size={20} color={theme.colors.primary} />
-          </View>
-          <View style={{ flex: 1, marginLeft: 12 }}>
-            <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.body, fontWeight: '600' as const }]}>
-              {t('business.profile.customerSupport')}
-            </Text>
-            <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, marginTop: 2 }]}>
-              {t('business.profile.customerSupportDesc')}
-            </Text>
-          </View>
-          <ChevronRight size={20} color={theme.colors.muted} />
-        </TouchableOpacity>
-
-        <View style={[styles.menuSection, { backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, marginTop: theme.spacing.lg, ...theme.shadows.shadowSm }]}>
-          <TouchableOpacity
-            style={[styles.menuItem, { padding: theme.spacing.lg }]}
-            onPress={handleSwitchToCustomer}
-          >
-            <View style={styles.menuItemLeft}>
-              <ArrowLeftRight size={20} color={theme.colors.textSecondary} />
-              <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.body, marginLeft: 12 }]}>
-                {t('business.profile.switchToCustomer')}
-              </Text>
-            </View>
-            <ChevronRight size={20} color={theme.colors.muted} />
-          </TouchableOpacity>
-        </View>
-
-        <TouchableOpacity
-          style={[styles.signOutBtn, { backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, padding: theme.spacing.lg, marginTop: theme.spacing.lg, ...theme.shadows.shadowSm }]}
-          onPress={handleSignOut}
-        >
-          <LogOut size={20} color={theme.colors.error} />
-          <Text style={[{ color: theme.colors.error, ...theme.typography.body, marginLeft: 12 }]}>
-            {t('business.profile.signOut')}
-          </Text>
-        </TouchableOpacity>
 
         <View style={{ height: 40 }} />
       </ScrollView>
@@ -583,22 +642,6 @@ const styles = StyleSheet.create({
   teamMemberRow: {
     flexDirection: 'row',
     alignItems: 'center',
-  },
-  supportCard: {},
-  menuSection: {},
-  menuItem: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  menuItemLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  signOutBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
   },
   modalOverlay: {
     flex: 1,

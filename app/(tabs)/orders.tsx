@@ -1,18 +1,69 @@
-import React, { useState, useMemo, useCallback } from 'react';
+import React, { useState, useMemo, useCallback, useEffect } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
+import { useRouter } from 'expo-router';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { RefreshCw } from 'lucide-react-native';
+import { RefreshCw, ShoppingBag } from 'lucide-react-native';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { useAuthStore } from '@/src/stores/authStore';
 import { fetchMyReservations, cancelReservation, hideReservation } from '@/src/services/reservations';
 import { getErrorMessage } from '@/src/lib/api';
 import { ReservationCard } from '@/src/components/ReservationCard';
 
+function PickupCountdown({ startTime, endTime, theme, t }: { startTime: string; endTime: string; theme: any; t: any }) {
+  const [now, setNow] = useState(new Date());
+
+  useEffect(() => {
+    const timer = setInterval(() => setNow(new Date()), 60000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const today = new Date();
+  const [sh, sm] = startTime.split(':').map(Number);
+  const [eh, em] = endTime.split(':').map(Number);
+  const startDate = new Date(today.getFullYear(), today.getMonth(), today.getDate(), sh, sm);
+  const endDate = new Date(today.getFullYear(), today.getMonth(), today.getDate(), eh, em);
+
+  const isBeforePickup = now < startDate;
+  const isDuringPickup = now >= startDate && now <= endDate;
+
+  let label = '';
+  let color = theme.colors.muted;
+  let timeLeft = '';
+
+  if (isBeforePickup) {
+    const diff = Math.round((startDate.getTime() - now.getTime()) / 60000);
+    const hours = Math.floor(diff / 60);
+    const mins = diff % 60;
+    label = t('orders.startsIn', { defaultValue: 'Starts in' });
+    timeLeft = hours > 0 ? `${hours}h ${mins}m` : `${mins}m`;
+    color = theme.colors.primary;
+  } else if (isDuringPickup) {
+    const diff = Math.round((endDate.getTime() - now.getTime()) / 60000);
+    const mins = diff;
+    label = t('orders.endsIn', { defaultValue: 'Ends in' });
+    timeLeft = `${mins}m`;
+    color = mins < 15 ? theme.colors.error : theme.colors.accentWarm;
+  } else {
+    label = t('orders.pickupEnded', { defaultValue: 'Pickup ended' });
+    color = theme.colors.muted;
+  }
+
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+      <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: color }} />
+      <Text style={{ color, ...theme.typography.bodySm, fontWeight: '600' }}>
+        {label} {timeLeft}
+      </Text>
+    </View>
+  );
+}
+
 export default function OrdersScreen() {
   const { t } = useTranslation();
   const theme = useTheme();
+  const router = useRouter();
   const queryClient = useQueryClient();
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
   const [activeTab, setActiveTab] = useState<'upcoming' | 'past'>('upcoming');
@@ -42,20 +93,53 @@ export default function OrdersScreen() {
     },
   });
 
+  const reservations = reservationsQuery.data ?? [];
+
   const upcomingOrders = useMemo(
-    () => (reservationsQuery.data ?? []).filter((r) => {
+    () => reservations.filter((r) => {
       const status = (r.status ?? '').toLowerCase();
       return status === 'reserved' || status === 'ready' || status === 'pending' || status === 'confirmed';
     }),
-    [reservationsQuery.data]
+    [reservations]
   );
 
   const pastOrders = useMemo(
-    () => (reservationsQuery.data ?? []).filter((r) => {
+    () => reservations.filter((r) => {
       const status = (r.status ?? '').toLowerCase();
-      return status === 'collected' || status === 'cancelled' || status === 'completed' || status === 'expired';
+      return status === 'collected' || status === 'cancelled' || status === 'completed' || status === 'expired' || status === 'picked_up';
     }),
-    [reservationsQuery.data]
+    [reservations]
+  );
+
+  const completedReservations = useMemo(
+    () => reservations.filter((r) => {
+      const status = (r.status ?? '').toLowerCase();
+      return status === 'collected' || status === 'completed' || status === 'picked_up';
+    }),
+    [reservations]
+  );
+
+  const moneySaved = useMemo(() => completedReservations.reduce((sum, r) => {
+    const orig = r.basket?.originalPrice ?? Number((r.basket as any)?.original_price ?? 0);
+    const disc = r.basket?.discountedPrice ?? Number((r.basket as any)?.discounted_price ?? 0);
+    return sum + (Number(orig) - Number(disc)) * (r.quantity ?? 1);
+  }, 0), [completedReservations]);
+
+  const co2Saved = completedReservations.length * 2.5;
+  const totalOrders = reservations.length;
+
+  const isToday = (dateStr: string) => {
+    const d = new Date(dateStr);
+    const now = new Date();
+    return d.toDateString() === now.toDateString();
+  };
+
+  const todayReservations = useMemo(
+    () => reservations.filter((r) =>
+      isToday(r.created_at ?? r.createdAt ?? '') &&
+      (r.status ?? '').toLowerCase() !== 'cancelled'
+    ),
+    [reservations]
   );
 
   const displayedOrders = activeTab === 'upcoming' ? upcomingOrders : pastOrders;
@@ -75,11 +159,23 @@ export default function OrdersScreen() {
     hideMutation.mutate(id);
   }, [hideMutation]);
 
+  const getPickupTimes = (reservation: any) => {
+    const start = reservation.basket?.pickupWindow?.start
+      ?? reservation.basket?.pickup_start_time
+      ?? reservation.restaurant?.pickup_start_time
+      ?? reservation.pickupWindow?.start;
+    const end = reservation.basket?.pickupWindow?.end
+      ?? reservation.basket?.pickup_end_time
+      ?? reservation.restaurant?.pickup_end_time
+      ?? reservation.pickupWindow?.end;
+    return { start, end };
+  };
+
   if (!isAuthenticated) {
     return (
-      <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]} edges={['top']}>
-        <View style={[styles.header, { paddingHorizontal: theme.spacing.xl, paddingTop: theme.spacing.lg }]}>
-          <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h2 }]}>{t('orders.title')}</Text>
+      <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]} edges={[]}>
+        <View style={[styles.header, { paddingHorizontal: theme.spacing.xl, paddingTop: theme.spacing.xs }]}>
+          <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h1 }]}>{t('orders.title')}</Text>
         </View>
         <View style={styles.emptyState}>
           <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.body, textAlign: 'center' as const }]}>
@@ -90,63 +186,40 @@ export default function OrdersScreen() {
     );
   }
 
-  return (
-    <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]} edges={['top']}>
-      <View style={[styles.header, { paddingHorizontal: theme.spacing.xl, paddingTop: theme.spacing.lg }]}>
-        <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h2 }]}>{t('orders.title')}</Text>
-      </View>
+  // No orders at all — empty state
+  const hasNoOrders = !reservationsQuery.isLoading && !reservationsQuery.isError && reservations.length === 0;
 
-      <View style={[styles.tabs, { paddingHorizontal: theme.spacing.xl, marginTop: theme.spacing.xl }]}>
-        <TouchableOpacity
-          style={[
-            styles.tab,
-            {
-              flex: 1,
-              paddingVertical: theme.spacing.md,
-              borderBottomWidth: 2,
-              borderBottomColor: activeTab === 'upcoming' ? theme.colors.primary : 'transparent',
-            },
-          ]}
-          onPress={() => setActiveTab('upcoming')}
-        >
-          <Text
-            style={[
-              {
-                color: activeTab === 'upcoming' ? theme.colors.primary : theme.colors.textSecondary,
-                ...theme.typography.body,
-                fontWeight: activeTab === 'upcoming' ? ('600' as const) : ('400' as const),
-                textAlign: 'center',
-              },
-            ]}
-          >
-            {t('orders.upcoming')}
+  if (hasNoOrders) {
+    return (
+      <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]} edges={[]}>
+        <View style={[styles.header, { paddingHorizontal: theme.spacing.xl, paddingTop: theme.spacing.xs }]}>
+          <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h1 }]}>{t('orders.title')}</Text>
+        </View>
+        <View style={{ flex: 1, justifyContent: 'flex-start', alignItems: 'center', paddingTop: 100, paddingHorizontal: 32 }}>
+          <ShoppingBag size={48} color={theme.colors.muted} />
+          <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h2, marginTop: 24, textAlign: 'center' }}>
+            {t('orders.emptyTitle', { defaultValue: 'No orders yet' })}
           </Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[
-            styles.tab,
-            {
-              flex: 1,
-              paddingVertical: theme.spacing.md,
-              borderBottomWidth: 2,
-              borderBottomColor: activeTab === 'past' ? theme.colors.primary : 'transparent',
-            },
-          ]}
-          onPress={() => setActiveTab('past')}
-        >
-          <Text
-            style={[
-              {
-                color: activeTab === 'past' ? theme.colors.primary : theme.colors.textSecondary,
-                ...theme.typography.body,
-                fontWeight: activeTab === 'past' ? ('600' as const) : ('400' as const),
-                textAlign: 'center',
-              },
-            ]}
-          >
-            {t('orders.past')}
+          <Text style={{ color: theme.colors.textSecondary, ...theme.typography.body, marginTop: 12, textAlign: 'center', lineHeight: 22 }}>
+            {t('orders.emptyDesc', { defaultValue: 'Start saving food and money by reserving a surprise bag!' })}
           </Text>
-        </TouchableOpacity>
+          <TouchableOpacity
+            onPress={() => router.push('/(tabs)' as never)}
+            style={{ backgroundColor: theme.colors.primary, borderRadius: theme.radii.r16, paddingVertical: 16, paddingHorizontal: 40, marginTop: 32 }}
+          >
+            <Text style={{ color: '#fff', ...theme.typography.button }}>
+              {t('orders.findBasket', { defaultValue: 'Find a Surprise Bag' })}
+            </Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  return (
+    <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]} edges={[]}>
+      <View style={[styles.header, { paddingHorizontal: theme.spacing.xl, paddingTop: theme.spacing.xs }]}>
+        <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h1 }]}>{t('orders.title')}</Text>
       </View>
 
       <ScrollView style={styles.content} contentContainerStyle={[{ padding: theme.spacing.xl }]}>
@@ -172,29 +245,148 @@ export default function OrdersScreen() {
               </Text>
             </TouchableOpacity>
           </View>
-        ) : displayedOrders.length === 0 ? (
-          <View style={styles.emptyState}>
-            <Text
-              style={[
-                {
-                  color: theme.colors.textSecondary,
-                  ...theme.typography.body,
-                  textAlign: 'center',
-                },
-              ]}
-            >
-              {t('orders.emptyState')}
-            </Text>
-          </View>
         ) : (
-          displayedOrders.map((reservation) => (
-            <ReservationCard
-              key={reservation.id}
-              reservation={reservation}
-              onCancel={handleCancel}
-              onHide={handleHide}
-            />
-          ))
+          <>
+            {/* Impact Summary Card */}
+            <View style={{
+              backgroundColor: theme.colors.primary,
+              borderRadius: theme.radii.r16,
+              padding: 20,
+              marginBottom: 16,
+            }}>
+              <Text style={{ color: 'rgba(255,255,255,0.7)', ...theme.typography.bodySm }}>
+                {t('orders.yourImpact', { defaultValue: 'Your Impact' })}
+              </Text>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-around', marginTop: 16 }}>
+                <View style={{ alignItems: 'center' }}>
+                  <Text style={{ color: '#fff', ...theme.typography.h2 }}>{moneySaved.toFixed(0)}</Text>
+                  <Text style={{ color: 'rgba(255,255,255,0.7)', ...theme.typography.caption }}>TND saved</Text>
+                </View>
+                <View style={{ alignItems: 'center' }}>
+                  <Text style={{ color: '#fff', ...theme.typography.h2 }}>{co2Saved.toFixed(1)}</Text>
+                  <Text style={{ color: 'rgba(255,255,255,0.7)', ...theme.typography.caption }}>kg CO₂</Text>
+                </View>
+                <View style={{ alignItems: 'center' }}>
+                  <Text style={{ color: '#fff', ...theme.typography.h2 }}>{totalOrders}</Text>
+                  <Text style={{ color: 'rgba(255,255,255,0.7)', ...theme.typography.caption }}>{t('orders.title')}</Text>
+                </View>
+              </View>
+            </View>
+
+            {/* Today's Reservations */}
+            {todayReservations.length > 0 && (
+              <View style={{ marginBottom: 16 }}>
+                <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3, marginBottom: 12 }}>
+                  {t('orders.todayPickups', { defaultValue: "Today's Pickups" })}
+                </Text>
+                {todayReservations.map((reservation) => {
+                  const { start, end } = getPickupTimes(reservation);
+                  return (
+                    <View key={`today-${reservation.id}`} style={{ marginBottom: 8 }}>
+                      {start && end && (
+                        <View style={{
+                          backgroundColor: theme.colors.surface,
+                          borderRadius: theme.radii.r12,
+                          padding: 12,
+                          marginBottom: 4,
+                        }}>
+                          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <Text style={{ color: theme.colors.textPrimary, ...theme.typography.body, fontWeight: '600' }}>
+                              {reservation.basket?.merchantName ?? reservation.basket?.merchant_name ?? reservation.restaurant?.name ?? ''}
+                            </Text>
+                            <PickupCountdown startTime={start} endTime={end} theme={theme} t={t} />
+                          </View>
+                          <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, marginTop: 4 }}>
+                            {start} - {end}
+                          </Text>
+                        </View>
+                      )}
+                    </View>
+                  );
+                })}
+              </View>
+            )}
+
+            {/* Tabs for Upcoming / Past */}
+            <View style={[styles.tabs, { marginBottom: theme.spacing.sm }]}>
+              <TouchableOpacity
+                style={[
+                  styles.tab,
+                  {
+                    flex: 1,
+                    paddingVertical: theme.spacing.md,
+                    borderBottomWidth: 2,
+                    borderBottomColor: activeTab === 'upcoming' ? theme.colors.primary : 'transparent',
+                  },
+                ]}
+                onPress={() => setActiveTab('upcoming')}
+              >
+                <Text
+                  style={[
+                    {
+                      color: activeTab === 'upcoming' ? theme.colors.primary : theme.colors.textSecondary,
+                      ...theme.typography.body,
+                      fontWeight: activeTab === 'upcoming' ? ('600' as const) : ('400' as const),
+                      textAlign: 'center',
+                    },
+                  ]}
+                >
+                  {t('orders.upcoming')}
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.tab,
+                  {
+                    flex: 1,
+                    paddingVertical: theme.spacing.md,
+                    borderBottomWidth: 2,
+                    borderBottomColor: activeTab === 'past' ? theme.colors.primary : 'transparent',
+                  },
+                ]}
+                onPress={() => setActiveTab('past')}
+              >
+                <Text
+                  style={[
+                    {
+                      color: activeTab === 'past' ? theme.colors.primary : theme.colors.textSecondary,
+                      ...theme.typography.body,
+                      fontWeight: activeTab === 'past' ? ('600' as const) : ('400' as const),
+                      textAlign: 'center',
+                    },
+                  ]}
+                >
+                  {t('orders.past')}
+                </Text>
+              </TouchableOpacity>
+            </View>
+
+            {/* Order History */}
+            {displayedOrders.length === 0 ? (
+              <View style={styles.emptyState}>
+                <Text
+                  style={[
+                    {
+                      color: theme.colors.textSecondary,
+                      ...theme.typography.body,
+                      textAlign: 'center',
+                    },
+                  ]}
+                >
+                  {t('orders.emptyState')}
+                </Text>
+              </View>
+            ) : (
+              displayedOrders.map((reservation) => (
+                <ReservationCard
+                  key={reservation.id}
+                  reservation={reservation}
+                  onCancel={handleCancel}
+                  onHide={handleHide}
+                />
+              ))
+            )}
+          </>
         )}
       </ScrollView>
     </SafeAreaView>

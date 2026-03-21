@@ -24,7 +24,13 @@ export const useAuthStore = create(
         set({ user: null, token: null, isAuthenticated: false });
       },
 
-      completeOnboarding: () => set({ hasCompletedOnboarding: true }),
+      completeOnboarding: async () => {
+        set({ hasCompletedOnboarding: true });
+        try {
+          const AsyncStorage = require('@react-native-async-storage/async-storage').default;
+          await AsyncStorage.setItem('barakeat_onboarding_completed', 'true');
+        } catch {}
+      },
 
       setUser: (user: User) => {
         console.log('[AuthStore] setUser:', user.name);
@@ -37,6 +43,16 @@ export const useAuthStore = create(
         try {
           const token = await getToken();
           const user = await getUser<User>();
+
+          // Restore onboarding state
+          try {
+            const AsyncStorage = require('@react-native-async-storage/async-storage').default;
+            const onboardingDone = await AsyncStorage.getItem('barakeat_onboarding_completed');
+            if (onboardingDone === 'true') {
+              set({ hasCompletedOnboarding: true });
+            }
+          } catch {}
+
           if (token && user) {
             console.log('[AuthStore] Session restored for:', user.name);
             set({ user, token, isAuthenticated: true, isRestoringSession: false });

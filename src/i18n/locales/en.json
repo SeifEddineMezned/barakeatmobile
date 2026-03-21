@@ -50,15 +50,37 @@
     "name": "Full Name",
     "phone": "Phone Number",
     "forgotPassword": "Forgot Password?",
+    "forgotPasswordTitle": "Forgot Password",
+    "forgotPasswordDesc": "Enter your email address and we'll send you a code to reset your password.",
+    "sendOtp": "Send Reset Code",
+    "otpSent": "A reset code has been sent to your email.",
+    "enterOtp": "Enter Code",
+    "otpSentTo": "We sent a 6-digit code to {{email}}",
+    "otpCode": "Reset Code",
+    "verifyOtp": "Verify Code",
+    "resendOtp": "Resend Code",
+    "resendIn": "Resend in {{seconds}}s",
+    "newPasswordTitle": "New Password",
+    "newPasswordDesc": "Choose a new password for your account.",
+    "newPassword": "New Password",
+    "confirmNewPassword": "Confirm Password",
+    "resetPassword": "Reset Password",
+    "passwordMismatch": "Passwords do not match.",
+    "passwordTooShort": "Password must be at least 6 characters.",
+    "passwordResetSuccess": "Your password has been reset successfully. Please sign in.",
     "noAccount": "Don't have an account?",
     "haveAccount": "Already have an account?",
     "createAccount": "Create Account",
     "welcome": "Welcome to Barakeat",
     "welcomeBack": "Welcome Back",
     "error": "Error",
-    "fillAllFields": "Please fill in all required fields."
+    "fillAllFields": "Please fill in all required fields.",
+    "notCustomerAccount": "This email is registered as a business account, not a customer. Please switch to business login or create a new customer account.",
+    "notBusinessAccount": "This email is registered as a customer account, not a business. Please switch to customer login."
   },
   "home": {
+    "search": "Search",
+    "welcomeBack": "Welcome back,",
     "discover": "Discover",
     "greeting": "Discover",
     "searchPlaceholder": "Search baskets, merchants...",
@@ -80,7 +102,7 @@
     "surpriseBasket": "Surprise Basket",
     "pickupWindow": "Pickup",
     "distance": "away",
-    "quantity": "{{count}} left",
+    "quantity": "left",
     "payOnPickup": "Pay on Pickup",
     "description": "Description",
     "whatYouMightGet": "What you might get",
@@ -137,13 +159,28 @@
     "emptyState": "No orders yet",
     "loginRequired": "Please sign in to view your orders.",
     "cancelTitle": "Cancel Reservation",
-    "cancelConfirm": "Are you sure you want to cancel this reservation?"
+    "cancelConfirm": "Are you sure you want to cancel this reservation?",
+    "showQrCode": "Show this QR code to the merchant at pickup",
+    "leaveReview": "Review"
+  },
+  "review": {
+    "title": "Leave a Review",
+    "rateExperience": "Rate your experience",
+    "comment": "Comment (optional)",
+    "commentPlaceholder": "Tell us about your experience...",
+    "submit": "Submit Review",
+    "success": "Thank you for your review!",
+    "error": "Could not submit review"
   },
   "favorites": {
     "title": "Favorites",
     "baskets": "Baskets",
     "merchants": "Merchants",
-    "emptyState": "Tap the heart to save favorites"
+    "emptyState": "Tap the heart to save favorites",
+    "emptyTitle": "No favorites added yet",
+    "emptyDesc": "Tap the heart icon on a store to add it to your favorites and it will show up here.",
+    "findBasket": "Find a Surprise Bag",
+    "count": "{{count}} favorites"
   },
   "profile": {
     "title": "Profile",
@@ -178,11 +215,37 @@
     "demoMode": "Demo Mode",
     "demoAdmin": "Administrator",
     "demoRestricted": "Restricted user",
-    "switchRole": "Switch demo role"
+    "switchRole": "Switch demo role",
+    "changePassword": "Change Password",
+    "passwordChanged": "Password changed successfully.",
+    "foodPreferences": "Food Preferences",
+    "preferencesUpdated": "Preferences updated.",
+    "currentPassword": "Current Password",
+    "newPasswordLabel": "New Password",
+    "confirmPasswordLabel": "Confirm Password",
+    "profileUpdated": "Profile updated.",
+    "editProfile": "Edit",
+    "businessesTried": "Places Tried"
+  },
+  "report": {
+    "title": "Report",
+    "reasonLabel": "Reason",
+    "reasonPlaceholder": "Select a reason...",
+    "detailsLabel": "Details (optional)",
+    "detailsPlaceholder": "Provide more details...",
+    "submit": "Submit Report",
+    "success": "Report submitted. Thank you.",
+    "error": "Could not submit report."
   },
   "map": {
     "title": "Nearby",
     "viewDetails": "View Details"
+  },
+  "notifications": {
+    "title": "Notifications",
+    "markAllRead": "Mark all read",
+    "empty": "No notifications yet",
+    "justNow": "Just now"
   },
   "business": {
     "dashboard": {
@@ -232,7 +295,9 @@
       "onlyOneActive": "Only one basket can be active at a time",
       "quantityAvailable": "Quantity available",
       "saveChanges": "Save changes",
-      "willDeactivate": "will be deactivated."
+      "willDeactivate": "will be deactivated.",
+      "todayQty": "Today",
+      "defaultQty": "Daily Reset"
     },
     "orders": {
       "title": "Orders",
@@ -244,6 +309,8 @@
       "pickupCode": "Pickup Code",
       "customer": "Customer",
       "noOrders": "No orders",
+      "noOrdersToday": "No orders today",
+      "noOrdersDesc": "Orders will appear here when customers reserve your surprise bags.",
       "callCustomer": "Call",
       "statusReserved": "Reserved",
       "statusReady": "Ready",
@@ -284,7 +351,24 @@
       "permCanEditProfile": "Can edit profile",
       "permCanManageTeam": "Can manage team",
       "permCanViewDashboard": "Can view dashboard",
-      "permCanViewFinancial": "Can view financial info"
+      "permCanViewFinancial": "Can view financial info",
+      "menuItems": "Menu Items",
+      "tempPassword": "Temporary password",
+      "imageUpdated": "Image updated successfully.",
+      "memberAdded": "Team member added successfully."
+    },
+    "team": {
+      "members": "Members",
+      "owner": "Owner",
+      "locations": "Locations",
+      "assignLocation": "Assign to Location",
+      "tempPasswordLabel": "Password",
+      "membersCount": "{{count}} members",
+      "addLocation": "Add Location",
+      "locationName": "Location name",
+      "locationAddress": "Address",
+      "locationAdded": "Location added successfully.",
+      "noLocations": "No locations yet. Tap + to add one."
     },
     "createBasket": {
       "title": "New Basket",
@@ -309,6 +393,86 @@
       "businessName": "Business Name",
       "businessAddress": "Business Address",
       "businessCategory": "Category"
+    },
+    "scan": {
+      "title": "Verify Pickup",
+      "enterCode": "Enter pickup code",
+      "codePlaceholder": "ABC123",
+      "verify": "Verify Code",
+      "codeTooShort": "Code must be at least 4 characters.",
+      "codeNotFound": "No matching order found for this code.",
+      "confirmed": "Pickup Confirmed!",
+      "customerLabel": "Customer",
+      "done": "Done",
+      "cameraUnavailable": "Camera scanner not available. Please enter the pickup code manually below.",
+      "manualEntryTitle": "Enter Pickup Code",
+      "manualEntryDesc": "Ask the customer for their pickup code shown in their order confirmation."
+    },
+    "availability": {
+      "title": "Availability",
+      "quantity": "Daily Quantity",
+      "pickupStart": "Pickup Start",
+      "pickupEnd": "Pickup End",
+      "paused": "Restaurant Paused",
+      "active": "Restaurant Active",
+      "save": "Save Changes",
+      "saved": "Availability updated successfully."
+    },
+    "menuItems": {
+      "title": "Menu Items",
+      "addItem": "Add Item",
+      "namePlaceholder": "Item name...",
+      "empty": "No menu items yet",
+      "deleteConfirm": "Delete this item?",
+      "added": "Item added.",
+      "deleted": "Item deleted."
     }
+  },
+  "errors": {
+    "invalidEmail": "Invalid email format.",
+    "invalidCredentials": "Invalid email or password.",
+    "emailExists": "This email is already registered.",
+    "phoneExists": "This phone number is already registered.",
+    "userNotFound": "User not found.",
+    "invalidPassword": "Invalid password.",
+    "invalidToken": "Session expired. Please sign in again.",
+    "invalidOtp": "Invalid verification code.",
+    "otpExpired": "Verification code expired. Please request a new one.",
+    "passwordTooShort": "Password must be at least 6 characters.",
+    "emailNotVerified": "Please verify your email first.",
+    "restaurantPaused": "This restaurant is currently unavailable.",
+    "noBaskets": "No baskets available right now.",
+    "alreadyReserved": "You already have a reservation for today.",
+    "pickupExpired": "The pickup window has expired.",
+    "reservationNotFound": "Reservation not found.",
+    "unauthorized": "Please sign in to continue.",
+    "forbidden": "You don't have permission for this action.",
+    "notFound": "The requested resource was not found.",
+    "serverError": "Something went wrong. Please try again later.",
+    "networkError": "No internet connection. Please check your network.",
+    "timeout": "Request timed out. Please try again."
+  },
+  "settings": {
+    "title": "Settings",
+    "notifications": "Notifications",
+    "pushNotifications": "Push Notifications",
+    "support": "Support"
+  },
+  "impact": {
+    "title": "My Impact",
+    "level": "Level {{level}}",
+    "xpProgress": "{{current}} / {{next}} XP",
+    "mealsSaved": "Meals Saved",
+    "moneySaved": "Money Saved",
+    "co2Saved": "CO\u2082 Saved",
+    "currentStreak": "Current Streak",
+    "days": "days",
+    "badges": "Badges",
+    "locked": "Locked",
+    "leaderboard": "Leaderboard",
+    "rank": "#{{rank}}",
+    "meals": "meals",
+    "showMore": "Show more",
+    "viewImpact": "View My Impact"
   }
 }

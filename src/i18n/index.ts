@@ -12,16 +12,16 @@ const resources = {
   ar: { translation: ar },
 };
 
-const deviceLang = Localization.getLocales()[0]?.languageCode || 'en';
-const supportedLangs = ['en', 'fr', 'ar'];
-const initialLang = supportedLangs.includes(deviceLang) ? deviceLang : 'en';
+const supportedLangs = ['fr', 'en', 'ar'];
+// Default to French regardless of device language
+const initialLang = 'fr';
 
 void i18n
   .use(initReactI18next)
   .init({
     resources,
     lng: initialLang,
-    fallbackLng: 'en',
+    fallbackLng: 'fr',
     interpolation: {
       escapeValue: false,
     },

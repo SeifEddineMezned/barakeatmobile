@@ -55,6 +55,7 @@ export function normalizeRestaurantToBasket(r: RestaurantFromAPI): Basket {
     imageUrl: r.image_url ?? undefined,
     isActive,
     isSupermarket: r.category === 'supermarket',
+    maxPerCustomer: (r as any).max_per_customer ?? undefined,
   };
 }
 

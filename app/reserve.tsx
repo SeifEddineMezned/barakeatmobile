@@ -19,10 +19,42 @@ export default function ReserveScreen() {
   const router = useRouter();
   const queryClient = useQueryClient();
   const [quantity, setQuantity] = useState(1);
-  const [showSuccess, setShowSuccess] = useState(false);
-  const [reservationResult, setReservationResult] = useState<{ id: string; pickupCode?: string; qrCode?: string } | null>(null);
+  const [paymentMethod, setPaymentMethod] = useState<'cash' | 'card'>('cash');
 
-  const confettiAnim = React.useRef(new Animated.Value(0)).current;
+  // Confirmation animation state
+  const [showConfirmation, setShowConfirmation] = useState(false);
+  const [confirmPhase, setConfirmPhase] = useState<'bouncing' | 'confirmed'>('bouncing');
+  const [confirmData, setConfirmData] = useState<{ pickupCode: string; pickupStart: string; pickupEnd: string; address: string } | null>(null);
+
+  // Letter bounce animations
+  const BARAKEAT = 'Barakeat'.split('');
+  const letterAnims = React.useRef(BARAKEAT.map(() => new Animated.Value(0))).current;
+
+  const startBouncingAnimation = () => {
+    // Reset all
+    letterAnims.forEach(a => a.setValue(0));
+
+    // Stagger bounce each letter
+    const animations = letterAnims.map((anim, i) =>
+      Animated.sequence([
+        Animated.delay(i * 100),
+        Animated.loop(
+          Animated.sequence([
+            Animated.timing(anim, { toValue: -15, duration: 200, useNativeDriver: true }),
+            Animated.timing(anim, { toValue: 0, duration: 200, useNativeDriver: true }),
+          ]),
+          { iterations: 3 }
+        ),
+      ])
+    );
+
+    Animated.parallel(animations).start();
+
+    // After 3 seconds, switch to confirmed phase
+    setTimeout(() => {
+      setConfirmPhase('confirmed');
+    }, 3000);
+  };
 
   const restaurantQuery = useQuery({
     queryKey: ['restaurant', basketId],
@@ -38,38 +70,21 @@ export default function ReserveScreen() {
       console.log('[Reserve] Reservation created:', data.id);
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
 
-      let qrCode = data.qrCode ?? '';
-      if (!qrCode && data.id) {
-        try {
-          qrCode = await fetchReservationQRCode(data.id);
-        } catch (err) {
-          console.log('[Reserve] Could not fetch QR code:', err);
-        }
-      }
+      const pickupCode = data.pickupCode ?? data.pickup_code ?? data.id?.substring(0, 6)?.toUpperCase() ?? '------';
 
-      setReservationResult({
-        id: data.id,
-        pickupCode: data.pickupCode ?? data.id?.substring(0, 6)?.toUpperCase(),
-        qrCode,
+      setConfirmData({
+        pickupCode,
+        pickupStart: basket?.pickupWindow.start ?? '',
+        pickupEnd: basket?.pickupWindow.end ?? '',
+        address: basket?.address ?? '',
       });
-      setShowSuccess(true);
+      setShowConfirmation(true);
+      setConfirmPhase('bouncing');
+      startBouncingAnimation();
 
       void queryClient.invalidateQueries({ queryKey: ['reservations'] });
       void queryClient.invalidateQueries({ queryKey: ['restaurants'] });
       void queryClient.invalidateQueries({ queryKey: ['restaurant', basketId] });
-
-      Animated.sequence([
-        Animated.timing(confettiAnim, {
-          toValue: 1,
-          duration: 600,
-          useNativeDriver: true,
-        }),
-        Animated.timing(confettiAnim, {
-          toValue: 0,
-          duration: 400,
-          useNativeDriver: true,
-        }),
-      ]).start();
     },
     onError: (err) => {
       const msg = getErrorMessage(err);
@@ -78,8 +93,13 @@ export default function ReserveScreen() {
     },
   });
 
+  // Respect maxPerCustomer limit if set, otherwise just use quantityLeft
+  const maxQuantity = basket
+    ? Math.min(basket.quantityLeft, basket.maxPerCustomer ?? basket.quantityLeft)
+    : 1;
+
   const handleIncrement = () => {
-    if (basket && quantity < basket.quantityLeft) {
+    if (basket && quantity < maxQuantity) {
       void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
       setQuantity((prev) => prev + 1);
     }
@@ -92,13 +112,24 @@ export default function ReserveScreen() {
     }
   };
 
-  const handleConfirm = () => {
-    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+  const submitReservation = () => {
     reserveMutation.mutate();
   };
 
-  const handleViewOrder = () => {
-    router.replace('/(tabs)/orders' as never);
+  const handleConfirm = () => {
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    if (paymentMethod === 'cash') {
+      Alert.alert(
+        t('reserve.confirmTitle', { defaultValue: 'Confirm Reservation' }),
+        t('reserve.cashWarning', { defaultValue: 'Ready to pick up this basket?\n\nIf your plans change, please cancel early \u2014 it frees up the spot for someone else.\n\nHeads up: repeated no-shows without cancelling may lead to a temporary pause on your reservations.' }),
+        [
+          { text: t('reserve.notYet', { defaultValue: 'Not Yet' }), style: 'cancel' },
+          { text: t('reserve.yesReserve', { defaultValue: 'Yes, Reserve!' }), onPress: submitReservation },
+        ]
+      );
+    } else {
+      submitReservation();
+    }
   };
 
   if (restaurantQuery.isLoading) {
@@ -116,122 +147,6 @@ export default function ReserveScreen() {
         <TouchableOpacity onPress={() => router.back()} style={{ marginTop: 16 }}>
           <Text style={[{ color: theme.colors.primary, ...theme.typography.body }]}>{t('common.goBack')}</Text>
         </TouchableOpacity>
-      </View>
-    );
-  }
-
-  if (showSuccess && reservationResult) {
-    return (
-      <View style={[styles.container, { backgroundColor: theme.colors.bg }]}>
-        <View style={styles.successContainer}>
-          <View style={[styles.successHeader, { padding: theme.spacing.xl }]}>
-            <TouchableOpacity onPress={() => router.back()}>
-              <X size={24} color={theme.colors.textPrimary} />
-            </TouchableOpacity>
-          </View>
-
-          <View style={styles.successContent}>
-            <Animated.View
-              style={{
-                transform: [
-                  {
-                    scale: confettiAnim.interpolate({
-                      inputRange: [0, 1],
-                      outputRange: [0.8, 1.2],
-                    }),
-                  },
-                ],
-                opacity: confettiAnim,
-              }}
-            >
-              <View
-                style={[
-                  styles.successIcon,
-                  {
-                    backgroundColor: theme.colors.secondary,
-                    width: 80,
-                    height: 80,
-                    borderRadius: 40,
-                    justifyContent: 'center',
-                    alignItems: 'center',
-                  },
-                ]}
-              >
-                <Check size={40} color={theme.colors.surface} />
-              </View>
-            </Animated.View>
-
-            <Text
-              style={[
-                styles.successTitle,
-                {
-                  color: theme.colors.textPrimary,
-                  ...theme.typography.h1,
-                  marginTop: theme.spacing.xxl,
-                  marginBottom: theme.spacing.md,
-                  textAlign: 'center',
-                },
-              ]}
-            >
-              {t('reserve.success.title')}
-            </Text>
-
-            <View
-              style={[
-                styles.pickupCodeCard,
-                {
-                  backgroundColor: theme.colors.surface,
-                  borderRadius: theme.radii.r16,
-                  padding: theme.spacing.xxl,
-                  marginTop: theme.spacing.xl,
-                  ...theme.shadows.shadowMd,
-                },
-              ]}
-            >
-              <Text
-                style={[
-                  {
-                    color: theme.colors.textSecondary,
-                    ...theme.typography.bodySm,
-                    textAlign: 'center',
-                    marginBottom: theme.spacing.md,
-                  },
-                ]}
-              >
-                {t('reserve.success.pickupCode')}
-              </Text>
-              <Text
-                style={[
-                  styles.pickupCodeText,
-                  {
-                    color: theme.colors.primary,
-                    ...theme.typography.display,
-                    textAlign: 'center',
-                    letterSpacing: 4,
-                  },
-                ]}
-              >
-                {reservationResult.pickupCode}
-              </Text>
-              <Text
-                style={[
-                  {
-                    color: theme.colors.textSecondary,
-                    ...theme.typography.caption,
-                    textAlign: 'center',
-                    marginTop: theme.spacing.md,
-                  },
-                ]}
-              >
-                {t('reserve.success.showThisCode')}
-              </Text>
-            </View>
-
-            <View style={[styles.successActions, { marginTop: theme.spacing.xxxl }]}>
-              <PrimaryCTAButton onPress={handleViewOrder} title={t('reserve.success.viewOrder')} />
-            </View>
-          </View>
-        </View>
       </View>
     );
   }
@@ -308,11 +223,11 @@ export default function ReserveScreen() {
                 },
               ]}
               onPress={handleIncrement}
-              disabled={quantity >= basket.quantityLeft}
+              disabled={quantity >= maxQuantity}
             >
               <Plus
                 size={20}
-                color={quantity >= basket.quantityLeft ? theme.colors.muted : theme.colors.textPrimary}
+                color={quantity >= maxQuantity ? theme.colors.muted : theme.colors.textPrimary}
               />
             </TouchableOpacity>
           </View>
@@ -357,48 +272,64 @@ export default function ReserveScreen() {
           </View>
         </View>
 
+        {/* Payment Method Selection */}
         <View
           style={[
-            styles.paymentSection,
+            styles.section,
             {
-              backgroundColor: theme.colors.discountBg,
+              backgroundColor: theme.colors.surface,
               borderRadius: theme.radii.r16,
               padding: theme.spacing.xl,
               marginBottom: theme.spacing.lg,
-              borderWidth: 2,
-              borderColor: theme.colors.discount,
+              ...theme.shadows.shadowSm,
             },
           ]}
         >
-          <View style={styles.paymentHeader}>
-            <CreditCard size={24} color={theme.colors.discount} />
-            <Text
-              style={[
-                {
-                  color: theme.colors.discount,
-                  ...theme.typography.h3,
-                  marginLeft: theme.spacing.md,
-                },
-              ]}
+          <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3, marginBottom: 12 }}>
+            {t('reserve.paymentMethod')}
+          </Text>
+          <View style={{ flexDirection: 'row', gap: 12 }}>
+            <TouchableOpacity
+              onPress={() => setPaymentMethod('cash')}
+              style={{
+                flex: 1,
+                backgroundColor: paymentMethod === 'cash' ? theme.colors.primary + '12' : theme.colors.bg,
+                borderRadius: theme.radii.r16,
+                padding: 16,
+                borderWidth: paymentMethod === 'cash' ? 2 : 1,
+                borderColor: paymentMethod === 'cash' ? theme.colors.primary : theme.colors.divider,
+                alignItems: 'center',
+              }}
             >
-              {t('reserve.paymentMethod')}
-            </Text>
+              <Text style={{ fontSize: 24 }}>💵</Text>
+              <Text style={{ color: paymentMethod === 'cash' ? theme.colors.primary : theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '600', marginTop: 8 }}>
+                {t('reserve.payCash', { defaultValue: 'Pay in Cash' })}
+              </Text>
+              <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, marginTop: 4, textAlign: 'center' }}>
+                {t('reserve.payCashDesc', { defaultValue: 'Pay the merchant at pickup' })}
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => setPaymentMethod('card')}
+              style={{
+                flex: 1,
+                backgroundColor: paymentMethod === 'card' ? theme.colors.primary + '12' : theme.colors.bg,
+                borderRadius: theme.radii.r16,
+                padding: 16,
+                borderWidth: paymentMethod === 'card' ? 2 : 1,
+                borderColor: paymentMethod === 'card' ? theme.colors.primary : theme.colors.divider,
+                alignItems: 'center',
+              }}
+            >
+              <Text style={{ fontSize: 24 }}>💳</Text>
+              <Text style={{ color: paymentMethod === 'card' ? theme.colors.primary : theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '600', marginTop: 8 }}>
+                {t('reserve.payCard', { defaultValue: 'Pay by Card' })}
+              </Text>
+              <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, marginTop: 4, textAlign: 'center' }}>
+                {t('reserve.payCardDesc', { defaultValue: 'Coming soon' })}
+              </Text>
+            </TouchableOpacity>
           </View>
-          <Text
-            style={[
-              {
-                color: theme.colors.textPrimary,
-                ...theme.typography.h3,
-                marginTop: theme.spacing.md,
-                marginBottom: theme.spacing.sm,
-              },
-            ]}
-          >
-            {t('basket.payOnPickup')}
-          </Text>
-          <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.body }]}>
-            {t('reserve.payOnPickupNote')}
-          </Text>
         </View>
       </ScrollView>
 
@@ -417,6 +348,130 @@ export default function ReserveScreen() {
       >
         <PrimaryCTAButton onPress={handleConfirm} title={t('reserve.confirmReservation')} loading={reserveMutation.isPending} />
       </View>
+
+      {/* Full-screen confirmation overlay */}
+      {showConfirmation && (
+        <View style={StyleSheet.absoluteFillObject}>
+          <View style={{
+            flex: 1,
+            backgroundColor: '#114b3c',
+            justifyContent: 'center',
+            alignItems: 'center',
+          }}>
+            {confirmPhase === 'bouncing' ? (
+              <>
+                {/* Bouncing Barakeat text */}
+                <View style={{ flexDirection: 'row' }}>
+                  {BARAKEAT.map((letter, i) => (
+                    <Animated.Text
+                      key={i}
+                      style={{
+                        color: '#fff',
+                        fontSize: 36,
+                        fontWeight: '700',
+                        fontFamily: 'Poppins_700Bold',
+                        transform: [{ translateY: letterAnims[i] }],
+                      }}
+                    >
+                      {letter}
+                    </Animated.Text>
+                  ))}
+                  <Text style={{ color: '#e3ff5c', fontSize: 36, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>.</Text>
+                </View>
+                <Text style={{ color: 'rgba(255,255,255,0.6)', ...theme.typography.body, marginTop: 16 }}>
+                  {t('reserve.processing', { defaultValue: 'Processing your reservation...' })}
+                </Text>
+              </>
+            ) : (
+              <>
+                {/* Confirmed phase */}
+                <View style={{
+                  backgroundColor: '#e3ff5c',
+                  width: 80,
+                  height: 80,
+                  borderRadius: 40,
+                  justifyContent: 'center',
+                  alignItems: 'center',
+                  marginBottom: 24,
+                }}>
+                  <Text style={{ fontSize: 36 }}>✓</Text>
+                </View>
+                <Text style={{ color: '#fff', fontSize: 28, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
+                  {t('reserve.success.title', { defaultValue: 'Order Confirmed!' })}
+                </Text>
+
+                {/* Pickup details card */}
+                <View style={{
+                  backgroundColor: 'rgba(255,255,255,0.1)',
+                  borderRadius: 20,
+                  padding: 24,
+                  marginTop: 32,
+                  marginHorizontal: 32,
+                  width: '85%',
+                }}>
+                  <Text style={{ color: 'rgba(255,255,255,0.7)', ...theme.typography.caption, textAlign: 'center' }}>
+                    {t('reserve.success.pickupCode', { defaultValue: 'Pickup Code' })}
+                  </Text>
+                  <Text style={{
+                    color: '#e3ff5c',
+                    fontSize: 32,
+                    fontWeight: '700',
+                    fontFamily: 'Poppins_700Bold',
+                    textAlign: 'center',
+                    letterSpacing: 6,
+                    marginTop: 8,
+                  }}>
+                    {confirmData?.pickupCode}
+                  </Text>
+
+                  <View style={{ marginTop: 20, gap: 12 }}>
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                      <Text style={{ color: 'rgba(255,255,255,0.6)', ...theme.typography.bodySm }}>
+                        {t('reserve.when', { defaultValue: 'When' })}
+                      </Text>
+                      <Text style={{ color: '#fff', ...theme.typography.bodySm, fontWeight: '600' }}>
+                        {confirmData?.pickupStart} - {confirmData?.pickupEnd}
+                      </Text>
+                    </View>
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                      <Text style={{ color: 'rgba(255,255,255,0.6)', ...theme.typography.bodySm }}>
+                        {t('reserve.where', { defaultValue: 'Where' })}
+                      </Text>
+                      <Text style={{ color: '#fff', ...theme.typography.bodySm, fontWeight: '600' }} numberOfLines={1}>
+                        {confirmData?.address || t('reserve.seeMap', { defaultValue: 'See map' })}
+                      </Text>
+                    </View>
+                  </View>
+
+                  <Text style={{ color: 'rgba(255,255,255,0.5)', ...theme.typography.caption, textAlign: 'center', marginTop: 16 }}>
+                    {t('reserve.success.showThisCode', { defaultValue: 'Show this code to the merchant at pickup' })}
+                  </Text>
+                </View>
+
+                {/* Done button */}
+                <TouchableOpacity
+                  onPress={() => {
+                    setShowConfirmation(false);
+                    router.back();
+                    router.back(); // go back past basket detail too
+                  }}
+                  style={{
+                    backgroundColor: '#e3ff5c',
+                    borderRadius: 16,
+                    paddingVertical: 16,
+                    paddingHorizontal: 48,
+                    marginTop: 32,
+                  }}
+                >
+                  <Text style={{ color: '#114b3c', ...theme.typography.button, fontWeight: '700' }}>
+                    {t('reserve.done', { defaultValue: 'Done' })}
+                  </Text>
+                </TouchableOpacity>
+              </>
+            )}
+          </View>
+        </View>
+      )}
     </View>
   );
 }
@@ -451,32 +506,5 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
   },
-  paymentSection: {},
-  paymentHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
   footer: {},
-  successContainer: {
-    flex: 1,
-  },
-  successHeader: {
-    flexDirection: 'row',
-    justifyContent: 'flex-end',
-  },
-  successContent: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 32,
-  },
-  successIcon: {},
-  successTitle: {},
-  pickupCodeCard: {
-    width: '100%',
-  },
-  pickupCodeText: {},
-  successActions: {
-    width: '100%',
-  },
 });

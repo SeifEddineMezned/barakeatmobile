@@ -1,21 +1,115 @@
 import React, { useCallback, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, Alert, Switch, Modal } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, Alert, Modal } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import { useRouter } from 'expo-router';
-import { Plus, Clock, Edit3, Trash2, ShoppingBag, MoreVertical, Minus } from 'lucide-react-native';
+import { Plus, Clock, Edit3, Trash2, ShoppingBag, MoreVertical, Minus, Camera, X } from 'lucide-react-native';
 import * as Haptics from 'expo-haptics';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { useBusinessStore } from '@/src/stores/businessStore';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { fetchMyBaskets, deleteBasket as deleteBasketAPI, fetchMyProfile, updateQuantity, updateBasket as updateBasketAPI, type BusinessBasketFromAPI } from '@/src/services/business';
+import { getErrorMessage } from '@/src/lib/api';
 
 export default function MyBasketsScreen() {
   const { t } = useTranslation();
   const theme = useTheme();
   const router = useRouter();
-  const { baskets, toggleBasketActive, deleteBasket, updateBasket, profile } = useBusinessStore();
+  const store = useBusinessStore();
+  const queryClient = useQueryClient();
+
+  const basketsQuery = useQuery({
+    queryKey: ['my-baskets'],
+    queryFn: fetchMyBaskets,
+    staleTime: 60_000,
+    retry: 1,
+  });
+
+  const profileQuery = useQuery({
+    queryKey: ['my-profile'],
+    queryFn: fetchMyProfile,
+    staleTime: 30_000,
+  });
+
+  const currentQty = profileQuery.data?.available_quantity ?? 0;
+  const pickupStart = profileQuery.data?.pickup_start_time?.substring(0, 5) ?? '--:--';
+  const pickupEnd = profileQuery.data?.pickup_end_time?.substring(0, 5) ?? '--:--';
+
+  const qtyMutation = useMutation({
+    mutationFn: (qty: number) => updateQuantity(qty),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['my-profile'] }),
+  });
+
+  const basketUpdateMutation = useMutation({
+    mutationFn: async ({ id, data }: { id: string; data: Record<string, any> }) => {
+      console.log('[MyBaskets] Saving basket', id, 'with:', JSON.stringify(data));
+      return updateBasketAPI(id, data);
+    },
+    onSuccess: () => {
+      console.log('[MyBaskets] Basket saved OK');
+      void queryClient.invalidateQueries({ queryKey: ['my-baskets'] });
+      void queryClient.invalidateQueries({ queryKey: ['my-profile'] });
+    },
+    onError: (err: any) => {
+      console.error('[MyBaskets] Save FAILED:', err?.response?.status, JSON.stringify(err?.response?.data), err?.message);
+      Alert.alert('Error', err?.response?.data?.error ?? err?.message ?? 'Failed to save');
+    },
+  });
+
+  // Normalize API baskets to match existing Basket type, fall back to store
+  const baskets = (basketsQuery.data ?? []).length > 0
+    ? (basketsQuery.data ?? []).map((b: BusinessBasketFromAPI) => ({
+        id: String(b.id),
+        merchantId: String(b.restaurant_id ?? ''),
+        merchantName: '',
+        name: b.name,
+        category: b.category ?? '',
+        originalPrice: Number(b.original_price ?? 0),
+        discountedPrice: Number(b.selling_price ?? 0),
+        discountPercentage: Number(b.original_price ?? 0) > 0
+          ? Math.round(((Number(b.original_price ?? 0) - Number(b.selling_price ?? 0)) / Number(b.original_price ?? 0)) * 100)
+          : 50,
+        pickupWindow: {
+          start: b.pickup_start_time?.substring(0, 5) ?? '18:00',
+          end: b.pickup_end_time?.substring(0, 5) ?? '19:00',
+        },
+        quantityLeft: b.available_quantity ?? 0,
+        quantityTotal: b.quantity ?? 0,
+        distance: 0,
+        address: '',
+        latitude: 0,
+        longitude: 0,
+        exampleItems: [],
+        imageUrl: b.image_url ?? undefined,
+        isActive: b.status !== 'deleted' && (b.available_quantity ?? 0) > 0,
+        description: b.description ?? undefined,
+        maxPerCustomer: (b as any).max_per_customer ?? 5,
+      }))
+    : store.baskets;
+
+  const { toggleBasketActive, updateBasket, profile } = store;
+
+  const deleteBasketMutation = useMutation({
+    mutationFn: (id: string) => deleteBasketAPI(id),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['my-baskets'] });
+    },
+    onError: (err) => {
+      Alert.alert('Error', getErrorMessage(err));
+    },
+  });
   const [menuOpenId, setMenuOpenId] = useState<string | null>(null);
   const [quantityModalBasket, setQuantityModalBasket] = useState<string | null>(null);
   const [tempQuantity, setTempQuantity] = useState(0);
+  const [detailBasket, setDetailBasket] = useState<typeof baskets[0] | null>(null);
+  const [detailTodayQty, setDetailTodayQty] = useState(0);
+  const [detailDailyQty, setDetailDailyQty] = useState(0);
+  const [showFullDesc, setShowFullDesc] = useState(false);
+  const [showPickupEditor, setShowPickupEditor] = useState(false);
+  const [pickupStartTime, setPickupStartTime] = useState('');
+  const [pickupEndTime, setPickupEndTime] = useState('');
+  const [useBusinessHours, setUseBusinessHours] = useState(false);
+  const [detailMaxPerCustomer, setDetailMaxPerCustomer] = useState(1);
 
   const isSupermarket = profile?.isSupermarket ?? false;
 
@@ -57,12 +151,13 @@ export default function MyBasketsScreen() {
           style: 'destructive',
           onPress: () => {
             void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-            deleteBasket(id);
+            deleteBasketMutation.mutate(id);
+            store.deleteBasket(id);
           },
         },
       ]
     );
-  }, [deleteBasket, t]);
+  }, [deleteBasketMutation, store, t]);
 
   const handleEdit = useCallback((id: string) => {
     setMenuOpenId(null);
@@ -89,8 +184,8 @@ export default function MyBasketsScreen() {
   }, [quantityModalBasket, tempQuantity, updateBasket]);
 
   return (
-    <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]} edges={['top']}>
-      <View style={[styles.header, { paddingHorizontal: theme.spacing.xl, paddingTop: theme.spacing.xl, paddingBottom: theme.spacing.md }]}>
+    <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]} edges={[]}>
+      <View style={[styles.header, { paddingHorizontal: theme.spacing.xl, paddingTop: theme.spacing.xs, paddingBottom: theme.spacing.md }]}>
         <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h1 }]}>
           {t('business.baskets.title')}
         </Text>
@@ -123,10 +218,8 @@ export default function MyBasketsScreen() {
           baskets.map((basket) => {
             const isSoldOut = basket.quantityLeft === 0;
             return (
-              <TouchableOpacity
+              <View
                 key={basket.id}
-                activeOpacity={isSupermarket ? 0.7 : 1}
-                onPress={isSupermarket ? () => handleSupermarketQuantity(basket.id) : undefined}
                 style={[
                   styles.basketCard,
                   {
@@ -138,52 +231,59 @@ export default function MyBasketsScreen() {
                   },
                 ]}
               >
-                <View style={styles.cardRow}>
-                  {basket.imageUrl ? (
-                    <Image source={{ uri: basket.imageUrl }} style={[styles.basketImage, { borderRadius: theme.radii.r12 }]} />
-                  ) : (
-                    <View style={[styles.basketImage, { borderRadius: theme.radii.r12, backgroundColor: theme.colors.bg }]} />
-                  )}
-                  <View style={styles.basketInfo}>
-                    <View style={styles.basketNameRow}>
-                      <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.body, fontWeight: '600' as const, flex: 1 }]} numberOfLines={1}>
-                        {basket.name}
-                      </Text>
-                      <TouchableOpacity
-                        onPress={() => setMenuOpenId(menuOpenId === basket.id ? null : basket.id)}
-                        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                        style={styles.moreButton}
-                      >
-                        <MoreVertical size={18} color={theme.colors.textSecondary} />
-                      </TouchableOpacity>
-                    </View>
-                    <View style={[styles.priceRow, { marginTop: 6 }]}>
-                      <Text style={[{ color: theme.colors.primary, ...theme.typography.body, fontWeight: '700' as const }]}>
-                        {basket.discountedPrice} TND
-                      </Text>
-                      <Text style={[{ color: theme.colors.muted, ...theme.typography.caption, textDecorationLine: 'line-through', marginLeft: 8 }]}>
-                        {basket.originalPrice} TND
-                      </Text>
-                    </View>
-                    <View style={[styles.metaRow, { marginTop: 6 }]}>
-                      <View style={[styles.metaChip, { backgroundColor: isSoldOut ? theme.colors.error + '15' : theme.colors.primary + '12', borderRadius: theme.radii.pill, paddingHorizontal: 8, paddingVertical: 3 }]}>
-                        <Text style={[{
-                          color: isSoldOut ? theme.colors.error : theme.colors.primary,
-                          ...theme.typography.caption,
-                          fontWeight: '600' as const,
-                        }]}>
-                          {isSoldOut ? t('business.baskets.soldOut') : `${basket.quantityLeft} ${t('business.baskets.of')} ${basket.quantityTotal}`}
+                <TouchableOpacity
+                  activeOpacity={0.7}
+                  onPress={() => { setMenuOpenId(null); setDetailBasket(basket); setDetailTodayQty(basket.quantityLeft); setDetailDailyQty(basket.quantityTotal); setShowFullDesc(false); setPickupStartTime(basket.pickupWindow.start); setPickupEndTime(basket.pickupWindow.end); setShowPickupEditor(false); setUseBusinessHours(false); setDetailMaxPerCustomer((basket as any).maxPerCustomer ?? 5); }}
+                >
+                  <View style={styles.cardRow}>
+                    {basket.imageUrl ? (
+                      <Image source={{ uri: basket.imageUrl }} style={[styles.basketImage, { borderRadius: theme.radii.r12 }]} />
+                    ) : (
+                      <View style={[styles.basketImage, { borderRadius: theme.radii.r12, backgroundColor: theme.colors.primary + '10', justifyContent: 'center', alignItems: 'center' }]}>
+                        <ShoppingBag size={28} color={theme.colors.primary} />
+                      </View>
+                    )}
+                    <View style={styles.basketInfo}>
+                      <View style={styles.basketNameRow}>
+                        <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.body, fontWeight: '600' as const, flex: 1 }]} numberOfLines={1}>
+                          {basket.name}
+                        </Text>
+                        <TouchableOpacity
+                          onPress={(e) => { e.stopPropagation(); setMenuOpenId(menuOpenId === basket.id ? null : basket.id); }}
+                          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                          style={styles.moreButton}
+                        >
+                          <MoreVertical size={18} color={theme.colors.textSecondary} />
+                        </TouchableOpacity>
+                      </View>
+                      <View style={[styles.priceRow, { marginTop: 6 }]}>
+                        <Text style={[{ color: theme.colors.primary, ...theme.typography.body, fontWeight: '700' as const }]}>
+                          {basket.discountedPrice} TND
+                        </Text>
+                        <Text style={[{ color: theme.colors.muted, ...theme.typography.caption, textDecorationLine: 'line-through', marginLeft: 8 }]}>
+                          {basket.originalPrice} TND
                         </Text>
                       </View>
-                      <View style={[styles.metaChip, { backgroundColor: theme.colors.bg, borderRadius: theme.radii.pill, paddingHorizontal: 8, paddingVertical: 3, marginLeft: 6 }]}>
-                        <Clock size={10} color={theme.colors.textSecondary} />
-                        <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, marginLeft: 3 }]}>
-                          {basket.pickupWindow.start}-{basket.pickupWindow.end}
-                        </Text>
+                      <View style={[styles.metaRow, { marginTop: 6 }]}>
+                        <View style={[styles.metaChip, { backgroundColor: isSoldOut ? theme.colors.error + '15' : theme.colors.primary + '12', borderRadius: theme.radii.pill, paddingHorizontal: 8, paddingVertical: 3 }]}>
+                          <Text style={[{
+                            color: isSoldOut ? theme.colors.error : theme.colors.primary,
+                            ...theme.typography.caption,
+                            fontWeight: '600' as const,
+                          }]}>
+                            {isSoldOut ? t('business.baskets.soldOut') : `${basket.quantityLeft} ${t('business.baskets.of')} ${basket.quantityTotal}`}
+                          </Text>
+                        </View>
+                        <View style={[styles.metaChip, { backgroundColor: theme.colors.bg, borderRadius: theme.radii.pill, paddingHorizontal: 8, paddingVertical: 3, marginLeft: 6 }]}>
+                          <Clock size={10} color={theme.colors.textSecondary} />
+                          <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, marginLeft: 3 }]}>
+                            {basket.pickupWindow.start}-{basket.pickupWindow.end}
+                          </Text>
+                        </View>
                       </View>
                     </View>
                   </View>
-                </View>
+                </TouchableOpacity>
 
                 {menuOpenId === basket.id && (
                   <View style={[styles.dropdownMenu, {
@@ -214,24 +314,406 @@ export default function MyBasketsScreen() {
                   </View>
                 )}
 
-                <View style={[styles.cardActions, { borderTopWidth: 1, borderTopColor: theme.colors.divider, paddingHorizontal: theme.spacing.lg, paddingVertical: theme.spacing.sm }]}>
-                  <View style={styles.switchRow}>
-                    <Text style={[{ color: basket.isActive ? theme.colors.success : theme.colors.muted, ...theme.typography.caption, fontWeight: '600' as const }]}>
-                      {basket.isActive ? t('business.baskets.active') : t('business.baskets.inactive')}
+                {/* Bottom action bar with quantity + adjust button */}
+                <View style={{
+                  borderTopWidth: 1,
+                  borderTopColor: theme.colors.divider,
+                  paddingHorizontal: theme.spacing.lg,
+                  paddingVertical: theme.spacing.sm,
+                  flexDirection: 'row',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                    <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption }}>
+                      {basket.quantityLeft}/{basket.quantityTotal}
                     </Text>
-                    <Switch
-                      value={basket.isActive}
-                      onValueChange={() => handleToggle(basket.id)}
-                      trackColor={{ false: theme.colors.divider, true: theme.colors.primary + '50' }}
-                      thumbColor={basket.isActive ? theme.colors.primary : theme.colors.muted}
-                    />
                   </View>
+                  <TouchableOpacity
+                    onPress={() => { setMenuOpenId(null); setDetailBasket(basket); setDetailTodayQty(basket.quantityLeft); setDetailDailyQty(basket.quantityTotal); setShowFullDesc(false); setPickupStartTime(basket.pickupWindow.start); setPickupEndTime(basket.pickupWindow.end); setShowPickupEditor(false); setUseBusinessHours(false); setDetailMaxPerCustomer((basket as any).maxPerCustomer ?? 5); }}
+                    style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}
+                  >
+                    <Text style={{ color: theme.colors.primary, ...theme.typography.caption, fontWeight: '600' }}>
+                      {t('business.baskets.adjustAvailability', { defaultValue: 'Adjust' })}
+                    </Text>
+                  </TouchableOpacity>
                 </View>
-              </TouchableOpacity>
+
+              </View>
             );
           })
         )}
       </ScrollView>
+
+      {/* Detail Bottom Sheet Modal */}
+      <Modal visible={detailBasket !== null} transparent animationType="slide" onRequestClose={() => setDetailBasket(null)}>
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' }}>
+          <View style={{
+            backgroundColor: theme.colors.bg,
+            borderTopLeftRadius: 28,
+            borderTopRightRadius: 28,
+            maxHeight: '90%',
+            ...theme.shadows.shadowLg,
+          }}>
+            {/* Drag handle */}
+            <View style={{ alignItems: 'center', paddingVertical: 10 }}>
+              <View style={{ width: 36, height: 4, borderRadius: 2, backgroundColor: theme.colors.divider }} />
+            </View>
+
+            <ScrollView showsVerticalScrollIndicator={false}>
+              {/* Pause pill + close button header */}
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 20, marginBottom: 12 }}>
+                <TouchableOpacity
+                  onPress={() => handleToggle(detailBasket!.id)}
+                  style={{
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    backgroundColor: detailBasket?.isActive ? theme.colors.success + '15' : theme.colors.error + '15',
+                    borderRadius: theme.radii.pill,
+                    paddingHorizontal: 12,
+                    paddingVertical: 6,
+                    gap: 6,
+                  }}
+                >
+                  <View style={{
+                    width: 8, height: 8, borderRadius: 4,
+                    backgroundColor: detailBasket?.isActive ? theme.colors.success : theme.colors.error,
+                  }} />
+                  <Text style={{
+                    color: detailBasket?.isActive ? theme.colors.success : theme.colors.error,
+                    ...theme.typography.caption,
+                    fontWeight: '600',
+                  }}>
+                    {detailBasket?.isActive ? t('business.baskets.active') : t('business.baskets.inactive')}
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity onPress={() => setDetailBasket(null)}>
+                  <X size={22} color={theme.colors.textSecondary} />
+                </TouchableOpacity>
+              </View>
+
+              {/* Photo section */}
+              <View style={{ height: 200, backgroundColor: theme.colors.divider, position: 'relative' }}>
+                {detailBasket?.imageUrl ? (
+                  <Image source={{ uri: detailBasket.imageUrl }} style={{ width: '100%', height: '100%' }} resizeMode="cover" />
+                ) : (
+                  <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: theme.colors.primary + '08' }}>
+                    <ShoppingBag size={48} color={theme.colors.muted} />
+                    <Text style={{ color: theme.colors.muted, ...theme.typography.bodySm, marginTop: 8 }}>
+                      {t('business.baskets.addPhoto', { defaultValue: 'Add Photo' })}
+                    </Text>
+                  </View>
+                )}
+                {/* Camera button */}
+                <TouchableOpacity
+                  onPress={() => {/* TODO: image picker */}}
+                  style={{
+                    position: 'absolute',
+                    bottom: 12,
+                    right: 12,
+                    backgroundColor: theme.colors.primary,
+                    borderRadius: 20,
+                    width: 40,
+                    height: 40,
+                    justifyContent: 'center',
+                    alignItems: 'center',
+                    ...theme.shadows.shadowMd,
+                  }}
+                >
+                  <Camera size={18} color="#fff" />
+                </TouchableOpacity>
+              </View>
+
+              {/* Info card overlapping photo */}
+              <View style={{
+                backgroundColor: theme.colors.surface,
+                borderRadius: theme.radii.r16,
+                marginTop: -20,
+                marginHorizontal: 16,
+                padding: 20,
+                ...theme.shadows.shadowSm,
+              }}>
+                <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h2 }}>
+                  {detailBasket?.name}
+                </Text>
+                <View style={{ flexDirection: 'row', alignItems: 'baseline', marginTop: 8 }}>
+                  <Text style={{ color: theme.colors.primary, ...theme.typography.h2, fontWeight: '700' }}>
+                    {detailBasket?.discountedPrice} TND
+                  </Text>
+                  <Text style={{ color: theme.colors.muted, ...theme.typography.bodySm, textDecorationLine: 'line-through', marginLeft: 10 }}>
+                    {detailBasket?.originalPrice} TND
+                  </Text>
+                </View>
+                {detailBasket?.description ? (
+                  <TouchableOpacity onPress={() => setShowFullDesc(!showFullDesc)} style={{ marginTop: 8 }}>
+                    <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm, lineHeight: 20 }} numberOfLines={showFullDesc ? undefined : 2}>
+                      {detailBasket.description}
+                    </Text>
+                    {!showFullDesc && (
+                      <Text style={{ color: theme.colors.primary, ...theme.typography.caption, marginTop: 2 }}>
+                        {t('common.seeMore', { defaultValue: '...see more' })}
+                      </Text>
+                    )}
+                  </TouchableOpacity>
+                ) : null}
+              </View>
+
+              {/* Availability Controls */}
+              <View style={{
+                backgroundColor: theme.colors.surface,
+                borderRadius: theme.radii.r16,
+                marginHorizontal: 16,
+                marginTop: 16,
+                padding: 20,
+                ...theme.shadows.shadowSm,
+              }}>
+                <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3, marginBottom: 16 }}>
+                  {t('business.availability.title', { defaultValue: 'Availability' })}
+                </Text>
+
+                {/* Today's Quantity */}
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+                  <Text style={{ color: theme.colors.textPrimary, ...theme.typography.body }}>
+                    {t('business.baskets.todayQty')}
+                  </Text>
+                  <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                    <TouchableOpacity
+                      onPress={() => setDetailTodayQty(Math.max(0, detailTodayQty - 1))}
+                      style={{ backgroundColor: theme.colors.bg, borderRadius: 8, width: 36, height: 36, justifyContent: 'center', alignItems: 'center' }}
+                    >
+                      <Minus size={16} color={theme.colors.textPrimary} />
+                    </TouchableOpacity>
+                    <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3, marginHorizontal: 16, minWidth: 24, textAlign: 'center' }}>
+                      {detailTodayQty}
+                    </Text>
+                    <TouchableOpacity
+                      onPress={() => setDetailTodayQty(detailTodayQty + 1)}
+                      style={{ backgroundColor: theme.colors.bg, borderRadius: 8, width: 36, height: 36, justifyContent: 'center', alignItems: 'center' }}
+                    >
+                      <Plus size={16} color={theme.colors.textPrimary} />
+                    </TouchableOpacity>
+                  </View>
+                </View>
+
+                {/* Daily Reinit Quantity */}
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+                  <Text style={{ color: theme.colors.textPrimary, ...theme.typography.body }}>
+                    {t('business.baskets.defaultQty')}
+                  </Text>
+                  <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                    <TouchableOpacity
+                      onPress={() => setDetailDailyQty(Math.max(0, detailDailyQty - 1))}
+                      style={{ backgroundColor: theme.colors.bg, borderRadius: 8, width: 36, height: 36, justifyContent: 'center', alignItems: 'center' }}
+                    >
+                      <Minus size={16} color={theme.colors.textPrimary} />
+                    </TouchableOpacity>
+                    <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3, marginHorizontal: 16, minWidth: 24, textAlign: 'center' }}>
+                      {detailDailyQty}
+                    </Text>
+                    <TouchableOpacity
+                      onPress={() => setDetailDailyQty(detailDailyQty + 1)}
+                      style={{ backgroundColor: theme.colors.bg, borderRadius: 8, width: 36, height: 36, justifyContent: 'center', alignItems: 'center' }}
+                    >
+                      <Plus size={16} color={theme.colors.textPrimary} />
+                    </TouchableOpacity>
+                  </View>
+                </View>
+
+                {/* Max per customer */}
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+                  <Text style={{ color: theme.colors.textPrimary, ...theme.typography.body }}>
+                    {t('business.baskets.maxPerCustomer', { defaultValue: 'Max per customer' })}
+                  </Text>
+                  <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                    <TouchableOpacity
+                      onPress={() => setDetailMaxPerCustomer(Math.max(1, detailMaxPerCustomer - 1))}
+                      style={{ backgroundColor: theme.colors.bg, borderRadius: 8, width: 36, height: 36, justifyContent: 'center', alignItems: 'center' }}
+                    >
+                      <Minus size={16} color={theme.colors.textPrimary} />
+                    </TouchableOpacity>
+                    <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3, marginHorizontal: 16, minWidth: 24, textAlign: 'center' }}>
+                      {detailMaxPerCustomer}
+                    </Text>
+                    <TouchableOpacity
+                      onPress={() => setDetailMaxPerCustomer(detailMaxPerCustomer + 1)}
+                      style={{ backgroundColor: theme.colors.bg, borderRadius: 8, width: 36, height: 36, justifyContent: 'center', alignItems: 'center' }}
+                    >
+                      <Plus size={16} color={theme.colors.textPrimary} />
+                    </TouchableOpacity>
+                  </View>
+                </View>
+
+                {/* Pickup Time */}
+                <TouchableOpacity
+                  onPress={() => setShowPickupEditor(!showPickupEditor)}
+                  style={{
+                    flexDirection: 'row',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    backgroundColor: theme.colors.bg,
+                    borderRadius: theme.radii.r12,
+                    padding: 14,
+                  }}
+                >
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                    <Clock size={18} color={theme.colors.primary} />
+                    <Text style={{ color: theme.colors.textPrimary, ...theme.typography.body }}>
+                      {t('basket.pickupWindow', { defaultValue: 'Pickup Time' })}
+                    </Text>
+                  </View>
+                  <Text style={{ color: theme.colors.primary, ...theme.typography.body, fontWeight: '600' }}>
+                    {pickupStartTime} - {pickupEndTime}
+                  </Text>
+                </TouchableOpacity>
+
+                {/* Inline Pickup Time Editor */}
+                {showPickupEditor && (
+                  <View style={{
+                    backgroundColor: theme.colors.bg,
+                    borderRadius: theme.radii.r12,
+                    padding: 16,
+                    marginTop: 8,
+                  }}>
+                    {/* Start Time */}
+                    <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+                      <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm }}>
+                        {t('business.availability.startTime', { defaultValue: 'Start Time' })}
+                      </Text>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                        <TouchableOpacity
+                          onPress={() => {
+                            const [h, m] = pickupStartTime.split(':').map(Number);
+                            const newH = h > 0 ? h - 1 : 23;
+                            setPickupStartTime(`${String(newH).padStart(2, '0')}:${String(m).padStart(2, '0')}`);
+                          }}
+                          style={{ backgroundColor: theme.colors.surface, borderRadius: 8, width: 32, height: 32, justifyContent: 'center', alignItems: 'center' }}
+                        >
+                          <Minus size={14} color={theme.colors.textPrimary} />
+                        </TouchableOpacity>
+                        <View style={{ backgroundColor: theme.colors.surface, borderRadius: 8, paddingHorizontal: 14, paddingVertical: 8 }}>
+                          <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3, fontFamily: 'Poppins_600SemiBold' }}>
+                            {pickupStartTime}
+                          </Text>
+                        </View>
+                        <TouchableOpacity
+                          onPress={() => {
+                            const [h, m] = pickupStartTime.split(':').map(Number);
+                            const newH = h < 23 ? h + 1 : 0;
+                            setPickupStartTime(`${String(newH).padStart(2, '0')}:${String(m).padStart(2, '0')}`);
+                          }}
+                          style={{ backgroundColor: theme.colors.surface, borderRadius: 8, width: 32, height: 32, justifyContent: 'center', alignItems: 'center' }}
+                        >
+                          <Plus size={14} color={theme.colors.textPrimary} />
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+
+                    {/* End Time */}
+                    <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+                      <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm }}>
+                        {t('business.availability.endTime', { defaultValue: 'End Time' })}
+                      </Text>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                        <TouchableOpacity
+                          onPress={() => {
+                            const [h, m] = pickupEndTime.split(':').map(Number);
+                            const newH = h > 0 ? h - 1 : 23;
+                            setPickupEndTime(`${String(newH).padStart(2, '0')}:${String(m).padStart(2, '0')}`);
+                          }}
+                          style={{ backgroundColor: theme.colors.surface, borderRadius: 8, width: 32, height: 32, justifyContent: 'center', alignItems: 'center' }}
+                        >
+                          <Minus size={14} color={theme.colors.textPrimary} />
+                        </TouchableOpacity>
+                        <View style={{ backgroundColor: theme.colors.surface, borderRadius: 8, paddingHorizontal: 14, paddingVertical: 8 }}>
+                          <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3, fontFamily: 'Poppins_600SemiBold' }}>
+                            {pickupEndTime}
+                          </Text>
+                        </View>
+                        <TouchableOpacity
+                          onPress={() => {
+                            const [h, m] = pickupEndTime.split(':').map(Number);
+                            const newH = h < 23 ? h + 1 : 0;
+                            setPickupEndTime(`${String(newH).padStart(2, '0')}:${String(m).padStart(2, '0')}`);
+                          }}
+                          style={{ backgroundColor: theme.colors.surface, borderRadius: 8, width: 32, height: 32, justifyContent: 'center', alignItems: 'center' }}
+                        >
+                          <Plus size={14} color={theme.colors.textPrimary} />
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+
+                    {/* Use business hours checkbox */}
+                    <TouchableOpacity
+                      onPress={() => {
+                        const newVal = !useBusinessHours;
+                        setUseBusinessHours(newVal);
+                        if (newVal) {
+                          setPickupStartTime(pickupStart);
+                          setPickupEndTime(pickupEnd);
+                        }
+                      }}
+                      style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 4 }}
+                    >
+                      <View style={{
+                        width: 22, height: 22, borderRadius: 6,
+                        borderWidth: 2,
+                        borderColor: useBusinessHours ? theme.colors.primary : theme.colors.muted,
+                        backgroundColor: useBusinessHours ? theme.colors.primary : 'transparent',
+                        justifyContent: 'center', alignItems: 'center',
+                      }}>
+                        {useBusinessHours && <Text style={{ color: '#fff', fontSize: 12, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>✓</Text>}
+                      </View>
+                      <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm }}>
+                        {t('business.availability.useBusinessHours', { defaultValue: 'Use business hours for pickup' })}
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+                )}
+              </View>
+
+              {/* Save Changes */}
+              <TouchableOpacity
+                onPress={() => {
+                  if (detailBasket) {
+                    // Send ALL fields to PUT /api/baskets/:id including available_quantity
+                    basketUpdateMutation.mutate({
+                      id: detailBasket.id,
+                      data: {
+                        name: detailBasket.name,
+                        original_price: detailBasket.originalPrice,
+                        selling_price: detailBasket.discountedPrice,
+                        quantity: detailDailyQty,
+                        available_quantity: detailTodayQty,
+                        pickup_start_time: `${pickupStartTime}:00`,
+                        pickup_end_time: `${pickupEndTime}:00`,
+                      },
+                    });
+                    // Also update restaurant-level available_quantity for backward compat
+                    qtyMutation.mutate(detailTodayQty);
+                    // Update local store
+                    updateBasket(detailBasket.id, { quantityLeft: detailTodayQty, quantityTotal: detailDailyQty });
+                    void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+                    setDetailBasket(null);
+                  }
+                }}
+                style={{
+                  backgroundColor: theme.colors.primary,
+                  borderRadius: theme.radii.r16,
+                  padding: 16,
+                  marginHorizontal: 16,
+                  marginTop: 20,
+                  marginBottom: 40,
+                  alignItems: 'center',
+                }}
+              >
+                <Text style={{ color: '#fff', ...theme.typography.button }}>
+                  {t('business.baskets.saveChanges')}
+                </Text>
+              </TouchableOpacity>
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
 
       <Modal visible={quantityModalBasket !== null} transparent animationType="fade" onRequestClose={() => setQuantityModalBasket(null)}>
         <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setQuantityModalBasket(null)}>

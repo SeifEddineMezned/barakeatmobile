@@ -50,15 +50,37 @@
     "name": "الاسم الكامل",
     "phone": "رقم الهاتف",
     "forgotPassword": "نسيت كلمة المرور؟",
+    "forgotPasswordTitle": "نسيت كلمة المرور",
+    "forgotPasswordDesc": "أدخل بريدك الإلكتروني وسنرسل لك رمزًا لإعادة تعيين كلمة المرور.",
+    "sendOtp": "إرسال رمز إعادة التعيين",
+    "otpSent": "تم إرسال رمز إعادة التعيين إلى بريدك الإلكتروني.",
+    "enterOtp": "أدخل الرمز",
+    "otpSentTo": "أرسلنا رمزًا مكونًا من 6 أرقام إلى {{email}}",
+    "otpCode": "رمز إعادة التعيين",
+    "verifyOtp": "تحقق من الرمز",
+    "resendOtp": "إعادة إرسال الرمز",
+    "resendIn": "إعادة الإرسال بعد {{seconds}} ثانية",
+    "newPasswordTitle": "كلمة مرور جديدة",
+    "newPasswordDesc": "اختر كلمة مرور جديدة لحسابك.",
+    "newPassword": "كلمة المرور الجديدة",
+    "confirmNewPassword": "تأكيد كلمة المرور",
+    "resetPassword": "إعادة تعيين كلمة المرور",
+    "passwordMismatch": "كلمات المرور غير متطابقة.",
+    "passwordTooShort": "يجب أن تتكون كلمة المرور من 6 أحرف على الأقل.",
+    "passwordResetSuccess": "تم إعادة تعيين كلمة المرور بنجاح. يرجى تسجيل الدخول.",
     "noAccount": "ليس لديك حساب؟",
     "haveAccount": "لديك حساب بالفعل؟",
     "createAccount": "إنشاء حساب",
     "welcome": "مرحبًا بك في بركات",
     "welcomeBack": "مرحبًا بعودتك",
     "error": "خطأ",
-    "fillAllFields": "يرجى ملء جميع الحقول المطلوبة."
+    "fillAllFields": "يرجى ملء جميع الحقول المطلوبة.",
+    "notCustomerAccount": "هذا البريد مسجل كحساب تجاري وليس عميل. يرجى التبديل إلى تسجيل دخول التجارة أو إنشاء حساب عميل جديد.",
+    "notBusinessAccount": "هذا البريد مسجل كحساب عميل وليس تجارة. يرجى التبديل إلى تسجيل دخول العميل."
   },
   "home": {
+    "search": "بحث",
+    "welcomeBack": "مرحبًا بعودتك،",
     "discover": "اكتشف",
     "greeting": "اكتشف",
     "searchPlaceholder": "ابحث عن سلال، تجار...",
@@ -80,7 +102,7 @@
     "surpriseBasket": "سلة مفاجأة",
     "pickupWindow": "الاستلام",
     "distance": "بعيدًا",
-    "quantity": "{{count}} متبقي",
+    "quantity": "متبقي",
     "payOnPickup": "الدفع عند الاستلام",
     "description": "الوصف",
     "whatYouMightGet": "ما قد تحصل عليه",
@@ -137,13 +159,28 @@
     "emptyState": "لا توجد طلبات بعد",
     "loginRequired": "يرجى تسجيل الدخول لعرض طلباتك.",
     "cancelTitle": "إلغاء الحجز",
-    "cancelConfirm": "هل أنت متأكد أنك تريد إلغاء هذا الحجز؟"
+    "cancelConfirm": "هل أنت متأكد أنك تريد إلغاء هذا الحجز؟",
+    "showQrCode": "أظهر رمز QR هذا للتاجر عند الاستلام",
+    "leaveReview": "تقييم"
+  },
+  "review": {
+    "title": "اترك تقييمًا",
+    "rateExperience": "قيّم تجربتك",
+    "comment": "تعليق (اختياري)",
+    "commentPlaceholder": "أخبرنا عن تجربتك...",
+    "submit": "إرسال التقييم",
+    "success": "شكرًا لتقييمك!",
+    "error": "تعذر إرسال التقييم"
   },
   "favorites": {
     "title": "المفضلة",
     "baskets": "سلال",
     "merchants": "تجار",
-    "emptyState": "اضغط على القلب لحفظ المفضلات"
+    "emptyState": "اضغط على القلب لحفظ المفضلات",
+    "emptyTitle": "لم تتم إضافة مفضلات بعد",
+    "emptyDesc": "اضغط على أيقونة القلب في أي متجر لإضافته إلى مفضلاتك وسيظهر هنا.",
+    "findBasket": "ابحث عن سلة مفاجأة",
+    "count": "{{count}} مفضلات"
   },
   "profile": {
     "title": "الملف الشخصي",
@@ -178,11 +215,37 @@
     "demoMode": "الوضع التجريبي",
     "demoAdmin": "مسؤول",
     "demoRestricted": "مستخدم مقيد",
-    "switchRole": "تغيير الدور التجريبي"
+    "switchRole": "تغيير الدور التجريبي",
+    "changePassword": "تغيير كلمة المرور",
+    "passwordChanged": "تم تغيير كلمة المرور بنجاح.",
+    "foodPreferences": "التفضيلات الغذائية",
+    "preferencesUpdated": "تم تحديث التفضيلات.",
+    "currentPassword": "كلمة المرور الحالية",
+    "newPasswordLabel": "كلمة المرور الجديدة",
+    "confirmPasswordLabel": "تأكيد كلمة المرور",
+    "profileUpdated": "تم تحديث الملف الشخصي.",
+    "editProfile": "تعديل",
+    "businessesTried": "أماكن مجربة"
+  },
+  "report": {
+    "title": "إبلاغ",
+    "reasonLabel": "السبب",
+    "reasonPlaceholder": "اختر سببًا...",
+    "detailsLabel": "التفاصيل (اختياري)",
+    "detailsPlaceholder": "قدم المزيد من التفاصيل...",
+    "submit": "إرسال البلاغ",
+    "success": "تم إرسال البلاغ. شكرًا.",
+    "error": "تعذر إرسال البلاغ."
   },
   "map": {
     "title": "القريبة",
     "viewDetails": "عرض التفاصيل"
+  },
+  "notifications": {
+    "title": "الإشعارات",
+    "markAllRead": "تحديد الكل كمقروء",
+    "empty": "لا توجد إشعارات بعد",
+    "justNow": "الآن"
   },
   "business": {
     "dashboard": {
@@ -232,7 +295,9 @@
       "onlyOneActive": "يمكن تفعيل سلة واحدة فقط في نفس الوقت",
       "quantityAvailable": "الكمية المتاحة",
       "saveChanges": "حفظ التعديلات",
-      "willDeactivate": "سيتم إلغاء تفعيله."
+      "willDeactivate": "سيتم إلغاء تفعيله.",
+      "todayQty": "اليوم",
+      "defaultQty": "إعادة التعيين اليومية"
     },
     "orders": {
       "title": "الطلبات",
@@ -244,6 +309,8 @@
       "pickupCode": "رمز الاستلام",
       "customer": "العميل",
       "noOrders": "لا توجد طلبات",
+      "noOrdersToday": "لا توجد طلبات اليوم",
+      "noOrdersDesc": "ستظهر الطلبات هنا عندما يحجز العملاء سلال المفاجآت الخاصة بك.",
       "callCustomer": "اتصال",
       "statusReserved": "محجوز",
       "statusReady": "جاهز",
@@ -284,7 +351,24 @@
       "permCanEditProfile": "تعديل الملف الشخصي",
       "permCanManageTeam": "إدارة الفريق",
       "permCanViewDashboard": "عرض لوحة التحكم",
-      "permCanViewFinancial": "عرض المعلومات المالية"
+      "permCanViewFinancial": "عرض المعلومات المالية",
+      "menuItems": "عناصر القائمة",
+      "tempPassword": "كلمة مرور مؤقتة",
+      "imageUpdated": "تم تحديث الصورة بنجاح.",
+      "memberAdded": "تمت إضافة العضو بنجاح."
+    },
+    "team": {
+      "members": "أعضاء",
+      "owner": "المالك",
+      "locations": "المواقع",
+      "assignLocation": "تعيين إلى موقع",
+      "tempPasswordLabel": "كلمة المرور",
+      "membersCount": "{{count}} أعضاء",
+      "addLocation": "إضافة موقع",
+      "locationName": "اسم الموقع",
+      "locationAddress": "العنوان",
+      "locationAdded": "تمت إضافة الموقع بنجاح.",
+      "noLocations": "لا توجد مواقع بعد. اضغط + لإضافة موقع."
     },
     "createBasket": {
       "title": "سلة جديدة",
@@ -309,6 +393,86 @@
       "businessName": "اسم التجارة",
       "businessAddress": "عنوان التجارة",
       "businessCategory": "الفئة"
+    },
+    "scan": {
+      "title": "تحقق من الاستلام",
+      "enterCode": "أدخل رمز الاستلام",
+      "codePlaceholder": "ABC123",
+      "verify": "تحقق من الرمز",
+      "codeTooShort": "يجب أن يتكون الرمز من 4 أحرف على الأقل.",
+      "codeNotFound": "لم يتم العثور على طلب مطابق لهذا الرمز.",
+      "confirmed": "تم تأكيد الاستلام!",
+      "customerLabel": "العميل",
+      "done": "تم",
+      "cameraUnavailable": "ماسح الكاميرا غير متاح. يرجى إدخال رمز الاستلام يدويًا أدناه.",
+      "manualEntryTitle": "أدخل رمز الاستلام",
+      "manualEntryDesc": "اطلب من العميل رمز الاستلام الظاهر في تأكيد طلبه."
+    },
+    "availability": {
+      "title": "التوفر",
+      "quantity": "الكمية اليومية",
+      "pickupStart": "بداية الاستلام",
+      "pickupEnd": "نهاية الاستلام",
+      "paused": "المطعم متوقف",
+      "active": "المطعم نشط",
+      "save": "حفظ التغييرات",
+      "saved": "تم تحديث التوفر."
+    },
+    "menuItems": {
+      "title": "عناصر القائمة",
+      "addItem": "إضافة",
+      "namePlaceholder": "اسم العنصر...",
+      "empty": "لا توجد عناصر",
+      "deleteConfirm": "حذف هذا العنصر؟",
+      "added": "تم إضافة العنصر.",
+      "deleted": "تم حذف العنصر."
     }
+  },
+  "errors": {
+    "invalidEmail": "\u062a\u0646\u0633\u064a\u0642 \u0627\u0644\u0628\u0631\u064a\u062f \u0627\u0644\u0625\u0644\u0643\u062a\u0631\u0648\u0646\u064a \u063a\u064a\u0631 \u0635\u0627\u0644\u062d.",
+    "invalidCredentials": "\u0627\u0644\u0628\u0631\u064a\u062f \u0627\u0644\u0625\u0644\u0643\u062a\u0631\u0648\u0646\u064a \u0623\u0648 \u0643\u0644\u0645\u0629 \u0627\u0644\u0645\u0631\u0648\u0631 \u063a\u064a\u0631 \u0635\u062d\u064a\u062d\u0629.",
+    "emailExists": "\u0647\u0630\u0627 \u0627\u0644\u0628\u0631\u064a\u062f \u0627\u0644\u0625\u0644\u0643\u062a\u0631\u0648\u0646\u064a \u0645\u0633\u062c\u0644 \u0628\u0627\u0644\u0641\u0639\u0644.",
+    "phoneExists": "\u0631\u0642\u0645 \u0627\u0644\u0647\u0627\u062a\u0641 \u0647\u0630\u0627 \u0645\u0633\u062c\u0644 \u0628\u0627\u0644\u0641\u0639\u0644.",
+    "userNotFound": "\u0627\u0644\u0645\u0633\u062a\u062e\u062f\u0645 \u063a\u064a\u0631 \u0645\u0648\u062c\u0648\u062f.",
+    "invalidPassword": "\u0643\u0644\u0645\u0629 \u0627\u0644\u0645\u0631\u0648\u0631 \u063a\u064a\u0631 \u0635\u062d\u064a\u062d\u0629.",
+    "invalidToken": "\u0627\u0646\u062a\u0647\u062a \u0627\u0644\u062c\u0644\u0633\u0629. \u064a\u0631\u062c\u0649 \u062a\u0633\u062c\u064a\u0644 \u0627\u0644\u062f\u062e\u0648\u0644 \u0645\u0631\u0629 \u0623\u062e\u0631\u0649.",
+    "invalidOtp": "\u0631\u0645\u0632 \u0627\u0644\u062a\u062d\u0642\u0642 \u063a\u064a\u0631 \u0635\u0627\u0644\u062d.",
+    "otpExpired": "\u0627\u0646\u062a\u0647\u062a \u0635\u0644\u0627\u062d\u064a\u0629 \u0631\u0645\u0632 \u0627\u0644\u062a\u062d\u0642\u0642. \u064a\u0631\u062c\u0649 \u0637\u0644\u0628 \u0631\u0645\u0632 \u062c\u062f\u064a\u062f.",
+    "passwordTooShort": "\u064a\u062c\u0628 \u0623\u0646 \u062a\u062a\u0643\u0648\u0646 \u0643\u0644\u0645\u0629 \u0627\u0644\u0645\u0631\u0648\u0631 \u0645\u0646 6 \u0623\u062d\u0631\u0641 \u0639\u0644\u0649 \u0627\u0644\u0623\u0642\u0644.",
+    "emailNotVerified": "\u064a\u0631\u062c\u0649 \u0627\u0644\u062a\u062d\u0642\u0642 \u0645\u0646 \u0628\u0631\u064a\u062f\u0643 \u0627\u0644\u0625\u0644\u0643\u062a\u0631\u0648\u0646\u064a \u0623\u0648\u0644\u0627\u064b.",
+    "restaurantPaused": "\u0647\u0630\u0627 \u0627\u0644\u0645\u0637\u0639\u0645 \u063a\u064a\u0631 \u0645\u062a\u0627\u062d \u062d\u0627\u0644\u064a\u064b\u0627.",
+    "noBaskets": "\u0644\u0627 \u062a\u0648\u062c\u062f \u0633\u0644\u0627\u0644 \u0645\u062a\u0627\u062d\u0629 \u0627\u0644\u0622\u0646.",
+    "alreadyReserved": "\u0644\u062f\u064a\u0643 \u062d\u062c\u0632 \u0628\u0627\u0644\u0641\u0639\u0644 \u0644\u0647\u0630\u0627 \u0627\u0644\u064a\u0648\u0645.",
+    "pickupExpired": "\u0627\u0646\u062a\u0647\u0649 \u0648\u0642\u062a \u0627\u0644\u0627\u0633\u062a\u0644\u0627\u0645.",
+    "reservationNotFound": "\u0627\u0644\u062d\u062c\u0632 \u063a\u064a\u0631 \u0645\u0648\u062c\u0648\u062f.",
+    "unauthorized": "\u064a\u0631\u062c\u0649 \u062a\u0633\u062c\u064a\u0644 \u0627\u0644\u062f\u062e\u0648\u0644 \u0644\u0644\u0645\u062a\u0627\u0628\u0639\u0629.",
+    "forbidden": "\u0644\u064a\u0633 \u0644\u062f\u064a\u0643 \u0635\u0644\u0627\u062d\u064a\u0629 \u0644\u0647\u0630\u0627 \u0627\u0644\u0625\u062c\u0631\u0627\u0621.",
+    "notFound": "\u0627\u0644\u0645\u0648\u0631\u062f \u0627\u0644\u0645\u0637\u0644\u0648\u0628 \u063a\u064a\u0631 \u0645\u0648\u062c\u0648\u062f.",
+    "serverError": "\u062d\u062f\u062b \u062e\u0637\u0623 \u0645\u0627. \u064a\u0631\u062c\u0649 \u0627\u0644\u0645\u062d\u0627\u0648\u0644\u0629 \u0644\u0627\u062d\u0642\u064b\u0627.",
+    "networkError": "\u0644\u0627 \u064a\u0648\u062c\u062f \u0627\u062a\u0635\u0627\u0644 \u0628\u0627\u0644\u0625\u0646\u062a\u0631\u0646\u062a. \u064a\u0631\u062c\u0649 \u0627\u0644\u062a\u062d\u0642\u0642 \u0645\u0646 \u0634\u0628\u0643\u062a\u0643.",
+    "timeout": "\u0627\u0646\u062a\u0647\u062a \u0645\u0647\u0644\u0629 \u0627\u0644\u0637\u0644\u0628. \u064a\u0631\u062c\u0649 \u0627\u0644\u0645\u062d\u0627\u0648\u0644\u0629 \u0645\u0631\u0629 \u0623\u062e\u0631\u0649."
+  },
+  "settings": {
+    "title": "\u0627\u0644\u0625\u0639\u062f\u0627\u062f\u0627\u062a",
+    "notifications": "\u0627\u0644\u0625\u0634\u0639\u0627\u0631\u0627\u062a",
+    "pushNotifications": "\u0627\u0644\u0625\u0634\u0639\u0627\u0631\u0627\u062a \u0627\u0644\u0641\u0648\u0631\u064a\u0629",
+    "support": "\u0627\u0644\u062f\u0639\u0645"
+  },
+  "impact": {
+    "title": "تأثيري",
+    "level": "المستوى {{level}}",
+    "xpProgress": "{{current}} / {{next}} نقطة خبرة",
+    "mealsSaved": "وجبات منقذة",
+    "moneySaved": "أموال موفرة",
+    "co2Saved": "CO₂ موفر",
+    "currentStreak": "السلسلة الحالية",
+    "days": "أيام",
+    "badges": "الشارات",
+    "locked": "مقفل",
+    "leaderboard": "لوحة المتصدرين",
+    "rank": "#{{rank}}",
+    "meals": "وجبات",
+    "showMore": "عرض المزيد",
+    "viewImpact": "عرض تأثيري"
   }
 }

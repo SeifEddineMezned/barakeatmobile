@@ -56,3 +56,26 @@ export async function updateAvatar(formData: FormData): Promise<string | null> {
     return null;
   }
 }
+
+export async function updatePassword(currentPassword: string, newPassword: string): Promise<void> {
+  console.log('[Profile] Updating password');
+  await apiClient.put('/api/users/password', { currentPassword, newPassword });
+}
+
+export async function updateFoodPreferences(preferences: string[]): Promise<void> {
+  console.log('[Profile] Updating food preferences');
+  await apiClient.put('/api/users/preferences', { food_preferences: preferences });
+}
+
+export async function fetchUserProfile(): Promise<{ food_preferences?: string[]; [key: string]: unknown }> {
+  console.log('[Profile] Fetching user profile');
+  const res = await apiClient.get('/api/users/profile');
+  const data = res.data;
+  if (data && typeof data === 'object' && 'data' in data) return (data as any).data;
+  return data as any;
+}
+
+export async function updateUserProfile(data: { name?: string; phone?: string }): Promise<void> {
+  console.log('[Profile] Updating user profile');
+  await apiClient.put('/api/users/profile', data);
+}

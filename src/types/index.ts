@@ -55,6 +55,7 @@ export interface Basket {
   imageUrl?: string;
   isActive: boolean;
   isSupermarket?: boolean;
+  maxPerCustomer?: number;
 }
 
 export interface Merchant {
@@ -93,6 +94,7 @@ export interface User {
   email: string;
   phone?: string;
   role: UserRole;
+  gender?: 'male' | 'female' | string;
 }
 
 export interface BusinessProfile {

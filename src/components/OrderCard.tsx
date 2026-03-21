@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Animated } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Animated, Linking } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import { MapPin, Clock, Navigation } from 'lucide-react-native';
@@ -36,8 +36,7 @@ export function OrderCard({ order }: OrderCardProps) {
   const handleDirections = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     const url = `https://www.google.com/maps/search/?api=1&query=${order.basket.latitude},${order.basket.longitude}`;
-    const Linking = require('react-native').Linking;
-    Linking.openURL(url);
+    void Linking.openURL(url);
   };
 
   const getStatusColor = () => {
