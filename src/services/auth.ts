@@ -10,8 +10,8 @@ export interface RegisterRequest {
   name: string;
   email: string;
   password: string;
-  phone?: string;
-  role?: string;
+  phone: string;        // required by backend for buyer accounts
+  type: 'buyer' | 'restaurant'; // backend uses `type`, NOT `role`
 }
 
 export interface AuthResponse {
@@ -37,12 +37,19 @@ export async function login(data: LoginRequest): Promise<AuthResponse> {
 }
 
 export async function register(data: RegisterRequest): Promise<AuthResponse> {
-  console.log('[Auth] Registering:', data.email);
+  // Log the exact payload so it's visible in Expo logs
+  console.log('[Auth] Registering with payload:', JSON.stringify({
+    name: data.name,
+    email: data.email,
+    phone: data.phone,
+    type: data.type,
+    password: '[hidden]',
+  }));
   const res = await apiClient.post<AuthResponse>('/api/auth/register', data);
   const { token, user } = res.data;
   await saveToken(token);
   await saveUser(user);
-  console.log('[Auth] Registration successful, user:', user.name);
+  console.log('[Auth] Registration successful, user:', user.name, '| type:', (user as any).type);
   return res.data;
 }
 

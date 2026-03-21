@@ -9,11 +9,13 @@ import { useTheme } from '@/src/theme/ThemeProvider';
 import { PrimaryCTAButton } from '@/src/components/PrimaryCTAButton';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import { fetchMyProfile, updateQuantity, updateAvailability } from '@/src/services/business';
+import { useAuthStore } from '@/src/stores/authStore';
 
 export default function AvailabilityScreen() {
   const { t } = useTranslation();
   const theme = useTheme();
   const router = useRouter();
+  const { user } = useAuthStore();
 
   const [quantity, setQuantity] = useState(0);
   const [pickupStart, setPickupStart] = useState('18:00');
@@ -35,20 +37,28 @@ export default function AvailabilityScreen() {
     }
   }, [profileQuery.data]);
 
+  // Ensure time is HH:MM:SS for the PostgreSQL time field
+  const toTimeField = (hhmm: string) =>
+    hhmm.includes(':') && hhmm.split(':').length === 2 ? `${hhmm}:00` : hhmm;
+
   const saveMutation = useMutation({
     mutationFn: async () => {
+      const userId = (user as any)?.id as number | undefined;
       await updateQuantity(quantity);
       await updateAvailability({
         is_paused: isPaused,
         availability_status: isPaused ? 'paused' : 'available',
-      });
+        pickup_start_time: toTimeField(pickupStart),
+        pickup_end_time: toTimeField(pickupEnd),
+      }, userId);
     },
     onSuccess: () => {
       Alert.alert(t('common.success'), t('business.availability.saved'));
       router.back();
     },
-    onError: () => {
-      Alert.alert(t('common.error'), t('common.errorOccurred'));
+    onError: (err: any) => {
+      const msg = err?.message ?? t('common.errorOccurred');
+      Alert.alert(t('common.error'), msg);
     },
   });
 

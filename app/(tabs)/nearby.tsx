@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useCallback, useRef } from 'react';
+import React, { useMemo, useState, useCallback, useRef, useEffect } from 'react';
 import {
   View,
   Text,
@@ -11,6 +11,7 @@ import {
   Dimensions,
   PanResponder,
   ScrollView,
+  ActivityIndicator,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
@@ -18,6 +19,7 @@ import { useRouter } from 'expo-router';
 import { useQuery } from '@tanstack/react-query';
 import { Search, Navigation, X, Clock, MapPin, ShoppingBag, ChevronUp } from 'lucide-react-native';
 import * as Haptics from 'expo-haptics';
+import * as Location from 'expo-location';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { MapFallback } from '@/src/components/MapFallback';
 import { fetchRestaurants } from '@/src/services/restaurants';
@@ -70,6 +72,127 @@ function getDistance(lat1: number, lon1: number, lat2: number, lon2: number): nu
 
 type BasketWithDist = Basket & { dist: number };
 
+/* ─── Inline radius slider (zero new dependencies) ───────────────────────── */
+const SLIDER_MIN = 1;
+const SLIDER_MAX = 20;
+// Stable module-level offset — never re-created inside a render
+const _THUMB_OFFSET = new Animated.Value(-11);
+
+function RadiusSlider({
+  value,
+  onChange,
+  primaryColor,
+  trackColor,
+}: {
+  value: number;
+  onChange: (km: number) => void;
+  primaryColor: string;
+  trackColor: string;
+}) {
+  const trackWidth = useRef(0);
+  const thumbX = useRef(new Animated.Value(0)).current;
+  const isDragging = useRef(false); // guard: skip onLayout reset while user is dragging
+  const lastKm = useRef(value);    // only emit onChange when km actually changes
+
+  const valueToX = (km: number, width: number) =>
+    ((km - SLIDER_MIN) / (SLIDER_MAX - SLIDER_MIN)) * width;
+
+  const xToKm = (x: number, width: number) => {
+    const raw = (x / width) * (SLIDER_MAX - SLIDER_MIN) + SLIDER_MIN;
+    return Math.max(SLIDER_MIN, Math.min(SLIDER_MAX, Math.round(raw)));
+  };
+
+  const sliderPan = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: () => true,
+      onPanResponderGrant: (e) => {
+        isDragging.current = true;
+        const x = Math.max(0, Math.min(trackWidth.current, e.nativeEvent.locationX));
+        thumbX.setValue(x);
+        const km = xToKm(x, trackWidth.current);
+        if (km !== lastKm.current) { lastKm.current = km; onChange(km); }
+      },
+      onPanResponderMove: (e) => {
+        const x = Math.max(0, Math.min(trackWidth.current, e.nativeEvent.locationX));
+        thumbX.setValue(x);
+        const km = xToKm(x, trackWidth.current);
+        if (km !== lastKm.current) { lastKm.current = km; onChange(km); }
+      },
+      onPanResponderRelease: (e) => {
+        const x = Math.max(0, Math.min(trackWidth.current, e.nativeEvent.locationX));
+        const km = xToKm(x, trackWidth.current);
+        thumbX.setValue(valueToX(km, trackWidth.current));
+        if (km !== lastKm.current) { lastKm.current = km; onChange(km); }
+        isDragging.current = false;
+      },
+    }),
+  ).current;
+
+  return (
+    <View
+      style={{ paddingVertical: 6, paddingHorizontal: 2 }}
+      onLayout={(e) => {
+        const w = e.nativeEvent.layout.width;
+        trackWidth.current = w;
+        // Only sync thumb from prop when not actively dragging
+        if (!isDragging.current) {
+          thumbX.setValue(valueToX(value, w));
+        }
+      }}
+      {...sliderPan.panHandlers}
+    >
+      {/* Track */}
+      <View
+        style={{
+          height: 5,
+          borderRadius: 3,
+          backgroundColor: trackColor,
+          overflow: 'visible',
+        }}
+      >
+        {/* Fill */}
+        <Animated.View
+          style={{
+            position: 'absolute',
+            left: 0,
+            top: 0,
+            bottom: 0,
+            width: thumbX,
+            backgroundColor: primaryColor,
+            borderRadius: 3,
+          }}
+        />
+        {/* Thumb — uses stable module-level offset to avoid re-creation on render */}
+        <Animated.View
+          style={{
+            position: 'absolute',
+            top: -9,
+            width: 22,
+            height: 22,
+            borderRadius: 11,
+            backgroundColor: primaryColor,
+            borderWidth: 3,
+            borderColor: '#fff',
+            shadowColor: '#000',
+            shadowOpacity: 0.2,
+            shadowRadius: 4,
+            shadowOffset: { width: 0, height: 2 },
+            elevation: 5,
+            transform: [{ translateX: Animated.add(thumbX, _THUMB_OFFSET) }],
+          }}
+        />
+      </View>
+      {/* Min / max labels */}
+      <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 12 }}>
+        <Text style={{ fontSize: 10, color: trackColor, fontFamily: 'Poppins_500Medium' }}>1 km</Text>
+        <Text style={{ fontSize: 10, color: trackColor, fontFamily: 'Poppins_500Medium' }}>20 km</Text>
+      </View>
+    </View>
+  );
+}
+/* ─────────────────────────────────────────────────────────────────────────── */
+
 export default function DiscoverScreen() {
   const { t } = useTranslation();
   const theme = useTheme();
@@ -79,7 +202,51 @@ export default function DiscoverScreen() {
   const [selectedBasket, setSelectedBasket] = useState<BasketWithDist | null>(null);
   const [radius, setRadius] = useState(5);
   const [searchQuery, setSearchQuery] = useState('');
-  const [tappedLocation, setTappedLocation] = useState<{ latitude: number; longitude: number } | null>(null);
+
+  // Real device location
+  const [userLocation, setUserLocation] = useState<{ latitude: number; longitude: number } | null>(null);
+  const [locationStatus, setLocationStatus] = useState<'loading' | 'granted' | 'denied'>('loading');
+  const mapRef = useRef<any>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (cancelled) return;
+        if (status !== 'granted') {
+          console.log('[Nearby] Location permission denied');
+          setLocationStatus('denied');
+          return;
+        }
+        setLocationStatus('granted');
+        const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+        if (cancelled) return;
+        const coords = { latitude: pos.coords.latitude, longitude: pos.coords.longitude };
+        console.log('[Nearby] User location:', coords);
+        setUserLocation(coords);
+      } catch (e) {
+        console.log('[Nearby] Location error:', e);
+        if (!cancelled) setLocationStatus('denied');
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  // Re-center the map on the user's real position
+  const handleRecenter = useCallback(() => {
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    if (mapRef.current && userLocation) {
+      mapRef.current.animateToRegion({
+        ...userLocation,
+        latitudeDelta: Math.max(0.02, radius * 0.015),
+        longitudeDelta: Math.max(0.02, radius * 0.015),
+      }, 600);
+    }
+  }, [userLocation, radius]);
+
+  // Effective center for radius filtering: real user location or Tunis fallback
+  const center = userLocation ?? DEFAULT_CENTER;
 
   // Bottom sheet animation
   const sheetHeight = useRef(new Animated.Value(COLLAPSED_HEIGHT)).current;
@@ -134,18 +301,28 @@ export default function DiscoverScreen() {
   }, [baskets, searchQuery]);
 
   const nearbyBaskets: BasketWithDist[] = useMemo(() => {
-    const center = tappedLocation ?? DEFAULT_CENTER;
     return filteredBaskets
-      .map((b) => ({ ...b, dist: getDistance(center.latitude, center.longitude, b.latitude, b.longitude) }))
+      .filter((b) => b.hasCoords)
+      .map((b) => ({
+        ...b,
+        dist: getDistance(center.latitude, center.longitude, b.latitude as number, b.longitude as number),
+      }))
       .filter((b) => b.dist <= radius)
       .sort((a, b) => a.dist - b.dist);
-  }, [filteredBaskets, tappedLocation, radius]);
+  }, [filteredBaskets, center, radius]);
 
-  const markers = filteredBaskets.map((b) => ({
+  // Restaurants with no real coordinates — still shown in list, never on map
+  const noCoordBaskets = useMemo(
+    () => filteredBaskets.filter((b) => !b.hasCoords),
+    [filteredBaskets],
+  );
+
+  // Only place in-radius restaurants on the map (they already have real coords)
+  const markers = nearbyBaskets.map((b) => ({
     id: b.id,
     name: b.merchantName,
-    lat: b.latitude,
-    lng: b.longitude,
+    lat: b.latitude as number,
+    lng: b.longitude as number,
   }));
 
   // Handlers
@@ -153,7 +330,6 @@ export default function DiscoverScreen() {
     (basket: BasketWithDist) => {
       void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
       setSelectedBasket(basket);
-      // Collapse sheet to show the single card
       Animated.spring(sheetHeight, { toValue: COLLAPSED_HEIGHT, useNativeDriver: false, friction: 10 }).start();
       isExpandedRef.current = false;
       setIsExpanded(false);
@@ -162,12 +338,7 @@ export default function DiscoverScreen() {
   );
 
   const handleMapPress = useCallback(
-    (e: any) => {
-      const { latitude, longitude } = e.nativeEvent.coordinate;
-      setTappedLocation({ latitude, longitude });
-      setSelectedBasket(null);
-      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    },
+    () => { setSelectedBasket(null); },
     [],
   );
 
@@ -179,19 +350,18 @@ export default function DiscoverScreen() {
     setIsExpanded(expanding);
   }, [sheetHeight]);
 
-  const center = tappedLocation ?? DEFAULT_CENTER;
-
   return (
     <View style={styles.container}>
       {/* ── Full-screen Map ── */}
       {Platform.OS !== 'web' && MapView ? (
         <MapView
+          ref={mapRef}
           style={StyleSheet.absoluteFillObject}
           mapType={Platform.OS === 'ios' ? 'mutedStandard' : 'standard'}
           customMapStyle={Platform.OS === 'android' ? MAP_STYLE : undefined}
           initialRegion={{
-            latitude: DEFAULT_CENTER.latitude,
-            longitude: DEFAULT_CENTER.longitude,
+            latitude: center.latitude,
+            longitude: center.longitude,
             latitudeDelta: Math.max(0.02, radius * 0.015),
             longitudeDelta: Math.max(0.02, radius * 0.015),
           }}
@@ -199,81 +369,109 @@ export default function DiscoverScreen() {
           showsUserLocation
           showsMyLocationButton={false}
         >
-          {/* Tapped location pin */}
-          {tappedLocation && Marker && (
-            <Marker coordinate={tappedLocation}>
-              <View
-                style={{
-                  backgroundColor: theme.colors.error,
-                  width: 16,
-                  height: 16,
-                  borderRadius: 8,
-                  borderWidth: 3,
-                  borderColor: '#fff',
-                }}
-              />
-            </Marker>
-          )}
-
-          {/* Food spot markers */}
+          {/* 🧺 Restaurant / business basket markers */}
           {nearbyBaskets.map((basket) =>
-            Marker ? (
+            Marker && basket.hasCoords ? (
               <Marker
                 key={basket.id}
-                coordinate={{ latitude: basket.latitude, longitude: basket.longitude }}
+                coordinate={{
+                  latitude: basket.latitude as number,
+                  longitude: basket.longitude as number,
+                }}
+                anchor={{ x: 0.5, y: 1 }}
                 onPress={() => handleMarkerPress(basket)}
               >
-                <View
-                  style={[
-                    styles.markerContainer,
-                    {
-                      backgroundColor:
-                        basket.isActive && basket.quantityLeft > 0
-                          ? theme.colors.primary
-                          : theme.colors.muted,
-                      borderRadius: 20,
-                      paddingHorizontal: 10,
-                      paddingVertical: 6,
-                      ...theme.shadows.shadowMd,
-                    },
-                  ]}
-                >
-                  <Text
+                <View style={{ alignItems: 'center' }}>
+                  <View
                     style={{
-                      color: '#fff',
-                      fontSize: 12,
-                      fontWeight: '700',
-                      fontFamily: 'Poppins_700Bold',
+                      backgroundColor: basket.isActive && basket.quantityLeft > 0
+                        ? '#114b3c'
+                        : '#888',
+                      borderRadius: 14,
+                      paddingHorizontal: 8,
+                      paddingVertical: 4,
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      gap: 3,
+                      shadowColor: '#000',
+                      shadowOpacity: 0.25,
+                      shadowRadius: 4,
+                      shadowOffset: { width: 0, height: 2 },
+                      elevation: 5,
                     }}
                   >
-                    {basket.discountedPrice} TND
-                  </Text>
+                    <Text style={{ fontSize: 13 }}>🧺</Text>
+                    <Text
+                      style={{
+                        color: '#fff',
+                        fontSize: 11,
+                        fontWeight: '700',
+                        fontFamily: 'Poppins_700Bold',
+                      }}
+                    >
+                      {basket.discountedPrice} TND
+                    </Text>
+                  </View>
+                  {/* callout arrow */}
+                  <View
+                    style={{
+                      width: 0,
+                      height: 0,
+                      borderLeftWidth: 5,
+                      borderRightWidth: 5,
+                      borderTopWidth: 6,
+                      borderLeftColor: 'transparent',
+                      borderRightColor: 'transparent',
+                      borderTopColor: basket.isActive && basket.quantityLeft > 0
+                        ? '#114b3c'
+                        : '#888',
+                    }}
+                  />
                 </View>
-                <View
-                  style={[
-                    styles.markerArrow,
-                    {
-                      borderTopColor:
-                        basket.isActive && basket.quantityLeft > 0
-                          ? theme.colors.primary
-                          : theme.colors.muted,
-                    },
-                  ]}
-                />
               </Marker>
             ) : null,
           )}
 
-          {/* Radius circle */}
+          {/* 📍 User's current location — custom "me" pin */}
+          {Marker && userLocation && (
+            <Marker
+              coordinate={userLocation}
+              anchor={{ x: 0.5, y: 0.5 }}
+              zIndex={99}
+            >
+              <View
+                style={{
+                  width: 36,
+                  height: 36,
+                  borderRadius: 18,
+                  backgroundColor: '#114b3c',
+                  borderWidth: 3,
+                  borderColor: '#fff',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  shadowColor: '#000',
+                  shadowOpacity: 0.3,
+                  shadowRadius: 6,
+                  shadowOffset: { width: 0, height: 3 },
+                  elevation: 9,
+                }}
+              >
+                <Text style={{ fontSize: 16 }}>🧑</Text>
+              </View>
+            </Marker>
+          )}
+
+          {/* Radius circle — red, clearly visible */}
           {Circle && (
             <Circle
               center={center}
               radius={radius * 1000}
-              fillColor="rgba(17, 75, 60, 0.08)"
-              strokeColor="rgba(17, 75, 60, 0.3)"
-              strokeWidth={1.5}
+              fillColor="rgba(220, 50, 50, 0.10)"
+              strokeColor="rgba(220, 50, 50, 0.80)"
+              strokeWidth={2.5}
             />
           )}
+
         </MapView>
       ) : (
         <MapFallback markers={markers} radius={radius} style={StyleSheet.absoluteFillObject} />
@@ -342,28 +540,16 @@ export default function DiscoverScreen() {
               {radius} {t('home.km')}
             </Text>
           </View>
-          <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 8 }}>
-            {[1, 3, 5, 10, 15, 20].map((r) => (
-              <TouchableOpacity
-                key={r}
-                onPress={() => { setRadius(r); void Haptics.selectionAsync(); }}
-                style={{
-                  paddingHorizontal: 10,
-                  paddingVertical: 6,
-                  borderRadius: 14,
-                  backgroundColor: radius === r ? theme.colors.primary : theme.colors.bg,
-                }}
-              >
-                <Text style={{
-                  color: radius === r ? '#fff' : theme.colors.textSecondary,
-                  fontSize: 12,
-                  fontWeight: radius === r ? '700' : '400',
-                  fontFamily: 'Poppins_500Medium',
-                }}>
-                  {r}km
-                </Text>
-              </TouchableOpacity>
-            ))}
+          <View style={{ marginTop: 8 }}>
+            <RadiusSlider
+              value={radius}
+              onChange={(km) => {
+                setRadius(km);
+                void Haptics.selectionAsync();
+              }}
+              primaryColor={theme.colors.primary}
+              trackColor={theme.colors.muted ?? '#ccc'}
+            />
           </View>
         </View>
       </View>
@@ -382,10 +568,37 @@ export default function DiscoverScreen() {
             ...theme.shadows.shadowLg,
           },
         ]}
-        onPress={() => void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)}
+        onPress={handleRecenter}
       >
-        <Navigation size={20} color={theme.colors.primary} />
+        {locationStatus === 'loading' ? (
+          <ActivityIndicator size="small" color={theme.colors.primary} />
+        ) : (
+          <Navigation size={20} color={userLocation ? theme.colors.primary : theme.colors.muted} />
+        )}
       </TouchableOpacity>
+
+      {/* ── Location permission denied banner ── */}
+      {locationStatus === 'denied' && (
+        <View
+          style={{
+            position: 'absolute',
+            top: 140 + insets.top,
+            left: 16,
+            right: 16,
+            backgroundColor: 'rgba(220,80,60,0.92)',
+            borderRadius: 12,
+            paddingHorizontal: 14,
+            paddingVertical: 8,
+            flexDirection: 'row',
+            alignItems: 'center',
+          }}
+        >
+          <MapPin size={14} color="#fff" />
+          <Text style={{ color: '#fff', fontSize: 12, marginLeft: 6, flex: 1, fontFamily: 'Poppins_500Medium' }}>
+            Location access denied — results based on Tunis center
+          </Text>
+        </View>
+      )}
 
       {/* ── Bottom sheet ── */}
       <Animated.View
@@ -493,7 +706,7 @@ export default function DiscoverScreen() {
                     </Text>
                   </View>
                   <Text style={{ color: theme.colors.muted, fontSize: 11 }}>
-                    {selectedBasket.dist.toFixed(1)} km
+                      {selectedBasket.dist.toFixed(1)} km
                   </Text>
                 </View>
                 <View style={{ flexDirection: 'row', alignItems: 'baseline', marginTop: 4 }}>
@@ -598,6 +811,85 @@ export default function DiscoverScreen() {
                 </View>
               </TouchableOpacity>
             ))
+          )}
+          {/* Restaurants with no backend coordinates — shown below, not on map */}
+          {noCoordBaskets.length > 0 && !selectedBasket && (
+            <>
+              {nearbyBaskets.length > 0 && (
+                <Text style={{ color: theme.colors.muted, ...theme.typography.caption, marginTop: 12, marginBottom: 6 }}>
+                  {t('home.otherSpots', { defaultValue: 'Other spots' })}
+                </Text>
+              )}
+              {noCoordBaskets.map((basket) => (
+                <TouchableOpacity
+                  key={basket.id}
+                  onPress={() => router.push(`/basket/${basket.id}` as never)}
+                  activeOpacity={0.9}
+                  style={{
+                    flexDirection: 'row',
+                    padding: 12,
+                    backgroundColor: theme.colors.bg,
+                    borderRadius: 12,
+                    marginBottom: 8,
+                    opacity: basket.isActive && basket.quantityLeft > 0 ? 1 : 0.5,
+                  }}
+                >
+                  {basket.imageUrl ? (
+                    <Image
+                      source={{ uri: basket.imageUrl }}
+                      style={{ width: 60, height: 60, borderRadius: 10 }}
+                    />
+                  ) : (
+                    <View
+                      style={{
+                        width: 60,
+                        height: 60,
+                        borderRadius: 10,
+                        backgroundColor: theme.colors.primary + '10',
+                        justifyContent: 'center',
+                        alignItems: 'center',
+                      }}
+                    >
+                      <ShoppingBag size={24} color={theme.colors.primary} />
+                    </View>
+                  )}
+                  <View style={{ flex: 1, marginLeft: 12, justifyContent: 'center' }}>
+                    <Text
+                      style={{
+                        color: theme.colors.textPrimary,
+                        ...theme.typography.bodySm,
+                        fontWeight: '600',
+                      }}
+                      numberOfLines={1}
+                    >
+                      {basket.merchantName}
+                    </Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 4, gap: 8 }}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                        <Clock size={12} color={theme.colors.muted} />
+                        <Text style={{ color: theme.colors.muted, fontSize: 11, marginLeft: 3 }}>
+                          {basket.pickupWindow.start}-{basket.pickupWindow.end}
+                        </Text>
+                      </View>
+                      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                        <MapPin size={10} color={theme.colors.muted} />
+                        <Text style={{ color: theme.colors.muted, fontSize: 11, marginLeft: 2 }}>
+                          {basket.address || t('home.locationUnknown', { defaultValue: 'No location' })}
+                        </Text>
+                      </View>
+                    </View>
+                    <View style={{ flexDirection: 'row', alignItems: 'baseline', marginTop: 4 }}>
+                      <Text style={{ color: theme.colors.muted, fontSize: 11, textDecorationLine: 'line-through' }}>
+                        {basket.originalPrice} TND
+                      </Text>
+                      <Text style={{ color: theme.colors.primary, ...theme.typography.bodySm, fontWeight: '700', marginLeft: 6 }}>
+                        {basket.discountedPrice} TND
+                      </Text>
+                    </View>
+                  </View>
+                </TouchableOpacity>
+              ))}
+            </>
           )}
         </ScrollView>
       </Animated.View>

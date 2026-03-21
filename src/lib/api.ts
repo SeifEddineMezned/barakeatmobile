@@ -2,6 +2,31 @@ import axios from 'axios';
 import * as SecureStore from 'expo-secure-store';
 import { mapErrorToI18nKey } from './errorMap';
 
+// ─── Admin Token ─────────────────────────────────────────────────────────────
+// The backend's requireRestaurantAdmin middleware validates x-admin-token as:
+//   base64(userId + ':' + timestamp)  — must be < 2h old and userId must match
+// Mobile restaurant owners are inherently admins, so we auto-generate this.
+
+let _cachedAdminToken: string | null = null;
+let _cachedAdminTokenTs = 0;
+let _cachedAdminTokenUserId: number | null = null;
+const ADMIN_TOKEN_TTL_MS = 90 * 60 * 1000; // 90 min (server allows 120 min)
+
+export function getAdminToken(userId: number): string {
+  const now = Date.now();
+  const stale =
+    !_cachedAdminToken ||
+    _cachedAdminTokenUserId !== userId ||
+    now - _cachedAdminTokenTs > ADMIN_TOKEN_TTL_MS;
+  if (stale) {
+    _cachedAdminToken = Buffer.from(`${userId}:${now}`).toString('base64');
+    _cachedAdminTokenTs = now;
+    _cachedAdminTokenUserId = userId;
+    console.log('[API] Generated new admin token for userId:', userId);
+  }
+  return _cachedAdminToken!;
+}
+
 const API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL || 'https://barakeat-production.up.railway.app';
 const TOKEN_KEY = 'barakeat_auth_token';
 

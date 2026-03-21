@@ -36,12 +36,20 @@ export default function OnboardingScreen() {
   const completeOnboarding = useAuthStore((state) => state.completeOnboarding);
   const hasCompletedOnboarding = useAuthStore((state) => state.hasCompletedOnboarding);
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
+  const user = useAuthStore((state) => state.user);
 
   useEffect(() => {
-    if (hasCompletedOnboarding || isAuthenticated) {
-      router.replace('/(tabs)' as never);
+    if (isAuthenticated) {
+      // Route by role — business users must never enter the customer (tabs) flow
+      if (user?.role === 'business') {
+        router.replace('/(business)/dashboard' as never);
+      } else {
+        router.replace('/(tabs)' as never);
+      }
+    } else if (hasCompletedOnboarding) {
+      router.replace('/auth/sign-in' as never);
     }
-  }, [hasCompletedOnboarding, isAuthenticated]);
+  }, [hasCompletedOnboarding, isAuthenticated, user?.role]);
 
   const slides: OnboardingSlide[] = [
     {

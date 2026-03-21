@@ -15,6 +15,7 @@ export default function TabLayout() {
   const { t } = useTranslation();
   const theme = useTheme();
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
+  const user = useAuthStore((s) => s.user);
   const router = useRouter();
   const setUnreadCount = useNotificationStore((s) => s.setUnreadCount);
   const unreadCount = useNotificationStore((s) => s.unreadCount);
@@ -30,6 +31,16 @@ export default function TabLayout() {
   const isSearchTab = activeIndex === 0;
   const headerIconColor = isSearchTab && heroVisible ? '#e3ff5c' : theme.colors.textPrimary;
   const headerBrandColor = isSearchTab && heroVisible ? '#e3ff5c' : theme.colors.primary;
+
+  // Guard: business accounts must not see the customer flow
+  React.useEffect(() => {
+    if (isAuthenticated && user?.role === 'business') {
+      console.log('[TabLayout] Business user detected, redirecting to (business)/dashboard');
+      router.replace('/(business)/dashboard' as never);
+    } else if (!isAuthenticated) {
+      router.replace('/auth/sign-in' as never);
+    }
+  }, [isAuthenticated, user?.role]);
 
   const unreadQuery = useQuery({
     queryKey: ['unread-count'],

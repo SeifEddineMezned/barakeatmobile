@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { Stack } from "expo-router";
+import { Stack, useRouter, useSegments } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
 import React, { useEffect, useState } from "react";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
@@ -63,12 +63,16 @@ export default function RootLayout() {
   const showSplash = initialSplash || loginSplash;
 
   const user = useAuthStore((s) => s.user);
+  const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
   const [showWelcomeModal, setShowWelcomeModal] = useState(false);
   const [welcomeCarouselPage, setWelcomeCarouselPage] = useState(0);
 
   const restoreSession = useAuthStore((s) => s.restoreSession);
   const isRestoringSession = useAuthStore((s) => s.isRestoringSession);
   const hydrateFavorites = useFavoritesStore((s) => s.hydrate);
+
+  const router = useRouter();
+  const segments = useSegments();
 
   useEffect(() => {
     void restoreSession();
@@ -80,6 +84,38 @@ export default function RootLayout() {
       void SplashScreen.hideAsync();
     }
   }, [fontsLoaded, isRestoringSession]);
+
+  // ── Central role-based routing guard ──────────────────────────────────────
+  // Fires once fonts are loaded and session restore is complete.
+  // Avoids running while still restoring (would route before role is known).
+  useEffect(() => {
+    if (!fontsLoaded || isRestoringSession) return;
+
+    const inBusinessFlow = segments[0] === '(business)';
+    const inTabsFlow = segments[0] === '(tabs)';
+    const inAuth = segments[0] === 'auth';
+    const inOnboarding = segments[0] === 'onboarding';
+
+    if (!isAuthenticated) {
+      // Not logged in: send to onboarding / auth — but only if currently in
+      // a protected area to avoid overriding the onboarding flow itself.
+      if (inBusinessFlow || inTabsFlow) {
+        router.replace('/onboarding' as never);
+      }
+      return;
+    }
+
+    // Authenticated — route to the right flow based on role.
+    const isBusiness = user?.role === 'business';
+
+    if (isBusiness && !inBusinessFlow && !inAuth) {
+      console.log('[RootLayout] Routing business user to (business)/dashboard');
+      router.replace('/(business)/dashboard' as never);
+    } else if (!isBusiness && !inTabsFlow && !inAuth && !inOnboarding) {
+      console.log('[RootLayout] Routing customer user to (tabs)');
+      router.replace('/(tabs)' as never);
+    }
+  }, [fontsLoaded, isRestoringSession, isAuthenticated, user?.role]);
 
   if (!fontsLoaded || isRestoringSession) {
     return (

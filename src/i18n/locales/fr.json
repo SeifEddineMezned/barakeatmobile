@@ -245,7 +245,15 @@
     "title": "Notifications",
     "markAllRead": "Tout marquer lu",
     "empty": "Aucune notification",
-    "justNow": "À l'instant"
+    "justNow": "À l'instant",
+    "notif_title_new_reservation": "Nouvelle réservation",
+    "notif_title_reservation_cancelled": "Réservation annulée",
+    "notif_title_pickup_confirmed": "Retrait confirmé",
+    "notif_title_review_received": "Nouvel avis",
+    "notif_message_new_reservation": "{{count}} panier(s) réservé(s) dans votre restaurant",
+    "notif_message_reservation_cancelled": "{{count}} réservation(s) ont été annulées",
+    "notif_message_pickup_confirmed": "Votre retrait chez {{restaurant}} a été confirmé !",
+    "notif_message_review_received": "Un client vous a laissé un avis"
   },
   "business": {
     "dashboard": {

@@ -27,6 +27,10 @@ export function normalizeRestaurantToBasket(r: RestaurantFromAPI): Basket {
   const bagDesc = r.bag_description?.trim();
   const description = r.description?.trim();
 
+  const hasCoords =
+    r.latitude != null && r.longitude != null &&
+    isFinite(Number(r.latitude)) && isFinite(Number(r.longitude));
+
   return {
     id: String(r.id),
     merchantId: String(r.id),
@@ -49,8 +53,11 @@ export function normalizeRestaurantToBasket(r: RestaurantFromAPI): Basket {
     quantityTotal: Math.max(quantityTotal, availableLeft),
     distance: 0,
     address: r.address ?? '',
-    latitude: r.latitude ?? 36.8065,
-    longitude: r.longitude ?? 10.1815,
+    // Preserve real coordinates exactly as the backend sends them.
+    // DO NOT inject fake/default coordinates — callers must check hasCoords.
+    latitude: hasCoords ? Number(r.latitude) : null as unknown as number,
+    longitude: hasCoords ? Number(r.longitude) : null as unknown as number,
+    hasCoords,
     exampleItems: bagDesc ? parseBagDescription(bagDesc) : [],
     imageUrl: r.image_url ?? undefined,
     isActive,

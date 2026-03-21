@@ -15,6 +15,7 @@ export default function BusinessTabLayout() {
   const { t } = useTranslation();
   const theme = useTheme();
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
+  const user = useAuthStore((s) => s.user);
   const router = useRouter();
   const setUnreadCount = useNotificationStore((s) => s.setUnreadCount);
   const unreadCount = useNotificationStore((s) => s.unreadCount);
@@ -25,6 +26,16 @@ export default function BusinessTabLayout() {
   const tabWidth = navWidth / tabCount;
   const glassAnim = React.useRef(new Animated.Value(0)).current;
   const [activeIndex, setActiveIndex] = React.useState(0);
+
+  // Guard: customer accounts must not see the business flow
+  React.useEffect(() => {
+    if (isAuthenticated && user?.role !== 'business') {
+      console.log('[BusinessLayout] Non-business user detected, redirecting to (tabs)');
+      router.replace('/(tabs)' as never);
+    } else if (!isAuthenticated) {
+      router.replace('/auth/sign-in' as never);
+    }
+  }, [isAuthenticated, user?.role]);
 
   const unreadQuery = useQuery({
     queryKey: ['unread-count'],

@@ -1,32 +1,113 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform } from 'react-native';
+import {
+  View, Text, StyleSheet, ScrollView, TextInput,
+  TouchableOpacity, KeyboardAvoidingView, Platform, Alert,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
-import { X, AlertCircle } from 'lucide-react-native';
+import { X, AlertCircle, Clock, Minus, Plus } from 'lucide-react-native';
 import * as Haptics from 'expo-haptics';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { useBusinessStore } from '@/src/stores/businessStore';
 import { PrimaryCTAButton } from '@/src/components/PrimaryCTAButton';
-import type { Basket } from '@/src/types';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  createBasketJSON, updateBasket as updateBasketAPI,
+  fetchMyBaskets, fetchMyProfile,
+} from '@/src/services/business';
+import { getErrorMessage } from '@/src/lib/api';
 
 export default function CreateBasketScreen() {
   const { editId } = useLocalSearchParams<{ editId?: string }>();
   const { t } = useTranslation();
   const theme = useTheme();
   const router = useRouter();
-  const { baskets, addBasket, updateBasket, profile } = useBusinessStore();
+  const { baskets: storeBaskets } = useBusinessStore();
+  const queryClient = useQueryClient();
 
-  const existingBasket = editId ? baskets.find((b) => b.id === editId) : null;
-  const isEditing = !!existingBasket;
+  // ── Fetch profile for default pickup times
+  const profileQuery = useQuery({
+    queryKey: ['my-profile'],
+    queryFn: fetchMyProfile,
+    staleTime: 60_000,
+  });
 
-  const [name, setName] = useState(existingBasket?.name ?? '');
-  const [description, setDescription] = useState(existingBasket?.description ?? '');
-  const [originalPrice, setOriginalPrice] = useState(existingBasket?.originalPrice?.toString() ?? '');
-  const [discountedPrice, setDiscountedPrice] = useState(existingBasket?.discountedPrice?.toString() ?? '');
-  const [basketContents, setBasketContents] = useState(existingBasket?.exampleItems?.join(', ') ?? '');
-  const [loading, setLoading] = useState(false);
+  // ── Fetch live baskets to populate edit fields
+  const basketsQuery = useQuery({
+    queryKey: ['my-baskets'],
+    queryFn: fetchMyBaskets,
+    staleTime: 60_000,
+  });
+
+  // Find the basket to edit — prefer live API data, fall back to store
+  const apiBasket = editId
+    ? basketsQuery.data?.find((b) => String(b.id) === editId)
+    : null;
+  const storeBasket = editId
+    ? storeBaskets.find((b) => b.id === editId)
+    : null;
+
+  const isEditing = !!editId;
+
+  // ── Field state — populate from API basket if editing
+  const [name, setName] = useState(
+    apiBasket?.name ?? storeBasket?.name ?? ''
+  );
+  const [description, setDescription] = useState(
+    apiBasket?.description ?? storeBasket?.description ?? ''
+  );
+  const [originalPrice, setOriginalPrice] = useState(
+    apiBasket?.original_price != null
+      ? String(apiBasket.original_price)
+      : storeBasket?.originalPrice?.toString() ?? ''
+  );
+  const [sellingPrice, setSellingPrice] = useState(
+    apiBasket?.selling_price != null
+      ? String(apiBasket.selling_price)
+      : storeBasket?.discountedPrice?.toString() ?? ''
+  );
+  const [quantity, setQuantity] = useState(
+    apiBasket?.quantity ?? storeBasket?.quantityTotal ?? 5
+  );
+
+  // Pickup times: use basket-specific times if editing, else profile-level defaults
+  const defaultStart =
+    apiBasket?.pickup_start_time?.substring(0, 5) ??
+    profileQuery.data?.pickup_start_time?.substring(0, 5) ??
+    '18:00';
+  const defaultEnd =
+    apiBasket?.pickup_end_time?.substring(0, 5) ??
+    profileQuery.data?.pickup_end_time?.substring(0, 5) ??
+    '19:00';
+
+  const [pickupStart, setPickupStart] = useState(defaultStart);
+  const [pickupEnd, setPickupEnd] = useState(defaultEnd);
+
   const [priceError, setPriceError] = useState('');
+
+  // Update pickup times when profile/baskets load (only if not yet modified by user)
+  React.useEffect(() => {
+    if (!isEditing && profileQuery.data) {
+      const s = profileQuery.data.pickup_start_time?.substring(0, 5);
+      const e = profileQuery.data.pickup_end_time?.substring(0, 5);
+      if (s) setPickupStart(s);
+      if (e) setPickupEnd(e);
+    }
+  }, [profileQuery.data, isEditing]);
+
+  React.useEffect(() => {
+    if (isEditing && apiBasket) {
+      setName(apiBasket.name);
+      if (apiBasket.description) setDescription(apiBasket.description);
+      if (apiBasket.original_price != null) setOriginalPrice(String(apiBasket.original_price));
+      if (apiBasket.selling_price != null) setSellingPrice(String(apiBasket.selling_price));
+      if (apiBasket.quantity != null) setQuantity(apiBasket.quantity);
+      if (apiBasket.pickup_start_time) setPickupStart(apiBasket.pickup_start_time.substring(0, 5));
+      if (apiBasket.pickup_end_time) setPickupEnd(apiBasket.pickup_end_time.substring(0, 5));
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [apiBasket?.id]);
 
   const validatePrice = (orig: string, disc: string) => {
     const o = parseFloat(orig);
@@ -39,75 +120,83 @@ export default function CreateBasketScreen() {
     return true;
   };
 
-  const handleDiscountedPriceChange = (val: string) => {
-    setDiscountedPrice(val);
-    if (originalPrice && val) {
-      validatePrice(originalPrice, val);
-    } else {
-      setPriceError('');
-    }
-  };
+  // ── Ensure time is formatted as HH:MM:SS for the backend
+  const toTimeField = (hhmm: string) =>
+    hhmm.includes(':') && hhmm.split(':').length === 2 ? `${hhmm}:00` : hhmm;
 
-  const handleOriginalPriceChange = (val: string) => {
-    setOriginalPrice(val);
-    if (val && discountedPrice) {
-      validatePrice(val, discountedPrice);
-    } else {
-      setPriceError('');
-    }
-  };
+  // ── Mutations
+  const createMutation = useMutation({
+    mutationFn: () =>
+      createBasketJSON({
+        name: name.trim(),
+        description: description.trim() || undefined,
+        original_price: originalPrice ? parseFloat(originalPrice) : undefined,
+        selling_price: parseFloat(sellingPrice),
+        quantity,
+        pickup_start_time: toTimeField(pickupStart),
+        pickup_end_time: toTimeField(pickupEnd),
+      }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['my-baskets'] });
+      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      router.back();
+    },
+    onError: (err: any) => {
+      Alert.alert(t('common.error'), getErrorMessage(err));
+    },
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: () =>
+      updateBasketAPI(editId!, {
+        name: name.trim(),
+        description: description.trim() || null,
+        original_price: originalPrice ? parseFloat(originalPrice) : undefined,
+        selling_price: parseFloat(sellingPrice),
+        quantity,
+        pickup_start_time: toTimeField(pickupStart),
+        pickup_end_time: toTimeField(pickupEnd),
+      }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['my-baskets'] });
+      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      router.back();
+    },
+    onError: (err: any) => {
+      Alert.alert(t('common.error'), getErrorMessage(err));
+    },
+  });
+
+  const isPending = createMutation.isPending || updateMutation.isPending;
 
   const handleSave = () => {
-    if (!name.trim() || !originalPrice || !discountedPrice) return;
-    if (!validatePrice(originalPrice, discountedPrice)) return;
-
-    setLoading(true);
+    if (!name.trim()) {
+      Alert.alert(t('common.error'), 'Name is required.');
+      return;
+    }
+    const sp = parseFloat(sellingPrice);
+    if (!sp || sp <= 0) {
+      Alert.alert(t('common.error'), 'Selling price is required.');
+      return;
+    }
+    if (!validatePrice(originalPrice, sellingPrice)) return;
+    if (quantity <= 0) {
+      Alert.alert(t('common.error'), 'Quantity must be at least 1.');
+      return;
+    }
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    if (isEditing) {
+      updateMutation.mutate();
+    } else {
+      createMutation.mutate();
+    }
+  };
 
-    const orig = parseFloat(originalPrice);
-    const disc = parseFloat(discountedPrice);
-    const discount = orig > 0 ? Math.round(((orig - disc) / orig) * 100) : 0;
-
-    setTimeout(() => {
-      if (isEditing && editId) {
-        updateBasket(editId, {
-          name: name.trim(),
-          description: description.trim(),
-          originalPrice: orig,
-          discountedPrice: disc,
-          discountPercentage: discount,
-          exampleItems: basketContents.split(',').map((s) => s.trim()).filter(Boolean),
-        });
-      } else {
-        const newBasket: Basket = {
-          id: `biz_${Date.now()}`,
-          merchantId: profile?.id ?? 'biz1',
-          merchantName: profile?.name ?? 'Mon Commerce',
-          merchantLogo: profile?.logo,
-          merchantRating: 0,
-          reviewCount: 0,
-          reviews: { service: 0, quantite: 0, qualite: 0, variete: 0 },
-          description: description.trim(),
-          name: name.trim(),
-          category: profile?.category ?? 'Patisseries/Boulangeries',
-          originalPrice: orig,
-          discountedPrice: disc,
-          discountPercentage: discount,
-          pickupWindow: { start: profile?.hours?.split(' - ')[0] ?? '18:00', end: profile?.hours?.split(' - ')[1] ?? '19:00' },
-          quantityLeft: 5,
-          quantityTotal: 5,
-          distance: 0,
-          address: profile?.address ?? '',
-          latitude: profile?.latitude ?? 36.8065,
-          longitude: profile?.longitude ?? 10.1815,
-          exampleItems: basketContents.split(',').map((s) => s.trim()).filter(Boolean),
-          isActive: false,
-        };
-        addBasket(newBasket);
-      }
-      setLoading(false);
-      router.back();
-    }, 600);
+  // ── Time picker helpers
+  const adjustHour = (time: string, delta: number) => {
+    const [h, m] = time.split(':').map(Number);
+    const newH = ((h + delta + 24) % 24);
+    return `${String(newH).padStart(2, '0')}:${String(m ?? 0).padStart(2, '0')}`;
   };
 
   return (
@@ -123,7 +212,12 @@ export default function CreateBasketScreen() {
           <View style={{ width: 24 }} />
         </View>
 
-        <ScrollView style={styles.form} contentContainerStyle={{ padding: theme.spacing.xl, paddingBottom: 100 }} showsVerticalScrollIndicator={false}>
+        <ScrollView
+          style={styles.form}
+          contentContainerStyle={{ padding: theme.spacing.xl, paddingBottom: 120 }}
+          showsVerticalScrollIndicator={false}
+        >
+          {/* Name */}
           <View style={[styles.field, { marginBottom: theme.spacing.xl }]}>
             <Text style={[styles.label, { color: theme.colors.textPrimary, ...theme.typography.bodySm, marginBottom: theme.spacing.sm }]}>
               {t('business.createBasket.name')}
@@ -137,6 +231,7 @@ export default function CreateBasketScreen() {
             />
           </View>
 
+          {/* Description */}
           <View style={[styles.field, { marginBottom: theme.spacing.xl }]}>
             <Text style={[styles.label, { color: theme.colors.textPrimary, ...theme.typography.bodySm, marginBottom: theme.spacing.sm }]}>
               {t('business.createBasket.description')}
@@ -153,6 +248,7 @@ export default function CreateBasketScreen() {
             />
           </View>
 
+          {/* Prices */}
           <View style={[styles.row, { marginBottom: theme.spacing.xl }]}>
             <View style={[styles.halfField, { marginRight: theme.spacing.md }]}>
               <Text style={[styles.label, { color: theme.colors.textPrimary, ...theme.typography.bodySm, marginBottom: theme.spacing.sm }]}>
@@ -161,7 +257,11 @@ export default function CreateBasketScreen() {
               <TextInput
                 style={[styles.input, { backgroundColor: theme.colors.surface, borderColor: theme.colors.divider, borderRadius: theme.radii.r12, color: theme.colors.textPrimary, ...theme.typography.body, ...theme.shadows.shadowSm }]}
                 value={originalPrice}
-                onChangeText={handleOriginalPriceChange}
+                onChangeText={(v) => {
+                  setOriginalPrice(v);
+                  if (v && sellingPrice) validatePrice(v, sellingPrice);
+                  else setPriceError('');
+                }}
                 placeholder="20"
                 placeholderTextColor={theme.colors.muted}
                 keyboardType="numeric"
@@ -169,7 +269,7 @@ export default function CreateBasketScreen() {
             </View>
             <View style={styles.halfField}>
               <Text style={[styles.label, { color: theme.colors.textPrimary, ...theme.typography.bodySm, marginBottom: theme.spacing.sm }]}>
-                {t('business.createBasket.discountedPrice')}
+                {t('business.createBasket.discountedPrice')} *
               </Text>
               <TextInput
                 style={[styles.input, {
@@ -180,8 +280,12 @@ export default function CreateBasketScreen() {
                   ...theme.typography.body,
                   ...theme.shadows.shadowSm,
                 }]}
-                value={discountedPrice}
-                onChangeText={handleDiscountedPriceChange}
+                value={sellingPrice}
+                onChangeText={(v) => {
+                  setSellingPrice(v);
+                  if (originalPrice && v) validatePrice(originalPrice, v);
+                  else setPriceError('');
+                }}
                 placeholder="10"
                 placeholderTextColor={theme.colors.muted}
                 keyboardType="numeric"
@@ -198,20 +302,82 @@ export default function CreateBasketScreen() {
             </View>
           )}
 
+          {/* Quantity */}
           <View style={[styles.field, { marginBottom: theme.spacing.xl }]}>
             <Text style={[styles.label, { color: theme.colors.textPrimary, ...theme.typography.bodySm, marginBottom: theme.spacing.sm }]}>
-              {t('business.createBasket.basketContents')}
+              {t('business.availability.quantity')} *
             </Text>
-            <TextInput
-              style={[styles.textArea, { backgroundColor: theme.colors.surface, borderColor: theme.colors.divider, borderRadius: theme.radii.r12, color: theme.colors.textPrimary, ...theme.typography.body, ...theme.shadows.shadowSm }]}
-              value={basketContents}
-              onChangeText={setBasketContents}
-              placeholder={t('business.createBasket.contentsPlaceholder')}
-              placeholderTextColor={theme.colors.muted}
-              multiline
-              numberOfLines={3}
-              textAlignVertical="top"
-            />
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              <TouchableOpacity
+                onPress={() => setQuantity(Math.max(1, quantity - 1))}
+                style={{ backgroundColor: theme.colors.surface, borderRadius: 10, width: 42, height: 42, justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: theme.colors.divider }}
+              >
+                <Minus size={16} color={theme.colors.textPrimary} />
+              </TouchableOpacity>
+              <TextInput
+                style={[{
+                  flex: 1, textAlign: 'center', backgroundColor: theme.colors.surface,
+                  borderRadius: theme.radii.r12, color: theme.colors.textPrimary,
+                  ...theme.typography.h3, height: 42, marginHorizontal: 12,
+                  borderWidth: 1, borderColor: theme.colors.divider,
+                }]}
+                value={String(quantity)}
+                onChangeText={(v) => { const n = parseInt(v); if (!isNaN(n) && n >= 1) setQuantity(n); }}
+                keyboardType="number-pad"
+              />
+              <TouchableOpacity
+                onPress={() => setQuantity(quantity + 1)}
+                style={{ backgroundColor: theme.colors.surface, borderRadius: 10, width: 42, height: 42, justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: theme.colors.divider }}
+              >
+                <Plus size={16} color={theme.colors.textPrimary} />
+              </TouchableOpacity>
+            </View>
+          </View>
+
+          {/* Pickup Window */}
+          <View style={[styles.field, { marginBottom: theme.spacing.xl }]}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: theme.spacing.sm }}>
+              <Clock size={14} color={theme.colors.primary} />
+              <Text style={[styles.label, { color: theme.colors.textPrimary, ...theme.typography.bodySm, marginLeft: 6 }]}>
+                {t('basket.pickupWindow')} *
+              </Text>
+            </View>
+            <View style={styles.row}>
+              {/* Start */}
+              <View style={[styles.halfField, { marginRight: theme.spacing.md }]}>
+                <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, marginBottom: 4 }}>
+                  {t('business.availability.pickupStart')}
+                </Text>
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.surface, borderRadius: theme.radii.r12, borderWidth: 1, borderColor: theme.colors.divider, paddingVertical: 8 }}>
+                  <TouchableOpacity onPress={() => setPickupStart(adjustHour(pickupStart, -1))} style={{ paddingHorizontal: 10 }}>
+                    <Minus size={14} color={theme.colors.textSecondary} />
+                  </TouchableOpacity>
+                  <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3, minWidth: 48, textAlign: 'center' }}>
+                    {pickupStart}
+                  </Text>
+                  <TouchableOpacity onPress={() => setPickupStart(adjustHour(pickupStart, 1))} style={{ paddingHorizontal: 10 }}>
+                    <Plus size={14} color={theme.colors.textSecondary} />
+                  </TouchableOpacity>
+                </View>
+              </View>
+              {/* End */}
+              <View style={styles.halfField}>
+                <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, marginBottom: 4 }}>
+                  {t('business.availability.pickupEnd')}
+                </Text>
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.surface, borderRadius: theme.radii.r12, borderWidth: 1, borderColor: theme.colors.divider, paddingVertical: 8 }}>
+                  <TouchableOpacity onPress={() => setPickupEnd(adjustHour(pickupEnd, -1))} style={{ paddingHorizontal: 10 }}>
+                    <Minus size={14} color={theme.colors.textSecondary} />
+                  </TouchableOpacity>
+                  <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3, minWidth: 48, textAlign: 'center' }}>
+                    {pickupEnd}
+                  </Text>
+                  <TouchableOpacity onPress={() => setPickupEnd(adjustHour(pickupEnd, 1))} style={{ paddingHorizontal: 10 }}>
+                    <Plus size={14} color={theme.colors.textSecondary} />
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </View>
           </View>
         </ScrollView>
 
@@ -219,8 +385,8 @@ export default function CreateBasketScreen() {
           <PrimaryCTAButton
             onPress={handleSave}
             title={isEditing ? t('business.createBasket.save') : t('business.createBasket.create')}
-            loading={loading}
-            disabled={!!priceError}
+            loading={isPending}
+            disabled={!!priceError || isPending}
           />
         </View>
       </KeyboardAvoidingView>
@@ -229,39 +395,15 @@ export default function CreateBasketScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-  },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  form: {
-    flex: 1,
-  },
+  container: { flex: 1 },
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  form: { flex: 1 },
   field: {},
   label: {},
-  input: {
-    height: 52,
-    borderWidth: 1,
-    paddingHorizontal: 16,
-  },
-  textArea: {
-    minHeight: 100,
-    borderWidth: 1,
-    paddingHorizontal: 16,
-    paddingTop: 14,
-  },
-  row: {
-    flexDirection: 'row',
-  },
-  halfField: {
-    flex: 1,
-  },
-  errorRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
+  input: { height: 52, borderWidth: 1, paddingHorizontal: 16 },
+  textArea: { minHeight: 100, borderWidth: 1, paddingHorizontal: 16, paddingTop: 14 },
+  row: { flexDirection: 'row' },
+  halfField: { flex: 1 },
+  errorRow: { flexDirection: 'row', alignItems: 'center' },
   footer: {},
 });

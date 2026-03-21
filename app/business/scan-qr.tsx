@@ -58,7 +58,8 @@ export default function ScanQRScreen() {
         setScanned(false);
         return;
       }
-      await confirmPickup(String(match.id), pickupCode.trim().toUpperCase());
+      // Pass buyer_id so backend can send pickup notification to the buyer
+      await confirmPickup(String(match.id), pickupCode.trim().toUpperCase(), match.buyer_id);
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       setVerified(true);
       setMatchedOrder(match);
@@ -76,24 +77,53 @@ export default function ScanQRScreen() {
     setScanned(true);
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
 
-    // Try parsing as JSON (QR contains { reservation_id, pickup_code, restaurant_id })
-    try {
-      const parsed = JSON.parse(data);
-      if (parsed.pickup_code) {
-        handleVerifyCode(parsed.pickup_code);
-        return;
-      }
-    } catch {
-      // Not JSON — treat as raw pickup code
-    }
-
-    // Treat raw string as pickup code
-    if (data.trim().length >= 4) {
-      handleVerifyCode(data.trim());
-    } else {
-      Alert.alert(t('common.error'), t('business.scan.codeNotFound'));
-      setScanned(false);
-    }
+    // Try using verifyQR for full backend verification (parses JSON QR data internally)
+    setLoading(true);
+    verifyQR(data)
+      .then(async (verifyResult) => {
+        if (!verifyResult.valid) {
+          Alert.alert(t('common.error'), t('business.scan.codeNotFound'));
+          setScanned(false);
+          return;
+        }
+        // Confirm pickup with buyer_id so notification reaches buyer
+        await confirmPickup(
+          String(verifyResult.reservation_id),
+          verifyResult.pickup_code ?? '',
+          verifyResult.buyer_id
+        );
+        void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        // Build a minimal matched order object from verifyResult for display
+        setMatchedOrder({
+          id: verifyResult.reservation_id ?? '',
+          buyer_id: verifyResult.buyer_id,
+          buyer_name: verifyResult.buyer_name,
+          quantity: verifyResult.quantity,
+          pickup_code: verifyResult.pickup_code,
+          status: verifyResult.status,
+        } as TodayReservationFromAPI);
+        setVerified(true);
+        void queryClient.invalidateQueries({ queryKey: ['today-orders'] });
+      })
+      .catch((err) => {
+        // verifyQR failed — fall back to manual pickup code flow if QR is not JSON
+        try {
+          const parsed = JSON.parse(data);
+          if (parsed.pickup_code) {
+            void handleVerifyCode(parsed.pickup_code);
+            return;
+          }
+        } catch {
+          // not JSON
+        }
+        if (data.trim().length >= 4) {
+          void handleVerifyCode(data.trim());
+        } else {
+          Alert.alert(t('common.error'), getErrorMessage(err));
+          setScanned(false);
+        }
+      })
+      .finally(() => setLoading(false));
   };
 
   const handleClose = () => {

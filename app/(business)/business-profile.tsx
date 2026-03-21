@@ -160,11 +160,12 @@ export default function BusinessProfileScreen() {
         formData.append('image', { uri, name: filename, type: 'image/jpeg' } as any);
         try {
           const { updateMyProfile } = await import('@/src/services/business');
-          await updateMyProfile(formData);
+          const userId = (user as any)?.id as number | undefined;
+          await updateMyProfile(formData, userId);
           profileQuery.refetch();
           Alert.alert(t('common.success'), t('business.profile.imageUpdated'));
-        } catch {
-          Alert.alert(t('common.error'), t('common.errorOccurred'));
+        } catch (err: any) {
+          Alert.alert(t('common.error'), err?.message ?? t('common.errorOccurred'));
         }
       }
     } catch {
@@ -187,11 +188,12 @@ export default function BusinessProfileScreen() {
         formData.append('image', { uri, name: filename, type: 'image/jpeg' } as any);
         try {
           const { updateMyProfile } = await import('@/src/services/business');
-          await updateMyProfile(formData);
+          const userId = (user as any)?.id as number | undefined;
+          await updateMyProfile(formData, userId);
           profileQuery.refetch();
           Alert.alert(t('common.success'), t('business.profile.imageUpdated'));
-        } catch {
-          Alert.alert(t('common.error'), t('common.errorOccurred'));
+        } catch (err: any) {
+          Alert.alert(t('common.error'), err?.message ?? t('common.errorOccurred'));
         }
       }
     } catch {

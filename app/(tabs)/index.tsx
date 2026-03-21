@@ -174,8 +174,10 @@ export default function HomeScreen() {
     return () => clearInterval(timer);
   }, [carouselWidth]);
 
+  // Only place markers for restaurants that have real backend coordinates
   const mapMarkers = baskets
-    .map((b) => ({ id: b.id, name: b.merchantName, lat: b.latitude, lng: b.longitude }));
+    .filter((b) => b.hasCoords)
+    .map((b) => ({ id: b.id, name: b.merchantName, lat: b.latitude as number, lng: b.longitude as number }));
 
   return (
     <View style={[styles.container, { backgroundColor: heroVisible ? '#114b3c' : theme.colors.bg }]}>
@@ -489,10 +491,10 @@ export default function HomeScreen() {
                     />
                   )}
                   {baskets.map((basket) => (
-                    MapMarker ? (
+                    MapMarker && basket.hasCoords ? (
                       <MapMarker
                         key={basket.id}
-                        coordinate={{ latitude: basket.latitude, longitude: basket.longitude }}
+                        coordinate={{ latitude: basket.latitude as number, longitude: basket.longitude as number }}
                         title={basket.merchantName}
                       />
                     ) : null

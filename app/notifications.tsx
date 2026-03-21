@@ -32,6 +32,36 @@ function timeAgo(dateStr: string): string {
   return `${Math.floor(diff / 86400)}d`;
 }
 
+/**
+ * Backend stores notification title as a plain i18n key string
+ * e.g. "notif_title_new_reservation"
+ * and message as a JSON string: {"key":"notif_message_...","params":{...}}
+ * This helper resolves both to human-readable text.
+ */
+function resolveNotifText(
+  raw: string | null | undefined,
+  t: (key: string, opts?: Record<string, unknown>) => string,
+  fallback = ''
+): string {
+  if (!raw) return fallback;
+  // Try parsing as JSON first (for message field)
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object' && parsed.key) {
+      const i18nKey = `notifications.${parsed.key}`;
+      const translated = t(i18nKey, parsed.params ?? {});
+      // If the key wasn't found, i18next returns the key itself – fall back to raw
+      return translated !== i18nKey ? translated : raw;
+    }
+  } catch {
+    // Not JSON – treat as plain i18n key
+  }
+  // Try as a plain i18n key (for title field)
+  const i18nKey = `notifications.${raw}`;
+  const translated = t(i18nKey, {});
+  return translated !== i18nKey ? translated : raw;
+}
+
 export default function NotificationsScreen() {
   const { t } = useTranslation();
   const theme = useTheme();
@@ -110,7 +140,7 @@ export default function NotificationsScreen() {
                 ]}
                 numberOfLines={1}
               >
-                {item.title}
+                {resolveNotifText(item.title, t)}
               </Text>
             ) : null}
             <Text
@@ -124,7 +154,7 @@ export default function NotificationsScreen() {
               ]}
               numberOfLines={2}
             >
-              {item.message}
+              {resolveNotifText(item.message, t, item.message)}
             </Text>
           </View>
           <Text

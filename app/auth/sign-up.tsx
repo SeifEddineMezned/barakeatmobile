@@ -27,35 +27,67 @@ export default function SignUpScreen() {
   const [businessAddress, setBusinessAddress] = useState('');
 
   const handleSignUp = async () => {
-    const displayName = role === 'business' ? (businessName || name) : name;
-    if (!displayName.trim() || !email.trim() || !password.trim()) {
+    const displayName = role === 'business' ? (businessName.trim() || name.trim()) : name.trim();
+
+    // Client-side validation
+    if (!displayName) {
       Alert.alert(t('auth.error'), t('auth.fillAllFields'));
       return;
     }
+    if (!email.trim()) {
+      Alert.alert(t('auth.error'), t('auth.fillAllFields'));
+      return;
+    }
+    if (!password.trim()) {
+      Alert.alert(t('auth.error'), t('auth.fillAllFields'));
+      return;
+    }
+
+    // Business accounts cannot self-register — backend returns 403 for type=restaurant
+    // Redirect them to the access-request flow instead
+    if (role === 'business') {
+      Alert.alert(
+        t('business.auth.businessSignUp'),
+        'Restaurant accounts are created by admin. Please contact us at support@barakeat.com to request access.'
+      );
+      return;
+    }
+
+    // Buyer signup requires phone
+    if (!phone.trim()) {
+      Alert.alert(t('auth.error'), 'Phone number is required');
+      return;
+    }
+
     setLoading(true);
     try {
-      const res = await register({
-        name: displayName.trim(),
+      // Backend requires: { name, email, password, phone, type }
+      // type must be 'buyer' (NOT 'customer') — backend validates this exactly
+      const payload = {
+        name: displayName,
         email: email.trim(),
         password,
-        phone: phone.trim() || undefined,
-        role,
-      });
+        phone: phone.trim(),
+        type: 'buyer' as const,
+      };
+      console.log('[SignUp] Submitting payload:', JSON.stringify({ ...payload, password: '[hidden]' }));
+      const res = await register(payload);
+
+      // Backend returns user.type ('buyer'/'restaurant'), not user.role
+      const rawType = (res.user as any).type ?? 'buyer';
+      const resolvedRole: UserRole = rawType === 'restaurant' ? 'business' : 'customer';
+
       const user: UserType = {
         id: res.user.id,
         name: res.user.name,
         firstName: res.user.firstName,
         email: res.user.email,
         phone: res.user.phone,
-        role: (res.user.role as UserRole) || role,
+        role: resolvedRole,
       };
       signIn(user, res.token);
-      console.log('[SignUp] Success, navigating for role:', user.role);
-      if (user.role === 'business') {
-        router.replace('/(business)/dashboard' as never);
-      } else {
-        router.replace('/(tabs)');
-      }
+      console.log('[SignUp] Success, role resolved to:', resolvedRole);
+      router.replace('/(tabs)');
     } catch (err) {
       const msg = getErrorMessage(err);
       console.log('[SignUp] Error:', msg);

@@ -245,7 +245,15 @@
     "title": "الإشعارات",
     "markAllRead": "تحديد الكل كمقروء",
     "empty": "لا توجد إشعارات بعد",
-    "justNow": "الآن"
+    "justNow": "الآن",
+    "notif_title_new_reservation": "حجز جديد",
+    "notif_title_reservation_cancelled": "حجز ملغي",
+    "notif_title_pickup_confirmed": "تم تأكيد الاستلام",
+    "notif_title_review_received": "تقييم جديد",
+    "notif_message_new_reservation": "تم حجز {{count}} سلة في مطعمك",
+    "notif_message_reservation_cancelled": "تم إلغاء {{count}} حجز",
+    "notif_message_pickup_confirmed": "تم تأكيد استلامك من {{restaurant}}!",
+    "notif_message_review_received": "ترك لك أحد العملاء تقييمًا"
   },
   "business": {
     "dashboard": {

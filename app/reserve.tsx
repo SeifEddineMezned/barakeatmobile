@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Animated, Alert, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Animated, Alert, ActivityIndicator, Image } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import { X, Minus, Plus, CreditCard, Check } from 'lucide-react-native';
@@ -24,7 +24,7 @@ export default function ReserveScreen() {
   // Confirmation animation state
   const [showConfirmation, setShowConfirmation] = useState(false);
   const [confirmPhase, setConfirmPhase] = useState<'bouncing' | 'confirmed'>('bouncing');
-  const [confirmData, setConfirmData] = useState<{ pickupCode: string; pickupStart: string; pickupEnd: string; address: string } | null>(null);
+  const [confirmData, setConfirmData] = useState<{ pickupCode: string; pickupStart: string; pickupEnd: string; address: string; qrCodeUrl?: string } | null>(null);
 
   // Letter bounce animations
   const BARAKEAT = 'Barakeat'.split('');
@@ -70,7 +70,8 @@ export default function ReserveScreen() {
       console.log('[Reserve] Reservation created:', data.id);
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
 
-      const pickupCode = data.pickupCode ?? data.pickup_code ?? data.id?.substring(0, 6)?.toUpperCase() ?? '------';
+      // Use the pickup_code returned by the backend directly
+      const pickupCode = data.pickup_code ?? data.pickupCode ?? '';
 
       setConfirmData({
         pickupCode,
@@ -85,6 +86,18 @@ export default function ReserveScreen() {
       void queryClient.invalidateQueries({ queryKey: ['reservations'] });
       void queryClient.invalidateQueries({ queryKey: ['restaurants'] });
       void queryClient.invalidateQueries({ queryKey: ['restaurant', basketId] });
+
+      // Fetch the backend QR code image after reservation is confirmed
+      if (data.id) {
+        try {
+          const qrCodeUrl = await fetchReservationQRCode(String(data.id));
+          if (qrCodeUrl) {
+            setConfirmData((prev) => prev ? { ...prev, qrCodeUrl } : prev);
+          }
+        } catch (qrErr) {
+          console.log('[Reserve] QR fetch failed (non-critical):', qrErr);
+        }
+      }
     },
     onError: (err) => {
       const msg = getErrorMessage(err);
@@ -408,7 +421,29 @@ export default function ReserveScreen() {
                   marginTop: 32,
                   marginHorizontal: 32,
                   width: '85%',
+                  alignItems: 'center',
                 }}>
+                  {/* QR Code image from backend */}
+                  {confirmData?.qrCodeUrl ? (
+                    <>
+                      <Text style={{ color: 'rgba(255,255,255,0.7)', ...theme.typography.caption, textAlign: 'center', marginBottom: 12 }}>
+                        {t('reserve.success.scanQR', { defaultValue: 'Show this QR to the merchant' })}
+                      </Text>
+                      <View style={{
+                        backgroundColor: '#fff',
+                        borderRadius: 12,
+                        padding: 8,
+                        marginBottom: 16,
+                      }}>
+                        <Image
+                          source={{ uri: confirmData.qrCodeUrl }}
+                          style={{ width: 180, height: 180 }}
+                          resizeMode="contain"
+                        />
+                      </View>
+                    </>                  
+                  ) : null}
+
                   <Text style={{ color: 'rgba(255,255,255,0.7)', ...theme.typography.caption, textAlign: 'center' }}>
                     {t('reserve.success.pickupCode', { defaultValue: 'Pickup Code' })}
                   </Text>
@@ -424,7 +459,7 @@ export default function ReserveScreen() {
                     {confirmData?.pickupCode}
                   </Text>
 
-                  <View style={{ marginTop: 20, gap: 12 }}>
+                  <View style={{ marginTop: 20, gap: 12, alignSelf: 'stretch' }}>
                     <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
                       <Text style={{ color: 'rgba(255,255,255,0.6)', ...theme.typography.bodySm }}>
                         {t('reserve.when', { defaultValue: 'When' })}

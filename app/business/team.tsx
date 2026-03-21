@@ -9,6 +9,7 @@ import { useTheme } from '@/src/theme/ThemeProvider';
 import {
   fetchMyContext,
   fetchOrganizationDetails,
+  createOrganization,
   addMember,
   removeMember,
   updateMember,
@@ -57,6 +58,10 @@ export default function TeamScreen() {
   const [newLocationName, setNewLocationName] = useState('');
   const [newLocationAddress, setNewLocationAddress] = useState('');
 
+  // Create-org modal state (shown when user has no organization)
+  const [showCreateOrgModal, setShowCreateOrgModal] = useState(false);
+  const [newOrgName, setNewOrgName] = useState('');
+
   // Step 1: Get the user's org context (which org they belong to)
   const contextQuery = useQuery({
     queryKey: ['team-context'],
@@ -65,12 +70,13 @@ export default function TeamScreen() {
   });
 
   const orgId = contextQuery.data?.organization_id;
+  const hasOrg = !!orgId;
 
   // Step 2: Fetch full org details (org + members + locations) in ONE call
   const orgDetailsQuery = useQuery({
     queryKey: ['org-details', orgId],
     queryFn: () => fetchOrganizationDetails(orgId!),
-    enabled: !!orgId,
+    enabled: hasOrg,
     staleTime: 60_000,
   });
 
@@ -90,6 +96,23 @@ export default function TeamScreen() {
     setNewMemberRole('member');
     setNewMemberLocationId(null);
   };
+
+  const createOrgMutation = useMutation({
+    mutationFn: async () => {
+      if (!newOrgName.trim()) throw new Error('Organization name is required');
+      return createOrganization({ name: newOrgName.trim() });
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['team-context'] });
+      void queryClient.invalidateQueries({ queryKey: ['org-details'] });
+      setShowCreateOrgModal(false);
+      setNewOrgName('');
+      Alert.alert(t('common.success'), t('business.team.orgCreated', { defaultValue: 'Organization created!' }));
+    },
+    onError: (err: any) => {
+      Alert.alert(t('common.error'), err?.message ?? t('common.errorOccurred'));
+    },
+  });
 
   const addMemberMutation = useMutation({
     mutationFn: async () => {
@@ -226,8 +249,9 @@ export default function TeamScreen() {
     }
   };
 
-  const isLoading = contextQuery.isLoading || orgDetailsQuery.isLoading;
-  const isError = contextQuery.isError || orgDetailsQuery.isError;
+  const isLoading = contextQuery.isLoading || (hasOrg && orgDetailsQuery.isLoading);
+  const isError = contextQuery.isError || (hasOrg && orgDetailsQuery.isError);
+  const noOrg = !isLoading && !isError && !hasOrg;
 
   const permissionLabels: { key: PermissionKey; label: string }[] = [
     { key: 'availability', label: t('business.availability.title') },
@@ -251,6 +275,51 @@ export default function TeamScreen() {
 
   const canAddMember = newMemberName.trim() && newMemberEmail.trim() && newMemberPassword;
 
+  // ── Render ──────────────────────────────────────────────────────────────
+  if (isLoading) {
+    return (
+      <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]}>
+        <View style={[styles.header, { paddingHorizontal: theme.spacing.xl, paddingVertical: theme.spacing.md, borderBottomWidth: 1, borderBottomColor: theme.colors.divider }]}>
+          <TouchableOpacity onPress={() => router.back()} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
+            <X size={24} color={theme.colors.textPrimary} />
+          </TouchableOpacity>
+          <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h2, flex: 1, textAlign: 'center' as const }]}>
+            {t('business.profile.teamManagement')}
+          </Text>
+          <View style={{ width: 24 }} />
+        </View>
+        <View style={styles.centered}><ActivityIndicator size="large" color={theme.colors.primary} /></View>
+      </SafeAreaView>
+    );
+  }
+
+  if (isError) {
+    return (
+      <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]}>
+        <View style={[styles.header, { paddingHorizontal: theme.spacing.xl, paddingVertical: theme.spacing.md, borderBottomWidth: 1, borderBottomColor: theme.colors.divider }]}>
+          <TouchableOpacity onPress={() => router.back()} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
+            <X size={24} color={theme.colors.textPrimary} />
+          </TouchableOpacity>
+          <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h2, flex: 1, textAlign: 'center' as const }]}>
+            {t('business.profile.teamManagement')}
+          </Text>
+          <View style={{ width: 24 }} />
+        </View>
+        <View style={styles.centered}>
+          <Text style={[{ color: theme.colors.error, ...theme.typography.body, textAlign: 'center', marginBottom: 16 }]}>
+            {t('common.errorOccurred')}
+          </Text>
+          <TouchableOpacity
+            onPress={() => { void contextQuery.refetch(); void orgDetailsQuery.refetch(); }}
+            style={{ backgroundColor: theme.colors.primary, borderRadius: theme.radii.r12, paddingHorizontal: 24, paddingVertical: 12 }}
+          >
+            <Text style={{ color: '#fff', ...theme.typography.bodySm, fontWeight: '600' }}>Retry</Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]}>
       {/* Header */}
@@ -264,16 +333,79 @@ export default function TeamScreen() {
         <View style={{ width: 24 }} />
       </View>
 
-      {isLoading ? (
-        <View style={styles.centered}>
-          <ActivityIndicator size="large" color={theme.colors.primary} />
-        </View>
-      ) : isError ? (
-        <View style={styles.centered}>
-          <Text style={[{ color: theme.colors.error, ...theme.typography.body }]}>
-            {t('common.errorOccurred')}
+      {/* No-org state: prompt to create */}
+      {noOrg ? (
+        <ScrollView contentContainerStyle={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 32 }}>
+          <Users size={48} color={theme.colors.muted} />
+          <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h2, marginTop: 20, textAlign: 'center' }}>
+            {t('business.team.noOrgTitle', { defaultValue: 'No Organization Yet' })}
           </Text>
-        </View>
+          <Text style={{ color: theme.colors.textSecondary, ...theme.typography.body, marginTop: 10, textAlign: 'center' }}>
+            {t('business.team.noOrgDesc', { defaultValue: 'Create an organization to manage your team and locations.' })}
+          </Text>
+          <TouchableOpacity
+            onPress={() => setShowCreateOrgModal(true)}
+            style={{
+              backgroundColor: theme.colors.primary,
+              borderRadius: theme.radii.r12,
+              paddingHorizontal: 28,
+              paddingVertical: 14,
+              marginTop: 28,
+              flexDirection: 'row',
+              alignItems: 'center',
+            }}
+          >
+            <Plus size={18} color="#fff" />
+            <Text style={{ color: '#fff', ...theme.typography.button, marginLeft: 8 }}>
+              {t('business.team.createOrg', { defaultValue: 'Create Organization' })}
+            </Text>
+          </TouchableOpacity>
+
+          {/* Create Org Modal */}
+          <Modal visible={showCreateOrgModal} transparent animationType="fade" onRequestClose={() => setShowCreateOrgModal(false)}>
+            <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setShowCreateOrgModal(false)}>
+              <View
+                style={[styles.modalContent, { backgroundColor: theme.colors.surface, borderRadius: theme.radii.r24, padding: theme.spacing.xl, ...theme.shadows.shadowLg }]}
+                onStartShouldSetResponder={() => true}
+              >
+                <View style={styles.modalHeader}>
+                  <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3 }]}>
+                    {t('business.team.createOrg', { defaultValue: 'Create Organization' })}
+                  </Text>
+                  <TouchableOpacity onPress={() => setShowCreateOrgModal(false)}>
+                    <X size={20} color={theme.colors.textSecondary} />
+                  </TouchableOpacity>
+                </View>
+                <TextInput
+                  style={[styles.modalInput, { backgroundColor: theme.colors.bg, borderRadius: theme.radii.r12, color: theme.colors.textPrimary, ...theme.typography.body, marginTop: theme.spacing.lg }]}
+                  value={newOrgName}
+                  onChangeText={setNewOrgName}
+                  placeholder={t('business.team.orgNamePlaceholder', { defaultValue: 'Organization name' })}
+                  placeholderTextColor={theme.colors.muted}
+                  autoCapitalize="words"
+                />
+                <TouchableOpacity
+                  onPress={() => createOrgMutation.mutate()}
+                  disabled={createOrgMutation.isPending || !newOrgName.trim()}
+                  style={[{
+                    backgroundColor: !newOrgName.trim() ? theme.colors.muted : theme.colors.primary,
+                    borderRadius: theme.radii.r12,
+                    padding: theme.spacing.lg,
+                    marginTop: theme.spacing.lg,
+                  }]}
+                >
+                  {createOrgMutation.isPending ? (
+                    <ActivityIndicator color="#fff" />
+                  ) : (
+                    <Text style={[{ color: '#fff', ...theme.typography.button, textAlign: 'center' as const }]}>
+                      {t('common.create', { defaultValue: 'Create' })}
+                    </Text>
+                  )}
+                </TouchableOpacity>
+              </View>
+            </TouchableOpacity>
+          </Modal>
+        </ScrollView>
       ) : (
         <ScrollView style={styles.content} contentContainerStyle={{ padding: theme.spacing.xl }} showsVerticalScrollIndicator={false}>
           {/* Organization Info Card */}

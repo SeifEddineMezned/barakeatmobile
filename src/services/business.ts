@@ -1,4 +1,4 @@
-import { apiClient } from '@/src/lib/api';
+import { apiClient, getAdminToken } from '@/src/lib/api';
 
 // ─── Profile ────────────────────────────────────────────────────────────────
 
@@ -40,11 +40,14 @@ export async function fetchMyProfile(): Promise<BusinessProfileFromAPI> {
   return data as BusinessProfileFromAPI;
 }
 
-export async function updateMyProfile(formData: FormData): Promise<BusinessProfileFromAPI> {
+export async function updateMyProfile(formData: FormData, userId?: number): Promise<BusinessProfileFromAPI> {
   console.log('[Business] Updating my profile');
-  const res = await apiClient.put<BusinessProfileFromAPI | { restaurant: BusinessProfileFromAPI }>('/api/restaurants/my/profile', formData, {
-    headers: { 'Content-Type': 'multipart/form-data' },
-  });
+  const headers: Record<string, string> = { 'Content-Type': 'multipart/form-data' };
+  if (userId) {
+    headers['x-admin-token'] = getAdminToken(userId);
+    console.log('[Business] Attaching x-admin-token for profile update');
+  }
+  const res = await apiClient.put<BusinessProfileFromAPI | { restaurant: BusinessProfileFromAPI }>('/api/restaurants/my/profile', formData, { headers });
   const data = res.data;
   if (data && typeof data === 'object' && 'restaurant' in data) return (data as any).restaurant;
   return data as BusinessProfileFromAPI;
@@ -81,10 +84,27 @@ export async function fetchMyBaskets(): Promise<BusinessBasketFromAPI[]> {
 }
 
 export async function createBasket(formData: FormData): Promise<BusinessBasketFromAPI> {
-  console.log('[Business] Creating basket');
+  console.log('[Business] Creating basket (multipart)');
   const res = await apiClient.post<BusinessBasketFromAPI | { basket: BusinessBasketFromAPI }>('/api/baskets', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
   });
+  const data = res.data;
+  if (data && typeof data === 'object' && 'basket' in data) return (data as any).basket;
+  return data as BusinessBasketFromAPI;
+}
+
+export async function createBasketJSON(payload: {
+  name: string;
+  description?: string;
+  category?: string;
+  original_price?: number;
+  selling_price: number;
+  quantity: number;
+  pickup_start_time: string;
+  pickup_end_time: string;
+}): Promise<BusinessBasketFromAPI> {
+  console.log('[Business] Creating basket (JSON):', JSON.stringify(payload));
+  const res = await apiClient.post<BusinessBasketFromAPI | { basket: BusinessBasketFromAPI }>('/api/baskets', payload);
   const data = res.data;
   if (data && typeof data === 'object' && 'basket' in data) return (data as any).basket;
   return data as BusinessBasketFromAPI;
@@ -120,9 +140,21 @@ export async function updateQuantity(availableQuantity: number): Promise<void> {
   await apiClient.put('/api/restaurants/my/quantity', { available_quantity: availableQuantity });
 }
 
-export async function updateAvailability(data: { availability_status?: string; is_paused?: boolean }): Promise<void> {
-  console.log('[Business] Updating availability:', data);
-  await apiClient.put('/api/restaurants/my/availability', data);
+export async function updateAvailability(data: {
+  availability_status?: string;
+  is_paused?: boolean;
+  pickup_start_time?: string;
+  pickup_end_time?: string;
+  available_quantity?: number;
+  default_daily_quantity?: number;
+}, userId?: number): Promise<void> {
+  console.log('[Business] Updating availability:', JSON.stringify(data));
+  const headers: Record<string, string> = {};
+  if (userId) {
+    headers['x-admin-token'] = getAdminToken(userId);
+    console.log('[Business] Attaching x-admin-token for availability update');
+  }
+  await apiClient.put('/api/restaurants/my/availability', data, { headers });
 }
 
 // ─── Today's Orders ─────────────────────────────────────────────────────────
@@ -155,14 +187,32 @@ export async function fetchTodayOrders(): Promise<TodayReservationFromAPI[]> {
   return [];
 }
 
-export async function confirmPickup(reservationId: number | string, pickupCode: string): Promise<void> {
+export async function confirmPickup(reservationId: number | string, pickupCode: string, buyerId?: number | string): Promise<void> {
   console.log('[Business] Confirming pickup:', reservationId);
-  await apiClient.post(`/api/reservations/${reservationId}/confirm-pickup`, { pickup_code: pickupCode });
+  const payload: Record<string, unknown> = { pickup_code: pickupCode };
+  if (buyerId !== undefined && buyerId !== null) {
+    payload.buyer_id = buyerId;
+  }
+  await apiClient.post(`/api/reservations/${reservationId}/confirm-pickup`, payload);
 }
 
-export async function verifyQR(qrData: string): Promise<{ valid: boolean; reservation?: TodayReservationFromAPI }> {
+export async function verifyQR(qrData: string): Promise<{ valid: boolean; reservation_id?: string; buyer_id?: number; buyer_name?: string; quantity?: number; pickup_code?: string; status?: string }> {
   console.log('[Business] Verifying QR code');
-  const res = await apiClient.post<{ valid: boolean; reservation?: TodayReservationFromAPI }>('/api/reservations/verify-qr', { qr_data: qrData });
+  // Backend expects { reservation_id, pickup_code } parsed from the QR JSON
+  let reservation_id: string | undefined;
+  let pickup_code: string | undefined;
+  try {
+    const parsed = JSON.parse(qrData);
+    reservation_id = parsed.reservation_id ? String(parsed.reservation_id) : undefined;
+    pickup_code = parsed.pickup_code ?? undefined;
+  } catch {
+    // Not JSON, treat as raw pickup code
+    pickup_code = qrData.trim();
+  }
+  if (!reservation_id || !pickup_code) {
+    throw new Error('Invalid QR code data');
+  }
+  const res = await apiClient.post<{ valid: boolean; reservation_id?: string; buyer_id?: number; buyer_name?: string; quantity?: number; pickup_code?: string; status?: string }>('/api/reservations/verify-qr', { reservation_id, pickup_code });
   return res.data;
 }
 

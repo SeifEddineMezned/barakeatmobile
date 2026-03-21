@@ -49,8 +49,10 @@ export interface Basket {
   quantityTotal: number;
   distance: number;
   address: string;
-  latitude: number;
-  longitude: number;
+  latitude: number | null;
+  longitude: number | null;
+  /** True only when the backend returned real, finite lat/lng values. */
+  hasCoords?: boolean;
   exampleItems: string[];
   imageUrl?: string;
   isActive: boolean;
