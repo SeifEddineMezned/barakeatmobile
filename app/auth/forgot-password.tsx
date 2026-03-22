@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { ArrowLeft, Mail, KeyRound, Lock } from 'lucide-react-native';
 import { useTheme } from '@/src/theme/ThemeProvider';
+import { StatusBar } from 'expo-status-bar';
 import { PrimaryCTAButton } from '@/src/components/PrimaryCTAButton';
 import { forgotPassword, verifyResetOtp, resetPassword } from '@/src/services/auth';
 import { getErrorMessage } from '@/src/lib/api';
@@ -19,6 +20,7 @@ export default function ForgotPasswordScreen() {
   const [step, setStep] = useState<Step>('email');
   const [email, setEmail] = useState('');
   const [otp, setOtp] = useState('');
+  const [resetToken, setResetToken] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -55,7 +57,8 @@ export default function ForgotPasswordScreen() {
     }
     setLoading(true);
     try {
-      await verifyResetOtp(email.trim(), otp.trim());
+      const token = await verifyResetOtp(email.trim(), otp.trim());
+      setResetToken(token);
       setStep('newPassword');
     } catch (err) {
       Alert.alert(t('auth.error'), getErrorMessage(err));
@@ -63,6 +66,8 @@ export default function ForgotPasswordScreen() {
       setLoading(false);
     }
   };
+
+  const PASSWORD_REGEX = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*(),.?":{}|<>]).{8,}$/;
 
   const handleResetPassword = async () => {
     if (!newPassword.trim() || !confirmPassword.trim()) {
@@ -73,13 +78,13 @@ export default function ForgotPasswordScreen() {
       Alert.alert(t('auth.error'), t('auth.passwordMismatch'));
       return;
     }
-    if (newPassword.length < 6) {
-      Alert.alert(t('auth.error'), t('auth.passwordTooShort'));
+    if (!PASSWORD_REGEX.test(newPassword)) {
+      Alert.alert(t('auth.error'), t('auth.passwordRequirements'));
       return;
     }
     setLoading(true);
     try {
-      await resetPassword(email.trim(), otp.trim(), newPassword);
+      await resetPassword(resetToken, newPassword);
       Alert.alert(t('common.success'), t('auth.passwordResetSuccess'), [
         { text: t('common.ok'), onPress: () => router.replace('/auth/sign-in' as never) },
       ]);
@@ -116,6 +121,7 @@ export default function ForgotPasswordScreen() {
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]}>
+      <StatusBar style="dark" />
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={styles.keyboardView}
@@ -213,9 +219,14 @@ export default function ForgotPasswordScreen() {
                 <Text style={[styles.title, { color: theme.colors.textPrimary, ...theme.typography.h1, marginBottom: theme.spacing.sm }]}>
                   {t('auth.newPasswordTitle')}
                 </Text>
-                <Text style={[styles.subtitle, { color: theme.colors.textSecondary, ...theme.typography.body, marginBottom: theme.spacing.xxl }]}>
+                <Text style={[styles.subtitle, { color: theme.colors.textSecondary, ...theme.typography.body, marginBottom: theme.spacing.lg }]}>
                   {t('auth.newPasswordDesc')}
                 </Text>
+                <View style={{ backgroundColor: theme.colors.primary + '15', borderRadius: theme.radii.r12, padding: 12, marginBottom: theme.spacing.xxl }}>
+                  <Text style={[theme.typography.caption, { color: theme.colors.primary }]}>
+                    {t('auth.passwordRequirements')}
+                  </Text>
+                </View>
                 <View style={[styles.inputContainer, { marginBottom: theme.spacing.xl }]}>
                   <Text style={[styles.label, { color: theme.colors.textPrimary, ...theme.typography.bodySm }]}>
                     {t('auth.newPassword')}

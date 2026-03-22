@@ -222,7 +222,7 @@ export default function OrdersScreen() {
         <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h1 }]}>{t('orders.title')}</Text>
       </View>
 
-      <ScrollView style={styles.content} contentContainerStyle={[{ padding: theme.spacing.xl }]}>
+      <ScrollView style={styles.content} contentContainerStyle={[{ padding: theme.spacing.xl, paddingBottom: 100 }]}>
         {reservationsQuery.isLoading ? (
           <View style={styles.centerState}>
             <ActivityIndicator size="large" color={theme.colors.primary} />
@@ -260,11 +260,11 @@ export default function OrdersScreen() {
               <View style={{ flexDirection: 'row', justifyContent: 'space-around', marginTop: 16 }}>
                 <View style={{ alignItems: 'center' }}>
                   <Text style={{ color: '#fff', ...theme.typography.h2 }}>{moneySaved.toFixed(0)}</Text>
-                  <Text style={{ color: 'rgba(255,255,255,0.7)', ...theme.typography.caption }}>TND saved</Text>
+                  <Text style={{ color: 'rgba(255,255,255,0.7)', ...theme.typography.caption }}>{t('orders.tndSaved')}</Text>
                 </View>
                 <View style={{ alignItems: 'center' }}>
                   <Text style={{ color: '#fff', ...theme.typography.h2 }}>{co2Saved.toFixed(1)}</Text>
-                  <Text style={{ color: 'rgba(255,255,255,0.7)', ...theme.typography.caption }}>kg CO₂</Text>
+                  <Text style={{ color: 'rgba(255,255,255,0.7)', ...theme.typography.caption }}>{t('orders.kgCO2')}</Text>
                 </View>
                 <View style={{ alignItems: 'center' }}>
                   <Text style={{ color: '#fff', ...theme.typography.h2 }}>{totalOrders}</Text>

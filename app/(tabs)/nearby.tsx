@@ -18,8 +18,8 @@ import { useTranslation } from 'react-i18next';
 import { useRouter } from 'expo-router';
 import { useQuery } from '@tanstack/react-query';
 import { Search, Navigation, X, Clock, MapPin, ShoppingBag, ChevronUp } from 'lucide-react-native';
-import * as Haptics from 'expo-haptics';
 import * as Location from 'expo-location';
+import { StatusBar } from 'expo-status-bar';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { MapFallback } from '@/src/components/MapFallback';
 import { fetchRestaurants } from '@/src/services/restaurants';
@@ -165,7 +165,6 @@ function RadiusSlider({
         if (km !== lastKm.current) {
           lastKm.current = km;
           onChangeRef.current(km);
-          void Haptics.selectionAsync();
         }
       },
       // Release — snap thumb to final integer km
@@ -268,6 +267,32 @@ export default function DiscoverScreen() {
   const [radius, setRadius] = useState(5);
   const [searchQuery, setSearchQuery] = useState('');
 
+  // Animated radius circle pulse
+  const pulseAnim = useRef(new Animated.Value(0)).current;
+  const [circleFill, setCircleFill] = useState(0.08);
+  const [circleStroke, setCircleStroke] = useState(0.55);
+
+  // Resting opacity inversely proportional to radius (small radius = denser color)
+  const getRestingFill = (r: number) => 0.05 + (1 - Math.min(r, 20) / 20) * 0.13;
+  const getRestingStroke = (r: number) => 0.35 + (1 - Math.min(r, 20) / 20) * 0.35;
+
+  useEffect(() => {
+    const resting = getRestingFill(radius);
+    const restingS = getRestingStroke(radius);
+    const id = pulseAnim.addListener(({ value }) => {
+      setCircleFill(resting + value * 0.22);
+      setCircleStroke(restingS + value * 0.3);
+    });
+    Animated.sequence([
+      Animated.timing(pulseAnim, { toValue: 1, duration: 220, useNativeDriver: false }),
+      Animated.spring(pulseAnim, { toValue: 0, friction: 4, tension: 50, useNativeDriver: false }),
+    ]).start(() => {
+      setCircleFill(resting);
+      setCircleStroke(restingS);
+    });
+    return () => pulseAnim.removeListener(id);
+  }, [radius]);
+
   // Real device location
   const [userLocation, setUserLocation] = useState<{ latitude: number; longitude: number } | null>(null);
   const [locationStatus, setLocationStatus] = useState<'loading' | 'granted' | 'denied'>('loading');
@@ -304,7 +329,6 @@ export default function DiscoverScreen() {
 
   // Re-center the map on the user's real position
   const handleRecenter = useCallback(() => {
-    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     if (mapRef.current && userLocation) {
       mapRef.current.animateToRegion({
         ...userLocation,
@@ -397,7 +421,6 @@ export default function DiscoverScreen() {
   // Handlers
   const handleMarkerPress = useCallback(
     (basket: BasketWithDist) => {
-      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
       setSelectedBasket(basket);
       Animated.spring(sheetHeight, { toValue: COLLAPSED_HEIGHT, useNativeDriver: false, friction: 10 }).start();
       isExpandedRef.current = false;
@@ -421,6 +444,7 @@ export default function DiscoverScreen() {
 
   return (
     <View style={styles.container}>
+      <StatusBar style="dark" />
       {/* ── Full-screen Map ── */}
       {Platform.OS !== 'web' && MapView ? (
         <MapView
@@ -543,13 +567,13 @@ export default function DiscoverScreen() {
             </Marker>
           )}
 
-          {/* Radius circle — clean teal, subtle but visible */}
+          {/* Radius circle — pulses on radius change, opacity scales with size */}
           {Circle && (
             <Circle
               center={center}
               radius={radius * 1000}
-              fillColor="rgba(17, 75, 60, 0.08)"
-              strokeColor="rgba(17, 75, 60, 0.55)"
+              fillColor={`rgba(17, 75, 60, ${circleFill.toFixed(3)})`}
+              strokeColor={`rgba(17, 75, 60, ${circleStroke.toFixed(3)})`}
               strokeWidth={2.5}
             />
           )}

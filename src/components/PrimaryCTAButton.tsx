@@ -1,6 +1,5 @@
 import React, { useCallback } from 'react';
 import { TouchableOpacity, Text, StyleSheet, ActivityIndicator, Animated } from 'react-native';
-import * as Haptics from 'expo-haptics';
 import { useTheme } from '@/src/theme/ThemeProvider';
 
 interface PrimaryCTAButtonProps {
@@ -22,7 +21,6 @@ export function PrimaryCTAButton({
   const scaleAnim = React.useRef(new Animated.Value(1)).current;
 
   const handlePressIn = useCallback(() => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     Animated.spring(scaleAnim, {
       toValue: 0.98,
       useNativeDriver: true,

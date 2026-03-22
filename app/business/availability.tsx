@@ -4,10 +4,9 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import { X, Minus, Plus } from 'lucide-react-native';
-import * as Haptics from 'expo-haptics';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { PrimaryCTAButton } from '@/src/components/PrimaryCTAButton';
-import { useQuery, useMutation } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { fetchMyProfile, updateQuantity, updateAvailability } from '@/src/services/business';
 import { useAuthStore } from '@/src/stores/authStore';
 
@@ -16,6 +15,8 @@ export default function AvailabilityScreen() {
   const theme = useTheme();
   const router = useRouter();
   const { user } = useAuthStore();
+  const queryClient = useQueryClient();
+  const hasInitializedRef = React.useRef(false);
 
   const [quantity, setQuantity] = useState(0);
   const [pickupStart, setPickupStart] = useState('18:00');
@@ -29,7 +30,8 @@ export default function AvailabilityScreen() {
   });
 
   React.useEffect(() => {
-    if (profileQuery.data) {
+    if (profileQuery.data && !hasInitializedRef.current) {
+      hasInitializedRef.current = true;
       setQuantity(profileQuery.data.available_quantity ?? profileQuery.data.default_daily_quantity ?? 0);
       setPickupStart(profileQuery.data.pickup_start_time?.substring(0, 5) ?? '18:00');
       setPickupEnd(profileQuery.data.pickup_end_time?.substring(0, 5) ?? '19:00');
@@ -53,6 +55,8 @@ export default function AvailabilityScreen() {
       }, userId);
     },
     onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['my-profile'] });
+      void queryClient.invalidateQueries({ queryKey: ['my-baskets'] });
       Alert.alert(t('common.success'), t('business.availability.saved'));
       router.back();
     },
@@ -63,12 +67,10 @@ export default function AvailabilityScreen() {
   });
 
   const handleDecrement = () => {
-    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setQuantity((prev) => Math.max(0, prev - 1));
   };
 
   const handleIncrement = () => {
-    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setQuantity((prev) => prev + 1);
   };
 
@@ -106,7 +108,7 @@ export default function AvailabilityScreen() {
         {/* Quantity Section */}
         <View style={[styles.section, { backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, padding: theme.spacing.xl, marginTop: theme.spacing.lg, ...theme.shadows.shadowSm }]}>
           <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, marginBottom: theme.spacing.lg }]}>
-            {t('business.availability.quantity')}
+            {t('business.availability.quantity just ')} 
           </Text>
           <View style={styles.quantitySelector}>
             <TouchableOpacity
@@ -173,7 +175,6 @@ export default function AvailabilityScreen() {
             <Switch
               value={isPaused}
               onValueChange={(val) => {
-                void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
                 setIsPaused(val);
               }}
               trackColor={{ false: theme.colors.divider, true: theme.colors.error + '50' }}

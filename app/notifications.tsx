@@ -14,6 +14,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { CheckCheck, ArrowLeft } from 'lucide-react-native';
 import { useRouter } from 'expo-router';
 import { useTheme } from '@/src/theme/ThemeProvider';
+import { StatusBar } from 'expo-status-bar';
 import {
   fetchNotifications,
   markNotificationRead,
@@ -176,6 +177,7 @@ export default function NotificationsScreen() {
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]} edges={['top']}>
+      <StatusBar style="dark" />
       <View
         style={[
           styles.header,

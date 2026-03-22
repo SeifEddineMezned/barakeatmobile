@@ -1,5 +1,6 @@
 import React, { useCallback, useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Switch, Alert, Modal, TextInput } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import { useRouter } from 'expo-router';
@@ -8,6 +9,7 @@ import {
   ChevronRight, Lock, FileText, Headphones, X, Trash2,
 } from 'lucide-react-native';
 import { useTheme } from '@/src/theme/ThemeProvider';
+import { StatusBar } from 'expo-status-bar';
 import { useAuthStore } from '@/src/stores/authStore';
 import { useSplashStore } from '@/src/stores/splashStore';
 import { logout } from '@/src/services/auth';
@@ -44,6 +46,7 @@ export default function SettingsScreen() {
 
   const handleLanguageChange = useCallback((langCode: string) => {
     void i18n.changeLanguage(langCode);
+    void AsyncStorage.setItem('app_lang', langCode);
     setCurrentLang(langCode);
     setShowLanguageModal(false);
     console.log('[Settings] Language changed to:', langCode);
@@ -110,20 +113,20 @@ export default function SettingsScreen() {
 
   const deleteAccount = useCallback(() => {
     Alert.alert(
-      'Delete Account',
-      'Are you sure you want to permanently delete your account? This action cannot be undone.',
+      t('profile.deleteAccount'),
+      t('profile.deleteAccountConfirm'),
       [
-        { text: 'Cancel', style: 'cancel' },
+        { text: t('common.cancel'), style: 'cancel' },
         {
-          text: 'Delete',
+          text: t('common.delete'),
           style: 'destructive',
           onPress: () => {
-            Alert.alert('Feature coming soon', 'Account deletion will be available in a future update.');
+            Alert.alert(t('common.featureSoon'), t('profile.deleteAccountSoon'));
           },
         },
       ]
     );
-  }, []);
+  }, [t]);
 
   const handleSignOut = useCallback(async () => {
     await logout();
@@ -134,6 +137,7 @@ export default function SettingsScreen() {
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]} edges={['top']}>
+      <StatusBar style="dark" />
       <View style={[styles.header, { paddingHorizontal: theme.spacing.xl, paddingVertical: theme.spacing.md }]}>
         <TouchableOpacity onPress={() => router.back()}>
           <ArrowLeft size={24} color={theme.colors.textPrimary} />
@@ -316,7 +320,7 @@ export default function SettingsScreen() {
           style={[{ backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, ...theme.shadows.shadowSm, padding: theme.spacing.lg, flexDirection: 'row', justifyContent: 'center', alignItems: 'center' }]}
         >
           <Trash2 size={20} color="#e53e3e" />
-          <Text style={[{ color: '#e53e3e', ...theme.typography.body, marginLeft: 12 }]}>Delete Account</Text>
+          <Text style={[{ color: '#e53e3e', ...theme.typography.body, marginLeft: 12 }]}>{t('profile.deleteAccount')}</Text>
         </TouchableOpacity>
 
         <View style={{ height: 80 }} />

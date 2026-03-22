@@ -13,7 +13,6 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import { useRouter } from 'expo-router';
 import { QrCode, X, CheckCircle, Keyboard, Camera, SwitchCamera } from 'lucide-react-native';
-import * as Haptics from 'expo-haptics';
 import { useQueryClient } from '@tanstack/react-query';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 
@@ -60,7 +59,6 @@ export default function ScanQRScreen() {
       }
       // Pass buyer_id so backend can send pickup notification to the buyer
       await confirmPickup(String(match.id), pickupCode.trim().toUpperCase(), match.buyer_id);
-      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       setVerified(true);
       setMatchedOrder(match);
       void queryClient.invalidateQueries({ queryKey: ['today-orders'] });
@@ -75,7 +73,6 @@ export default function ScanQRScreen() {
   const handleBarCodeScanned = ({ data }: { data: string }) => {
     if (scanned || loading) return;
     setScanned(true);
-    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
 
     // Try using verifyQR for full backend verification (parses JSON QR data internally)
     setLoading(true);
@@ -92,7 +89,6 @@ export default function ScanQRScreen() {
           verifyResult.pickup_code ?? '',
           verifyResult.buyer_id
         );
-        void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         // Build a minimal matched order object from verifyResult for display
         setMatchedOrder({
           id: verifyResult.reservation_id ?? '',

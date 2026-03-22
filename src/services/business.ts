@@ -65,6 +65,7 @@ export interface BusinessBasketFromAPI {
   selling_price?: string | number;
   quantity?: number;
   available_quantity?: number;
+  restaurant_available_quantity?: number | null;
   pickup_start_time?: string | null;
   pickup_end_time?: string | null;
   image_url?: string | null;

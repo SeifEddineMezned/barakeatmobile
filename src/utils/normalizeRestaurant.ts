@@ -1,6 +1,69 @@
 import type { Basket } from '@/src/types';
 import type { RestaurantFromAPI } from '@/src/services/restaurants';
 
+// Raw shape returned by GET /api/baskets/:id and GET /api/baskets/location/:id
+export interface RawBasketFromAPI {
+  id: number | string;
+  restaurant_id?: number | string;
+  name?: string | null;
+  description?: string | null;
+  original_price?: number | string | null;
+  selling_price?: number | string | null;
+  quantity?: number | null;
+  available_quantity?: number | null;
+  pickup_start_time?: string | null;
+  pickup_end_time?: string | null;
+  status?: string | null;
+  category?: string | null;
+  image_url?: string | null;
+  restaurant_name?: string | null;
+  restaurant_address?: string | null;
+  restaurant_image?: string | null;
+  [key: string]: unknown;
+}
+
+export function normalizeRawBasketToBasket(b: RawBasketFromAPI, fallbackRestaurantName?: string): Basket {
+  const originalPrice = Number(b.original_price ?? 0);
+  const discountedPrice = Number(b.selling_price ?? 0);
+  const discountPercentage = originalPrice > 0
+    ? Math.round(((originalPrice - discountedPrice) / originalPrice) * 100)
+    : 0;
+
+  const quantityLeft = Number(b.available_quantity ?? b.quantity ?? 0);
+  const quantityTotal = Number(b.quantity ?? 0);
+
+  return {
+    id: String(b.id),
+    merchantId: String(b.restaurant_id ?? ''),
+    merchantName: b.restaurant_name ?? fallbackRestaurantName ?? 'Unknown',
+    merchantLogo: b.restaurant_image ?? undefined,
+    merchantRating: undefined,
+    reviewCount: undefined,
+    reviews: undefined,
+    description: b.description ?? undefined,
+    name: b.name ?? 'Surprise Bag',
+    category: mapCategory(typeof b.category === 'string' ? b.category : null),
+    originalPrice,
+    discountedPrice,
+    discountPercentage,
+    pickupWindow: {
+      start: formatTime(b.pickup_start_time) || '18:00',
+      end: formatTime(b.pickup_end_time) || '19:00',
+    },
+    quantityLeft,
+    quantityTotal: Math.max(quantityTotal, quantityLeft),
+    distance: 0,
+    address: b.restaurant_address ?? '',
+    latitude: null as unknown as number,
+    longitude: null as unknown as number,
+    hasCoords: false,
+    exampleItems: b.description ? parseBagDescription(b.description) : [],
+    imageUrl: b.image_url ?? undefined,
+    isActive: b.status === 'available',
+    isSupermarket: b.category === 'supermarket',
+  };
+}
+
 function formatTime(timeStr: string | null | undefined): string {
   if (!timeStr) return '';
   const parts = timeStr.split(':');
@@ -36,7 +99,7 @@ export function normalizeRestaurantToBasket(r: RestaurantFromAPI): Basket {
     merchantId: String(r.id),
     merchantName: r.name ?? 'Unknown',
     merchantLogo: r.image_url ?? undefined,
-    merchantRating: undefined,
+    merchantRating: r.avg_rating != null ? Number(r.avg_rating) : undefined,
     reviewCount: undefined,
     reviews: undefined,
     description: bagDesc || description || undefined,

@@ -21,6 +21,7 @@ export interface RestaurantFromAPI {
   pickup_instructions?: string | null;
   latitude?: number | null;
   longitude?: number | null;
+  avg_rating?: number | string | null;
   reserved_today?: number;
   available_left?: number;
   pickup_expired?: boolean;

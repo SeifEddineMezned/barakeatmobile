@@ -2,16 +2,16 @@ import React, { useState, useCallback } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Modal, Dimensions, ActivityIndicator, Image, Animated as RNAnimated } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
-import { TrendingUp, ShoppingBag, Banknote, Clock, Leaf, Star, X, Package, AlertCircle, Store, Settings, Bell } from 'lucide-react-native';
+import { TrendingUp, ShoppingBag, Banknote, Clock, Leaf, Star, X, Package, AlertCircle, Store, Settings, Bell, ChevronDown, Check, Building2 } from 'lucide-react-native';
 import { useQuery } from '@tanstack/react-query';
 import { useRouter } from 'expo-router';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { StatusBar } from 'expo-status-bar';
 import { useAuthStore } from '@/src/stores/authStore';
 import { fetchStats, fetchTodayOrders, fetchAnalytics } from '@/src/services/business';
+import { fetchMyContext, fetchOrganizationDetails } from '@/src/services/teams';
 import { apiClient } from '@/src/lib/api';
 import { LineChart } from '@/src/components/LineChart';
-import { FeatureFlags } from '@/src/lib/featureFlags';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
 
@@ -140,22 +140,46 @@ export default function BusinessDashboard() {
   const { user } = useAuthStore();
   const insets = useSafeAreaInsets();
 
+  const [selectedLocationId, setSelectedLocationId] = useState<number | null>(null);
+  const [showLocationModal, setShowLocationModal] = useState(false);
+  const [isSwitchingLocation, setIsSwitchingLocation] = useState(false);
+  const switchSpinAnim = React.useRef(new RNAnimated.Value(0)).current;
+
+  const handleLocationSwitch = React.useCallback((id: number | null) => {
+    setShowLocationModal(false);
+    setIsSwitchingLocation(true);
+    switchSpinAnim.setValue(0);
+    RNAnimated.loop(
+      RNAnimated.timing(switchSpinAnim, {
+        toValue: 1,
+        duration: 700,
+        useNativeDriver: true,
+        easing: (t) => t,
+      })
+    ).start();
+    setTimeout(() => {
+      setSelectedLocationId(id);
+      setIsSwitchingLocation(false);
+      switchSpinAnim.stopAnimation();
+    }, 700);
+  }, [switchSpinAnim]);
+
   const statsQuery = useQuery({
-    queryKey: ['business-stats'],
+    queryKey: ['business-stats', selectedLocationId],
     queryFn: fetchStats,
     staleTime: 60_000,
     retry: 1,
   });
 
   const analyticsQuery = useQuery({
-    queryKey: ['business-analytics'],
+    queryKey: ['business-analytics', selectedLocationId],
     queryFn: fetchAnalytics,
     staleTime: 60_000,
     retry: 1,
   });
 
   const todayQuery = useQuery({
-    queryKey: ['today-orders'],
+    queryKey: ['today-orders', selectedLocationId],
     queryFn: fetchTodayOrders,
     staleTime: 30_000,
     refetchInterval: 30_000,
@@ -163,7 +187,7 @@ export default function BusinessDashboard() {
   });
 
   const profileQuery = useQuery({
-    queryKey: ['my-profile'],
+    queryKey: ['my-profile', selectedLocationId],
     queryFn: async () => {
       const res = await apiClient.get('/api/restaurants/my/profile');
       return res.data as any;
@@ -207,27 +231,36 @@ export default function BusinessDashboard() {
     activeBaskets: profileQuery.data?.available_quantity ?? 0,
     averageRating: statsData?.average_rating ?? profileQuery.data?.average_rating ?? 0,
     dailySales: (analytics?.weekly ?? []).map((d: any) => d.baskets_sold ?? 0),
-    dailyLabels: (analytics?.weekly ?? []).map((d: any) => d.dayName ?? ''),
+    dailyLabels: (analytics?.weekly ?? []).map((d: any) => d.dayName ? t(`business.dashboard.days.${d.dayName}`, { defaultValue: d.dayName }) : ''),
     weeklySales: (analytics?.monthly ?? []).map((m: any) => m.baskets_sold ?? 0),
-    weeklyLabels: (analytics?.monthly ?? []).map((m: any) => m.monthName ?? ''),
+    weeklyLabels: (analytics?.monthly ?? []).map((m: any) => m.monthName ? t(`business.dashboard.months.${m.monthName}`, { defaultValue: m.monthName }) : ''),
     weeklyRevenue: (analytics?.monthly ?? []).map((m: any) => m.revenue ?? 0),
   };
 
   const [showRatingModal, setShowRatingModal] = useState(false);
 
-  // Easter egg: Logo tap × 5
-  const [logoPressCount, setLogoPressCount] = useState(0);
-  const [lastPressTime, setLastPressTime] = useState(0);
-  const [showEggModal, setShowEggModal] = useState(false);
-  const [eggFact, setEggFact] = useState('');
+  const teamContextQuery = useQuery({
+    queryKey: ['team-context'],
+    queryFn: fetchMyContext,
+    staleTime: 300_000,
+    retry: 1,
+  });
 
-  const FOOD_FACTS = [
-    'Tunisia wastes ~30% of food produced each year 🌾',
-    'The average Tunisian household throws away 80kg of food annually 🗑️',
-    'Food waste accounts for 10% of global greenhouse gases 🌍',
-    'Saving one meal prevents ~2.5kg of CO₂ emissions ♻️',
-    'Barakeat has helped rescue thousands of meals this year 🧺',
-  ];
+  const orgId = teamContextQuery.data?.organization_id;
+
+  const orgDetailsQuery = useQuery({
+    queryKey: ['org-details', orgId],
+    queryFn: () => fetchOrganizationDetails(orgId!),
+    enabled: !!orgId,
+    staleTime: 300_000,
+    retry: 1,
+  });
+
+  const orgLocations = orgDetailsQuery.data?.locations ?? [];
+  const isAdmin = (teamContextQuery.data?.role ?? '') === 'admin' || (teamContextQuery.data?.role ?? '') === 'owner';
+  const selectedLocationName = selectedLocationId
+    ? (orgLocations.find((l) => l.id === selectedLocationId)?.name ?? `Location ${selectedLocationId}`)
+    : (isAdmin ? (teamContextQuery.data?.organization_name ?? 'All locations') : (teamContextQuery.data?.location_name ?? 'My location'));
 
   const reviews = reviewsQuery.data ?? { service: 0, quantite: 0, qualite: 0, variete: 0 };
 
@@ -264,7 +297,7 @@ export default function BusinessDashboard() {
     <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]} edges={[]}>
       {/* Cover photo is always dark/coloured — keep status bar icons white */}
       <StatusBar style="light" />
-      <ScrollView showsVerticalScrollIndicator={false}>
+      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 100 }}>
         {/* Floating header - overlays the cover image */}
         <View style={{
           position: 'absolute',
@@ -276,37 +309,31 @@ export default function BusinessDashboard() {
           justifyContent: 'space-between',
           alignItems: 'center',
         }}>
-          {/* Barakeat logo pill */}
+          {/* Team / location switcher */}
           <TouchableOpacity
-            activeOpacity={1}
+            onPress={() => setShowLocationModal(true)}
             style={{
               backgroundColor: theme.colors.surface,
               borderRadius: 20,
-              paddingHorizontal: 14,
+              paddingHorizontal: 12,
               paddingVertical: 8,
               flexDirection: 'row',
-              alignItems: 'baseline',
+              alignItems: 'center',
+              gap: 6,
               ...theme.shadows.shadowMd,
-            }}
-            onPress={() => {
-              if (!(FeatureFlags.ENABLE_EASTER_EGGS && FeatureFlags.ENABLE_LOGO_TAP_EASTER_EGG)) return;
-              const now = Date.now();
-              const newCount = now - lastPressTime < 2000 ? logoPressCount + 1 : 1;
-              setLastPressTime(now);
-              setLogoPressCount(newCount);
-              if (newCount >= 5) {
-                setLogoPressCount(0);
-                setEggFact(FOOD_FACTS[Math.floor(Math.random() * FOOD_FACTS.length)]);
-                setShowEggModal(true);
-              }
+              maxWidth: 200,
             }}
           >
-            <Text style={{ color: theme.colors.primary, fontSize: 16, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
-              Barakeat
+            <Building2 size={14} color={theme.colors.primary} />
+            <Text
+              style={{ color: theme.colors.textPrimary, fontSize: 13, fontWeight: '600', fontFamily: 'Poppins_600SemiBold', flexShrink: 1 }}
+              numberOfLines={1}
+            >
+              {selectedLocationName}
             </Text>
-            <Text style={{ color: '#e3ff5c', fontSize: 16, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
-              .
-            </Text>
+            {orgLocations.length > 0 && (
+              <ChevronDown size={13} color={theme.colors.textSecondary} />
+            )}
           </TouchableOpacity>
 
           {/* Settings + Notifications pills */}
@@ -577,6 +604,88 @@ export default function BusinessDashboard() {
           </View>
         </View>
       </Modal>
+
+      {/* Location / team switcher modal */}
+      <Modal visible={showLocationModal} transparent animationType="slide" onRequestClose={() => setShowLocationModal(false)}>
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContent, { backgroundColor: theme.colors.surface, borderTopLeftRadius: 28, borderTopRightRadius: 28, padding: theme.spacing.xl, ...theme.shadows.shadowLg }]}>
+            <View style={[styles.modalHandle, { backgroundColor: theme.colors.divider, alignSelf: 'center', marginBottom: theme.spacing.lg }]} />
+            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: theme.spacing.lg }}>
+              <Building2 size={18} color={theme.colors.primary} />
+              <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h2, marginLeft: 10, flex: 1 }]}>
+                {teamContextQuery.data?.organization_name ?? 'My Organization'}
+              </Text>
+              <TouchableOpacity onPress={() => setShowLocationModal(false)}>
+                <X size={22} color={theme.colors.textPrimary} />
+              </TouchableOpacity>
+            </View>
+
+            {/* "All locations" option — admin only */}
+            {isAdmin && (
+              <TouchableOpacity
+                onPress={() => handleLocationSwitch(null)}
+                style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: theme.colors.divider }}
+              >
+                <Store size={18} color={selectedLocationId === null ? theme.colors.primary : theme.colors.textSecondary} />
+                <Text style={[{ ...theme.typography.body, color: selectedLocationId === null ? theme.colors.primary : theme.colors.textPrimary, flex: 1, marginLeft: 12, fontWeight: selectedLocationId === null ? ('600' as const) : ('400' as const) }]}>
+                  All locations
+                </Text>
+                {selectedLocationId === null && <Check size={18} color={theme.colors.primary} />}
+              </TouchableOpacity>
+            )}
+
+            {/* Individual locations */}
+            {orgLocations.map((loc) => {
+              const isSelected = selectedLocationId === loc.id;
+              return (
+                <TouchableOpacity
+                  key={loc.id}
+                  onPress={() => handleLocationSwitch(loc.id)}
+                  style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: theme.colors.divider }}
+                >
+                  <Building2 size={18} color={isSelected ? theme.colors.primary : theme.colors.textSecondary} />
+                  <View style={{ flex: 1, marginLeft: 12 }}>
+                    <Text style={[{ ...theme.typography.body, color: theme.colors.textPrimary, fontWeight: isSelected ? ('600' as const) : ('400' as const) }]}>
+                      {loc.name ?? `Location ${loc.id}`}
+                    </Text>
+                    {loc.address ? (
+                      <Text style={[{ ...theme.typography.caption, color: theme.colors.textSecondary }]} numberOfLines={1}>
+                        {loc.address}
+                      </Text>
+                    ) : null}
+                  </View>
+                  {isSelected && <Check size={18} color={theme.colors.primary} />}
+                </TouchableOpacity>
+              );
+            })}
+
+            {orgLocations.length === 0 && !orgDetailsQuery.isLoading && (
+              <Text style={[{ ...theme.typography.bodySm, color: theme.colors.muted, textAlign: 'center', marginTop: 16 }]}>
+                No additional locations found
+              </Text>
+            )}
+          </View>
+        </View>
+      </Modal>
+
+      {/* Location switching animation overlay */}
+      {isSwitchingLocation && (
+        <View style={[StyleSheet.absoluteFillObject, { backgroundColor: 'rgba(17,75,60,0.88)', justifyContent: 'center', alignItems: 'center', zIndex: 9999 }]}>
+          <View style={{ width: 80, height: 80, justifyContent: 'center', alignItems: 'center' }}>
+            <RNAnimated.View style={{
+              position: 'absolute',
+              width: 80,
+              height: 80,
+              borderRadius: 40,
+              borderWidth: 3,
+              borderColor: '#e3ff5c',
+              borderTopColor: 'transparent',
+              transform: [{ rotate: switchSpinAnim.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] }) }],
+            }} />
+            <Text style={{ color: '#e3ff5c', fontSize: 32, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>B</Text>
+          </View>
+        </View>
+      )}
     </SafeAreaView>
   );
 }

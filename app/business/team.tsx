@@ -1,9 +1,9 @@
-import React, { useState, useCallback, useEffect, useMemo } from 'react';
+import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Modal, TextInput, Switch, Alert, ActivityIndicator, Animated } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import { useRouter } from 'expo-router';
-import { X, UserPlus, Trash2, Shield, Users, MapPin, Crown, ShieldCheck, Key, Plus, ChevronDown, ChevronUp, List, GitBranch } from 'lucide-react-native';
+import { X, UserPlus, Trash2, Shield, Users, MapPin, Crown, ShieldCheck, Key, Plus, ChevronDown, ChevronUp, List, GitBranch, Mail } from 'lucide-react-native';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import {
@@ -67,125 +67,376 @@ const ROLE_PRESETS: PresetConfig[] = [
 ];
 
 // ── OrgChartView ──────────────────────────────────────────────────────────
-function OrgChartView({ org }: { org: OrgDetailsFromAPI | undefined }) {
-  const theme = useTheme();
-  const members = org?.members ?? [];
-  const orgName = org?.name ?? 'Organisation';
+type OrgNode = {
+  id: string;
+  initials: string;
+  label: string;
+  sublabel: string;
+  isHighlighted: boolean;
+  nodeType: 'location' | 'member' | 'team-all';
+  data: any;
+};
 
-  // Stable animated values — recreate only when member count changes
-  const memberAnims = useMemo(
-    () => members.map(() => new Animated.Value(0)),
+function OrgChartView({
+  org,
+  userRole = 'owner',
+}: {
+  org: OrgDetailsFromAPI | undefined;
+  userRole?: string;
+}) {
+  const theme = useTheme();
+  const { t } = useTranslation();
+  const members = org?.members ?? [];
+  const locations = org?.locations ?? [];
+  const orgName = org?.name ?? t('business.team.orgLabel');
+
+  type LevelState =
+    | { type: 'org' }
+    | { type: 'location'; id: number | null; name: string };
+
+  const [levelState, setLevelState] = useState<LevelState>(() => {
+    if (userRole === 'member' && locations.length <= 1) {
+      const loc = locations[0];
+      if (loc) return { type: 'location' as const, id: (loc as any).id ?? null, name: (loc as any).name ?? t('business.team.teamLabel') };
+      return { type: 'location' as const, id: null, name: t('business.team.teamLabel') };
+    }
+    return { type: 'org' as const };
+  });
+
+  const [memberPreview, setMemberPreview] = useState<any | null>(null);
+  const levelAnim = useRef(new Animated.Value(1)).current;
+
+  const doLevelTransition = (next: LevelState) => {
+    Animated.timing(levelAnim, { toValue: 0, duration: 180, useNativeDriver: true }).start(() => {
+      setLevelState(next);
+      Animated.timing(levelAnim, { toValue: 1, duration: 220, useNativeDriver: true }).start();
+    });
+  };
+
+  const { centerLabel, nodes }: { centerLabel: string; nodes: OrgNode[] } = useMemo(() => {
+    if (levelState.type === 'org') {
+      const locNodes: OrgNode[] = (locations as any[]).map((loc: any) => {
+        const count = (members as any[]).filter((m: any) => m.location_id === loc.id).length;
+        const name: string = loc.name ?? loc.address ?? 'Location';
+        return {
+          id: `loc-${loc.id}`,
+          initials: name.substring(0, 2).toUpperCase(),
+          label: name.length > 8 ? name.substring(0, 7) + '\u2026' : name,
+          sublabel: t('business.team.membersCount', { count }),
+          isHighlighted: false,
+          nodeType: 'location' as const,
+          data: { ...loc, _locId: loc.id },
+        };
+      });
+      const unassigned = (members as any[]).filter((m: any) => !m.location_id);
+      if (unassigned.length > 0 || locNodes.length === 0) {
+        locNodes.push({
+          id: 'team-all',
+          initials: 'TM',
+          label: t('business.team.teamLabel'),
+          sublabel: t('business.team.membersCount', { count: unassigned.length > 0 ? unassigned.length : (members as any[]).length }),
+          isHighlighted: false,
+          nodeType: 'team-all' as const,
+          data: { _locId: null },
+        });
+      }
+      return { centerLabel: orgName, nodes: locNodes.slice(0, 8) };
+    } else {
+      const loc = levelState as { type: 'location'; id: number | null; name: string };
+      const locMembers =
+        loc.id === null
+          ? (members as any[]).filter((m: any) => !m.location_id)
+          : (members as any[]).filter((m: any) => m.location_id === loc.id);
+      const displayMembers = locMembers.length > 0 ? locMembers : (members as any[]);
+      const memberNodes: OrgNode[] = displayMembers.slice(0, 8).map((m: any) => {
+        const name: string = m.name ?? m.user_name ?? m.email ?? '?';
+        const initials = name
+          .split(' ')
+          .map((w: string) => w[0] ?? '')
+          .join('')
+          .toUpperCase()
+          .substring(0, 2);
+        const isAdmin = m.role === 'admin' || m.role === 'owner';
+        return {
+          id: String(m.membership_id ?? m.id ?? Math.random()),
+          initials,
+          label: name.split(' ')[0] ?? name,
+          sublabel: m.role === 'owner' ? t('business.team.owner') : isAdmin ? t('business.team.admin') : t('business.team.member'),
+          isHighlighted: isAdmin,
+          nodeType: 'member' as const,
+          data: m,
+        };
+      });
+      return { centerLabel: loc.name, nodes: memberNodes };
+    }
+  }, [levelState, members, locations, orgName]);
+
+  const nodeAnims = useMemo(
+    () => nodes.map(() => new Animated.Value(0)),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [members.length]
+    [nodes.length, levelState.type, (levelState as any).id ?? 'org']
   );
 
   useEffect(() => {
-    // Reset then stagger each member circle popping out from the center
-    memberAnims.forEach((anim) => anim.setValue(0));
+    nodeAnims.forEach((a) => a.setValue(0));
     Animated.stagger(
-      120,
-      memberAnims.map((anim) =>
-        Animated.spring(anim, {
-          toValue: 1,
-          useNativeDriver: true,
-          speed: 8,
-          bounciness: 12,
-        })
+      80,
+      nodeAnims.map((a) =>
+        Animated.spring(a, { toValue: 1, useNativeDriver: true, speed: 10, bounciness: 10 })
       )
     ).start();
-  }, [members.length, memberAnims]);
+  }, [nodeAnims]);
 
-  const RING_RADIUS = 110;
-  const CENTER_CIRCLE_R = 56;
-  const MEMBER_CIRCLE_R = 36;
+  const RING_RADIUS = 118;
+  const CENTER_R = 52;
+  const NODE_R = 34;
+
+  const handleNodePress = (node: OrgNode) => {
+    if (node.nodeType === 'location') {
+      doLevelTransition({ type: 'location', id: node.data._locId, name: node.label });
+    } else if (node.nodeType === 'team-all') {
+      doLevelTransition({ type: 'location', id: null, name: t('business.team.teamLabel') });
+    } else if (node.nodeType === 'member') {
+      setMemberPreview(node.data);
+    }
+  };
 
   return (
-    <View style={{ flex: 1, backgroundColor: '#114b3c', alignItems: 'center', justifyContent: 'center' }}>
-      {/* Faint ring guide */}
-      <View style={{
-        position: 'absolute',
-        width: RING_RADIUS * 2,
-        height: RING_RADIUS * 2,
-        borderRadius: RING_RADIUS,
-        borderWidth: 1,
-        borderColor: 'rgba(255,255,255,0.12)',
-        borderStyle: 'dashed',
-      }} />
-
-      {/* Center org circle */}
-      <View style={{
-        position: 'absolute',
-        width: CENTER_CIRCLE_R * 2,
-        height: CENTER_CIRCLE_R * 2,
-        borderRadius: CENTER_CIRCLE_R,
-        backgroundColor: '#e3ff5c',
-        alignItems: 'center',
-        justifyContent: 'center',
-        shadowColor: '#000',
-        shadowOpacity: 0.3,
-        shadowRadius: 12,
-        elevation: 8,
-      }}>
-        <Text style={{ color: '#114b3c', fontWeight: '700', fontFamily: 'Poppins_700Bold', fontSize: 11, textAlign: 'center', paddingHorizontal: 8 }} numberOfLines={2}>
-          {orgName}
+    <View style={{ flex: 1, backgroundColor: '#114b3c' }}>
+      {/* Top nav */}
+      <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingTop: 12, paddingBottom: 4 }}>
+        {levelState.type === 'location' && userRole !== 'member' ? (
+          <TouchableOpacity onPress={() => doLevelTransition({ type: 'org' })} style={{ flexDirection: 'row', alignItems: 'center' }}>
+            <Text style={{ color: 'rgba(255,255,255,0.6)', fontSize: 13, fontFamily: 'Poppins_400Regular' }}>
+              {t('business.team.orgBack')}
+            </Text>
+          </TouchableOpacity>
+        ) : (
+          <View style={{ width: 50 }} />
+        )}
+        <Text style={{ flex: 1, color: 'rgba(255,255,255,0.45)', fontSize: 11, fontFamily: 'Poppins_400Regular', textAlign: 'center' }}>
+          {levelState.type === 'org' ? t('business.team.orgLabel') : t('business.team.teamLabel')}
         </Text>
+        <View style={{ width: 50 }} />
       </View>
 
-      {/* Member circles — positioned around the ring */}
-      {members.map((member: any, i: number) => {
-        const angle = (2 * Math.PI * i) / Math.max(members.length, 1) - Math.PI / 2;
-        const tx = Math.cos(angle) * RING_RADIUS;
-        const ty = Math.sin(angle) * RING_RADIUS;
+      {/* Chart */}
+      <Animated.View
+        style={{
+          flex: 1,
+          alignItems: 'center',
+          justifyContent: 'center',
+          opacity: levelAnim,
+          transform: [
+            {
+              scale: levelAnim.interpolate({
+                inputRange: [0, 1],
+                outputRange: [0.92, 1],
+              }),
+            },
+          ],
+        }}
+      >
+        {/* Guide ring */}
+        <View
+          style={{
+            position: 'absolute',
+            width: RING_RADIUS * 2,
+            height: RING_RADIUS * 2,
+            borderRadius: RING_RADIUS,
+            borderWidth: 1,
+            borderColor: 'rgba(255,255,255,0.1)',
+            borderStyle: 'dashed',
+          }}
+        />
 
-        const anim = memberAnims[i] ?? new Animated.Value(1);
-        const scale = anim.interpolate({ inputRange: [0, 1], outputRange: [0, 1] });
-        const opacity = anim;
-
-        // Get initials
-        const name: string = member.name ?? member.user_name ?? member.email ?? member.user_email ?? '?';
-        const initials = name.split(' ').map((w: string) => w[0]).join('').toUpperCase().substring(0, 2);
-
-        const isAdmin = member.role === 'admin' || member.role === 'owner';
-
-        return (
-          <Animated.View
-            key={member.membership_id ?? member.id ?? i}
-            style={{
-              position: 'absolute',
-              width: MEMBER_CIRCLE_R * 2,
-              height: MEMBER_CIRCLE_R * 2,
-              borderRadius: MEMBER_CIRCLE_R,
-              backgroundColor: isAdmin ? 'rgba(255,255,255,0.25)' : 'rgba(255,255,255,0.12)',
-              borderWidth: isAdmin ? 2 : 1,
-              borderColor: isAdmin ? '#e3ff5c' : 'rgba(255,255,255,0.3)',
-              alignItems: 'center',
-              justifyContent: 'center',
-              transform: [
-                { translateX: tx },
-                { translateY: ty },
-                { scale },
-              ],
-              opacity,
-            }}
+        {/* Center circle */}
+        <View
+          style={{
+            position: 'absolute',
+            width: CENTER_R * 2,
+            height: CENTER_R * 2,
+            borderRadius: CENTER_R,
+            backgroundColor: '#e3ff5c',
+            alignItems: 'center',
+            justifyContent: 'center',
+            elevation: 8,
+            shadowColor: '#000',
+            shadowOpacity: 0.3,
+            shadowRadius: 12,
+          }}
+        >
+          <Text
+            style={{ color: '#114b3c', fontWeight: '700', fontFamily: 'Poppins_700Bold', fontSize: 11, textAlign: 'center', paddingHorizontal: 8 }}
+            numberOfLines={2}
           >
-            <Text style={{ color: '#fff', fontWeight: '700', fontFamily: 'Poppins_700Bold', fontSize: 14 }}>
-              {initials}
-            </Text>
-            <Text style={{ color: 'rgba(255,255,255,0.6)', fontSize: 8, fontFamily: 'Poppins_400Regular', textAlign: 'center', marginTop: 2, paddingHorizontal: 4 }} numberOfLines={1}>
-              {member.role === 'owner' ? 'Owner' : isAdmin ? 'Admin' : 'Member'}
-            </Text>
-          </Animated.View>
-        );
-      })}
+            {centerLabel}
+          </Text>
+        </View>
+
+        {/* Nodes */}
+        {nodes.map((node, i) => {
+          const angle = (2 * Math.PI * i) / Math.max(nodes.length, 1) - Math.PI / 2;
+          const tx = Math.cos(angle) * RING_RADIUS;
+          const ty = Math.sin(angle) * RING_RADIUS;
+          const anim = nodeAnims[i] ?? new Animated.Value(1);
+          const isLocType = node.nodeType === 'location' || node.nodeType === 'team-all';
+
+          return (
+            <Animated.View
+              key={node.id}
+              style={{
+                position: 'absolute',
+                width: NODE_R * 2,
+                height: NODE_R * 2,
+                borderRadius: NODE_R,
+                backgroundColor: isLocType
+                  ? '#1a6b56'
+                  : node.isHighlighted
+                  ? 'rgba(255,255,255,0.22)'
+                  : 'rgba(255,255,255,0.1)',
+                borderWidth: node.isHighlighted ? 2 : 1.5,
+                borderColor: node.isHighlighted ? '#e3ff5c' : 'rgba(255,255,255,0.3)',
+                alignItems: 'center',
+                justifyContent: 'center',
+                transform: [
+                  { translateX: tx },
+                  { translateY: ty },
+                  { scale: anim.interpolate({ inputRange: [0, 1], outputRange: [0, 1] }) },
+                ],
+                opacity: anim,
+              }}
+            >
+              <TouchableOpacity
+                style={{ width: NODE_R * 2, height: NODE_R * 2, alignItems: 'center', justifyContent: 'center', padding: 4 }}
+                onPress={() => handleNodePress(node)}
+                activeOpacity={0.7}
+              >
+                <Text
+                  style={{ color: '#fff', fontWeight: '700', fontFamily: 'Poppins_700Bold', fontSize: node.nodeType === 'member' ? 14 : 10, textAlign: 'center' }}
+                  numberOfLines={1}
+                >
+                  {node.nodeType === 'member' ? node.initials : node.label}
+                </Text>
+                <Text
+                  style={{ color: 'rgba(255,255,255,0.55)', fontSize: 7, fontFamily: 'Poppins_400Regular', textAlign: 'center', marginTop: 1 }}
+                  numberOfLines={1}
+                >
+                  {node.sublabel}
+                </Text>
+              </TouchableOpacity>
+            </Animated.View>
+          );
+        })}
+      </Animated.View>
 
       {/* Empty state */}
-      {members.length === 0 && (
-        <View style={{ position: 'absolute', bottom: 60, alignItems: 'center' }}>
-          <Text style={{ color: 'rgba(255,255,255,0.5)', fontSize: 13, fontFamily: 'Poppins_400Regular', textAlign: 'center' }}>
-            Add team members to see them here
+      {nodes.length === 0 && (
+        <View style={{ position: 'absolute', bottom: 60, left: 0, right: 0, alignItems: 'center' }}>
+          <Text style={{ color: 'rgba(255,255,255,0.45)', fontSize: 13, fontFamily: 'Poppins_400Regular', textAlign: 'center', paddingHorizontal: 32 }}>
+            {levelState.type === 'org' ? t('business.team.noLocations') : t('business.team.noMembers')}
           </Text>
         </View>
       )}
+
+      {/* Member preview sheet */}
+      <Modal
+        visible={memberPreview !== null}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setMemberPreview(null)}
+      >
+        {memberPreview ? (
+          <TouchableOpacity
+            style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' }}
+            activeOpacity={1}
+            onPress={() => setMemberPreview(null)}
+          >
+            <View
+              onStartShouldSetResponder={() => true}
+              style={{ backgroundColor: '#fff', borderTopLeftRadius: 28, borderTopRightRadius: 28, padding: 24 }}
+            >
+              {/* Handle */}
+              <View style={{ width: 40, height: 4, borderRadius: 2, backgroundColor: '#e0e0e0', alignSelf: 'center', marginBottom: 20 }} />
+
+              {/* Avatar + name */}
+              <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 16 }}>
+                <View style={{ width: 52, height: 52, borderRadius: 26, backgroundColor: '#114b3c20', alignItems: 'center', justifyContent: 'center', marginRight: 14 }}>
+                  <Text style={{ color: '#114b3c', fontWeight: '700', fontSize: 18, fontFamily: 'Poppins_700Bold' }}>
+                    {(memberPreview.name ?? memberPreview.user_name ?? memberPreview.email ?? '?')
+                      .split(' ')
+                      .map((w: string) => (w[0] ?? ''))
+                      .join('')
+                      .toUpperCase()
+                      .substring(0, 2)}
+                  </Text>
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={{ color: '#1a1a1a', fontSize: 16, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
+                    {memberPreview.name ?? memberPreview.user_name ?? 'Unknown'}
+                  </Text>
+                  <Text style={{ color: '#777', fontSize: 13, fontFamily: 'Poppins_400Regular', marginTop: 2 }}>
+                    {memberPreview.role === 'owner' ? t('business.team.owner') : memberPreview.role === 'admin' ? t('business.team.admin') : t('business.team.member')}
+                  </Text>
+                </View>
+                <TouchableOpacity onPress={() => setMemberPreview(null)}>
+                  <X size={20} color="#777" />
+                </TouchableOpacity>
+              </View>
+
+              {/* Email */}
+              {(memberPreview.email ?? memberPreview.user_email) ? (
+                <View style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 10, borderTopWidth: 1, borderTopColor: '#f0f0f0' }}>
+                  <View style={{ marginRight: 10 }}>
+                    <Mail size={15} color="#888" />
+                  </View>
+                  <Text style={{ color: '#555', fontSize: 13, fontFamily: 'Poppins_400Regular' }}>
+                    {memberPreview.email ?? memberPreview.user_email}
+                  </Text>
+                </View>
+              ) : null}
+
+              {/* Stats row */}
+              <View style={{ flexDirection: 'row', marginTop: 16, gap: 10 }}>
+                {[
+                  {
+                    label: t('business.team.activePerms'),
+                    value: String(
+                      Object.values(memberPreview.permissions ?? {}).filter(
+                        (v) => v === 'write' || v === true
+                      ).length
+                    ),
+                  },
+                  {
+                    label: t('business.team.roleLabel'),
+                    value: memberPreview.role === 'owner'
+                      ? t('business.team.owner')
+                      : memberPreview.role === 'admin'
+                      ? t('business.team.admin')
+                      : t('business.team.member'),
+                  },
+                  {
+                    label: t('business.team.locationLabel'),
+                    value: memberPreview.location_name ??
+                      (memberPreview.location_id ? t('business.team.assigned') : t('business.team.all')),
+                  },
+                ].map((stat) => (
+                  <View key={stat.label} style={{ flex: 1, backgroundColor: '#f5f5f5', borderRadius: 12, padding: 10, alignItems: 'center' }}>
+                    <Text style={{ color: '#114b3c', fontSize: 14, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
+                      {stat.value}
+                    </Text>
+                    <Text style={{ color: '#999', fontSize: 10, fontFamily: 'Poppins_400Regular', marginTop: 2, textAlign: 'center' }}>
+                      {stat.label}
+                    </Text>
+                  </View>
+                ))}
+              </View>
+
+              <View style={{ height: 24 }} />
+            </View>
+          </TouchableOpacity>
+        ) : null}
+      </Modal>
     </View>
   );
 }
@@ -427,9 +678,9 @@ export default function TeamScreen() {
       case 'owner':
         return { color: '#16a34a', bg: '#16a34a15', label: t('business.team.owner', { defaultValue: 'Owner' }), icon: Crown };
       case 'admin':
-        return { color: theme.colors.primary, bg: theme.colors.primary + '20', label: 'Admin', icon: ShieldCheck };
+        return { color: theme.colors.primary, bg: theme.colors.primary + '20', label: t('business.team.admin'), icon: ShieldCheck };
       default:
-        return { color: theme.colors.muted, bg: theme.colors.muted + '25', label: 'Member', icon: Shield };
+        return { color: theme.colors.muted, bg: theme.colors.muted + '25', label: t('business.team.member'), icon: Shield };
     }
   };
 
@@ -528,7 +779,7 @@ export default function TeamScreen() {
             onPress={() => { void contextQuery.refetch(); void orgDetailsQuery.refetch(); }}
             style={{ backgroundColor: theme.colors.primary, borderRadius: theme.radii.r12, paddingHorizontal: 24, paddingVertical: 12 }}
           >
-            <Text style={{ color: '#fff', ...theme.typography.bodySm, fontWeight: '600' }}>Retry</Text>
+            <Text style={{ color: '#fff', ...theme.typography.bodySm, fontWeight: '600' }}>{t('common.retry')}</Text>
           </TouchableOpacity>
         </View>
       </SafeAreaView>
@@ -542,7 +793,7 @@ export default function TeamScreen() {
 
       {/* Org chart view (alternative to list) */}
       {viewMode === 'chart' && FeatureFlags.ENABLE_TEAM_ORG_CHART ? (
-        <OrgChartView org={orgDetailsQuery.data} />
+        <OrgChartView org={orgDetailsQuery.data} userRole={contextQuery.data?.role ?? 'owner'} />
       ) : (
       /* No-org state: prompt to create */
       noOrg ? (
@@ -870,7 +1121,7 @@ export default function TeamScreen() {
                   textAlign: 'center',
                   marginBottom: theme.spacing.sm,
                 }}>
-                  Build Your Team
+                  {t('business.team.buildTeamTitle')}
                 </Text>
                 <Text style={{
                   color: theme.colors.textSecondary,
@@ -879,7 +1130,7 @@ export default function TeamScreen() {
                   marginBottom: theme.spacing.xl,
                   lineHeight: 20,
                 }}>
-                  Add team members to manage your restaurant together. Each person gets their own login and permissions.
+                  {t('business.team.buildTeamDesc')}
                 </Text>
                 <TouchableOpacity
                   onPress={handleAddMemberFromLocation}
@@ -894,7 +1145,7 @@ export default function TeamScreen() {
                 >
                   <UserPlus size={16} color="#fff" />
                   <Text style={{ color: '#fff', ...theme.typography.bodySm, fontWeight: '600', marginLeft: 8 }}>
-                    Add First Member
+                    {t('business.team.addFirstMember')}
                   </Text>
                 </TouchableOpacity>
               </View>

@@ -4,7 +4,6 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import { X, Trash2, Plus, Camera, SquareCheck, Square } from 'lucide-react-native';
-import * as Haptics from 'expo-haptics';
 import * as ImagePicker from 'expo-image-picker';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -59,7 +58,6 @@ export default function MenuItemsScreen() {
   const handleAdd = () => {
     const trimmed = newItemName.trim();
     if (!trimmed) return;
-    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     addMutation.mutate(trimmed);
   };
 
@@ -73,7 +71,6 @@ export default function MenuItemsScreen() {
           text: t('common.delete'),
           style: 'destructive',
           onPress: () => {
-            void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
             deleteMutation.mutate(item.id);
           },
         },
@@ -84,7 +81,7 @@ export default function MenuItemsScreen() {
   const handleScanMenu = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== 'granted') {
-      Alert.alert(t('common.error'), 'Photo library permission is required to scan a menu.');
+      Alert.alert(t('common.error'), t('business.menuItems.photoPermRequired'));
       return;
     }
     const result = await ImagePicker.launchImageLibraryAsync({
@@ -112,7 +109,7 @@ export default function MenuItemsScreen() {
 
       const items: { name: string; price?: number }[] = response.data?.items ?? [];
       if (items.length === 0) {
-        Alert.alert('No items found', 'Could not detect any menu items in the image.');
+        Alert.alert(t('business.menuItems.noItemsFound'), t('business.menuItems.noItemsDetected'));
         return;
       }
       setScannedItems(items.map((item) => ({ ...item, selected: true })));
@@ -127,7 +124,7 @@ export default function MenuItemsScreen() {
   const handleAddScannedItems = async () => {
     const selected = scannedItems.filter((i) => i.selected);
     if (selected.length === 0) {
-      Alert.alert('No items selected', 'Select at least one item to add.');
+      Alert.alert(t('business.menuItems.noItemsSelected'), t('business.menuItems.selectAtLeastOne'));
       return;
     }
     setShowScanModal(false);
@@ -141,7 +138,7 @@ export default function MenuItemsScreen() {
       }
     }
     void queryClient.invalidateQueries({ queryKey: ['my-menu-items'] });
-    Alert.alert(t('common.success'), `${selected.length} item(s) added to your menu.`);
+    Alert.alert(t('common.success'), t('business.menuItems.addSelectedItems'));
   };
 
   const renderItem = ({ item }: { item: MenuItemFromAPI }) => (
@@ -205,7 +202,7 @@ export default function MenuItemsScreen() {
               <>
                 <Camera size={16} color={theme.colors.primary} />
                 <Text style={{ color: theme.colors.primary, ...theme.typography.caption, fontWeight: '600' as const, marginLeft: 4 }}>
-                  Scan
+                  {t('business.menuItems.scan')}
                 </Text>
               </>
             )}
@@ -256,7 +253,7 @@ export default function MenuItemsScreen() {
             <View style={[styles.modalContainer, { backgroundColor: theme.colors.bg, borderRadius: theme.radii.r12 }]}>
               <View style={[styles.modalHeader, { paddingHorizontal: theme.spacing.xl, paddingVertical: theme.spacing.lg, borderBottomWidth: 1, borderBottomColor: theme.colors.divider }]}>
                 <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, flex: 1 }]}>
-                  Scanned Items
+                  {t('business.menuItems.scannedItems')}
                 </Text>
                 <TouchableOpacity onPress={() => setShowScanModal(false)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
                   <X size={22} color={theme.colors.textPrimary} />
@@ -308,7 +305,7 @@ export default function MenuItemsScreen() {
                   }]}
                 >
                   <Text style={[{ color: '#fff', ...theme.typography.button }]}>
-                    Add Selected Items ({scannedItems.filter((i) => i.selected).length})
+                    {t('business.menuItems.addSelectedItems')} ({scannedItems.filter((i) => i.selected).length})
                   </Text>
                 </TouchableOpacity>
               </View>

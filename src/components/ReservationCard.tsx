@@ -3,7 +3,6 @@ import { View, Text, StyleSheet, TouchableOpacity, Animated, Image, ActivityIndi
 import { useTranslation } from 'react-i18next';
 import { MapPin, Clock, Navigation, X as XIcon, QrCode, Star, ChevronDown, ChevronUp } from 'lucide-react-native';
 import { useRouter } from 'expo-router';
-import * as Haptics from 'expo-haptics';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import type { ReservationFromAPI } from '@/src/services/reservations';
 import { fetchReservationQRCode } from '@/src/services/reservations';
@@ -37,7 +36,6 @@ export function ReservationCard({ reservation, onCancel, onHide: _onHide }: Rese
   const longitude = basket?.longitude ?? (basket as any)?.lng ?? 0;
 
   const handlePress = () => {
-    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     Animated.sequence([
       Animated.timing(scaleAnim, { toValue: 0.98, duration: 100, useNativeDriver: true }),
       Animated.timing(scaleAnim, { toValue: 1, duration: 100, useNativeDriver: true }),
@@ -46,7 +44,6 @@ export function ReservationCard({ reservation, onCancel, onHide: _onHide }: Rese
   };
 
   const handleToggleQR = async () => {
-    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     if (qrExpanded) {
       setQrExpanded(false);
       return;
@@ -68,7 +65,6 @@ export function ReservationCard({ reservation, onCancel, onHide: _onHide }: Rese
   };
 
   const handleDirections = () => {
-    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     if (latitude && longitude) {
       const url = `https://www.google.com/maps/search/?api=1&query=${latitude},${longitude}`;
       void Linking.openURL(url);

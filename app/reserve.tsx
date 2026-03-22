@@ -3,9 +3,9 @@ import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Animated, Alert, 
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import { X, Minus, Plus, CreditCard, Check } from 'lucide-react-native';
-import * as Haptics from 'expo-haptics';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTheme } from '@/src/theme/ThemeProvider';
+import { StatusBar } from 'expo-status-bar';
 import { PrimaryCTAButton } from '@/src/components/PrimaryCTAButton';
 import { fetchRestaurantById } from '@/src/services/restaurants';
 import { normalizeRestaurantToBasket } from '@/src/utils/normalizeRestaurant';
@@ -73,8 +73,6 @@ export default function ReserveScreen() {
     mutationFn: () => createReservation({ restaurant_id: Number(basketId), quantity }),
     onSuccess: async (data) => {
       console.log('[Reserve] Reservation created:', data.id);
-      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-
       // Use the pickup_code returned by the backend directly
       const pickupCode = data.pickup_code ?? data.pickupCode ?? '';
 
@@ -120,21 +118,21 @@ export default function ReserveScreen() {
     },
   });
 
-  // Respect maxPerCustomer limit if set, otherwise just use quantityLeft
+  // Respect maxPerCustomer limit only when the feature is enabled
   const maxQuantity = basket
-    ? Math.min(basket.quantityLeft, basket.maxPerCustomer ?? basket.quantityLeft)
+    ? (FeatureFlags.ENABLE_MAX_PER_CUSTOMER
+        ? Math.min(basket.quantityLeft, basket.maxPerCustomer ?? basket.quantityLeft)
+        : basket.quantityLeft)
     : 1;
 
   const handleIncrement = () => {
     if (basket && quantity < maxQuantity) {
-      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
       setQuantity((prev) => prev + 1);
     }
   };
 
   const handleDecrement = () => {
     if (quantity > 1) {
-      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
       setQuantity((prev) => prev - 1);
     }
   };
@@ -144,7 +142,6 @@ export default function ReserveScreen() {
   };
 
   const handleConfirm = () => {
-    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     if (paymentMethod === 'cash') {
       Alert.alert(
         t('reserve.confirmTitle', { defaultValue: 'Confirm Reservation' }),
@@ -180,6 +177,7 @@ export default function ReserveScreen() {
 
   return (
     <View style={[styles.container, { backgroundColor: theme.colors.bg }]}>
+      <StatusBar style="dark" />
       <View style={[styles.header, { padding: theme.spacing.xl }]}>
         <TouchableOpacity onPress={() => router.back()}>
           <X size={24} color={theme.colors.textPrimary} />

@@ -7,7 +7,6 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import { X, AlertCircle, Clock, Minus, Plus, Sparkles } from 'lucide-react-native';
-import * as Haptics from 'expo-haptics';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { useBusinessStore } from '@/src/stores/businessStore';
 import { PrimaryCTAButton } from '@/src/components/PrimaryCTAButton';
@@ -159,7 +158,6 @@ export default function CreateBasketScreen() {
       }),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['my-baskets'] });
-      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       router.back();
     },
     onError: (err: any) => {
@@ -180,7 +178,6 @@ export default function CreateBasketScreen() {
       }),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['my-baskets'] });
-      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       router.back();
     },
     onError: (err: any) => {
@@ -192,20 +189,19 @@ export default function CreateBasketScreen() {
 
   const handleSave = () => {
     if (!name.trim()) {
-      Alert.alert(t('common.error'), 'Name is required.');
+      Alert.alert(t('common.error'), t('business.createBasket.nameRequired'));
       return;
     }
     const sp = parseFloat(sellingPrice);
     if (!sp || sp <= 0) {
-      Alert.alert(t('common.error'), 'Selling price is required.');
+      Alert.alert(t('common.error'), t('business.createBasket.sellingPriceRequired'));
       return;
     }
     if (!validatePrice(originalPrice, sellingPrice)) return;
     if (quantity <= 0) {
-      Alert.alert(t('common.error'), 'Quantity must be at least 1.');
+      Alert.alert(t('common.error'), t('business.createBasket.quantityRequired'));
       return;
     }
-    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     if (isEditing) {
       updateMutation.mutate();
     } else {
@@ -265,7 +261,7 @@ export default function CreateBasketScreen() {
                     <>
                       <Sparkles size={14} color={theme.colors.primary} />
                       <Text style={{ color: theme.colors.primary, ...theme.typography.caption, fontWeight: '600' as const, marginLeft: 4 }}>
-                        Suggest
+                        {t('business.createBasket.suggest')}
                       </Text>
                     </>
                   )}

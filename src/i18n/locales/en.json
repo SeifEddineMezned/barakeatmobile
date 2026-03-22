@@ -21,7 +21,8 @@
     "noPermission": "You do not have permission for this action",
     "adminRequired": "Admin access required",
     "errorOccurred": "An error occurred. Please try again.",
-    "goBack": "Go back"
+    "goBack": "Go back",
+    "featureSoon": "Feature Coming Soon"
   },
   "onboarding": {
     "slide1": {
@@ -76,7 +77,13 @@
     "error": "Error",
     "fillAllFields": "Please fill in all required fields.",
     "notCustomerAccount": "This email is registered as a business account, not a customer. Please switch to business login or create a new customer account.",
-    "notBusinessAccount": "This email is registered as a customer account, not a business. Please switch to customer login."
+    "notBusinessAccount": "This email is registered as a customer account, not a business. Please switch to customer login.",
+    "chooseAccountType": "How will you use Barakeat?",
+    "customerRole": "I'm a Customer",
+    "customerRoleDesc": "Find and reserve surprise baskets near you",
+    "businessRoleDesc": "Sell surplus food and reduce waste",
+    "passwordRequirements": "Min 8 characters with uppercase, lowercase, a number and a special character (!@#$%...)",
+    "tosRequired": "Please accept the Terms of Service to continue."
   },
   "home": {
     "search": "Search",
@@ -96,7 +103,16 @@
     "selectRadius": "Select radius",
     "useMyLocation": "Use my current location",
     "chooseLocation": "Choose this location",
-    "km": "km"
+    "km": "km",
+    "newPartner": "New Partner",
+    "nearbySpots": "spots nearby",
+    "otherSpots": "Other spots",
+    "welcomePopup": {
+      "back": "Welcome back",
+      "whatsNew": "What's new",
+      "newPartners": "New partners near you!",
+      "newPartnersDesc": "Discover surprise bags from restaurants in your area"
+    }
   },
   "basket": {
     "surpriseBasket": "Surprise Basket",
@@ -121,7 +137,9 @@
     "reviewService": "Service",
     "reviewQuantite": "Quantity",
     "reviewQualite": "Quality",
-    "reviewVariete": "Variety"
+    "reviewVariete": "Variety",
+    "availableBaskets": "Available Baskets",
+    "noBaskets": "No baskets available right now"
   },
   "reserve": {
     "title": "Reserve Basket",
@@ -161,7 +179,17 @@
     "cancelTitle": "Cancel Reservation",
     "cancelConfirm": "Are you sure you want to cancel this reservation?",
     "showQrCode": "Show this QR code to the merchant at pickup",
-    "leaveReview": "Review"
+    "leaveReview": "Review",
+    "emptyTitle": "No orders yet",
+    "emptyDesc": "Reserve a surprise bag to save food and money!",
+    "findBasket": "Find a Surprise Bag",
+    "yourImpact": "Your Impact",
+    "todayPickups": "Today's Pickups",
+    "startsIn": "Starts in",
+    "endsIn": "Ends in",
+    "pickupEnded": "Pickup ended",
+    "tndSaved": "TND saved",
+    "kgCO2": "kg CO₂"
   },
   "review": {
     "title": "Leave a Review",
@@ -170,7 +198,9 @@
     "commentPlaceholder": "Tell us about your experience...",
     "submit": "Submit Review",
     "success": "Thank you for your review!",
-    "error": "Could not submit review"
+    "error": "Could not submit review",
+    "noRating": "N/A",
+    "noReviews": "(0 reviews)"
   },
   "favorites": {
     "title": "Favorites",
@@ -225,7 +255,30 @@
     "confirmPasswordLabel": "Confirm Password",
     "profileUpdated": "Profile updated.",
     "editProfile": "Edit",
-    "businessesTried": "Places Tried"
+    "businessesTried": "Places Tried",
+    "deleteAccount": "Delete Account",
+    "deleteAccountConfirm": "Are you sure you want to permanently delete your account? This action cannot be undone.",
+    "deleteAccountSoon": "Account deletion will be available in a future update.",
+    "statMoneySaved": "Money Saved 💰",
+    "statMoneySavedDesc": "Calculated from the difference between original prices and what you paid",
+    "statCO2Saved": "CO₂ Saved 🌍",
+    "statBaskets": "Baskets Rescued 🧺",
+    "statSpots": "Places Explored 🗺️",
+    "noCompletedReservations": "No completed reservations yet",
+    "noPlacesVisited": "No places visited yet",
+    "carTrips": "car trips avoided",
+    "plasticBottles": "plastic bottles not produced",
+    "kgRescued": "kg of food rescued",
+    "pref": {
+      "vegetarian": "Vegetarian",
+      "vegan": "Vegan",
+      "halal": "Halal",
+      "gluten_free": "Gluten-Free",
+      "nut_allergy": "Nut Allergy",
+      "lactose_free": "Lactose-Free",
+      "shellfish_allergy": "Shellfish Allergy",
+      "no_pork": "No Pork"
+    }
   },
   "report": {
     "title": "Report",
@@ -284,7 +337,18 @@
       "details": "Details",
       "salesLegend": "Sales",
       "basketsLegend": "Baskets",
-      "revenueLegend": "Revenue"
+      "revenueLegend": "Revenue",
+      "noData": "No data available yet",
+      "days": {
+        "Mon": "Mon", "Tue": "Tue", "Wed": "Wed", "Thu": "Thu", "Fri": "Fri", "Sat": "Sat", "Sun": "Sun",
+        "Monday": "Mon", "Tuesday": "Tue", "Wednesday": "Wed", "Thursday": "Thu", "Friday": "Fri", "Saturday": "Sat", "Sunday": "Sun"
+      },
+      "months": {
+        "Jan": "Jan", "Feb": "Feb", "Mar": "Mar", "Apr": "Apr", "May": "May", "Jun": "Jun",
+        "Jul": "Jul", "Aug": "Aug", "Sep": "Sep", "Oct": "Oct", "Nov": "Nov", "Dec": "Dec",
+        "January": "Jan", "February": "Feb", "March": "Mar", "April": "Apr", "June": "Jun",
+        "July": "Jul", "August": "Aug", "September": "Sep", "October": "Oct", "November": "Nov", "December": "Dec"
+      }
     },
     "baskets": {
       "title": "My Baskets",
@@ -323,7 +387,15 @@
       "statusReserved": "Reserved",
       "statusReady": "Ready",
       "statusCollected": "Collected",
-      "statusCancelled": "Cancelled"
+      "statusCancelled": "Cancelled",
+      "noCompletedOrders": "No completed orders",
+      "noCompletedDesc": "Completed and cancelled orders will show up here.",
+      "verifyPickup": "Verify Pickup",
+      "verifyDesc": "Ask the customer for their pickup code and enter it below, or use the QR scanner.",
+      "confirmCode": "Confirm Code",
+      "scanQR": "Scan QR Code Instead",
+      "enterPickupCode": "Please enter the pickup code.",
+      "incorrectCode": "Incorrect code. Please try again."
     },
     "profile": {
       "title": "Business Profile",
@@ -376,7 +448,21 @@
       "locationName": "Location name",
       "locationAddress": "Address",
       "locationAdded": "Location added successfully.",
-      "noLocations": "No locations yet. Tap + to add one."
+      "noLocations": "No locations yet. Tap + to add one.",
+      "admin": "Admin",
+      "member": "Member",
+      "buildTeamTitle": "Build Your Team",
+      "buildTeamDesc": "Add team members to manage your restaurant together. Each person gets their own login and permissions.",
+      "addFirstMember": "Add First Member",
+      "noMembers": "No members in this team",
+      "orgLabel": "Organisation",
+      "teamLabel": "Team",
+      "orgBack": "← Org",
+      "activePerms": "Active perms",
+      "roleLabel": "Role",
+      "locationLabel": "Location",
+      "all": "All",
+      "assigned": "Assigned"
     },
     "createBasket": {
       "title": "New Basket",
@@ -391,16 +477,26 @@
       "save": "Save",
       "create": "Create Basket",
       "basketContents": "Basket contents",
-      "contentsPlaceholder": "Describe the types of items customers might find..."
+      "contentsPlaceholder": "Describe the types of items customers might find...",
+      "suggest": "Suggest",
+      "nameRequired": "Name is required.",
+      "sellingPriceRequired": "Selling price is required.",
+      "quantityRequired": "Quantity must be at least 1."
     },
     "auth": {
       "businessSignIn": "Business Sign In",
       "businessSignUp": "Register Business",
       "switchToCustomer": "I'm a customer",
-      "switchToBusiness": "I'm a business",
+      "switchToBusiness": "I'm a Business",
       "businessName": "Business Name",
       "businessAddress": "Business Address",
-      "businessCategory": "Category"
+      "businessCategory": "Category",
+      "contactName": "Your Name",
+      "requestTitle": "Partner with Barakeat",
+      "requestDesc": "Restaurant accounts are set up by our team. Fill out the form below and we'll reach out to you.",
+      "submitApplication": "Submit Application",
+      "applicationSubmitted": "Application Sent!",
+      "applicationSubmittedDesc": "We've received your request and will review it shortly. Expect an email from us within 2–3 business days."
     },
     "scan": {
       "title": "Verify Pickup",
@@ -414,7 +510,14 @@
       "done": "Done",
       "cameraUnavailable": "Camera scanner not available. Please enter the pickup code manually below.",
       "manualEntryTitle": "Enter Pickup Code",
-      "manualEntryDesc": "Ask the customer for their pickup code shown in their order confirmation."
+      "manualEntryDesc": "Ask the customer for their pickup code shown in their order confirmation.",
+      "pointCamera": "Point camera at QR code",
+      "processing": "Processing...",
+      "scanAgain": "Scan Again",
+      "cameraPermTitle": "Camera Access Required",
+      "cameraPermDesc": "Allow camera access to scan customer QR codes for pickup verification.",
+      "allowCamera": "Allow Camera Access",
+      "useManualEntry": "Enter code manually instead"
     },
     "availability": {
       "title": "Availability",
@@ -433,7 +536,15 @@
       "empty": "No menu items yet",
       "deleteConfirm": "Delete this item?",
       "added": "Item added.",
-      "deleted": "Item deleted."
+      "deleted": "Item deleted.",
+      "scan": "Scan",
+      "photoPermRequired": "Photo library permission is required to scan a menu.",
+      "noItemsFound": "No items found",
+      "noItemsDetected": "Could not detect any menu items in the image.",
+      "scannedItems": "Scanned Items",
+      "noItemsSelected": "No items selected",
+      "selectAtLeastOne": "Select at least one item to add.",
+      "addSelectedItems": "Add {{count}} item(s)"
     }
   },
   "errors": {

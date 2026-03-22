@@ -14,9 +14,11 @@ import {
   Poppins_700Bold,
 } from '@expo-google-fonts/poppins';
 import { useAuthStore } from "@/src/stores/authStore";
+import { useTranslation } from 'react-i18next';
 import { SplashAnimation } from "@/src/components/SplashAnimation";
 import { ErrorBoundary } from "@/src/components/ErrorBoundary";
 import { useFavoritesStore } from "@/src/stores/favoritesStore";
+import { useAddressStore } from "@/src/stores/addressStore";
 import { useSplashStore } from "@/src/stores/splashStore";
 
 void SplashScreen.preventAutoHideAsync();
@@ -34,6 +36,7 @@ function RootLayoutNav() {
       <Stack.Screen name="impact" options={{ headerShown: false }} />
       <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
       <Stack.Screen name="(business)" options={{ headerShown: false }} />
+      <Stack.Screen name="restaurant/[id]" options={{ headerShown: false }} />
       <Stack.Screen name="business-detail/[id]" options={{ headerShown: false }} />
       <Stack.Screen name="basket/[id]" options={{ headerShown: false }} />
       <Stack.Screen name="reserve" options={{ presentation: "modal", headerShown: false }} />
@@ -56,6 +59,7 @@ export default function RootLayout() {
     Poppins_700Bold,
   });
 
+  const { t } = useTranslation();
   const WELCOME_WIDTH = Dimensions.get('window').width;
   const [initialSplash, setInitialSplash] = useState(true);
   const loginSplash = useSplashStore((s) => s.showSplash);
@@ -71,6 +75,7 @@ export default function RootLayout() {
   const restoreSession = useAuthStore((s) => s.restoreSession);
   const isRestoringSession = useAuthStore((s) => s.isRestoringSession);
   const hydrateFavorites = useFavoritesStore((s) => s.hydrate);
+  const hydrateAddresses = useAddressStore((s) => s.hydrate);
 
   const router = useRouter();
   const segments = useSegments();
@@ -78,7 +83,8 @@ export default function RootLayout() {
   useEffect(() => {
     void restoreSession();
     void hydrateFavorites();
-  }, [restoreSession, hydrateFavorites]);
+    void hydrateAddresses();
+  }, [restoreSession, hydrateFavorites, hydrateAddresses]);
 
   useEffect(() => {
     if (fontsLoaded && !isRestoringSession) {
@@ -192,7 +198,7 @@ export default function RootLayout() {
                     <View style={{ width: WELCOME_WIDTH - 48, paddingVertical: 60, paddingHorizontal: 30, alignItems: 'center' }}>
                       <Text style={{ fontSize: 40 }}>👋</Text>
                       <Text style={{ color: 'rgba(255,255,255,0.7)', fontSize: 14, fontFamily: 'Poppins_400Regular', marginTop: 20 }}>
-                        Welcome back
+                        {t('home.welcomePopup.back')}
                       </Text>
                       <Text style={{ color: '#fff', fontSize: 28, fontWeight: '700', fontFamily: 'Poppins_700Bold', marginTop: 8, textAlign: 'center' }}>
                         {user?.name ?? 'there'}
@@ -203,13 +209,13 @@ export default function RootLayout() {
                     <View style={{ width: WELCOME_WIDTH - 48, paddingVertical: 60, paddingHorizontal: 30, alignItems: 'center' }}>
                       <Text style={{ fontSize: 40 }}>🎉</Text>
                       <Text style={{ color: 'rgba(255,255,255,0.7)', fontSize: 14, fontFamily: 'Poppins_400Regular', marginTop: 20 }}>
-                        What's new
+                        {t('home.welcomePopup.whatsNew')}
                       </Text>
                       <Text style={{ color: '#fff', fontSize: 22, fontWeight: '700', fontFamily: 'Poppins_700Bold', marginTop: 8, textAlign: 'center' }}>
-                        New partners near you!
+                        {t('home.welcomePopup.newPartners')}
                       </Text>
                       <Text style={{ color: 'rgba(255,255,255,0.6)', fontSize: 13, fontFamily: 'Poppins_400Regular', marginTop: 12, textAlign: 'center' }}>
-                        Discover surprise bags from restaurants in your area
+                        {t('home.welcomePopup.newPartnersDesc')}
                       </Text>
                     </View>
                   </ScrollView>
@@ -248,6 +254,6 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#f5f5f0',
+    backgroundColor: '#f9f9f6',
   },
 });

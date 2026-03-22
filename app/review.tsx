@@ -14,9 +14,9 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import { X, Star } from 'lucide-react-native';
-import * as Haptics from 'expo-haptics';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTheme } from '@/src/theme/ThemeProvider';
+import { StatusBar } from 'expo-status-bar';
 import { PrimaryCTAButton } from '@/src/components/PrimaryCTAButton';
 import { submitReview } from '@/src/services/reviews';
 
@@ -57,7 +57,6 @@ function StarRatingRow({
           <TouchableOpacity
             key={star}
             onPress={() => {
-              void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
               onChange(star);
             }}
             style={{ paddingHorizontal: 2 }}
@@ -116,7 +115,6 @@ export default function ReviewScreen() {
         comment: comment.trim() || undefined,
       }),
     onSuccess: () => {
-      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       void queryClient.invalidateQueries({ queryKey: ['reservations'] });
       Alert.alert(t('common.success'), t('review.success'), [
         { text: t('common.ok'), onPress: () => router.back() },
@@ -132,12 +130,12 @@ export default function ReviewScreen() {
 
   const handleSubmit = () => {
     if (!canSubmit) return;
-    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     mutation.mutate();
   };
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]} edges={['top']}>
+      <StatusBar style="dark" />
       <KeyboardAvoidingView
         style={styles.container}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}

@@ -21,7 +21,8 @@
     "noPermission": "ليس لديك صلاحية لهذا الإجراء",
     "adminRequired": "يتطلب صلاحيات المسؤول",
     "errorOccurred": "حدث خطأ. يرجى المحاولة مرة أخرى.",
-    "goBack": "رجوع"
+    "goBack": "رجوع",
+    "featureSoon": "ميزة قادمة قريباً"
   },
   "onboarding": {
     "slide1": {
@@ -76,7 +77,13 @@
     "error": "خطأ",
     "fillAllFields": "يرجى ملء جميع الحقول المطلوبة.",
     "notCustomerAccount": "هذا البريد مسجل كحساب تجاري وليس عميل. يرجى التبديل إلى تسجيل دخول التجارة أو إنشاء حساب عميل جديد.",
-    "notBusinessAccount": "هذا البريد مسجل كحساب عميل وليس تجارة. يرجى التبديل إلى تسجيل دخول العميل."
+    "notBusinessAccount": "هذا البريد مسجل كحساب عميل وليس تجارة. يرجى التبديل إلى تسجيل دخول العميل.",
+    "chooseAccountType": "كيف ستستخدم بركات؟",
+    "customerRole": "أنا عميل",
+    "customerRoleDesc": "اعثر على سلال مفاجئة بالقرب منك واحجزها",
+    "businessRoleDesc": "بِع فائض الطعام وقلل الهدر الغذائي",
+    "passwordRequirements": "8 أحرف على الأقل مع حرف كبير وصغير ورقم ورمز خاص (!@#$%...)",
+    "tosRequired": "يرجى قبول شروط الخدمة للمتابعة."
   },
   "home": {
     "search": "بحث",
@@ -96,7 +103,16 @@
     "selectRadius": "اختر النطاق",
     "useMyLocation": "استخدم موقعي الحالي",
     "chooseLocation": "اختر هذا الموقع",
-    "km": "كم"
+    "km": "كم",
+    "newPartner": "شريك جديد",
+    "nearbySpots": "أماكن قريبة",
+    "otherSpots": "أماكن أخرى",
+    "welcomePopup": {
+      "back": "مرحبًا بعودتك",
+      "whatsNew": "ما الجديد",
+      "newPartners": "شركاء جدد بالقرب منك!",
+      "newPartnersDesc": "اكتشف سلال مفاجأة من المطاعم في منطقتك"
+    }
   },
   "basket": {
     "surpriseBasket": "سلة مفاجأة",
@@ -121,7 +137,9 @@
     "reviewService": "الخدمة",
     "reviewQuantite": "الكمية",
     "reviewQualite": "الجودة",
-    "reviewVariete": "التنوع"
+    "reviewVariete": "التنوع",
+    "availableBaskets": "السلال المتاحة",
+    "noBaskets": "لا توجد سلال متاحة حالياً"
   },
   "reserve": {
     "title": "حجز سلة",
@@ -161,7 +179,17 @@
     "cancelTitle": "إلغاء الحجز",
     "cancelConfirm": "هل أنت متأكد أنك تريد إلغاء هذا الحجز؟",
     "showQrCode": "أظهر رمز QR هذا للتاجر عند الاستلام",
-    "leaveReview": "تقييم"
+    "leaveReview": "تقييم",
+    "emptyTitle": "لا توجد طلبات بعد",
+    "emptyDesc": "احجز أول سلة مفاجأة لك لتبدأ في توفير المال وإنقاذ الطعام.",
+    "findBasket": "اعثر على سلة",
+    "yourImpact": "تأثيرك",
+    "todayPickups": "استلامات اليوم",
+    "startsIn": "تبدأ في",
+    "endsIn": "تنتهي في",
+    "pickupEnded": "انتهى وقت الاستلام",
+    "tndSaved": "د.ت موفرة",
+    "kgCO2": "كجم CO₂"
   },
   "review": {
     "title": "اترك تقييمًا",
@@ -170,7 +198,9 @@
     "commentPlaceholder": "أخبرنا عن تجربتك...",
     "submit": "إرسال التقييم",
     "success": "شكرًا لتقييمك!",
-    "error": "تعذر إرسال التقييم"
+    "error": "تعذر إرسال التقييم",
+    "noRating": "غ/م",
+    "noReviews": "(0 تقييمات)"
   },
   "favorites": {
     "title": "المفضلة",
@@ -225,7 +255,30 @@
     "confirmPasswordLabel": "تأكيد كلمة المرور",
     "profileUpdated": "تم تحديث الملف الشخصي.",
     "editProfile": "تعديل",
-    "businessesTried": "أماكن مجربة"
+    "businessesTried": "أماكن مجربة",
+    "deleteAccount": "حذف الحساب",
+    "deleteAccountConfirm": "هل أنت متأكد من رغبتك في حذف حسابك نهائياً؟ لا يمكن التراجع عن هذا الإجراء.",
+    "deleteAccountSoon": "سيتاح حذف الحساب في تحديث قادم.",
+    "statMoneySaved": "أموال موفرة 💰",
+    "statMoneySavedDesc": "محسوبة من الفارق بين السعر الأصلي والسعر المخفض لكل سلة اشتريتها.",
+    "statCO2Saved": "CO₂ موفر 🌍",
+    "statBaskets": "سلال منقذة 🧺",
+    "statSpots": "أماكن مستكشفة 🗺️",
+    "noCompletedReservations": "لا توجد حجوزات مكتملة بعد",
+    "noPlacesVisited": "لم تزر أي مكان بعد",
+    "carTrips": "رحلات سيارة",
+    "plasticBottles": "زجاجات بلاستيكية",
+    "kgRescued": "كجم طعام منقذ",
+    "pref": {
+      "vegetarian": "نباتي",
+      "vegan": "نباتي صرف",
+      "halal": "حلال",
+      "gluten_free": "خالي من الجلوتين",
+      "nut_allergy": "حساسية من المكسرات",
+      "lactose_free": "خالي من اللاكتوز",
+      "shellfish_allergy": "حساسية من المحار",
+      "no_pork": "بدون لحم خنزير"
+    }
   },
   "report": {
     "title": "إبلاغ",
@@ -284,7 +337,49 @@
       "details": "التفاصيل",
       "salesLegend": "المبيعات",
       "basketsLegend": "السلال",
-      "revenueLegend": "الإيرادات"
+      "revenueLegend": "الإيرادات",
+      "noData": "لا توجد بيانات",
+      "days": {
+        "Mon": "إثنين",
+        "Tue": "ثلاثاء",
+        "Wed": "أربعاء",
+        "Thu": "خميس",
+        "Fri": "جمعة",
+        "Sat": "سبت",
+        "Sun": "أحد",
+        "Monday": "الاثنين",
+        "Tuesday": "الثلاثاء",
+        "Wednesday": "الأربعاء",
+        "Thursday": "الخميس",
+        "Friday": "الجمعة",
+        "Saturday": "السبت",
+        "Sunday": "الأحد"
+      },
+      "months": {
+        "Jan": "يناير",
+        "Feb": "فبراير",
+        "Mar": "مارس",
+        "Apr": "أبريل",
+        "May": "مايو",
+        "Jun": "يونيو",
+        "Jul": "يوليو",
+        "Aug": "أغسطس",
+        "Sep": "سبتمبر",
+        "Oct": "أكتوبر",
+        "Nov": "نوفمبر",
+        "Dec": "ديسمبر",
+        "January": "يناير",
+        "February": "فبراير",
+        "March": "مارس",
+        "April": "أبريل",
+        "June": "يونيو",
+        "July": "يوليو",
+        "August": "أغسطس",
+        "September": "سبتمبر",
+        "October": "أكتوبر",
+        "November": "نوفمبر",
+        "December": "ديسمبر"
+      }
     },
     "baskets": {
       "title": "سلالي",
@@ -323,7 +418,15 @@
       "statusReserved": "محجوز",
       "statusReady": "جاهز",
       "statusCollected": "تم الاستلام",
-      "statusCancelled": "ملغي"
+      "statusCancelled": "ملغي",
+      "noCompletedOrders": "لا توجد طلبات مكتملة",
+      "noCompletedDesc": "ستظهر الطلبات المكتملة هنا بعد تأكيد الاستلام.",
+      "verifyPickup": "تحقق من الاستلام",
+      "verifyDesc": "أدخل رمز الاستلام أو امسح رمز QR للتحقق من استلام العميل",
+      "confirmCode": "تأكيد الرمز",
+      "scanQR": "مسح رمز QR",
+      "enterPickupCode": "يرجى إدخال رمز الاستلام.",
+      "incorrectCode": "الرمز غير صحيح. يرجى المحاولة مرة أخرى."
     },
     "profile": {
       "title": "ملف التجارة",
@@ -376,7 +479,21 @@
       "locationName": "اسم الموقع",
       "locationAddress": "العنوان",
       "locationAdded": "تمت إضافة الموقع بنجاح.",
-      "noLocations": "لا توجد مواقع بعد. اضغط + لإضافة موقع."
+      "noLocations": "لا توجد مواقع بعد. اضغط + لإضافة موقع.",
+      "admin": "مسؤول",
+      "member": "عضو",
+      "buildTeamTitle": "أنشئ فريقك",
+      "buildTeamDesc": "أضف أعضاء الفريق لإدارة مطعمك معاً. يحصل كل شخص على تسجيل دخول خاص وصلاحيات محددة.",
+      "addFirstMember": "أضف أول عضو",
+      "noMembers": "لا يوجد أعضاء في هذا الفريق",
+      "orgLabel": "المؤسسة",
+      "teamLabel": "الفريق",
+      "orgBack": "← المؤسسة",
+      "activePerms": "الصلاحيات النشطة",
+      "roleLabel": "الدور",
+      "locationLabel": "الموقع",
+      "all": "الكل",
+      "assigned": "مُعيَّن"
     },
     "createBasket": {
       "title": "سلة جديدة",
@@ -391,7 +508,11 @@
       "save": "حفظ",
       "create": "إنشاء السلة",
       "basketContents": "محتوى السلة",
-      "contentsPlaceholder": "وصف أنواع المنتجات التي قد يجدها العميل..."
+      "contentsPlaceholder": "وصف أنواع المنتجات التي قد يجدها العميل...",
+      "suggest": "اقتراح",
+      "nameRequired": "اسم السلة مطلوب.",
+      "sellingPriceRequired": "سعر البيع مطلوب.",
+      "quantityRequired": "الكمية يجب أن تكون 1 على الأقل."
     },
     "auth": {
       "businessSignIn": "دخول التجارة",
@@ -400,7 +521,13 @@
       "switchToBusiness": "أنا تاجر",
       "businessName": "اسم التجارة",
       "businessAddress": "عنوان التجارة",
-      "businessCategory": "الفئة"
+      "businessCategory": "الفئة",
+      "contactName": "اسمك",
+      "requestTitle": "كن شريكاً مع بركات",
+      "requestDesc": "يتم إنشاء حسابات التجار من قِبل فريقنا. أملأ النموذج وسنتواصل معك.",
+      "submitApplication": "إرسال الطلب",
+      "applicationSubmitted": "تم إرسال الطلب!",
+      "applicationSubmittedDesc": "استلمنا طلبك وسنراجعه قريباً. توقع بريداً إلكترونياً منا خلال 2-3 أيام عمل."
     },
     "scan": {
       "title": "تحقق من الاستلام",
@@ -414,7 +541,14 @@
       "done": "تم",
       "cameraUnavailable": "ماسح الكاميرا غير متاح. يرجى إدخال رمز الاستلام يدويًا أدناه.",
       "manualEntryTitle": "أدخل رمز الاستلام",
-      "manualEntryDesc": "اطلب من العميل رمز الاستلام الظاهر في تأكيد طلبه."
+      "manualEntryDesc": "اطلب من العميل رمز الاستلام الظاهر في تأكيد طلبه.",
+      "pointCamera": "وجّه الكاميرا نحو رمز QR",
+      "processing": "جاري المعالجة...",
+      "scanAgain": "مسح مجدداً",
+      "cameraPermTitle": "إذن الكاميرا مطلوب",
+      "cameraPermDesc": "يحتاج التطبيق إلى الوصول إلى الكاميرا لمسح رمز QR.",
+      "allowCamera": "السماح بالوصول للكاميرا",
+      "useManualEntry": "إدخال يدوي"
     },
     "availability": {
       "title": "التوفر",
@@ -433,7 +567,15 @@
       "empty": "لا توجد عناصر",
       "deleteConfirm": "حذف هذا العنصر؟",
       "added": "تم إضافة العنصر.",
-      "deleted": "تم حذف العنصر."
+      "deleted": "تم حذف العنصر.",
+      "scan": "مسح",
+      "photoPermRequired": "مطلوب إذن مكتبة الصور لمسح القائمة.",
+      "noItemsFound": "لم يتم العثور على عناصر",
+      "noItemsDetected": "لم يتم اكتشاف أي عناصر في القائمة. يرجى المحاولة مرة أخرى بصورة أوضح.",
+      "scannedItems": "العناصر الممسوحة",
+      "noItemsSelected": "لم يتم اختيار عناصر",
+      "selectAtLeastOne": "اختر عنصراً واحداً على الأقل للإضافة.",
+      "addSelectedItems": "إضافة العناصر المختارة"
     }
   },
   "errors": {

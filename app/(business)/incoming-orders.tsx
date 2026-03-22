@@ -3,9 +3,9 @@ import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Linking, Alert, M
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import { Phone, CheckCircle, XCircle, Clock, Package, QrCode, ClipboardList } from 'lucide-react-native';
-import * as Haptics from 'expo-haptics';
 import { useRouter } from 'expo-router';
 import { useTheme } from '@/src/theme/ThemeProvider';
+import { StatusBar } from 'expo-status-bar';
 import { useBusinessStore } from '@/src/stores/businessStore';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { fetchTodayOrders, confirmPickup, type TodayReservationFromAPI } from '@/src/services/business';
@@ -83,7 +83,6 @@ export default function IncomingOrdersScreen() {
   const [verifyError, setVerifyError] = useState('');
 
   const handleMarkReady = useCallback((orderId: string) => {
-    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     updateOrderStatus(orderId, 'ready');
   }, [updateOrderStatus]);
 
@@ -95,7 +94,7 @@ export default function IncomingOrdersScreen() {
       void queryClient.invalidateQueries({ queryKey: ['today-orders'] });
     },
     onError: (err) => {
-      Alert.alert('Error', getErrorMessage(err));
+      Alert.alert(t('common.error'), getErrorMessage(err));
     },
   });
 
@@ -113,11 +112,11 @@ export default function IncomingOrdersScreen() {
     const expected = (order.pickupCode ?? '').trim().toUpperCase();
     const entered = typedCode.trim().toUpperCase();
     if (!entered) {
-      setVerifyError('Please enter the pickup code.');
+      setVerifyError(t('business.orders.enterPickupCode'));
       return;
     }
     if (entered !== expected) {
-      setVerifyError('Incorrect code. Please try again.');
+      setVerifyError(t('business.orders.incorrectCode'));
       return;
     }
     // Code matches — confirm via backend
@@ -136,7 +135,6 @@ export default function IncomingOrdersScreen() {
           text: t('common.confirm'),
           style: 'destructive',
           onPress: () => {
-            void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
             updateOrderStatus(orderId, 'cancelled');
           },
         },
@@ -171,6 +169,7 @@ export default function IncomingOrdersScreen() {
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]} edges={[]}>
+      <StatusBar style="dark" />
       <View style={[styles.header, { paddingHorizontal: theme.spacing.xl, paddingTop: theme.spacing.xs }]}>
         <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h1 }]}>
           {t('business.orders.title')}
@@ -209,7 +208,7 @@ export default function IncomingOrdersScreen() {
         ))}
       </View>
 
-      <ScrollView style={styles.content} contentContainerStyle={{ paddingHorizontal: theme.spacing.xl, paddingTop: theme.spacing.md, paddingBottom: 40 }} showsVerticalScrollIndicator={false}>
+      <ScrollView style={styles.content} contentContainerStyle={{ paddingHorizontal: theme.spacing.xl, paddingTop: theme.spacing.md, paddingBottom: 100 }} showsVerticalScrollIndicator={false}>
         {displayedOrders.length === 0 ? (
           <View style={styles.emptyState}>
             <View style={{

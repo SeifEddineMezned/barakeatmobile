@@ -1,9 +1,18 @@
 import React, { useEffect, useRef } from 'react';
-import { View, Text, StyleSheet, Animated, Dimensions } from 'react-native';
+import { View, StyleSheet, Animated, Easing } from 'react-native';
 
 const BRAND_TEXT = 'Barakeat';
 const LETTER_DELAY = 80;
-const HOLD_DURATION = 500;
+const HOLD_DURATION = 450;
+const HOP_COUNT = BRAND_TEXT.length;
+const HOP_DURATION = 110;  // ms per hop — slightly slower for visibility
+const HOP_HEIGHT = -50;    // px upward per hop
+const DOT_TRAVEL = 248;    // pixels dot travels left→right
+const DOT_DELAY = BRAND_TEXT.length * LETTER_DELAY + 60;
+
+// Split hop into up (40%) and down (60%) for natural arc
+const HOP_UP = Math.round(HOP_DURATION * 0.40);
+const HOP_DOWN = HOP_DURATION - HOP_UP;
 
 interface SplashAnimationProps {
   onFinish: () => void;
@@ -13,12 +22,13 @@ export function SplashAnimation({ onFinish }: SplashAnimationProps) {
   const letterAnims = useRef(
     BRAND_TEXT.split('').map(() => ({
       opacity: new Animated.Value(0),
-      translateY: new Animated.Value(20),
+      translateY: new Animated.Value(22),
     }))
   ).current;
 
   const dotOpacity = useRef(new Animated.Value(0)).current;
-  const dotScale = useRef(new Animated.Value(0.5)).current;
+  const dotX = useRef(new Animated.Value(-DOT_TRAVEL)).current;
+  const dotY = useRef(new Animated.Value(0)).current;
   const overlayOpacity = useRef(new Animated.Value(1)).current;
 
   useEffect(() => {
@@ -33,37 +43,72 @@ export function SplashAnimation({ onFinish }: SplashAnimationProps) {
         }),
         Animated.timing(anim.translateY, {
           toValue: 0,
-          duration: 250,
+          duration: 260,
           delay: i * LETTER_DELAY,
           useNativeDriver: true,
+          easing: Easing.out(Easing.cubic),
         }),
       ])
     );
 
-    // Dot animation (appears after all letters)
-    const dotAnimation = Animated.parallel([
-      Animated.timing(dotOpacity, {
-        toValue: 1,
-        duration: 200,
-        delay: BRAND_TEXT.length * LETTER_DELAY,
-        useNativeDriver: true,
-      }),
-      Animated.spring(dotScale, {
-        toValue: 1,
-        delay: BRAND_TEXT.length * LETTER_DELAY,
-        useNativeDriver: true,
-      }),
-    ]);
-
-    // Fade out
-    const fadeOut = Animated.timing(overlayOpacity, {
-      toValue: 0,
-      duration: 400,
-      delay: BRAND_TEXT.length * LETTER_DELAY + HOLD_DURATION,
+    // Dot appears at starting position the instant travel begins
+    const dotOpacityAnim = Animated.timing(dotOpacity, {
+      toValue: 1,
+      duration: 0,
+      delay: DOT_DELAY,
       useNativeDriver: true,
     });
 
-    Animated.parallel([...letterAnimations, dotAnimation, fadeOut]).start(() => {
+    // Dot travels left → right at perfectly constant speed
+    const dotXAnim = Animated.timing(dotX, {
+      toValue: 0,
+      duration: HOP_COUNT * HOP_DURATION,
+      delay: DOT_DELAY,
+      useNativeDriver: true,
+      easing: Easing.linear,
+    });
+
+    // Dot Y: smooth parabolic arc per hop
+    //   Rise: decelerate (fast launch → slow at peak)  — Easing.out(Easing.quad)
+    //   Fall: accelerate (slow at peak → fast landing) — Easing.in(Easing.quad)
+    const hopAnims = Array.from({ length: HOP_COUNT }, () =>
+      Animated.sequence([
+        Animated.timing(dotY, {
+          toValue: HOP_HEIGHT,
+          duration: HOP_UP,
+          useNativeDriver: true,
+          easing: Easing.out(Easing.quad),
+        }),
+        Animated.timing(dotY, {
+          toValue: 0,
+          duration: HOP_DOWN,
+          useNativeDriver: true,
+          easing: Easing.in(Easing.quad),
+        }),
+      ])
+    );
+
+    const dotYAnim = Animated.sequence([
+      Animated.delay(DOT_DELAY),
+      ...hopAnims,
+    ]);
+
+    // Fade-out overlay after dot has fully landed
+    const TOTAL_DOT_TIME = HOP_COUNT * HOP_DURATION;
+    const fadeOut = Animated.timing(overlayOpacity, {
+      toValue: 0,
+      duration: 420,
+      delay: DOT_DELAY + TOTAL_DOT_TIME + HOLD_DURATION,
+      useNativeDriver: true,
+    });
+
+    Animated.parallel([
+      ...letterAnimations,
+      dotOpacityAnim,
+      dotXAnim,
+      dotYAnim,
+      fadeOut,
+    ]).start(() => {
       onFinish();
     });
   }, []);
@@ -90,7 +135,7 @@ export function SplashAnimation({ onFinish }: SplashAnimationProps) {
             styles.dot,
             {
               opacity: dotOpacity,
-              transform: [{ scale: dotScale }],
+              transform: [{ translateX: dotX }, { translateY: dotY }],
             },
           ]}
         >
@@ -116,7 +161,7 @@ const styles = StyleSheet.create({
   letter: {
     fontSize: 44,
     fontWeight: '700',
-    color: '#fff',
+    color: '#e3ff5c',
     fontFamily: 'Poppins_700Bold',
   },
   dot: {

@@ -3,7 +3,6 @@ import { View, Text, StyleSheet, TouchableOpacity, Animated, Linking } from 'rea
 import { useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import { MapPin, Clock, Navigation } from 'lucide-react-native';
-import * as Haptics from 'expo-haptics';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import type { Order } from '@/src/types';
 
@@ -18,7 +17,6 @@ export function OrderCard({ order }: OrderCardProps) {
   const scaleAnim = React.useRef(new Animated.Value(1)).current;
 
   const handlePress = () => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     Animated.sequence([
       Animated.timing(scaleAnim, {
         toValue: 0.98,
@@ -34,7 +32,6 @@ export function OrderCard({ order }: OrderCardProps) {
   };
 
   const handleDirections = () => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     const url = `https://www.google.com/maps/search/?api=1&query=${order.basket.latitude},${order.basket.longitude}`;
     void Linking.openURL(url);
   };

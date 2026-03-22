@@ -131,6 +131,16 @@ export default function ProfileScreen() {
   }, [leaderboardQuery.data, showAllLeaderboard]);
 
   const FOOD_PREFS = ['Vegetarian', 'Vegan', 'Halal', 'Gluten-Free', 'Nut Allergy', 'Lactose-Free', 'Shellfish Allergy', 'No Pork'];
+  const FOOD_PREF_KEY_MAP: Record<string, string> = {
+    'Vegetarian': 'profile.pref.vegetarian',
+    'Vegan': 'profile.pref.vegan',
+    'Halal': 'profile.pref.halal',
+    'Gluten-Free': 'profile.pref.gluten_free',
+    'Nut Allergy': 'profile.pref.nut_allergy',
+    'Lactose-Free': 'profile.pref.lactose_free',
+    'Shellfish Allergy': 'profile.pref.shellfish_allergy',
+    'No Pork': 'profile.pref.no_pork',
+  };
 
   const handleSavePreferences = async () => {
     try {
@@ -163,7 +173,7 @@ export default function ProfileScreen() {
         <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h1 }]}>{t('profile.title')}</Text>
       </View>
 
-      <ScrollView style={styles.content} contentContainerStyle={[{ padding: theme.spacing.xl }]} showsVerticalScrollIndicator={false}>
+      <ScrollView style={styles.content} contentContainerStyle={[{ padding: theme.spacing.xl, paddingBottom: 100 }]} showsVerticalScrollIndicator={false}>
         {/* User Card with XP bar, level badge, streak */}
         <View
           style={[
@@ -719,18 +729,18 @@ export default function ProfileScreen() {
               return (
                 <>
                   <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h2, marginBottom: theme.spacing.sm }}>
-                    {'Money Saved \uD83D\uDCB0'}
+                    {t('profile.statMoneySaved')}
                   </Text>
                   <Text style={{ color: theme.colors.primary, ...theme.typography.h1, marginBottom: theme.spacing.sm }}>
                     {stats.moneySaved.toFixed(2)} TND
                   </Text>
                   <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm, marginBottom: theme.spacing.lg }}>
-                    {'Calculated from the difference between original prices and what you paid'}
+                    {t('profile.statMoneySavedDesc')}
                   </Text>
                   <ScrollView showsVerticalScrollIndicator={false}>
                     {recent5.length === 0 ? (
                       <Text style={{ color: theme.colors.muted, ...theme.typography.bodySm, textAlign: 'center' as const }}>
-                        {'No completed reservations yet'}
+                        {t('profile.noCompletedReservations')}
                       </Text>
                     ) : (
                       recent5.map((r, i) => {
@@ -773,16 +783,16 @@ export default function ProfileScreen() {
             {statModal === 'co2' && (
               <>
                 <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h2, marginBottom: theme.spacing.sm }}>
-                  {'CO\u2082 Saved \uD83C\uDF0D'}
+                  {t('profile.statCO2Saved')}
                 </Text>
                 <Text style={{ color: theme.colors.accentFresh, ...theme.typography.h1, marginBottom: theme.spacing.lg }}>
                   {stats.co2Saved.toFixed(1)} kg
                 </Text>
                 <ScrollView showsVerticalScrollIndicator={false}>
                   {[
-                    { label: 'car trips avoided', value: (stats.co2Saved / 8).toFixed(1) },
-                    { label: 'plastic bottles not produced', value: (stats.co2Saved * 4).toFixed(0) },
-                    { label: 'kg of food rescued', value: (stats.basketsBought * 1.3).toFixed(1) },
+                    { label: t('profile.carTrips'), value: (stats.co2Saved / 8).toFixed(1) },
+                    { label: t('profile.plasticBottles'), value: (stats.co2Saved * 4).toFixed(0) },
+                    { label: t('profile.kgRescued'), value: (stats.basketsBought * 1.3).toFixed(1) },
                   ].map((eq, i) => (
                     <View
                       key={`co2-${i}`}
@@ -830,7 +840,7 @@ export default function ProfileScreen() {
               return (
                 <>
                   <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h2, marginBottom: theme.spacing.sm }}>
-                    {'Baskets Rescued \uD83E\uDDBA'}
+                    {t('profile.statBaskets')}
                   </Text>
                   <Text style={{ color: theme.colors.primaryDark, ...theme.typography.h1, marginBottom: theme.spacing.lg }}>
                     {stats.basketsBought}
@@ -838,7 +848,7 @@ export default function ProfileScreen() {
                   <ScrollView showsVerticalScrollIndicator={false}>
                     {last8.length === 0 ? (
                       <Text style={{ color: theme.colors.muted, ...theme.typography.bodySm, textAlign: 'center' as const }}>
-                        {'No completed reservations yet'}
+                        {t('profile.noCompletedReservations')}
                       </Text>
                     ) : (
                       last8.map((r, i) => {
@@ -893,7 +903,7 @@ export default function ProfileScreen() {
               return (
                 <>
                   <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h2, marginBottom: theme.spacing.sm }}>
-                    {'Places Explored \uD83D\uDDFA\uFE0F'}
+                    {t('profile.statSpots')}
                   </Text>
                   <Text style={{ color: theme.colors.primary, ...theme.typography.h1, marginBottom: theme.spacing.lg }}>
                     {stats.businessesTried}
@@ -901,7 +911,7 @@ export default function ProfileScreen() {
                   <ScrollView showsVerticalScrollIndicator={false}>
                     {uniquePlaces.length === 0 ? (
                       <Text style={{ color: theme.colors.muted, ...theme.typography.bodySm, textAlign: 'center' as const }}>
-                        {'No places visited yet'}
+                        {t('profile.noPlacesVisited')}
                       </Text>
                     ) : (
                       uniquePlaces.map((place, i) => (
@@ -943,7 +953,7 @@ export default function ProfileScreen() {
               }}
             >
               <Text style={{ color: theme.colors.textPrimary, ...theme.typography.button }}>
-                {'Close'}
+                {t('common.close')}
               </Text>
             </TouchableOpacity>
           </TouchableOpacity>
@@ -985,7 +995,7 @@ export default function ProfileScreen() {
                       ...theme.typography.bodySm,
                       fontWeight: isSelected ? ('600' as const) : ('400' as const),
                     }}>
-                      {pref}
+                      {t(FOOD_PREF_KEY_MAP[pref] ?? pref, { defaultValue: pref })}
                     </Text>
                   </TouchableOpacity>
                 );

@@ -4,13 +4,14 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import { useRouter } from 'expo-router';
 import { Plus, Clock, Edit3, Trash2, ShoppingBag, MoreVertical, Minus, Camera, X } from 'lucide-react-native';
-import * as Haptics from 'expo-haptics';
 import { useTheme } from '@/src/theme/ThemeProvider';
+import { StatusBar } from 'expo-status-bar';
 import { useBusinessStore } from '@/src/stores/businessStore';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { fetchMyBaskets, deleteBasket as deleteBasketAPI, fetchMyProfile, updateQuantity, updateBasket as updateBasketAPI, updateBasketWithImage, type BusinessBasketFromAPI } from '@/src/services/business';
 import * as ImagePicker from 'expo-image-picker';
 import { getErrorMessage } from '@/src/lib/api';
+import { FeatureFlags } from '@/src/lib/featureFlags';
 
 export default function MyBasketsScreen() {
   const { t } = useTranslation();
@@ -38,7 +39,10 @@ export default function MyBasketsScreen() {
 
   const qtyMutation = useMutation({
     mutationFn: (qty: number) => updateQuantity(qty),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['my-profile'] }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['my-profile'] });
+      void queryClient.invalidateQueries({ queryKey: ['my-baskets'] });
+    },
   });
 
   const basketUpdateMutation = useMutation({
@@ -74,7 +78,7 @@ export default function MyBasketsScreen() {
           start: b.pickup_start_time?.substring(0, 5) ?? '18:00',
           end: b.pickup_end_time?.substring(0, 5) ?? '19:00',
         },
-        quantityLeft: b.available_quantity ?? 0,
+        quantityLeft: b.restaurant_available_quantity ?? b.available_quantity ?? b.quantity ?? 0,
         quantityTotal: b.quantity ?? 0,
         distance: 0,
         address: '',
@@ -82,7 +86,7 @@ export default function MyBasketsScreen() {
         longitude: 0,
         exampleItems: [],
         imageUrl: b.image_url ?? undefined,
-        isActive: b.status !== 'deleted' && (b.available_quantity ?? 0) > 0,
+        isActive: b.status !== 'deleted' && (b.restaurant_available_quantity ?? b.available_quantity ?? b.quantity ?? 0) > 0,
         description: b.description ?? undefined,
         maxPerCustomer: (b as any).max_per_customer ?? 5,
       }))
@@ -115,7 +119,6 @@ export default function MyBasketsScreen() {
   const isSupermarket = profile?.isSupermarket ?? false;
 
   const handleToggle = useCallback((id: string) => {
-    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     const target = baskets.find((b) => b.id === id);
     if (!target) return;
 
@@ -151,7 +154,6 @@ export default function MyBasketsScreen() {
           text: t('business.baskets.delete'),
           style: 'destructive',
           onPress: () => {
-            void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
             deleteBasketMutation.mutate(id);
             store.deleteBasket(id);
           },
@@ -208,7 +210,7 @@ export default function MyBasketsScreen() {
     try {
       await updateBasketWithImage(basketId, formData);
       void queryClient.invalidateQueries({ queryKey: ['my-baskets'] });
-      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      setDetailBasket(prev => prev ? { ...prev, imageUrl: asset.uri } : prev);
     } catch (err: any) {
       Alert.alert('Error', err?.message ?? 'Failed to upload photo');
     }
@@ -216,6 +218,7 @@ export default function MyBasketsScreen() {
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]} edges={[]}>
+      <StatusBar style="dark" />
       <View style={[styles.header, { paddingHorizontal: theme.spacing.xl, paddingTop: theme.spacing.xs, paddingBottom: theme.spacing.md }]}>
         <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h1 }]}>
           {t('business.baskets.title')}
@@ -232,7 +235,7 @@ export default function MyBasketsScreen() {
         </TouchableOpacity>
       </View>
 
-      <ScrollView style={styles.content} contentContainerStyle={{ paddingHorizontal: theme.spacing.xl, paddingBottom: 40 }} showsVerticalScrollIndicator={false}>
+      <ScrollView style={styles.content} contentContainerStyle={{ paddingHorizontal: theme.spacing.xl, paddingBottom: 100 }} showsVerticalScrollIndicator={false}>
         {baskets.length === 0 ? (
           <View style={[styles.emptyState, { marginTop: 80 }]}>
             <View style={[styles.emptyIcon, { backgroundColor: theme.colors.primary + '15', borderRadius: 40, width: 80, height: 80 }]}>
@@ -540,6 +543,7 @@ export default function MyBasketsScreen() {
                 </View>
 
                 {/* Max per customer */}
+                {FeatureFlags.ENABLE_MAX_PER_CUSTOMER && (
                 <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
                   <Text style={{ color: theme.colors.textPrimary, ...theme.typography.body }}>
                     {t('business.baskets.maxPerCustomer', { defaultValue: 'Max per customer' })}
@@ -562,6 +566,7 @@ export default function MyBasketsScreen() {
                     </TouchableOpacity>
                   </View>
                 </View>
+                )}
 
                 {/* Pickup Time */}
                 <TouchableOpacity
@@ -695,25 +700,30 @@ export default function MyBasketsScreen() {
               <TouchableOpacity
                 onPress={() => {
                   if (detailBasket) {
-                    // Send ALL fields to PUT /api/baskets/:id including available_quantity
-                    basketUpdateMutation.mutate({
-                      id: detailBasket.id,
-                      data: {
-                        name: detailBasket.name,
-                        original_price: detailBasket.originalPrice,
-                        selling_price: detailBasket.discountedPrice,
-                        quantity: detailDailyQty,
-                        available_quantity: detailTodayQty,
-                        pickup_start_time: `${pickupStartTime}:00`,
-                        pickup_end_time: `${pickupEndTime}:00`,
-                      },
-                    });
                     // Also update restaurant-level available_quantity for backward compat
                     qtyMutation.mutate(detailTodayQty);
-                    // Update local store
-                    updateBasket(detailBasket.id, { quantityLeft: detailTodayQty, quantityTotal: detailDailyQty });
-                    void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-                    setDetailBasket(null);
+                    // Send ALL fields to PUT /api/baskets/:id including available_quantity
+                    // Close modal only after save succeeds so the list refetches first
+                    basketUpdateMutation.mutate(
+                      {
+                        id: detailBasket.id,
+                        data: {
+                          name: detailBasket.name,
+                          original_price: detailBasket.originalPrice,
+                          selling_price: detailBasket.discountedPrice,
+                          quantity: detailDailyQty,
+                          available_quantity: detailTodayQty,
+                          pickup_start_time: `${pickupStartTime}:00`,
+                          pickup_end_time: `${pickupEndTime}:00`,
+                        },
+                      },
+                      {
+                        onSuccess: () => {
+                          updateBasket(detailBasket.id, { quantityLeft: detailTodayQty, quantityTotal: detailDailyQty });
+                          setDetailBasket(null);
+                        },
+                      }
+                    );
                   }
                 }}
                 style={{

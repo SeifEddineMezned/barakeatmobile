@@ -31,6 +31,7 @@ import {
   Shuffle,
 } from 'lucide-react-native';
 import { useTheme } from '@/src/theme/ThemeProvider';
+import { StatusBar } from 'expo-status-bar';
 import { useAuthStore } from '@/src/stores/authStore';
 import { fetchMyReservations } from '@/src/services/reservations';
 import {
@@ -155,6 +156,7 @@ export default function ImpactScreen() {
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]} edges={['top']}>
+      <StatusBar style="dark" />
       {/* Header */}
       <View
         style={[

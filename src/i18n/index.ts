@@ -2,6 +2,7 @@ import i18n from 'i18next';
 import { initReactI18next } from 'react-i18next';
 import * as Localization from 'expo-localization';
 import { I18nManager, Platform } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import en from './locales/en.json';
 import fr from './locales/fr.json';
 import ar from './locales/ar.json';
@@ -37,5 +38,12 @@ i18n.on('languageChanged', (lng) => {
   }
   console.log('[i18n] Language changed to:', lng, 'RTL:', isRTL);
 });
+
+// Restore persisted language preference
+AsyncStorage.getItem('app_lang').then((saved) => {
+  if (saved && supportedLangs.includes(saved) && saved !== i18n.language) {
+    void i18n.changeLanguage(saved);
+  }
+}).catch(() => {});
 
 export default i18n;

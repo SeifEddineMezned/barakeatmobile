@@ -105,6 +105,7 @@ export const FeatureFlags = {
   ENABLE_TEAM_ORG_CHART: true,
 
   // ── Previously disabled ──────────────────────────────────────────────────
+  ENABLE_MAX_PER_CUSTOMER: false,  // Per-basket cap on how many a single customer can reserve
   ENABLE_GROWING_TREE: false,
   ENABLE_SPLASH_ANIMATION: false,
   IS_PROTOTYPE: false,

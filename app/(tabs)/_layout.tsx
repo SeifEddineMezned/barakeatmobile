@@ -2,7 +2,7 @@ import { Tabs } from "expo-router";
 import { Search, ShoppingBag, Heart, User, Bell, MapPin, Settings } from "lucide-react-native";
 import React from "react";
 import { useTranslation } from "react-i18next";
-import { View, Text, TouchableOpacity, Animated, Dimensions } from "react-native";
+import { View, Text, TouchableOpacity, Animated, Dimensions, PanResponder } from "react-native";
 import { useRouter } from "expo-router";
 import { useQuery } from "@tanstack/react-query";
 import { useTheme } from "@/src/theme/ThemeProvider";
@@ -43,6 +43,55 @@ export default function TabLayout() {
   const tabWidth = navWidth / tabCount;
   const glassAnim = React.useRef(new Animated.Value(0)).current;
   const [activeIndex, setActiveIndex] = React.useState(0);
+
+  // Track live glassAnim x for swipe calculations
+  const glassX = React.useRef(0);
+  React.useEffect(() => {
+    const id = glassAnim.addListener(({ value }) => { glassX.current = value; });
+    return () => glassAnim.removeListener(id);
+  }, [glassAnim]);
+
+  // Refs so PanResponder (created once) can see latest navigation state
+  const navStateRef = React.useRef<any>(null);
+  const navRef = React.useRef<any>(null);
+
+  const swipePanResponder = React.useMemo(() => PanResponder.create({
+    // Only capture clearly horizontal swipes
+    onMoveShouldSetPanResponder: (_, g) =>
+      Math.abs(g.dx) > 10 && Math.abs(g.dx) > Math.abs(g.dy) * 1.8,
+    onPanResponderGrant: () => {
+      glassAnim.stopAnimation();
+      glassAnim.setOffset(glassX.current);
+      glassAnim.setValue(0);
+    },
+    onPanResponderMove: (_, g) => {
+      const maxX = tabWidth * (tabCount - 1);
+      const clamped = Math.max(-glassX.current, Math.min(maxX - glassX.current, g.dx));
+      glassAnim.setValue(clamped);
+    },
+    onPanResponderRelease: (_, g) => {
+      glassAnim.flattenOffset();
+      const raw = glassX.current;
+      // Flick: velocity > 0.4 nudges to next/prev tab
+      let targetIdx = Math.round(raw / tabWidth);
+      if (g.vx > 0.4) targetIdx = Math.min(tabCount - 1, Math.floor(raw / tabWidth) + 1);
+      else if (g.vx < -0.4) targetIdx = Math.max(0, Math.ceil(raw / tabWidth) - 1);
+      targetIdx = Math.max(0, Math.min(tabCount - 1, targetIdx));
+
+      Animated.spring(glassAnim, {
+        toValue: targetIdx * tabWidth,
+        useNativeDriver: true,
+        friction: 10,
+        tension: 100,
+      }).start();
+      setActiveIndex(targetIdx);
+      const routes = navStateRef.current?.routes ?? [];
+      if (routes[targetIdx]) navRef.current?.navigate(routes[targetIdx].name);
+    },
+    onPanResponderTerminate: () => {
+      glassAnim.flattenOffset();
+    },
+  }), [glassAnim, tabWidth, tabCount]);
 
   const heroVisible = useHeroStore((s) => s.heroVisible);
   const isSearchTab = activeIndex === 0;
@@ -163,6 +212,9 @@ export default function TabLayout() {
       }}
       tabBar={(props) => {
         const { state, descriptors, navigation } = props;
+        // Keep refs current for PanResponder
+        navStateRef.current = state;
+        navRef.current = navigation;
 
         // Defer state update to avoid "cannot update during render" warning
         const targetX = state.index * tabWidth;
@@ -180,6 +232,7 @@ export default function TabLayout() {
 
         return (
           <View
+            {...swipePanResponder.panHandlers}
             style={{
               position: 'absolute',
               bottom: 20,

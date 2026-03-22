@@ -55,15 +55,33 @@ export async function register(data: RegisterRequest): Promise<AuthResponse> {
 
 export async function forgotPassword(email: string): Promise<void> {
   console.log('[Auth] Forgot password for:', email);
-  await apiClient.post('/api/auth/forgot-password', { email });
+  // Backend expects `identifier` (email OR phone)
+  await apiClient.post('/api/auth/forgot-password', { identifier: email });
 }
 
-export async function verifyResetOtp(email: string, otp: string): Promise<void> {
-  await apiClient.post('/api/auth/verify-reset-otp', { email, otp });
+export async function verifyResetOtp(identifier: string, otp: string): Promise<string> {
+  // Backend returns { success, token, requiresPasswordChange, email }
+  const res = await apiClient.post<{ token: string }>('/api/auth/verify-reset-otp', { identifier, otp });
+  return res.data.token;
 }
 
-export async function resetPassword(email: string, otp: string, newPassword: string): Promise<void> {
-  await apiClient.post('/api/auth/reset-password', { email, otp, newPassword });
+export async function resetPassword(resetToken: string, newPassword: string): Promise<void> {
+  // Backend validates the OTP-granted JWT via Authorization header, body only needs newPassword
+  await apiClient.post('/api/auth/reset-password', { newPassword }, {
+    headers: { Authorization: `Bearer ${resetToken}` },
+  });
+}
+
+export interface RestaurantAccessRequest {
+  name: string;
+  restaurantName: string;
+  email: string;
+  phone?: string;
+  address?: string;
+}
+
+export async function restaurantAccessRequest(data: RestaurantAccessRequest): Promise<void> {
+  await apiClient.post('/api/auth/restaurant-access/request', data);
 }
 
 export async function logout(): Promise<void> {

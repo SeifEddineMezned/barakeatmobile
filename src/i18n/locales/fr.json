@@ -21,7 +21,8 @@
     "noPermission": "Vous n'avez pas la permission pour cette action",
     "adminRequired": "Accès administrateur requis",
     "errorOccurred": "Une erreur est survenue. Veuillez réessayer.",
-    "goBack": "Retour"
+    "goBack": "Retour",
+    "featureSoon": "Fonctionnalité à venir"
   },
   "onboarding": {
     "slide1": {
@@ -76,7 +77,13 @@
     "error": "Erreur",
     "fillAllFields": "Veuillez remplir tous les champs obligatoires.",
     "notCustomerAccount": "Cet email est enregistré comme compte commerce, pas client. Veuillez passer au mode commerce ou créer un nouveau compte client.",
-    "notBusinessAccount": "Cet email est enregistré comme compte client, pas commerce. Veuillez passer au mode client."
+    "notBusinessAccount": "Cet email est enregistré comme compte client, pas commerce. Veuillez passer au mode client.",
+    "chooseAccountType": "Comment allez-vous utiliser Barakeat ?",
+    "customerRole": "Je suis client",
+    "customerRoleDesc": "Trouvez et réservez des paniers surprises près de chez vous",
+    "businessRoleDesc": "Vendez vos surplus alimentaires et réduisez le gaspillage",
+    "passwordRequirements": "Min 8 caractères avec majuscule, minuscule, chiffre et caractère spécial (!@#$%...)",
+    "tosRequired": "Veuillez accepter les Conditions d'utilisation pour continuer."
   },
   "home": {
     "search": "Rechercher",
@@ -96,7 +103,16 @@
     "selectRadius": "Choisir le rayon",
     "useMyLocation": "Utiliser ma position actuelle",
     "chooseLocation": "Choisir cette localisation",
-    "km": "km"
+    "km": "km",
+    "newPartner": "Nouveau Partenaire",
+    "nearbySpots": "spots à proximité",
+    "otherSpots": "Autres spots",
+    "welcomePopup": {
+      "back": "Content de vous revoir",
+      "whatsNew": "Quoi de neuf",
+      "newPartners": "Nouveaux partenaires près de chez vous !",
+      "newPartnersDesc": "Découvrez des paniers surprise de restaurants dans votre quartier"
+    }
   },
   "basket": {
     "surpriseBasket": "Panier Surprise",
@@ -121,7 +137,9 @@
     "reviewService": "Service",
     "reviewQuantite": "Quantité",
     "reviewQualite": "Qualité",
-    "reviewVariete": "Variété"
+    "reviewVariete": "Variété",
+    "availableBaskets": "Paniers disponibles",
+    "noBaskets": "Aucun panier disponible pour le moment"
   },
   "reserve": {
     "title": "Réserver Panier",
@@ -161,7 +179,17 @@
     "cancelTitle": "Annuler la réservation",
     "cancelConfirm": "Êtes-vous sûr de vouloir annuler cette réservation ?",
     "showQrCode": "Montrez ce QR code au commerçant lors du retrait",
-    "leaveReview": "Avis"
+    "leaveReview": "Avis",
+    "emptyTitle": "Aucune commande pour l'instant",
+    "emptyDesc": "Réservez un panier surprise pour économiser de la nourriture et de l'argent !",
+    "findBasket": "Trouver un Panier Surprise",
+    "yourImpact": "Votre Impact",
+    "todayPickups": "Retraits d'Aujourd'hui",
+    "startsIn": "Commence dans",
+    "endsIn": "Se termine dans",
+    "pickupEnded": "Retrait terminé",
+    "tndSaved": "TND économisés",
+    "kgCO2": "kg CO₂"
   },
   "review": {
     "title": "Laisser un avis",
@@ -170,7 +198,9 @@
     "commentPlaceholder": "Racontez-nous votre expérience...",
     "submit": "Envoyer l'avis",
     "success": "Merci pour votre avis !",
-    "error": "Impossible d'envoyer l'avis"
+    "error": "Impossible d'envoyer l'avis",
+    "noRating": "N/A",
+    "noReviews": "(0 avis)"
   },
   "favorites": {
     "title": "Favoris",
@@ -225,7 +255,30 @@
     "confirmPasswordLabel": "Confirmer le mot de passe",
     "profileUpdated": "Profil mis \u00e0 jour.",
     "editProfile": "Modifier",
-    "businessesTried": "Commerces essayés"
+    "businessesTried": "Commerces essayés",
+    "deleteAccount": "Supprimer le compte",
+    "deleteAccountConfirm": "Êtes-vous sûr de vouloir supprimer définitivement votre compte ? Cette action est irréversible.",
+    "deleteAccountSoon": "La suppression de compte sera disponible dans une prochaine mise à jour.",
+    "statMoneySaved": "Argent Économisé 💰",
+    "statMoneySavedDesc": "Calculé à partir de la différence entre les prix originaux et ce que vous avez payé",
+    "statCO2Saved": "CO₂ Économisé 🌍",
+    "statBaskets": "Paniers Sauvés 🧺",
+    "statSpots": "Lieux Explorés 🗺️",
+    "noCompletedReservations": "Aucune réservation complétée pour l'instant",
+    "noPlacesVisited": "Aucun lieu visité pour l'instant",
+    "carTrips": "trajets en voiture évités",
+    "plasticBottles": "bouteilles plastiques non produites",
+    "kgRescued": "kg de nourriture sauvée",
+    "pref": {
+      "vegetarian": "Végétarien",
+      "vegan": "Végan",
+      "halal": "Halal",
+      "gluten_free": "Sans Gluten",
+      "nut_allergy": "Allergie aux Noix",
+      "lactose_free": "Sans Lactose",
+      "shellfish_allergy": "Allergie aux Fruits de Mer",
+      "no_pork": "Sans Porc"
+    }
   },
   "report": {
     "title": "Signaler",
@@ -284,7 +337,18 @@
       "details": "Détails",
       "salesLegend": "Ventes",
       "basketsLegend": "Paniers",
-      "revenueLegend": "Revenus"
+      "revenueLegend": "Revenus",
+      "noData": "Aucune donnée disponible",
+      "days": {
+        "Mon": "Lun", "Tue": "Mar", "Wed": "Mer", "Thu": "Jeu", "Fri": "Ven", "Sat": "Sam", "Sun": "Dim",
+        "Monday": "Lun", "Tuesday": "Mar", "Wednesday": "Mer", "Thursday": "Jeu", "Friday": "Ven", "Saturday": "Sam", "Sunday": "Dim"
+      },
+      "months": {
+        "Jan": "Jan", "Feb": "Fév", "Mar": "Mar", "Apr": "Avr", "May": "Mai", "Jun": "Jun",
+        "Jul": "Jul", "Aug": "Aoû", "Sep": "Sep", "Oct": "Oct", "Nov": "Nov", "Dec": "Déc",
+        "January": "Jan", "February": "Fév", "March": "Mar", "April": "Avr", "June": "Jun",
+        "July": "Jul", "August": "Aoû", "September": "Sep", "October": "Oct", "November": "Nov", "December": "Déc"
+      }
     },
     "baskets": {
       "title": "Mes Paniers",
@@ -323,7 +387,15 @@
       "statusReserved": "Réservé",
       "statusReady": "Prêt",
       "statusCollected": "Collecté",
-      "statusCancelled": "Annulé"
+      "statusCancelled": "Annulé",
+      "noCompletedOrders": "Aucune commande terminée",
+      "noCompletedDesc": "Les commandes terminées et annulées apparaîtront ici.",
+      "verifyPickup": "Vérifier le Retrait",
+      "verifyDesc": "Demandez au client son code de retrait et entrez-le ci-dessous, ou utilisez le scanner QR.",
+      "confirmCode": "Confirmer le Code",
+      "scanQR": "Scanner le QR Code",
+      "enterPickupCode": "Veuillez entrer le code de retrait.",
+      "incorrectCode": "Code incorrect. Veuillez réessayer."
     },
     "profile": {
       "title": "Profil",
@@ -376,7 +448,21 @@
       "locationName": "Nom de l'emplacement",
       "locationAddress": "Adresse",
       "locationAdded": "Emplacement ajouté avec succès.",
-      "noLocations": "Aucun emplacement. Appuyez sur + pour en ajouter un."
+      "noLocations": "Aucun emplacement. Appuyez sur + pour en ajouter un.",
+      "admin": "Admin",
+      "member": "Membre",
+      "buildTeamTitle": "Constituez votre équipe",
+      "buildTeamDesc": "Ajoutez des membres pour gérer votre restaurant ensemble. Chaque personne dispose de sa propre connexion et de ses permissions.",
+      "addFirstMember": "Ajouter le premier membre",
+      "noMembers": "Aucun membre dans cette équipe",
+      "orgLabel": "Organisation",
+      "teamLabel": "Équipe",
+      "orgBack": "← Org",
+      "activePerms": "Permissions actives",
+      "roleLabel": "Rôle",
+      "locationLabel": "Emplacement",
+      "all": "Tous",
+      "assigned": "Assigné"
     },
     "createBasket": {
       "title": "Nouveau Panier",
@@ -391,7 +477,11 @@
       "save": "Enregistrer",
       "create": "Créer le panier",
       "basketContents": "Contenu du panier",
-      "contentsPlaceholder": "Décrivez les types d'articles que le client pourrait trouver..."
+      "contentsPlaceholder": "Décrivez les types d'articles que le client pourrait trouver...",
+      "suggest": "Suggérer",
+      "nameRequired": "Le nom est requis.",
+      "sellingPriceRequired": "Le prix de vente est requis.",
+      "quantityRequired": "La quantité doit être d'au moins 1."
     },
     "auth": {
       "businessSignIn": "Connexion Commerce",
@@ -400,7 +490,13 @@
       "switchToBusiness": "Je suis commerçant",
       "businessName": "Nom du commerce",
       "businessAddress": "Adresse du commerce",
-      "businessCategory": "Catégorie"
+      "businessCategory": "Catégorie",
+      "contactName": "Votre nom",
+      "requestTitle": "Devenez partenaire Barakeat",
+      "requestDesc": "Les comptes commerçants sont créés par notre équipe. Remplissez le formulaire et nous vous contacterons.",
+      "submitApplication": "Soumettre la demande",
+      "applicationSubmitted": "Demande envoyée !",
+      "applicationSubmittedDesc": "Nous avons reçu votre demande et allons l'examiner. Attendez un email de notre part sous 2 à 3 jours ouvrables."
     },
     "scan": {
       "title": "Vérifier le retrait",
@@ -414,7 +510,14 @@
       "done": "Terminé",
       "cameraUnavailable": "Scanner caméra non disponible. Veuillez entrer le code de retrait manuellement ci-dessous.",
       "manualEntryTitle": "Entrer le code de retrait",
-      "manualEntryDesc": "Demandez au client son code de retrait affiché dans sa confirmation de commande."
+      "manualEntryDesc": "Demandez au client son code de retrait affiché dans sa confirmation de commande.",
+      "pointCamera": "Pointez la caméra sur le QR code",
+      "processing": "Traitement en cours...",
+      "scanAgain": "Scanner à nouveau",
+      "cameraPermTitle": "Accès à la caméra requis",
+      "cameraPermDesc": "Autorisez l'accès à la caméra pour scanner les QR codes des clients.",
+      "allowCamera": "Autoriser la caméra",
+      "useManualEntry": "Saisir le code manuellement"
     },
     "availability": {
       "title": "Disponibilité",
@@ -433,7 +536,15 @@
       "empty": "Aucun article",
       "deleteConfirm": "Supprimer cet article ?",
       "added": "Article ajouté.",
-      "deleted": "Article supprimé."
+      "deleted": "Article supprimé.",
+      "scan": "Scanner",
+      "photoPermRequired": "L'accès à la galerie photo est requis pour scanner un menu.",
+      "noItemsFound": "Aucun article trouvé",
+      "noItemsDetected": "Impossible de détecter des articles dans l'image.",
+      "scannedItems": "Articles scannés",
+      "noItemsSelected": "Aucun article sélectionné",
+      "selectAtLeastOne": "Sélectionnez au moins un article à ajouter.",
+      "addSelectedItems": "Ajouter {{count}} article(s)"
     }
   },
   "errors": {

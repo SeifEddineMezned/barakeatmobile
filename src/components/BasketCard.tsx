@@ -1,8 +1,7 @@
 import React, { useCallback, useEffect } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Animated, Image } from 'react-native';
 import { useRouter } from 'expo-router';
-import { Heart, Clock, MapPin, Star, ShoppingBag } from 'lucide-react-native';
-import * as Haptics from 'expo-haptics';
+import { Heart, Clock, MapPin, Star, ShoppingBag, Tag } from 'lucide-react-native';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { Basket } from '@/src/types';
 
@@ -36,7 +35,6 @@ export function BasketCard({ basket, onFavoritePress, isFavorite = false }: Bask
   }, []);
 
   const handlePressIn = useCallback(() => {
-    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     Animated.spring(scaleAnim, {
       toValue: 0.97,
       useNativeDriver: true,
@@ -53,11 +51,10 @@ export function BasketCard({ basket, onFavoritePress, isFavorite = false }: Bask
   }, [scaleAnim]);
 
   const handlePress = useCallback(() => {
-    router.push(`/basket/${basket.id}` as never);
-  }, [basket.id, router]);
+    router.push(`/restaurant/${basket.merchantId}` as never);
+  }, [basket.merchantId, router]);
 
   const handleFavoritePress = useCallback(() => {
-    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     Animated.sequence([
       Animated.spring(favoriteAnim, {
         toValue: 1.3,
@@ -91,6 +88,7 @@ export function BasketCard({ basket, onFavoritePress, isFavorite = false }: Bask
           },
         ]}
       >
+        {/* Image area */}
         <View style={styles.imageContainer}>
           {basket.imageUrl ? (
             <Image source={{ uri: basket.imageUrl }} style={[styles.image, { borderTopLeftRadius: theme.radii.r16, borderTopRightRadius: theme.radii.r16 }]} />
@@ -103,6 +101,7 @@ export function BasketCard({ basket, onFavoritePress, isFavorite = false }: Bask
             />
           )}
 
+          {/* Bags left badge — top left */}
           <View style={[styles.bagsLeftBadge, { backgroundColor: bagsBgColor, borderRadius: theme.radii.r12 }]}>
             <ShoppingBag size={16} color={bagsCountColor} />
             <Text style={[styles.bagsLeftText, { color: bagsCountColor, ...theme.typography.bodySm, fontWeight: '700' as const, marginLeft: 5 }]}>
@@ -110,25 +109,17 @@ export function BasketCard({ basket, onFavoritePress, isFavorite = false }: Bask
             </Text>
           </View>
 
-          {basket.merchantRating != null && (
-            <View style={[styles.ratingBadge, { backgroundColor: 'rgba(0,0,0,0.65)', borderRadius: theme.radii.r8 }]}>
-              <Star size={12} color={theme.colors.starYellow} fill={theme.colors.starYellow} />
-              <Text style={[{ color: '#fff', ...theme.typography.caption, fontWeight: '700' as const, marginLeft: 3 }]}>
-                {basket.merchantRating.toFixed(1)}
-              </Text>
-            </View>
-          )}
-
+          {/* Heart button — top right */}
           <TouchableOpacity
             onPress={handleFavoritePress}
             style={[
               styles.favoriteButton,
-              { backgroundColor: 'rgba(255,255,255,0.9)', ...theme.shadows.shadowSm },
+              { backgroundColor: 'rgba(255,255,255,0.92)', ...theme.shadows.shadowSm },
             ]}
           >
             <Animated.View style={{ transform: [{ scale: favoriteAnim }] }}>
               <Heart
-                size={18}
+                size={17}
                 color={isFavorite ? theme.colors.error : theme.colors.textSecondary}
                 fill={isFavorite ? theme.colors.error : 'transparent'}
               />
@@ -136,7 +127,9 @@ export function BasketCard({ basket, onFavoritePress, isFavorite = false }: Bask
           </TouchableOpacity>
         </View>
 
+        {/* Content area */}
         <View style={[styles.content, { padding: theme.spacing.sm, paddingHorizontal: theme.spacing.md }]}>
+          {/* Merchant row: logo + name + rating */}
           <View style={styles.merchantRow}>
             {basket.merchantLogo ? (
               <Image source={{ uri: basket.merchantLogo }} style={styles.merchantLogo} />
@@ -151,8 +144,28 @@ export function BasketCard({ basket, onFavoritePress, isFavorite = false }: Bask
                 {basket.merchantName}
               </Text>
             </View>
+            {/* Rating — right side of merchant row */}
+            {basket.merchantRating != null && (
+              <View style={[styles.ratingChip, { backgroundColor: theme.colors.bg, borderRadius: theme.radii.r8 }]}>
+                <Star size={11} color={theme.colors.starYellow} fill={theme.colors.starYellow} />
+                <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.caption, fontWeight: '700' as const, marginLeft: 3 }]}>
+                  {basket.merchantRating.toFixed(1)}
+                </Text>
+              </View>
+            )}
           </View>
 
+          {/* Category row */}
+          {basket.category && basket.category !== 'Tous' && (
+            <View style={[styles.categoryRow, { marginTop: 3 }]}>
+              <Tag size={10} color={theme.colors.textSecondary} />
+              <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, marginLeft: 4 }]} numberOfLines={1}>
+                {basket.category}
+              </Text>
+            </View>
+          )}
+
+          {/* Details row: chips + price */}
           <View style={[styles.detailsRow, { marginTop: theme.spacing.xs }]}>
             <View style={styles.chipRow}>
               <View style={[styles.inlineChip, { backgroundColor: theme.colors.bg, borderRadius: theme.radii.pill, paddingHorizontal: 8, paddingVertical: 3 }]}>
@@ -211,22 +224,13 @@ const styles = StyleSheet.create({
     paddingVertical: 5,
   },
   bagsLeftText: {},
-  ratingBadge: {
+  favoriteButton: {
     position: 'absolute',
     top: 10,
     right: 10,
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-  },
-  favoriteButton: {
-    position: 'absolute',
-    bottom: 10,
-    right: 10,
-    width: 34,
-    height: 34,
-    borderRadius: 17,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -244,6 +248,18 @@ const styles = StyleSheet.create({
   merchantInfo: {
     flex: 1,
   },
+  ratingChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    marginLeft: 6,
+  },
+  categoryRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingLeft: 38,
+  },
   detailsRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -252,6 +268,7 @@ const styles = StyleSheet.create({
   chipRow: {
     flexDirection: 'row',
     gap: 6,
+    flex: 1,
   },
   inlineChip: {
     flexDirection: 'row',
@@ -259,5 +276,6 @@ const styles = StyleSheet.create({
   },
   priceBlock: {
     alignItems: 'flex-end',
+    marginLeft: 8,
   },
 });

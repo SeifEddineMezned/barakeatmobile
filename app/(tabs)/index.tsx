@@ -2,7 +2,7 @@ import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react'
 import { View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity, Modal, Platform, Dimensions, Animated, PanResponder, Image } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
-import { Search, X, RefreshCw, Settings, Bell, Navigation } from 'lucide-react-native';
+import { Search, X, RefreshCw, Settings, Bell, MapPin, ChevronDown, Navigation } from 'lucide-react-native';
 import { useRouter } from 'expo-router';
 import { useQuery } from '@tanstack/react-query';
 import { useTheme } from '@/src/theme/ThemeProvider';
@@ -14,6 +14,8 @@ import { MapFallback } from '@/src/components/MapFallback';
 import { fetchRestaurants } from '@/src/services/restaurants';
 import { normalizeRestaurantToBasket } from '@/src/utils/normalizeRestaurant';
 import { useHeroStore } from '@/src/stores/heroStore';
+import { useAddressStore } from '@/src/stores/addressStore';
+import { LocationPickerModal } from '@/src/components/LocationPickerModal';
 import { StatusBar } from 'expo-status-bar';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
@@ -43,13 +45,20 @@ export default function HomeScreen() {
   const [radius, setRadius] = useState(5);
   const [carouselPage, setCarouselPage] = useState(0);
   const carouselRef = useRef<ScrollView>(null);
+  const [showAddressModal, setShowAddressModal] = useState(false);
+  const { addresses, selectedId, hydrate: hydrateAddresses } = useAddressStore();
+  const selectedAddress = addresses.find((a) => a.id === selectedId) ?? null;
+
+  useEffect(() => {
+    void hydrateAddresses();
+  }, [hydrateAddresses]);
 
   // Hero slide-up/slide-down animation
   const heroHeight = useRef(new Animated.Value(1)).current; // 1 = visible, 0 = hidden
   const [heroVisible, setHeroVisible] = useState(true);
   const setHeroVisibleGlobal = useHeroStore((s) => s.setHeroVisible);
 
-  const HERO_HEIGHT = 340;
+  const HERO_HEIGHT = 160;
 
   // Track the raw animated value for drag
   const heroRawRef = useRef(1);
@@ -201,14 +210,27 @@ export default function HomeScreen() {
         justifyContent: 'space-between',
         alignItems: 'center',
       }}>
-        <View style={{ flexDirection: 'row', alignItems: 'baseline' }}>
-          <Text style={{ color: heroVisible ? '#e3ff5c' : theme.colors.primary, fontSize: 20, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
-            Barakeat
+        <TouchableOpacity
+          onPress={() => setShowAddressModal(true)}
+          style={{
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: 5,
+            backgroundColor: heroVisible ? 'rgba(255,255,255,0.15)' : theme.colors.surface,
+            borderRadius: 20,
+            paddingHorizontal: 12,
+            paddingVertical: 6,
+          }}
+        >
+          <MapPin size={13} color={heroVisible ? '#e3ff5c' : theme.colors.primary} />
+          <Text
+            style={{ color: heroVisible ? '#fff' : theme.colors.textPrimary, fontSize: 13, fontWeight: '600', fontFamily: 'Poppins_600SemiBold', maxWidth: 130 }}
+            numberOfLines={1}
+          >
+            {selectedAddress?.label ?? 'Choose location'}
           </Text>
-          <Text style={{ color: '#e3ff5c', fontSize: 20, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
-            .
-          </Text>
-        </View>
+          <ChevronDown size={13} color={heroVisible ? 'rgba(255,255,255,0.7)' : theme.colors.textSecondary} />
+        </TouchableOpacity>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
           <TouchableOpacity onPress={() => router.push('/settings' as never)}>
             <Settings size={20} color={heroVisible ? '#e3ff5c' : theme.colors.textPrimary} />
@@ -244,10 +266,10 @@ export default function HomeScreen() {
               </Text>
               <Text style={{
                 color: '#fff',
-                fontSize: 26,
+                fontSize: 24,
                 fontWeight: '700',
                 fontFamily: 'Poppins_700Bold',
-                marginTop: 4,
+                marginTop: 2,
               }}>
                 {firstName || t('home.search')} 👋
               </Text>
@@ -255,7 +277,7 @@ export default function HomeScreen() {
             {/* Hero image */}
             <Image
               source={require('@/assets/images/man_holding_basket-removebg-preview.png')}
-              style={{ width: HERO_HEIGHT * 0.65, height: HERO_HEIGHT * 0.85, marginLeft: 4 }}
+              style={{ width: HERO_HEIGHT * 0.68, height: HERO_HEIGHT * 0.92, marginLeft: 4 }}
               resizeMode="contain"
             />
           </View>
@@ -264,14 +286,14 @@ export default function HomeScreen() {
             <View style={{ flex: 1 }}>
               <Text style={{
                 color: 'rgba(255,255,255,0.7)',
-                fontSize: 14,
+                fontSize: 12,
                 fontFamily: 'Poppins_400Regular',
               }}>
                 {t('home.newPartner', { defaultValue: 'New Partner' })}
               </Text>
               <Text style={{
                 color: '#fff',
-                fontSize: 22,
+                fontSize: 18,
                 fontWeight: '700',
                 fontFamily: 'Poppins_700Bold',
                 marginTop: 4,
@@ -281,14 +303,14 @@ export default function HomeScreen() {
             </View>
             <Image
               source={require('@/assets/images/man_holding_basket-removebg-preview.png')}
-              style={{ width: HERO_HEIGHT * 0.55, height: HERO_HEIGHT * 0.75, marginLeft: 8 }}
+              style={{ width: HERO_HEIGHT * 0.5, height: HERO_HEIGHT * 0.68, marginLeft: 8 }}
               resizeMode="contain"
             />
           </View>
         </ScrollView>
 
         {/* Dot indicators */}
-        <View style={{ flexDirection: 'row', justifyContent: 'center', marginTop: 12 }}>
+        <View style={{ flexDirection: 'row', justifyContent: 'center', marginTop: 6 }}>
           {[0, 1].map((i) => (
             <View
               key={i}
@@ -359,7 +381,7 @@ export default function HomeScreen() {
         {/* Scrollable content */}
         <ScrollView
           style={styles.scrollView}
-          contentContainerStyle={{ paddingHorizontal: theme.spacing.xl, paddingTop: theme.spacing.lg, paddingBottom: theme.spacing.xxl }}
+          contentContainerStyle={{ paddingHorizontal: theme.spacing.xl, paddingTop: theme.spacing.lg, paddingBottom: 100 }}
           showsVerticalScrollIndicator={false}
         >
           <View style={[styles.categoriesSection, { marginBottom: theme.spacing.lg }]}>
@@ -561,6 +583,8 @@ export default function HomeScreen() {
           </View>
         </View>
       </Modal>
+
+      <LocationPickerModal visible={showAddressModal} onClose={() => setShowAddressModal(false)} />
     </Animated.View>
   );
 }

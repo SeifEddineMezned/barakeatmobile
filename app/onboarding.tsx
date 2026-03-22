@@ -14,6 +14,7 @@ import { useTranslation } from 'react-i18next';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { ShoppingBag, Package, MapPin, CreditCard } from 'lucide-react-native';
 import { useTheme } from '@/src/theme/ThemeProvider';
+import { StatusBar } from 'expo-status-bar';
 import { PrimaryCTAButton } from '@/src/components/PrimaryCTAButton';
 import { useAuthStore } from '@/src/stores/authStore';
 
@@ -171,6 +172,7 @@ export default function OnboardingScreen() {
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]}>
+      <StatusBar style="dark" />
       <View style={[styles.header, { paddingHorizontal: theme.spacing.xl }]}>
         <TouchableOpacity onPress={handleSkip}>
           <Text style={[styles.skipText, { color: theme.colors.textSecondary, ...theme.typography.body }]}>

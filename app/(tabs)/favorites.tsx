@@ -68,7 +68,7 @@ export default function FavoritesScreen() {
           </View>
           <ScrollView
             style={styles.content}
-            contentContainerStyle={{ padding: theme.spacing.xl }}
+            contentContainerStyle={{ padding: theme.spacing.xl, paddingBottom: 100 }}
             showsVerticalScrollIndicator={false}
           >
             {favoriteBaskets.map((basket) => (

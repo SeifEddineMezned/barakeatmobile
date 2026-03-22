@@ -5,9 +5,10 @@ import { useTranslation } from 'react-i18next';
 import { useQuery } from '@tanstack/react-query';
 import { MapPin, Clock, Phone, Navigation, ChevronLeft, Star, ShoppingBag, RefreshCw, Flag } from 'lucide-react-native';
 import { useTheme } from '@/src/theme/ThemeProvider';
+import { StatusBar } from 'expo-status-bar';
 import { PrimaryCTAButton } from '@/src/components/PrimaryCTAButton';
-import { fetchRestaurantById } from '@/src/services/restaurants';
-import { normalizeRestaurantToBasket } from '@/src/utils/normalizeRestaurant';
+import { fetchBasketById } from '@/src/services/baskets';
+import { normalizeRawBasketToBasket } from '@/src/utils/normalizeRestaurant';
 import { submitReport } from '@/src/services/reports';
 
 
@@ -63,13 +64,13 @@ export default function BasketDetailsScreen() {
   const [reportLoading, setReportLoading] = useState(false);
 
   const restaurantQuery = useQuery({
-    queryKey: ['restaurant', id],
-    queryFn: () => fetchRestaurantById(String(id)),
+    queryKey: ['basket', id],
+    queryFn: () => fetchBasketById(String(id)),
     enabled: !!id,
     retry: 2,
   });
 
-  const basket = restaurantQuery.data ? normalizeRestaurantToBasket(restaurantQuery.data) : null;
+  const basket = restaurantQuery.data ? normalizeRawBasketToBasket(restaurantQuery.data as any) : null;
 
   const overallRating = basket?.reviews
     ? ((basket.reviews.service + basket.reviews.quantite + basket.reviews.qualite + basket.reviews.variete) / 4).toFixed(1)
@@ -126,15 +127,17 @@ export default function BasketDetailsScreen() {
   };
 
   const handleDirections = () => {
-    const url = `https://www.google.com/maps/search/?api=1&query=${basket.latitude},${basket.longitude}`;
-    void Linking.openURL(url);
+    const query = basket?.hasCoords
+      ? `${basket.latitude},${basket.longitude}`
+      : encodeURIComponent(basket?.address ?? '');
+    void Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${query}`);
   };
 
   const handleReport = async () => {
     if (!reportReason.trim()) return;
     setReportLoading(true);
     try {
-      await submitReport({ restaurant_id: String(id), reason: reportReason.trim(), details: reportDetails.trim() || undefined });
+      await submitReport({ restaurant_id: basket?.merchantId ?? String(id), reason: reportReason.trim(), details: reportDetails.trim() || undefined });
       Alert.alert(t('common.success'), t('report.success'));
       setShowReportModal(false);
       setReportReason('');
@@ -148,6 +151,7 @@ export default function BasketDetailsScreen() {
 
   return (
     <View style={[styles.container, { backgroundColor: theme.colors.bg }]}>
+      <StatusBar style="dark" />
       <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
         <View style={styles.heroContainer}>
           {basket.imageUrl ? (
