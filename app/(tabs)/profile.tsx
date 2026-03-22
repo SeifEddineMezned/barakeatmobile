@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from 'react';
+import { StatusBar } from 'expo-status-bar';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity, Modal, Alert, TextInput,
   ActivityIndicator,
@@ -64,6 +65,7 @@ export default function ProfileScreen() {
 
   const [showPrefsModal, setShowPrefsModal] = useState(false);
   const [selectedPrefs, setSelectedPrefs] = useState<string[]>([]);
+  const [statModal, setStatModal] = useState<'money' | 'co2' | 'baskets' | 'spots' | null>(null);
   const [isEditing, setIsEditing] = useState(false);
   const [editName, setEditName] = useState(user?.name ?? '');
   const [editPhone, setEditPhone] = useState(user?.phone ?? '');
@@ -156,6 +158,7 @@ export default function ProfileScreen() {
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]} edges={[]}>
+      <StatusBar style="dark" />
       <View style={[styles.header, { paddingHorizontal: theme.spacing.xl, paddingTop: theme.spacing.xs, paddingBottom: theme.spacing.sm }]}>
         <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h1 }]}>{t('profile.title')}</Text>
       </View>
@@ -250,7 +253,7 @@ export default function ProfileScreen() {
 
         {/* Stats Row */}
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: theme.spacing.lg }} contentContainerStyle={{ gap: 10, paddingRight: theme.spacing.xl }}>
-          <View style={{ width: 100, backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, padding: theme.spacing.lg, alignItems: 'center', ...theme.shadows.shadowSm }}>
+          <TouchableOpacity onPress={() => setStatModal('money')} style={{ width: 100, backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, padding: theme.spacing.lg, alignItems: 'center', ...theme.shadows.shadowSm }}>
             <View style={[styles.statIcon, { backgroundColor: theme.colors.primary + '15', borderRadius: theme.radii.r12, width: 36, height: 36 }]}>
               <Banknote size={18} color={theme.colors.primary} />
             </View>
@@ -260,8 +263,8 @@ export default function ProfileScreen() {
             <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, textAlign: 'center' }]}>
               {t('profile.moneySaved')}
             </Text>
-          </View>
-          <View style={{ width: 100, backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, padding: theme.spacing.lg, alignItems: 'center', ...theme.shadows.shadowSm }}>
+          </TouchableOpacity>
+          <TouchableOpacity onPress={() => setStatModal('co2')} style={{ width: 100, backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, padding: theme.spacing.lg, alignItems: 'center', ...theme.shadows.shadowSm }}>
             <View style={[styles.statIcon, { backgroundColor: theme.colors.accentFresh + '15', borderRadius: theme.radii.r12, width: 36, height: 36 }]}>
               <Leaf size={18} color={theme.colors.accentFresh} />
             </View>
@@ -271,8 +274,8 @@ export default function ProfileScreen() {
             <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, textAlign: 'center' }]}>
               {t('profile.co2Saved')}
             </Text>
-          </View>
-          <View style={{ width: 100, backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, padding: theme.spacing.lg, alignItems: 'center', ...theme.shadows.shadowSm }}>
+          </TouchableOpacity>
+          <TouchableOpacity onPress={() => setStatModal('baskets')} style={{ width: 100, backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, padding: theme.spacing.lg, alignItems: 'center', ...theme.shadows.shadowSm }}>
             <View style={[styles.statIcon, { backgroundColor: theme.colors.secondary + '30', borderRadius: theme.radii.r12, width: 36, height: 36 }]}>
               <ShoppingBag size={18} color={theme.colors.primaryDark} />
             </View>
@@ -282,8 +285,8 @@ export default function ProfileScreen() {
             <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, textAlign: 'center' }]}>
               {t('profile.basketsBought')}
             </Text>
-          </View>
-          <View style={{ width: 100, backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, padding: theme.spacing.lg, alignItems: 'center', ...theme.shadows.shadowSm }}>
+          </TouchableOpacity>
+          <TouchableOpacity onPress={() => setStatModal('spots')} style={{ width: 100, backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, padding: theme.spacing.lg, alignItems: 'center', ...theme.shadows.shadowSm }}>
             <View style={[styles.statIcon, { backgroundColor: theme.colors.primary + '15', borderRadius: theme.radii.r12, width: 36, height: 36 }]}>
               <Store size={18} color={theme.colors.primary} />
             </View>
@@ -293,7 +296,7 @@ export default function ProfileScreen() {
             <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, textAlign: 'center' }]}>
               {t('profile.businessesTried', { defaultValue: 'Places Tried' })}
             </Text>
-          </View>
+          </TouchableOpacity>
         </ScrollView>
 
         {/* Badges Section */}
@@ -669,6 +672,283 @@ export default function ProfileScreen() {
 
         <View style={{ height: 30 }} />
       </ScrollView>
+
+      {/* Stat Detail Modal */}
+      <Modal
+        visible={statModal !== null}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setStatModal(null)}
+      >
+        <TouchableOpacity
+          style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' }}
+          activeOpacity={1}
+          onPress={() => setStatModal(null)}
+        >
+          <TouchableOpacity
+            activeOpacity={1}
+            onPress={() => {}}
+            style={{
+              backgroundColor: theme.colors.surface,
+              borderTopLeftRadius: 24,
+              borderTopRightRadius: 24,
+              padding: 24,
+              maxHeight: '70%',
+            }}
+          >
+            {/* Drag handle */}
+            <View
+              style={{
+                width: 40,
+                height: 4,
+                backgroundColor: theme.colors.divider,
+                borderRadius: 2,
+                alignSelf: 'center',
+                marginBottom: theme.spacing.lg,
+              }}
+            />
+
+            {/* Money Saved */}
+            {statModal === 'money' && (() => {
+              const reservations = reservationsQuery.data ?? [];
+              const completed = reservations.filter((r) => {
+                const status = (r.status ?? '').toLowerCase();
+                return status === 'collected' || status === 'completed';
+              });
+              const recent5 = completed.slice(-5).reverse();
+              return (
+                <>
+                  <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h2, marginBottom: theme.spacing.sm }}>
+                    {'Money Saved \uD83D\uDCB0'}
+                  </Text>
+                  <Text style={{ color: theme.colors.primary, ...theme.typography.h1, marginBottom: theme.spacing.sm }}>
+                    {stats.moneySaved.toFixed(2)} TND
+                  </Text>
+                  <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm, marginBottom: theme.spacing.lg }}>
+                    {'Calculated from the difference between original prices and what you paid'}
+                  </Text>
+                  <ScrollView showsVerticalScrollIndicator={false}>
+                    {recent5.length === 0 ? (
+                      <Text style={{ color: theme.colors.muted, ...theme.typography.bodySm, textAlign: 'center' as const }}>
+                        {'No completed reservations yet'}
+                      </Text>
+                    ) : (
+                      recent5.map((r, i) => {
+                        const orig = r.basket?.originalPrice ?? (r.basket as any)?.original_price ?? 0;
+                        const disc = r.basket?.discountedPrice ?? (r.basket as any)?.discounted_price ?? 0;
+                        const saving = (Number(orig) - Number(disc)) * (r.quantity ?? 1);
+                        const name = r.basket?.name ?? (r.basket as any)?.basket_name ?? 'Basket';
+                        return (
+                          <View
+                            key={`ms-${i}`}
+                            style={{
+                              flexDirection: 'row' as const,
+                              justifyContent: 'space-between' as const,
+                              alignItems: 'center' as const,
+                              paddingVertical: theme.spacing.sm,
+                              borderBottomWidth: 1,
+                              borderBottomColor: theme.colors.divider,
+                            }}
+                          >
+                            <Text
+                              style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, flex: 1 }}
+                              numberOfLines={1}
+                            >
+                              {name}
+                            </Text>
+                            <Text style={{ color: theme.colors.accentFresh, ...theme.typography.bodySm, fontWeight: '600' as const, marginLeft: 8 }}>
+                              {saving > 0 ? `+${saving.toFixed(2)} TND` : '—'}
+                            </Text>
+                          </View>
+                        );
+                      })
+                    )}
+                    <View style={{ height: theme.spacing.lg }} />
+                  </ScrollView>
+                </>
+              );
+            })()}
+
+            {/* CO2 Saved */}
+            {statModal === 'co2' && (
+              <>
+                <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h2, marginBottom: theme.spacing.sm }}>
+                  {'CO\u2082 Saved \uD83C\uDF0D'}
+                </Text>
+                <Text style={{ color: theme.colors.accentFresh, ...theme.typography.h1, marginBottom: theme.spacing.lg }}>
+                  {stats.co2Saved.toFixed(1)} kg
+                </Text>
+                <ScrollView showsVerticalScrollIndicator={false}>
+                  {[
+                    { label: 'car trips avoided', value: (stats.co2Saved / 8).toFixed(1) },
+                    { label: 'plastic bottles not produced', value: (stats.co2Saved * 4).toFixed(0) },
+                    { label: 'kg of food rescued', value: (stats.basketsBought * 1.3).toFixed(1) },
+                  ].map((eq, i) => (
+                    <View
+                      key={`co2-${i}`}
+                      style={{
+                        flexDirection: 'row' as const,
+                        alignItems: 'center' as const,
+                        paddingVertical: theme.spacing.md,
+                        borderBottomWidth: 1,
+                        borderBottomColor: theme.colors.divider,
+                        gap: 12,
+                      }}
+                    >
+                      <View
+                        style={{
+                          backgroundColor: theme.colors.accentFresh + '20',
+                          borderRadius: theme.radii.r12,
+                          paddingHorizontal: theme.spacing.md,
+                          paddingVertical: theme.spacing.sm,
+                          minWidth: 60,
+                          alignItems: 'center' as const,
+                        }}
+                      >
+                        <Text style={{ color: theme.colors.accentFresh, ...theme.typography.h3, fontWeight: '700' as const }}>
+                          {eq.value}
+                        </Text>
+                      </View>
+                      <Text style={{ color: theme.colors.textPrimary, ...theme.typography.body, flex: 1 }}>
+                        {eq.label}
+                      </Text>
+                    </View>
+                  ))}
+                  <View style={{ height: theme.spacing.lg }} />
+                </ScrollView>
+              </>
+            )}
+
+            {/* Baskets Bought */}
+            {statModal === 'baskets' && (() => {
+              const reservations = reservationsQuery.data ?? [];
+              const completed = reservations.filter((r) => {
+                const status = (r.status ?? '').toLowerCase();
+                return status === 'collected' || status === 'completed';
+              });
+              const last8 = completed.slice(-8).reverse();
+              return (
+                <>
+                  <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h2, marginBottom: theme.spacing.sm }}>
+                    {'Baskets Rescued \uD83E\uDDBA'}
+                  </Text>
+                  <Text style={{ color: theme.colors.primaryDark, ...theme.typography.h1, marginBottom: theme.spacing.lg }}>
+                    {stats.basketsBought}
+                  </Text>
+                  <ScrollView showsVerticalScrollIndicator={false}>
+                    {last8.length === 0 ? (
+                      <Text style={{ color: theme.colors.muted, ...theme.typography.bodySm, textAlign: 'center' as const }}>
+                        {'No completed reservations yet'}
+                      </Text>
+                    ) : (
+                      last8.map((r, i) => {
+                        const name = r.basket?.name ?? (r.basket as any)?.basket_name ?? 'Basket';
+                        const rawDate = (r as any).created_at ?? (r as any).pickup_date ?? '';
+                        const dateStr = rawDate ? new Date(rawDate).toLocaleDateString() : '—';
+                        return (
+                          <View
+                            key={`bk-${i}`}
+                            style={{
+                              flexDirection: 'row' as const,
+                              justifyContent: 'space-between' as const,
+                              alignItems: 'center' as const,
+                              paddingVertical: theme.spacing.sm,
+                              borderBottomWidth: 1,
+                              borderBottomColor: theme.colors.divider,
+                            }}
+                          >
+                            <Text
+                              style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, flex: 1 }}
+                              numberOfLines={1}
+                            >
+                              {name}
+                            </Text>
+                            <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, marginLeft: 8 }}>
+                              {dateStr}
+                            </Text>
+                          </View>
+                        );
+                      })
+                    )}
+                    <View style={{ height: theme.spacing.lg }} />
+                  </ScrollView>
+                </>
+              );
+            })()}
+
+            {/* Places Tried */}
+            {statModal === 'spots' && (() => {
+              const reservations = reservationsQuery.data ?? [];
+              const completed = reservations.filter((r) => {
+                const status = (r.status ?? '').toLowerCase();
+                return status === 'collected' || status === 'completed';
+              });
+              const uniquePlaces = Array.from(
+                new Set(
+                  completed
+                    .map((r) => r.basket?.merchantName ?? (r.basket as any)?.merchant_name ?? (r.basket as any)?.restaurant_name ?? null)
+                    .filter((n): n is string => Boolean(n))
+                )
+              );
+              return (
+                <>
+                  <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h2, marginBottom: theme.spacing.sm }}>
+                    {'Places Explored \uD83D\uDDFA\uFE0F'}
+                  </Text>
+                  <Text style={{ color: theme.colors.primary, ...theme.typography.h1, marginBottom: theme.spacing.lg }}>
+                    {stats.businessesTried}
+                  </Text>
+                  <ScrollView showsVerticalScrollIndicator={false}>
+                    {uniquePlaces.length === 0 ? (
+                      <Text style={{ color: theme.colors.muted, ...theme.typography.bodySm, textAlign: 'center' as const }}>
+                        {'No places visited yet'}
+                      </Text>
+                    ) : (
+                      uniquePlaces.map((place, i) => (
+                        <View
+                          key={`pl-${i}`}
+                          style={{
+                            flexDirection: 'row' as const,
+                            alignItems: 'center' as const,
+                            paddingVertical: theme.spacing.sm,
+                            borderBottomWidth: 1,
+                            borderBottomColor: theme.colors.divider,
+                            gap: 10,
+                          }}
+                        >
+                          <Store size={16} color={theme.colors.primary} />
+                          <Text style={{ color: theme.colors.textPrimary, ...theme.typography.body, flex: 1 }} numberOfLines={1}>
+                            {place}
+                          </Text>
+                        </View>
+                      ))
+                    )}
+                    <View style={{ height: theme.spacing.lg }} />
+                  </ScrollView>
+                </>
+              );
+            })()}
+
+            {/* Close button */}
+            <TouchableOpacity
+              onPress={() => setStatModal(null)}
+              style={{
+                backgroundColor: theme.colors.bg,
+                borderRadius: theme.radii.r12,
+                paddingVertical: theme.spacing.md,
+                alignItems: 'center' as const,
+                borderWidth: 1,
+                borderColor: theme.colors.divider,
+                marginTop: theme.spacing.md,
+              }}
+            >
+              <Text style={{ color: theme.colors.textPrimary, ...theme.typography.button }}>
+                {'Close'}
+              </Text>
+            </TouchableOpacity>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
 
       {/* Food Preferences Modal */}
       <Modal visible={showPrefsModal} transparent animationType="fade" onRequestClose={() => setShowPrefsModal(false)}>

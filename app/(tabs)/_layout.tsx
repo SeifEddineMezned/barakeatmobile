@@ -11,6 +11,23 @@ import { useNotificationStore } from "@/src/stores/notificationStore";
 import { useAuthStore } from "@/src/stores/authStore";
 import { useHeroStore } from "@/src/stores/heroStore";
 
+function TabIcon({ icon: Icon, color, size, focused, fill }: { icon: any; color: string; size: number; focused: boolean; fill?: string }) {
+  const scale = React.useRef(new Animated.Value(1)).current;
+  React.useEffect(() => {
+    Animated.spring(scale, {
+      toValue: focused ? 1.15 : 1,
+      useNativeDriver: true,
+      speed: 20,
+      bounciness: 8,
+    }).start();
+  }, [focused]);
+  return (
+    <Animated.View style={{ transform: [{ scale }] }}>
+      <Icon size={size} color={color} fill={fill ?? 'transparent'} />
+    </Animated.View>
+  );
+}
+
 export default function TabLayout() {
   const { t } = useTranslation();
   const theme = useTheme();
@@ -217,11 +234,11 @@ export default function TabLayout() {
               const iconSize = 22;
               const fill = isFocused ? color : 'transparent';
               switch (route.name) {
-                case 'index': icon = <Search size={iconSize} color={color} fill={fill} />; break;
-                case 'nearby': icon = <MapPin size={iconSize} color={color} fill={fill} />; break;
-                case 'orders': icon = <ShoppingBag size={iconSize} color={color} fill={fill} />; break;
-                case 'favorites': icon = <Heart size={iconSize} color={color} fill={fill} />; break;
-                case 'profile': icon = <User size={iconSize} color={color} fill={fill} />; break;
+                case 'index': icon = <TabIcon icon={Search} color={color} size={iconSize} focused={isFocused} fill={fill} />; break;
+                case 'nearby': icon = <TabIcon icon={MapPin} color={color} size={iconSize} focused={isFocused} fill={fill} />; break;
+                case 'orders': icon = <TabIcon icon={ShoppingBag} color={color} size={iconSize} focused={isFocused} fill={fill} />; break;
+                case 'favorites': icon = <TabIcon icon={Heart} color={color} size={iconSize} focused={isFocused} fill={fill} />; break;
+                case 'profile': icon = <TabIcon icon={User} color={color} size={iconSize} focused={isFocused} fill={fill} />; break;
               }
 
               return (
@@ -263,7 +280,7 @@ export default function TabLayout() {
         options={{
           title: t('home.search'),
           headerShown: false,
-          tabBarIcon: ({ color, size, focused }) => <Search size={size} color={color} fill={focused ? color : 'transparent'} />,
+          tabBarIcon: ({ color, size, focused }) => <TabIcon icon={Search} color={color} size={size} focused={focused} fill={focused ? color : 'transparent'} />,
         }}
       />
       <Tabs.Screen
@@ -271,14 +288,14 @@ export default function TabLayout() {
         options={{
           title: t('home.discover'),
           headerShown: false,
-          tabBarIcon: ({ color, size, focused }) => <MapPin size={size} color={color} fill={focused ? color : 'transparent'} />,
+          tabBarIcon: ({ color, size, focused }) => <TabIcon icon={MapPin} color={color} size={size} focused={focused} fill={focused ? color : 'transparent'} />,
         }}
       />
       <Tabs.Screen
         name="orders"
         options={{
           title: t('orders.title'),
-          tabBarIcon: ({ color, size, focused }) => <ShoppingBag size={size} color={color} fill={focused ? color : 'transparent'} />,
+          tabBarIcon: ({ color, size, focused }) => <TabIcon icon={ShoppingBag} color={color} size={size} focused={focused} fill={focused ? color : 'transparent'} />,
         }}
       />
       <Tabs.Screen
@@ -286,7 +303,7 @@ export default function TabLayout() {
         options={{
           title: t('favorites.title'),
           tabBarIcon: ({ color, size, focused }) => (
-            <Heart size={size} color={color} fill={focused ? color : 'transparent'} />
+            <TabIcon icon={Heart} color={color} size={size} focused={focused} fill={focused ? color : 'transparent'} />
           ),
         }}
       />
@@ -294,7 +311,7 @@ export default function TabLayout() {
         name="profile"
         options={{
           title: t('profile.title'),
-          tabBarIcon: ({ color, size, focused }) => <User size={size} color={color} fill={focused ? color : 'transparent'} />,
+          tabBarIcon: ({ color, size, focused }) => <TabIcon icon={User} color={color} size={size} focused={focused} fill={focused ? color : 'transparent'} />,
         }}
       />
     </Tabs>

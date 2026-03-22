@@ -9,6 +9,7 @@ import { useAuthStore } from '@/src/stores/authStore';
 import { register } from '@/src/services/auth';
 import { getErrorMessage } from '@/src/lib/api';
 import type { UserRole, User as UserType } from '@/src/types';
+import { StatusBar } from 'expo-status-bar';
 
 export default function SignUpScreen() {
   const { t } = useTranslation();
@@ -21,12 +22,18 @@ export default function SignUpScreen() {
   const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
+  const [tosAccepted, setTosAccepted] = useState(false);
   const [role, setRole] = useState<UserRole>('customer');
 
   const [businessName, setBusinessName] = useState('');
   const [businessAddress, setBusinessAddress] = useState('');
 
   const handleSignUp = async () => {
+    if (!tosAccepted) {
+      Alert.alert('Required', 'Please accept the Terms of Service to continue.');
+      return;
+    }
+
     const displayName = role === 'business' ? (businessName.trim() || name.trim()) : name.trim();
 
     // Client-side validation
@@ -99,6 +106,7 @@ export default function SignUpScreen() {
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: '#114b3c' }]}>
+      <StatusBar style="light" />
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={styles.keyboardView}
@@ -270,10 +278,35 @@ export default function SignUpScreen() {
                 />
               </View>
 
-              <View style={[styles.buttonContainer, { marginTop: theme.spacing.xl }]}>
+              {/* ToS Checkbox */}
+              <View style={[styles.tosRow, { marginTop: theme.spacing.xl }]}>
+                <TouchableOpacity
+                  onPress={() => setTosAccepted(!tosAccepted)}
+                  activeOpacity={0.7}
+                  style={[
+                    styles.tosCheckbox,
+                    {
+                      borderColor: tosAccepted ? '#e3ff5c' : 'rgba(255,255,255,0.5)',
+                      backgroundColor: tosAccepted ? '#e3ff5c' : 'transparent',
+                    },
+                  ]}
+                >
+                  {tosAccepted && (
+                    <Text style={{ color: '#114b3c', fontSize: 13, fontWeight: '700' as const, lineHeight: 18 }}>✓</Text>
+                  )}
+                </TouchableOpacity>
+                <Text style={{ color: 'rgba(255,255,255,0.85)', ...theme.typography.bodySm, flex: 1, flexWrap: 'wrap' }}>
+                  {'I agree to the '}
+                  <Text style={{ color: '#e3ff5c', fontWeight: '600' as const }}>Terms of Service</Text>
+                  {' and '}
+                  <Text style={{ color: '#e3ff5c', fontWeight: '600' as const }}>Privacy Policy</Text>
+                </Text>
+              </View>
+
+              <View style={[styles.buttonContainer, { marginTop: theme.spacing.lg }]}>
                 <TouchableOpacity
                   onPress={handleSignUp}
-                  disabled={loading}
+                  disabled={loading || !tosAccepted}
                   style={{
                     height: 56,
                     justifyContent: 'center',
@@ -281,7 +314,7 @@ export default function SignUpScreen() {
                     paddingHorizontal: 32,
                     backgroundColor: '#e3ff5c',
                     borderRadius: theme.radii.pill,
-                    opacity: loading ? 0.5 : 1,
+                    opacity: loading || !tosAccepted ? 0.5 : 1,
                   }}
                   activeOpacity={0.8}
                 >
@@ -347,6 +380,19 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
   },
   buttonContainer: {},
+  tosRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  tosCheckbox: {
+    width: 20,
+    height: 20,
+    borderWidth: 1.5,
+    borderRadius: 4,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
   footer: {
     flexDirection: 'row',
     justifyContent: 'center',

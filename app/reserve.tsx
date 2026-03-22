@@ -11,6 +11,7 @@ import { fetchRestaurantById } from '@/src/services/restaurants';
 import { normalizeRestaurantToBasket } from '@/src/utils/normalizeRestaurant';
 import { createReservation, fetchReservationQRCode } from '@/src/services/reservations';
 import { getErrorMessage } from '@/src/lib/api';
+import { FeatureFlags } from '@/src/lib/featureFlags';
 
 export default function ReserveScreen() {
   const { basketId } = useLocalSearchParams();
@@ -20,6 +21,10 @@ export default function ReserveScreen() {
   const queryClient = useQueryClient();
   const [quantity, setQuantity] = useState(1);
   const [paymentMethod, setPaymentMethod] = useState<'cash' | 'card'>('cash');
+
+  // Easter egg: Lucky Dip state
+  const [showLuckyDip, setShowLuckyDip] = useState(false);
+  const [luckyCode, setLuckyCode] = useState('');
 
   // Confirmation animation state
   const [showConfirmation, setShowConfirmation] = useState(false);
@@ -86,6 +91,15 @@ export default function ReserveScreen() {
       void queryClient.invalidateQueries({ queryKey: ['reservations'] });
       void queryClient.invalidateQueries({ queryKey: ['restaurants'] });
       void queryClient.invalidateQueries({ queryKey: ['restaurant', basketId] });
+
+      // Easter egg: Lucky Dip — 5% chance after a successful reservation
+      if (FeatureFlags.ENABLE_EASTER_EGGS && FeatureFlags.ENABLE_LUCKY_DIP) {
+        if (Math.random() < 0.05) {
+          const code = 'LUCKY' + Math.random().toString(36).substring(2, 4).toUpperCase();
+          setLuckyCode(code);
+          setShowLuckyDip(true);
+        }
+      }
 
       // Fetch the backend QR code image after reservation is confirmed
       if (data.id) {
@@ -361,6 +375,20 @@ export default function ReserveScreen() {
       >
         <PrimaryCTAButton onPress={handleConfirm} title={t('reserve.confirmReservation')} loading={reserveMutation.isPending} />
       </View>
+
+      {/* Easter egg: Lucky Dip banner */}
+      {showLuckyDip && (
+        <View style={{ position: 'absolute', bottom: 100, left: 16, right: 16, zIndex: 99, backgroundColor: '#e3ff5c', borderRadius: 16, padding: 16, flexDirection: 'row', alignItems: 'center', shadowColor: '#000', shadowOpacity: 0.2, shadowRadius: 8, elevation: 8 }}>
+          <Text style={{ flex: 1, color: '#114b3c', fontWeight: '700', fontSize: 13, fontFamily: 'Poppins_700Bold' }}>
+            {'🎁 Lucky Dip! Use code '}
+            <Text style={{ letterSpacing: 2 }}>{luckyCode}</Text>
+            {' for 10% off your next order!'}
+          </Text>
+          <TouchableOpacity onPress={() => setShowLuckyDip(false)} style={{ marginLeft: 8 }}>
+            <Text style={{ color: '#114b3c', fontSize: 18, fontWeight: '700' }}>✕</Text>
+          </TouchableOpacity>
+        </View>
+      )}
 
       {/* Full-screen confirmation overlay */}
       {showConfirmation && (

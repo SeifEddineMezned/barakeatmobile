@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react';
-import { View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity, Modal, Platform, ActivityIndicator, Dimensions, Animated, PanResponder, Image } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity, Modal, Platform, Dimensions, Animated, PanResponder, Image } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import { Search, X, RefreshCw, Settings, Bell, Navigation } from 'lucide-react-native';
@@ -7,12 +7,14 @@ import { useRouter } from 'expo-router';
 import { useQuery } from '@tanstack/react-query';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { BasketCard } from '@/src/components/BasketCard';
+import { SkeletonLoader } from '@/src/components/SkeletonLoader';
 import { useFavoritesStore } from '@/src/stores/favoritesStore';
 import { useAuthStore } from '@/src/stores/authStore';
 import { MapFallback } from '@/src/components/MapFallback';
 import { fetchRestaurants } from '@/src/services/restaurants';
 import { normalizeRestaurantToBasket } from '@/src/utils/normalizeRestaurant';
 import { useHeroStore } from '@/src/stores/heroStore';
+import { StatusBar } from 'expo-status-bar';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
 const CAROUSEL_PAGES = 2;
@@ -106,6 +108,12 @@ export default function HomeScreen() {
     outputRange: [0, 0, 1],
   });
 
+  // Container bg slides from green → light as hero collapses
+  const containerBg = heroHeight.interpolate({
+    inputRange: [0, 1],
+    outputRange: [theme.colors.bg, '#114b3c'],
+  });
+
   const restaurantsQuery = useQuery({
     queryKey: ['restaurants'],
     queryFn: fetchRestaurants,
@@ -180,42 +188,28 @@ export default function HomeScreen() {
     .map((b) => ({ id: b.id, name: b.merchantName, lat: b.latitude as number, lng: b.longitude as number }));
 
   return (
-    <View style={[styles.container, { backgroundColor: heroVisible ? '#114b3c' : theme.colors.bg }]}>
-      {/* Floating header — Barakeat logo + settings + bell, always on top */}
+    <Animated.View style={[styles.container, { backgroundColor: containerBg }]}>
+      {/* Status bar: white icons on dark green hero, black icons on light content */}
+      <StatusBar style={heroVisible ? 'light' : 'dark'} />
+
+      {/* Fixed top bar — always visible, colors shift as hero collapses */}
       <View style={{
-        position: 'absolute',
-        top: 0,
-        left: 0,
-        right: 0,
-        zIndex: 20,
         paddingTop: insets.top + 4,
         paddingHorizontal: 16,
         paddingBottom: 8,
         flexDirection: 'row',
         justifyContent: 'space-between',
         alignItems: 'center',
-        backgroundColor: heroVisible ? 'transparent' : theme.colors.bg,
       }}>
         <View style={{ flexDirection: 'row', alignItems: 'baseline' }}>
           <Text style={{ color: heroVisible ? '#e3ff5c' : theme.colors.primary, fontSize: 20, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
             Barakeat
           </Text>
-          <Text style={{ color: heroVisible ? '#e3ff5c' : '#e3ff5c', fontSize: 20, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
+          <Text style={{ color: '#e3ff5c', fontSize: 20, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
             .
           </Text>
         </View>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-          <TouchableOpacity onPress={snapHero ? () => snapHero(!heroVisible) : undefined} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-            <View style={{
-              width: 28, height: 28, borderRadius: 14,
-              backgroundColor: heroVisible ? 'rgba(255,255,255,0.15)' : theme.colors.divider,
-              justifyContent: 'center', alignItems: 'center',
-            }}>
-              <Text style={{ color: heroVisible ? '#e3ff5c' : theme.colors.textPrimary, fontSize: 12, fontWeight: '700' }}>
-                {heroVisible ? '\u25B2' : '\u25BC'}
-              </Text>
-            </View>
-          </TouchableOpacity>
           <TouchableOpacity onPress={() => router.push('/settings' as never)}>
             <Settings size={20} color={heroVisible ? '#e3ff5c' : theme.colors.textPrimary} />
           </TouchableOpacity>
@@ -225,8 +219,8 @@ export default function HomeScreen() {
         </View>
       </View>
 
-      {/* Carousel hero — fills top area */}
-      <Animated.View style={{ height: animatedHeroHeight, opacity: animatedHeroOpacity, overflow: 'hidden', paddingTop: insets.top + 48, paddingBottom: 30, paddingHorizontal: 20 }}>
+      {/* Hero body — text, image, dots — slides away on scroll up */}
+      <Animated.View style={{ height: animatedHeroHeight, opacity: animatedHeroOpacity, overflow: 'hidden', paddingBottom: 24, paddingHorizontal: 20 }}>
         <ScrollView
           ref={carouselRef}
           horizontal
@@ -324,8 +318,8 @@ export default function HomeScreen() {
           {...dragPanResponder.panHandlers}
           style={{
             alignItems: 'center',
-            paddingTop: 16,
-            paddingBottom: 16,
+            paddingTop: 12,
+            paddingBottom: 12,
           }}
         >
           <View style={{
@@ -406,12 +400,15 @@ export default function HomeScreen() {
             </ScrollView>
           </View>
           {restaurantsQuery.isLoading ? (
-            <View style={styles.centerState}>
-              <ActivityIndicator size="large" color={theme.colors.primary} />
-              <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.body, marginTop: 16 }]}>
-                {t('common.loading')}
-              </Text>
-            </View>
+            <>
+              {[0, 1, 2, 3].map((i) => (
+                <View key={i} style={{ marginBottom: 16, backgroundColor: theme.colors.surface, borderRadius: 16, overflow: 'hidden', padding: 12 }}>
+                  <SkeletonLoader height={120} borderRadius={12} style={{ marginBottom: 10 }} />
+                  <SkeletonLoader height={14} width="60%" borderRadius={6} style={{ marginBottom: 6 }} />
+                  <SkeletonLoader height={12} width="40%" borderRadius={6} />
+                </View>
+              ))}
+            </>
           ) : restaurantsQuery.isError ? (
             <View style={styles.centerState}>
               <Text style={[{ color: theme.colors.error, ...theme.typography.body, textAlign: 'center' as const, marginBottom: 16 }]}>
@@ -564,7 +561,7 @@ export default function HomeScreen() {
           </View>
         </View>
       </Modal>
-    </View>
+    </Animated.View>
   );
 }
 

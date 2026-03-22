@@ -1,14 +1,16 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, TextInput, FlatList, Alert, ActivityIndicator, Image } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, TextInput, FlatList, Alert, ActivityIndicator, Image, Modal, ScrollView } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
-import { X, Trash2, Plus } from 'lucide-react-native';
+import { X, Trash2, Plus, Camera, SquareCheck, Square } from 'lucide-react-native';
 import * as Haptics from 'expo-haptics';
+import * as ImagePicker from 'expo-image-picker';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { fetchMyMenuItems, addMenuItem, deleteMenuItem, type MenuItemFromAPI } from '@/src/services/business';
-import { getErrorMessage } from '@/src/lib/api';
+import { getErrorMessage, apiClient } from '@/src/lib/api';
+import { FeatureFlags } from '@/src/lib/featureFlags';
 
 export default function MenuItemsScreen() {
   const { t } = useTranslation();
@@ -17,6 +19,9 @@ export default function MenuItemsScreen() {
   const queryClient = useQueryClient();
 
   const [newItemName, setNewItemName] = useState('');
+  const [showScanModal, setShowScanModal] = useState(false);
+  const [scannedItems, setScannedItems] = useState<{ name: string; price?: number; selected: boolean }[]>([]);
+  const [scanLoading, setScanLoading] = useState(false);
 
   const menuQuery = useQuery({
     queryKey: ['my-menu-items'],
@@ -76,6 +81,69 @@ export default function MenuItemsScreen() {
     );
   };
 
+  const handleScanMenu = async () => {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert(t('common.error'), 'Photo library permission is required to scan a menu.');
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      quality: 0.8,
+      allowsEditing: false,
+    });
+    if (result.canceled || !result.assets[0]) return;
+
+    setScanLoading(true);
+    try {
+      const asset = result.assets[0];
+      const uri = asset.uri;
+      const filename = uri.split('/').pop() ?? 'menu.jpg';
+      const ext = filename.split('.').pop()?.toLowerCase() ?? 'jpg';
+      const mimeType = ext === 'png' ? 'image/png' : ext === 'webp' ? 'image/webp' : 'image/jpeg';
+
+      const formData = new FormData();
+      formData.append('image', { uri, name: filename, type: mimeType } as any);
+
+      const response = await apiClient.post('/api/restaurants/my/menu-items/scan', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+        timeout: 30000,
+      });
+
+      const items: { name: string; price?: number }[] = response.data?.items ?? [];
+      if (items.length === 0) {
+        Alert.alert('No items found', 'Could not detect any menu items in the image.');
+        return;
+      }
+      setScannedItems(items.map((item) => ({ ...item, selected: true })));
+      setShowScanModal(true);
+    } catch (err) {
+      Alert.alert(t('common.error'), getErrorMessage(err));
+    } finally {
+      setScanLoading(false);
+    }
+  };
+
+  const handleAddScannedItems = async () => {
+    const selected = scannedItems.filter((i) => i.selected);
+    if (selected.length === 0) {
+      Alert.alert('No items selected', 'Select at least one item to add.');
+      return;
+    }
+    setShowScanModal(false);
+    for (const item of selected) {
+      const formData = new FormData();
+      formData.append('name', item.name);
+      try {
+        await addMenuItem(formData);
+      } catch (_) {
+        // continue adding remaining items even if one fails
+      }
+    }
+    void queryClient.invalidateQueries({ queryKey: ['my-menu-items'] });
+    Alert.alert(t('common.success'), `${selected.length} item(s) added to your menu.`);
+  };
+
   const renderItem = ({ item }: { item: MenuItemFromAPI }) => (
     <View style={[styles.itemRow, {
       backgroundColor: theme.colors.surface,
@@ -117,7 +185,34 @@ export default function MenuItemsScreen() {
         <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h2, flex: 1, textAlign: 'center' as const }]}>
           {t('business.menuItems.title')}
         </Text>
-        <View style={{ width: 24 }} />
+        {FeatureFlags.ENABLE_AI_MENU_SCANNER ? (
+          <TouchableOpacity
+            onPress={handleScanMenu}
+            disabled={scanLoading}
+            style={{
+              flexDirection: 'row',
+              alignItems: 'center',
+              borderWidth: 1.5,
+              borderColor: theme.colors.primary,
+              borderRadius: theme.radii.r12,
+              paddingHorizontal: theme.spacing.sm,
+              paddingVertical: 5,
+            }}
+          >
+            {scanLoading ? (
+              <ActivityIndicator size="small" color={theme.colors.primary} />
+            ) : (
+              <>
+                <Camera size={16} color={theme.colors.primary} />
+                <Text style={{ color: theme.colors.primary, ...theme.typography.caption, fontWeight: '600' as const, marginLeft: 4 }}>
+                  Scan
+                </Text>
+              </>
+            )}
+          </TouchableOpacity>
+        ) : (
+          <View style={{ width: 24 }} />
+        )}
       </View>
 
       {menuQuery.isLoading ? (
@@ -147,6 +242,79 @@ export default function MenuItemsScreen() {
           contentContainerStyle={{ paddingHorizontal: theme.spacing.xl, paddingTop: theme.spacing.lg, paddingBottom: 120 }}
           showsVerticalScrollIndicator={false}
         />
+      )}
+
+      {/* AI Scan Review Modal */}
+      {FeatureFlags.ENABLE_AI_MENU_SCANNER && (
+        <Modal
+          visible={showScanModal}
+          animationType="slide"
+          transparent
+          onRequestClose={() => setShowScanModal(false)}
+        >
+          <View style={styles.modalOverlay}>
+            <View style={[styles.modalContainer, { backgroundColor: theme.colors.bg, borderRadius: theme.radii.r12 }]}>
+              <View style={[styles.modalHeader, { paddingHorizontal: theme.spacing.xl, paddingVertical: theme.spacing.lg, borderBottomWidth: 1, borderBottomColor: theme.colors.divider }]}>
+                <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, flex: 1 }]}>
+                  Scanned Items
+                </Text>
+                <TouchableOpacity onPress={() => setShowScanModal(false)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                  <X size={22} color={theme.colors.textPrimary} />
+                </TouchableOpacity>
+              </View>
+              <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: theme.spacing.xl }}>
+                {scannedItems.map((item, index) => (
+                  <TouchableOpacity
+                    key={index}
+                    onPress={() => {
+                      setScannedItems((prev) =>
+                        prev.map((it, i) => i === index ? { ...it, selected: !it.selected } : it)
+                      );
+                    }}
+                    style={[{
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      backgroundColor: theme.colors.surface,
+                      borderRadius: theme.radii.r12,
+                      padding: theme.spacing.md,
+                      marginBottom: theme.spacing.sm,
+                      ...theme.shadows.shadowSm,
+                    }]}
+                  >
+                    {item.selected ? (
+                      <SquareCheck size={20} color={theme.colors.primary} />
+                    ) : (
+                      <Square size={20} color={theme.colors.muted} />
+                    )}
+                    <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.body, flex: 1, marginLeft: theme.spacing.md }]}>
+                      {item.name}
+                    </Text>
+                    {item.price != null && (
+                      <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.bodySm }]}>
+                        {item.price} TND
+                      </Text>
+                    )}
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+              <View style={[{ padding: theme.spacing.xl, borderTopWidth: 1, borderTopColor: theme.colors.divider }]}>
+                <TouchableOpacity
+                  onPress={handleAddScannedItems}
+                  style={[{
+                    backgroundColor: theme.colors.primary,
+                    borderRadius: theme.radii.r12,
+                    paddingVertical: theme.spacing.md,
+                    alignItems: 'center',
+                  }]}
+                >
+                  <Text style={[{ color: '#fff', ...theme.typography.button }]}>
+                    Add Selected Items ({scannedItems.filter((i) => i.selected).length})
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </Modal>
       )}
 
       {/* Add Item Section */}
@@ -239,5 +407,18 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     height: 48,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'flex-end',
+  },
+  modalContainer: {
+    maxHeight: '80%',
+    flexDirection: 'column',
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
   },
 });

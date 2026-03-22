@@ -1,4 +1,4 @@
-import React, { useCallback } from 'react';
+import React, { useCallback, useEffect } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Animated, Image } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Heart, Clock, MapPin, Star, ShoppingBag } from 'lucide-react-native';
@@ -17,6 +17,23 @@ export function BasketCard({ basket, onFavoritePress, isFavorite = false }: Bask
   const router = useRouter();
   const scaleAnim = React.useRef(new Animated.Value(1)).current;
   const favoriteAnim = React.useRef(new Animated.Value(1)).current;
+  const entranceOpacity = React.useRef(new Animated.Value(0)).current;
+  const entranceTranslateY = React.useRef(new Animated.Value(20)).current;
+
+  useEffect(() => {
+    Animated.parallel([
+      Animated.timing(entranceOpacity, {
+        toValue: 1,
+        duration: 350,
+        useNativeDriver: true,
+      }),
+      Animated.timing(entranceTranslateY, {
+        toValue: 0,
+        duration: 350,
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }, []);
 
   const handlePressIn = useCallback(() => {
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -59,7 +76,7 @@ export function BasketCard({ basket, onFavoritePress, isFavorite = false }: Bask
   const bagsBgColor = isLowStock ? theme.colors.secondary : theme.colors.primary;
 
   return (
-    <Animated.View style={{ transform: [{ scale: scaleAnim }] }}>
+    <Animated.View style={{ opacity: entranceOpacity, transform: [{ translateY: entranceTranslateY }, { scale: scaleAnim }] }}>
       <TouchableOpacity
         onPress={handlePress}
         onPressIn={handlePressIn}

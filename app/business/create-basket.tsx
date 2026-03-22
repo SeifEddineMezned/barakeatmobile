@@ -1,12 +1,12 @@
 import React, { useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TextInput,
-  TouchableOpacity, KeyboardAvoidingView, Platform, Alert,
+  TouchableOpacity, KeyboardAvoidingView, Platform, Alert, ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
-import { X, AlertCircle, Clock, Minus, Plus } from 'lucide-react-native';
+import { X, AlertCircle, Clock, Minus, Plus, Sparkles } from 'lucide-react-native';
 import * as Haptics from 'expo-haptics';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { useBusinessStore } from '@/src/stores/businessStore';
@@ -16,7 +16,8 @@ import {
   createBasketJSON, updateBasket as updateBasketAPI,
   fetchMyBaskets, fetchMyProfile,
 } from '@/src/services/business';
-import { getErrorMessage } from '@/src/lib/api';
+import { getErrorMessage, apiClient } from '@/src/lib/api';
+import { FeatureFlags } from '@/src/lib/featureFlags';
 
 export default function CreateBasketScreen() {
   const { editId } = useLocalSearchParams<{ editId?: string }>();
@@ -85,6 +86,26 @@ export default function CreateBasketScreen() {
   const [pickupEnd, setPickupEnd] = useState(defaultEnd);
 
   const [priceError, setPriceError] = useState('');
+  const [aiLoading, setAiLoading] = useState(false);
+
+  const handleAISuggest = async () => {
+    setAiLoading(true);
+    try {
+      const response = await apiClient.post('/api/baskets/ai-suggest', {
+        category: profileQuery.data?.category,
+        name,
+      });
+      const data = response.data as { name?: string; description?: string; price?: number };
+      if (data.name) setName(data.name);
+      if (data.description) setDescription(data.description);
+      if (data.price != null) setSellingPrice(String(data.price));
+      Alert.alert('AI Suggestion', 'AI suggested content filled in! Adjust as needed.');
+    } catch (err) {
+      Alert.alert('Error', getErrorMessage(err));
+    } finally {
+      setAiLoading(false);
+    }
+  };
 
   // Update pickup times when profile/baskets load (only if not yet modified by user)
   React.useEffect(() => {
@@ -219,9 +240,38 @@ export default function CreateBasketScreen() {
         >
           {/* Name */}
           <View style={[styles.field, { marginBottom: theme.spacing.xl }]}>
-            <Text style={[styles.label, { color: theme.colors.textPrimary, ...theme.typography.bodySm, marginBottom: theme.spacing.sm }]}>
-              {t('business.createBasket.name')}
-            </Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: theme.spacing.sm }}>
+              <Text style={[styles.label, { color: theme.colors.textPrimary, ...theme.typography.bodySm }]}>
+                {t('business.createBasket.name')}
+              </Text>
+              {FeatureFlags.ENABLE_AI_BASKET_SUGGESTIONS && (
+                <TouchableOpacity
+                  onPress={handleAISuggest}
+                  disabled={aiLoading}
+                  style={{
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    backgroundColor: theme.colors.primary + '18',
+                    borderWidth: 1,
+                    borderColor: theme.colors.primary,
+                    borderRadius: theme.radii.r12,
+                    paddingHorizontal: theme.spacing.md,
+                    paddingVertical: 6,
+                  }}
+                >
+                  {aiLoading ? (
+                    <ActivityIndicator size="small" color={theme.colors.primary} />
+                  ) : (
+                    <>
+                      <Sparkles size={14} color={theme.colors.primary} />
+                      <Text style={{ color: theme.colors.primary, ...theme.typography.caption, fontWeight: '600' as const, marginLeft: 4 }}>
+                        Suggest
+                      </Text>
+                    </>
+                  )}
+                </TouchableOpacity>
+              )}
+            </View>
             <TextInput
               style={[styles.input, { backgroundColor: theme.colors.surface, borderColor: theme.colors.divider, borderRadius: theme.radii.r12, color: theme.colors.textPrimary, ...theme.typography.body, ...theme.shadows.shadowSm }]}
               value={name}

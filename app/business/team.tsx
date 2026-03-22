@@ -1,9 +1,9 @@
-import React, { useState, useCallback } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Modal, TextInput, Switch, Alert, ActivityIndicator } from 'react-native';
+import React, { useState, useCallback, useEffect, useMemo } from 'react';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Modal, TextInput, Switch, Alert, ActivityIndicator, Animated } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import { useRouter } from 'expo-router';
-import { X, UserPlus, Trash2, Shield, Users, MapPin, Crown, ShieldCheck, Key, Plus } from 'lucide-react-native';
+import { X, UserPlus, Trash2, Shield, Users, MapPin, Crown, ShieldCheck, Key, Plus, ChevronDown, ChevronUp, List, GitBranch } from 'lucide-react-native';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import {
@@ -17,6 +17,7 @@ import {
   type OrgDetailsFromAPI,
 } from '@/src/services/teams';
 import { getErrorMessage } from '@/src/lib/api';
+import { FeatureFlags } from '@/src/lib/featureFlags';
 
 type PermissionKey = 'availability' | 'reservations' | 'profile' | 'menu' | 'team';
 
@@ -30,12 +31,172 @@ function permBoolToString(val: boolean): string {
   return val ? 'write' : 'none';
 }
 
+// ── Role Preset Definitions ─────────────────────────────────────────────────
+type RolePreset = 'full_access' | 'orders_only' | 'view_only';
+
+interface PresetConfig {
+  id: RolePreset;
+  label: string;
+  description: string;
+  role: 'admin' | 'member';
+  permissions: Record<PermissionKey, boolean>;
+}
+
+const ROLE_PRESETS: PresetConfig[] = [
+  {
+    id: 'full_access',
+    label: 'Full Access',
+    description: 'Can manage everything',
+    role: 'admin',
+    permissions: { availability: true, reservations: true, profile: true, menu: true, team: true },
+  },
+  {
+    id: 'orders_only',
+    label: 'Orders Only',
+    description: 'Can manage reservations only',
+    role: 'member',
+    permissions: { availability: false, reservations: true, profile: false, menu: false, team: false },
+  },
+  {
+    id: 'view_only',
+    label: 'View Only',
+    description: 'Read-only access to everything',
+    role: 'member',
+    permissions: { availability: true, reservations: true, profile: true, menu: true, team: true },
+  },
+];
+
+// ── OrgChartView ──────────────────────────────────────────────────────────
+function OrgChartView({ org }: { org: OrgDetailsFromAPI | undefined }) {
+  const theme = useTheme();
+  const members = org?.members ?? [];
+  const orgName = org?.name ?? 'Organisation';
+
+  // Stable animated values — recreate only when member count changes
+  const memberAnims = useMemo(
+    () => members.map(() => new Animated.Value(0)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [members.length]
+  );
+
+  useEffect(() => {
+    // Reset then stagger each member circle popping out from the center
+    memberAnims.forEach((anim) => anim.setValue(0));
+    Animated.stagger(
+      120,
+      memberAnims.map((anim) =>
+        Animated.spring(anim, {
+          toValue: 1,
+          useNativeDriver: true,
+          speed: 8,
+          bounciness: 12,
+        })
+      )
+    ).start();
+  }, [members.length, memberAnims]);
+
+  const RING_RADIUS = 110;
+  const CENTER_CIRCLE_R = 56;
+  const MEMBER_CIRCLE_R = 36;
+
+  return (
+    <View style={{ flex: 1, backgroundColor: '#114b3c', alignItems: 'center', justifyContent: 'center' }}>
+      {/* Faint ring guide */}
+      <View style={{
+        position: 'absolute',
+        width: RING_RADIUS * 2,
+        height: RING_RADIUS * 2,
+        borderRadius: RING_RADIUS,
+        borderWidth: 1,
+        borderColor: 'rgba(255,255,255,0.12)',
+        borderStyle: 'dashed',
+      }} />
+
+      {/* Center org circle */}
+      <View style={{
+        position: 'absolute',
+        width: CENTER_CIRCLE_R * 2,
+        height: CENTER_CIRCLE_R * 2,
+        borderRadius: CENTER_CIRCLE_R,
+        backgroundColor: '#e3ff5c',
+        alignItems: 'center',
+        justifyContent: 'center',
+        shadowColor: '#000',
+        shadowOpacity: 0.3,
+        shadowRadius: 12,
+        elevation: 8,
+      }}>
+        <Text style={{ color: '#114b3c', fontWeight: '700', fontFamily: 'Poppins_700Bold', fontSize: 11, textAlign: 'center', paddingHorizontal: 8 }} numberOfLines={2}>
+          {orgName}
+        </Text>
+      </View>
+
+      {/* Member circles — positioned around the ring */}
+      {members.map((member: any, i: number) => {
+        const angle = (2 * Math.PI * i) / Math.max(members.length, 1) - Math.PI / 2;
+        const tx = Math.cos(angle) * RING_RADIUS;
+        const ty = Math.sin(angle) * RING_RADIUS;
+
+        const anim = memberAnims[i] ?? new Animated.Value(1);
+        const scale = anim.interpolate({ inputRange: [0, 1], outputRange: [0, 1] });
+        const opacity = anim;
+
+        // Get initials
+        const name: string = member.name ?? member.user_name ?? member.email ?? member.user_email ?? '?';
+        const initials = name.split(' ').map((w: string) => w[0]).join('').toUpperCase().substring(0, 2);
+
+        const isAdmin = member.role === 'admin' || member.role === 'owner';
+
+        return (
+          <Animated.View
+            key={member.membership_id ?? member.id ?? i}
+            style={{
+              position: 'absolute',
+              width: MEMBER_CIRCLE_R * 2,
+              height: MEMBER_CIRCLE_R * 2,
+              borderRadius: MEMBER_CIRCLE_R,
+              backgroundColor: isAdmin ? 'rgba(255,255,255,0.25)' : 'rgba(255,255,255,0.12)',
+              borderWidth: isAdmin ? 2 : 1,
+              borderColor: isAdmin ? '#e3ff5c' : 'rgba(255,255,255,0.3)',
+              alignItems: 'center',
+              justifyContent: 'center',
+              transform: [
+                { translateX: tx },
+                { translateY: ty },
+                { scale },
+              ],
+              opacity,
+            }}
+          >
+            <Text style={{ color: '#fff', fontWeight: '700', fontFamily: 'Poppins_700Bold', fontSize: 14 }}>
+              {initials}
+            </Text>
+            <Text style={{ color: 'rgba(255,255,255,0.6)', fontSize: 8, fontFamily: 'Poppins_400Regular', textAlign: 'center', marginTop: 2, paddingHorizontal: 4 }} numberOfLines={1}>
+              {member.role === 'owner' ? 'Owner' : isAdmin ? 'Admin' : 'Member'}
+            </Text>
+          </Animated.View>
+        );
+      })}
+
+      {/* Empty state */}
+      {members.length === 0 && (
+        <View style={{ position: 'absolute', bottom: 60, alignItems: 'center' }}>
+          <Text style={{ color: 'rgba(255,255,255,0.5)', fontSize: 13, fontFamily: 'Poppins_400Regular', textAlign: 'center' }}>
+            Add team members to see them here
+          </Text>
+        </View>
+      )}
+    </View>
+  );
+}
+
 export default function TeamScreen() {
   const { t } = useTranslation();
   const theme = useTheme();
   const router = useRouter();
   const queryClient = useQueryClient();
 
+  const [viewMode, setViewMode] = useState<'list' | 'chart'>('list');
   const [showAddMemberModal, setShowAddMemberModal] = useState(false);
   const [showPermissionsModal, setShowPermissionsModal] = useState<string | null>(null);
   const [selectedLocation, setSelectedLocation] = useState<number | null>(null);
@@ -52,6 +213,10 @@ export default function TeamScreen() {
     menu: false,
     team: false,
   });
+
+  // Role preset state for add-member modal
+  const [selectedPreset, setSelectedPreset] = useState<RolePreset | null>('orders_only');
+  const [showAdvancedPermissions, setShowAdvancedPermissions] = useState(false);
 
   // Add-location modal state
   const [showAddLocationModal, setShowAddLocationModal] = useState(false);
@@ -95,6 +260,17 @@ export default function TeamScreen() {
     setNewMemberPassword('');
     setNewMemberRole('member');
     setNewMemberLocationId(null);
+    setSelectedPreset('orders_only');
+    setShowAdvancedPermissions(false);
+    // Reset permissions to Orders Only defaults
+    const ordersOnly = ROLE_PRESETS.find((p) => p.id === 'orders_only')!;
+    setPermissionsState(ordersOnly.permissions);
+  };
+
+  const handleSelectPreset = (preset: PresetConfig) => {
+    setSelectedPreset(preset.id);
+    setNewMemberRole(preset.role);
+    setPermissionsState(preset.permissions);
   };
 
   const createOrgMutation = useMutation({
@@ -118,6 +294,14 @@ export default function TeamScreen() {
     mutationFn: async () => {
       if (!orgId) throw new Error('No organization');
       const locationId = newMemberLocationId ?? selectedLocation ?? undefined;
+      // Build permissions payload from current state
+      const permsPayload: Record<string, string> = {
+        availability: permBoolToString(permissionsState.availability),
+        reservations: permBoolToString(permissionsState.reservations),
+        profile: permBoolToString(permissionsState.profile),
+        menu: permBoolToString(permissionsState.menu),
+        team: permBoolToString(permissionsState.team),
+      };
       return addMember(orgId, {
         email: newMemberEmail.trim(),
         name: newMemberName.trim(),
@@ -243,9 +427,9 @@ export default function TeamScreen() {
       case 'owner':
         return { color: '#16a34a', bg: '#16a34a15', label: t('business.team.owner', { defaultValue: 'Owner' }), icon: Crown };
       case 'admin':
-        return { color: '#2563eb', bg: '#2563eb15', label: t('business.profile.admin'), icon: ShieldCheck };
+        return { color: theme.colors.primary, bg: theme.colors.primary + '20', label: 'Admin', icon: ShieldCheck };
       default:
-        return { color: '#ea580c', bg: '#ea580c15', label: t('business.profile.restricted'), icon: Shield };
+        return { color: theme.colors.muted, bg: theme.colors.muted + '25', label: 'Member', icon: Shield };
     }
   };
 
@@ -270,24 +454,63 @@ export default function TeamScreen() {
       setNewMemberLocationId(selectedLocation);
     }
     setNewMemberPassword(generatePassword());
+    // Apply default preset
+    const defaultPreset = ROLE_PRESETS.find((p) => p.id === 'orders_only')!;
+    setSelectedPreset(defaultPreset.id);
+    setNewMemberRole(defaultPreset.role);
+    setPermissionsState(defaultPreset.permissions);
     setShowAddMemberModal(true);
   };
 
   const canAddMember = newMemberName.trim() && newMemberEmail.trim() && newMemberPassword;
 
+  // Helper: get initials from a name
+  const getInitials = (name: string) => {
+    const parts = name.trim().split(/\s+/);
+    if (parts.length === 0 || !parts[0]) return '?';
+    if (parts.length === 1) return parts[0][0].toUpperCase();
+    return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+  };
+
+  // Helper: find location name for a member
+  const getLocationName = (locationId: number | undefined | null) => {
+    if (!locationId) return null;
+    const loc = locations.find((l: any) => l.id === locationId);
+    if (!loc) return null;
+    return loc.name ?? loc.address ?? null;
+  };
+
+  // ── Shared header ─────────────────────────────────────────────────────────
+  const renderHeader = (title?: string) => (
+    <View style={[styles.header, { paddingHorizontal: theme.spacing.xl, paddingVertical: theme.spacing.md, borderBottomWidth: 1, borderBottomColor: theme.colors.divider }]}>
+      <TouchableOpacity onPress={() => router.back()} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
+        <X size={24} color={theme.colors.textPrimary} />
+      </TouchableOpacity>
+      <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h2, flex: 1, textAlign: 'center' as const }]}>
+        {title ?? t('business.profile.teamManagement')}
+      </Text>
+      {FeatureFlags.ENABLE_TEAM_ORG_CHART ? (
+        <TouchableOpacity
+          onPress={() => setViewMode((prev) => (prev === 'list' ? 'chart' : 'list'))}
+          hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+        >
+          {viewMode === 'list' ? (
+            <GitBranch size={22} color={theme.colors.textPrimary} />
+          ) : (
+            <List size={22} color={theme.colors.textPrimary} />
+          )}
+        </TouchableOpacity>
+      ) : (
+        <View style={{ width: 24 }} />
+      )}
+    </View>
+  );
+
   // ── Render ──────────────────────────────────────────────────────────────
   if (isLoading) {
     return (
       <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]}>
-        <View style={[styles.header, { paddingHorizontal: theme.spacing.xl, paddingVertical: theme.spacing.md, borderBottomWidth: 1, borderBottomColor: theme.colors.divider }]}>
-          <TouchableOpacity onPress={() => router.back()} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
-            <X size={24} color={theme.colors.textPrimary} />
-          </TouchableOpacity>
-          <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h2, flex: 1, textAlign: 'center' as const }]}>
-            {t('business.profile.teamManagement')}
-          </Text>
-          <View style={{ width: 24 }} />
-        </View>
+        {renderHeader()}
         <View style={styles.centered}><ActivityIndicator size="large" color={theme.colors.primary} /></View>
       </SafeAreaView>
     );
@@ -296,15 +519,7 @@ export default function TeamScreen() {
   if (isError) {
     return (
       <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]}>
-        <View style={[styles.header, { paddingHorizontal: theme.spacing.xl, paddingVertical: theme.spacing.md, borderBottomWidth: 1, borderBottomColor: theme.colors.divider }]}>
-          <TouchableOpacity onPress={() => router.back()} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
-            <X size={24} color={theme.colors.textPrimary} />
-          </TouchableOpacity>
-          <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h2, flex: 1, textAlign: 'center' as const }]}>
-            {t('business.profile.teamManagement')}
-          </Text>
-          <View style={{ width: 24 }} />
-        </View>
+        {renderHeader()}
         <View style={styles.centered}>
           <Text style={[{ color: theme.colors.error, ...theme.typography.body, textAlign: 'center', marginBottom: 16 }]}>
             {t('common.errorOccurred')}
@@ -323,18 +538,14 @@ export default function TeamScreen() {
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]}>
       {/* Header */}
-      <View style={[styles.header, { paddingHorizontal: theme.spacing.xl, paddingVertical: theme.spacing.md, borderBottomWidth: 1, borderBottomColor: theme.colors.divider }]}>
-        <TouchableOpacity onPress={() => router.back()} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
-          <X size={24} color={theme.colors.textPrimary} />
-        </TouchableOpacity>
-        <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h2, flex: 1, textAlign: 'center' as const }]}>
-          {org?.name ?? t('business.profile.teamManagement')}
-        </Text>
-        <View style={{ width: 24 }} />
-      </View>
+      {renderHeader(org?.name ?? t('business.profile.teamManagement'))}
 
-      {/* No-org state: prompt to create */}
-      {noOrg ? (
+      {/* Org chart view (alternative to list) */}
+      {viewMode === 'chart' && FeatureFlags.ENABLE_TEAM_ORG_CHART ? (
+        <OrgChartView org={orgDetailsQuery.data} />
+      ) : (
+      /* No-org state: prompt to create */
+      noOrg ? (
         <ScrollView contentContainerStyle={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 32 }}>
           <Users size={48} color={theme.colors.muted} />
           <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h2, marginTop: 20, textAlign: 'center' }}>
@@ -476,7 +687,7 @@ export default function TeamScreen() {
             </View>
           </View>
 
-          {/* Locations */}
+          {/* Locations Section */}
           {(locations.length > 0 || orgId) && (
             <View style={{
               backgroundColor: theme.colors.surface,
@@ -493,6 +704,7 @@ export default function TeamScreen() {
                 <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3 }}>
                   {t('business.team.locations', { defaultValue: 'Locations' })}
                 </Text>
+                {/* "+" button in Locations section header */}
                 <TouchableOpacity
                   onPress={() => setShowAddLocationModal(true)}
                   style={{
@@ -510,44 +722,44 @@ export default function TeamScreen() {
 
               {/* "All" option to clear location filter */}
               {locations.length > 0 && (
-              <TouchableOpacity
-                onPress={() => setSelectedLocation(null)}
-                style={{
-                  paddingHorizontal: theme.spacing.lg,
-                  paddingVertical: theme.spacing.md,
-                  borderTopWidth: 1,
-                  borderTopColor: theme.colors.divider,
-                  flexDirection: 'row',
-                  alignItems: 'center',
-                  backgroundColor: selectedLocation === null ? theme.colors.primary + '08' : 'transparent',
-                }}
-              >
-                <View style={{
-                  backgroundColor: theme.colors.primary + '12',
-                  borderRadius: 10,
-                  width: 36,
-                  height: 36,
-                  justifyContent: 'center',
-                  alignItems: 'center',
-                }}>
-                  <Users size={18} color={theme.colors.primary} />
-                </View>
-                <View style={{ flex: 1, marginLeft: 12 }}>
-                  <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '500' }}>
-                    {t('business.dashboard.viewAll', { defaultValue: 'View All' })}
-                  </Text>
-                </View>
-                <View style={{
-                  backgroundColor: theme.colors.bg,
-                  borderRadius: 12,
-                  paddingHorizontal: 8,
-                  paddingVertical: 4,
-                }}>
-                  <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption }}>
-                    {t('business.team.membersCount', { count: members.length, defaultValue: `${members.length} members` })}
-                  </Text>
-                </View>
-              </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={() => setSelectedLocation(null)}
+                  style={{
+                    paddingHorizontal: theme.spacing.lg,
+                    paddingVertical: theme.spacing.md,
+                    borderTopWidth: 1,
+                    borderTopColor: theme.colors.divider,
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    backgroundColor: selectedLocation === null ? theme.colors.primary + '08' : 'transparent',
+                  }}
+                >
+                  <View style={{
+                    backgroundColor: theme.colors.primary + '12',
+                    borderRadius: 10,
+                    width: 36,
+                    height: 36,
+                    justifyContent: 'center',
+                    alignItems: 'center',
+                  }}>
+                    <Users size={18} color={theme.colors.primary} />
+                  </View>
+                  <View style={{ flex: 1, marginLeft: 12 }}>
+                    <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '500' }}>
+                      {t('business.dashboard.viewAll', { defaultValue: 'View All' })}
+                    </Text>
+                  </View>
+                  <View style={{
+                    backgroundColor: theme.colors.bg,
+                    borderRadius: 12,
+                    paddingHorizontal: 8,
+                    paddingVertical: 4,
+                  }}>
+                    <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption }}>
+                      {t('business.team.membersCount', { count: members.length, defaultValue: `${members.length} members` })}
+                    </Text>
+                  </View>
+                </TouchableOpacity>
               )}
 
               {locations.length === 0 && (
@@ -632,108 +844,196 @@ export default function TeamScreen() {
               </Text>
             </View>
 
+            {/* Zero-member onboarding card */}
+            {displayedMembers.length === 0 && (
+              <View style={{
+                paddingHorizontal: theme.spacing.xl,
+                paddingVertical: theme.spacing.xl,
+                borderTopWidth: 1,
+                borderTopColor: theme.colors.divider,
+                alignItems: 'center',
+              }}>
+                <View style={{
+                  backgroundColor: theme.colors.primary + '15',
+                  borderRadius: 32,
+                  width: 64,
+                  height: 64,
+                  justifyContent: 'center',
+                  alignItems: 'center',
+                  marginBottom: theme.spacing.lg,
+                }}>
+                  <Users size={32} color={theme.colors.primary} />
+                </View>
+                <Text style={{
+                  color: theme.colors.textPrimary,
+                  ...theme.typography.h3,
+                  textAlign: 'center',
+                  marginBottom: theme.spacing.sm,
+                }}>
+                  Build Your Team
+                </Text>
+                <Text style={{
+                  color: theme.colors.textSecondary,
+                  ...theme.typography.bodySm,
+                  textAlign: 'center',
+                  marginBottom: theme.spacing.xl,
+                  lineHeight: 20,
+                }}>
+                  Add team members to manage your restaurant together. Each person gets their own login and permissions.
+                </Text>
+                <TouchableOpacity
+                  onPress={handleAddMemberFromLocation}
+                  style={{
+                    backgroundColor: theme.colors.primary,
+                    borderRadius: theme.radii.r12,
+                    paddingHorizontal: 24,
+                    paddingVertical: 12,
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                  }}
+                >
+                  <UserPlus size={16} color="#fff" />
+                  <Text style={{ color: '#fff', ...theme.typography.bodySm, fontWeight: '600', marginLeft: 8 }}>
+                    Add First Member
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            )}
+
+            {/* Member Cards */}
             {displayedMembers.map((member: any, index: number) => {
-              // Backend returns membership_id as the unique id for org membership rows
               const memberId = String(member.membership_id ?? member.id ?? index);
               const memberRole = member.role ?? 'member';
-              // Backend joins users table: returns name, email directly
               const memberName = member.name ?? member.user_name ?? '';
               const memberEmail = member.email ?? member.user_email ?? '';
               const badge = getRoleBadge(memberRole);
-              const BadgeIcon = badge.icon;
               const isOwner = memberRole === 'owner';
+              const initials = getInitials(memberName);
+              const locationName = getLocationName(member.location_id);
 
               return (
                 <View
                   key={memberId}
-                  style={[{
+                  style={{
                     paddingHorizontal: theme.spacing.lg,
-                    paddingVertical: theme.spacing.md,
+                    paddingVertical: theme.spacing.lg,
                     borderTopWidth: 1,
                     borderTopColor: theme.colors.divider,
-                  }]}
+                  }}
                 >
+                  {/* Top row: avatar + name/badges */}
                   <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                    <View style={[{
-                      backgroundColor: badge.bg,
-                      borderRadius: 20,
-                      width: 40,
-                      height: 40,
+                    {/* Avatar circle with initials */}
+                    <View style={{
+                      backgroundColor: theme.colors.primary + '20',
+                      borderRadius: 22,
+                      width: 44,
+                      height: 44,
                       justifyContent: 'center',
                       alignItems: 'center',
-                    }]}>
-                      <BadgeIcon size={18} color={badge.color} />
+                      flexShrink: 0,
+                    }}>
+                      <Text style={{
+                        color: theme.colors.primary,
+                        fontSize: 16,
+                        fontWeight: '700',
+                        lineHeight: 20,
+                      }}>
+                        {initials}
+                      </Text>
                     </View>
+
+                    {/* Name + badges */}
                     <View style={{ flex: 1, marginLeft: 12 }}>
-                      <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '500' as const }]}>
-                        {memberName}
-                      </Text>
-                      <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, marginTop: 1 }]}>
-                        {memberEmail}
-                      </Text>
-                    </View>
-                    <View style={[{
-                      backgroundColor: badge.bg,
-                      borderRadius: theme.radii.pill,
-                      paddingHorizontal: 10,
-                      paddingVertical: 4,
-                    }]}>
-                      <Text style={[{ color: badge.color, ...theme.typography.caption, fontWeight: '600' as const }]}>
-                        {badge.label}
-                      </Text>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
+                        <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '600' as const }}>
+                          {memberName || memberEmail}
+                        </Text>
+                        {/* Role badge pill */}
+                        <View style={{
+                          backgroundColor: badge.bg,
+                          borderRadius: theme.radii.pill,
+                          paddingHorizontal: 8,
+                          paddingVertical: 2,
+                        }}>
+                          <Text style={{ color: badge.color, ...theme.typography.caption, fontWeight: '600' as const }}>
+                            {badge.label}
+                          </Text>
+                        </View>
+                      </View>
+                      {/* Email subtitle */}
+                      {memberEmail && memberName ? (
+                        <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, marginTop: 2 }}>
+                          {memberEmail}
+                        </Text>
+                      ) : null}
+                      {/* Location badge */}
+                      {locationName ? (
+                        <View style={{
+                          flexDirection: 'row',
+                          alignItems: 'center',
+                          marginTop: 4,
+                          alignSelf: 'flex-start',
+                          backgroundColor: theme.colors.bg,
+                          borderRadius: theme.radii.r8,
+                          paddingHorizontal: 6,
+                          paddingVertical: 2,
+                        }}>
+                          <MapPin size={10} color={theme.colors.muted} />
+                          <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, marginLeft: 3 }}>
+                            {locationName}
+                          </Text>
+                        </View>
+                      ) : null}
                     </View>
                   </View>
 
-                  {/* Action buttons for owner/admin on non-owner members */}
+                  {/* Quick action row for non-owner members */}
                   {!isOwner && (
-                    <View style={{ flexDirection: 'row', flexWrap: 'wrap', marginTop: theme.spacing.sm, marginLeft: 52, gap: 6 }}>
-                      <TouchableOpacity
-                        onPress={() => handleChangeRole(memberId, memberRole)}
-                        style={[{
-                          backgroundColor: theme.colors.bg,
-                          borderRadius: theme.radii.r8,
-                          paddingHorizontal: 8,
-                          paddingVertical: 6,
-                          flexDirection: 'row',
-                          alignItems: 'center',
-                        }]}
-                      >
-                        <ShieldCheck size={14} color={theme.colors.primary} />
-                        <Text style={[{ color: theme.colors.primary, ...theme.typography.caption, fontWeight: '600' as const, marginLeft: 4 }]}>
-                          {memberRole === 'admin' ? t('business.profile.restricted') : t('business.profile.admin')}
-                        </Text>
-                      </TouchableOpacity>
-
+                    <View style={{
+                      flexDirection: 'row',
+                      marginTop: theme.spacing.md,
+                      marginLeft: 56,
+                      gap: 8,
+                    }}>
+                      {/* Permissions button */}
                       <TouchableOpacity
                         onPress={() => handleOpenPermissions(memberId, member.permissions)}
-                        style={[{
+                        style={{
+                          flex: 1,
                           backgroundColor: theme.colors.bg,
                           borderRadius: theme.radii.r8,
-                          paddingHorizontal: 8,
-                          paddingVertical: 6,
+                          paddingVertical: 8,
                           flexDirection: 'row',
                           alignItems: 'center',
-                        }]}
+                          justifyContent: 'center',
+                          borderWidth: 1,
+                          borderColor: theme.colors.divider,
+                        }}
                       >
-                        <Shield size={14} color={theme.colors.textSecondary} />
-                        <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, fontWeight: '600' as const, marginLeft: 4 }]}>
+                        <Shield size={13} color={theme.colors.textSecondary} />
+                        <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, fontWeight: '600' as const, marginLeft: 4 }}>
                           {t('business.profile.permissions')}
                         </Text>
                       </TouchableOpacity>
 
+                      {/* Remove button (destructive red) */}
                       <TouchableOpacity
                         onPress={() => handleRemoveMember(memberId, memberName)}
-                        style={[{
+                        style={{
+                          flex: 1,
                           backgroundColor: theme.colors.error + '10',
                           borderRadius: theme.radii.r8,
-                          paddingHorizontal: 8,
-                          paddingVertical: 6,
+                          paddingVertical: 8,
                           flexDirection: 'row',
                           alignItems: 'center',
-                        }]}
+                          justifyContent: 'center',
+                          borderWidth: 1,
+                          borderColor: theme.colors.error + '30',
+                        }}
                       >
-                        <Trash2 size={14} color={theme.colors.error} />
-                        <Text style={[{ color: theme.colors.error, ...theme.typography.caption, fontWeight: '600' as const, marginLeft: 4 }]}>
+                        <Trash2 size={13} color={theme.colors.error} />
+                        <Text style={{ color: theme.colors.error, ...theme.typography.caption, fontWeight: '600' as const, marginLeft: 4 }}>
                           {t('business.profile.removeMember')}
                         </Text>
                       </TouchableOpacity>
@@ -743,172 +1043,258 @@ export default function TeamScreen() {
               );
             })}
 
-            {/* Add Member Button */}
-            <TouchableOpacity
-              onPress={handleAddMemberFromLocation}
-              style={[{
-                flexDirection: 'row',
-                alignItems: 'center',
-                justifyContent: 'center',
-                padding: theme.spacing.lg,
-                borderTopWidth: 1,
-                borderTopColor: theme.colors.divider,
-              }]}
-            >
-              <UserPlus size={18} color={theme.colors.primary} />
-              <Text style={[{ color: theme.colors.primary, ...theme.typography.body, fontWeight: '600' as const, marginLeft: 8 }]}>
-                {t('business.profile.addMember')}
-              </Text>
-            </TouchableOpacity>
+            {/* Add Member Button (only shown when there are already members) */}
+            {displayedMembers.length > 0 && (
+              <TouchableOpacity
+                onPress={handleAddMemberFromLocation}
+                style={[{
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  padding: theme.spacing.lg,
+                  borderTopWidth: 1,
+                  borderTopColor: theme.colors.divider,
+                }]}
+              >
+                <UserPlus size={18} color={theme.colors.primary} />
+                <Text style={[{ color: theme.colors.primary, ...theme.typography.body, fontWeight: '600' as const, marginLeft: 8 }]}>
+                  {t('business.profile.addMember')}
+                </Text>
+              </TouchableOpacity>
+            )}
           </View>
 
           <View style={{ height: 40 }} />
         </ScrollView>
-      )}
+      ) /* end noOrg ternary */
+      )} {/* end viewMode ternary */}
 
-      {/* Add Member Modal */}
+      {/* ── Add Member Modal ──────────────────────────────────────────────── */}
       <Modal visible={showAddMemberModal} transparent animationType="fade" onRequestClose={() => setShowAddMemberModal(false)}>
         <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setShowAddMemberModal(false)}>
-          <View
-            style={[styles.modalContent, { backgroundColor: theme.colors.surface, borderRadius: theme.radii.r24, padding: theme.spacing.xl, ...theme.shadows.shadowLg }]}
-            onStartShouldSetResponder={() => true}
+          <ScrollView
+            style={{ width: '100%', maxWidth: 400, alignSelf: 'center' }}
+            contentContainerStyle={{ flexGrow: 1, justifyContent: 'center' }}
+            showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
           >
-            <View style={styles.modalHeader}>
-              <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3 }]}>
-                {t('business.profile.addMember')}
-              </Text>
-              <TouchableOpacity onPress={() => { setShowAddMemberModal(false); resetAddMemberForm(); }}>
-                <X size={20} color={theme.colors.textSecondary} />
-              </TouchableOpacity>
-            </View>
+            <View
+              style={[styles.modalContent, { backgroundColor: theme.colors.surface, borderRadius: theme.radii.r24, padding: theme.spacing.xl, ...theme.shadows.shadowLg }]}
+              onStartShouldSetResponder={() => true}
+            >
+              <View style={styles.modalHeader}>
+                <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3 }]}>
+                  {t('business.profile.addMember')}
+                </Text>
+                <TouchableOpacity onPress={() => { setShowAddMemberModal(false); resetAddMemberForm(); }}>
+                  <X size={20} color={theme.colors.textSecondary} />
+                </TouchableOpacity>
+              </View>
 
-            {/* Name field (required by backend) */}
-            <TextInput
-              style={[styles.modalInput, { backgroundColor: theme.colors.bg, borderRadius: theme.radii.r12, color: theme.colors.textPrimary, ...theme.typography.body, marginTop: theme.spacing.lg }]}
-              value={newMemberName}
-              onChangeText={setNewMemberName}
-              placeholder={t('business.profile.memberName') || 'Full name'}
-              placeholderTextColor={theme.colors.muted}
-              autoCapitalize="words"
-            />
-
-            {/* Email field */}
-            <TextInput
-              style={[styles.modalInput, { backgroundColor: theme.colors.bg, borderRadius: theme.radii.r12, color: theme.colors.textPrimary, ...theme.typography.body, marginTop: theme.spacing.md }]}
-              value={newMemberEmail}
-              onChangeText={setNewMemberEmail}
-              placeholder={t('business.profile.memberEmail')}
-              placeholderTextColor={theme.colors.muted}
-              keyboardType="email-address"
-              autoCapitalize="none"
-            />
-
-            {/* Temporary password field (required by backend) */}
-            <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: theme.spacing.md, gap: 8 }}>
+              {/* Name field */}
               <TextInput
-                style={[styles.modalInput, { backgroundColor: theme.colors.bg, borderRadius: theme.radii.r12, color: theme.colors.textPrimary, ...theme.typography.body, flex: 1 }]}
-                value={newMemberPassword}
-                onChangeText={setNewMemberPassword}
-                placeholder={t('business.profile.tempPassword') || 'Temporary password'}
+                style={[styles.modalInput, { backgroundColor: theme.colors.bg, borderRadius: theme.radii.r12, color: theme.colors.textPrimary, ...theme.typography.body, marginTop: theme.spacing.lg }]}
+                value={newMemberName}
+                onChangeText={setNewMemberName}
+                placeholder={t('business.profile.memberName') || 'Full name'}
                 placeholderTextColor={theme.colors.muted}
+                autoCapitalize="words"
               />
-              <TouchableOpacity
-                onPress={() => setNewMemberPassword(generatePassword())}
-                style={[{
-                  backgroundColor: theme.colors.bg,
-                  borderRadius: theme.radii.r12,
-                  paddingHorizontal: 12,
-                  height: 48,
-                  justifyContent: 'center',
-                }]}
-              >
-                <Key size={18} color={theme.colors.primary} />
-              </TouchableOpacity>
-            </View>
 
-            <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.bodySm, marginTop: theme.spacing.lg, marginBottom: theme.spacing.sm }]}>
-              {t('business.profile.memberRole')}
-            </Text>
+              {/* Email field */}
+              <TextInput
+                style={[styles.modalInput, { backgroundColor: theme.colors.bg, borderRadius: theme.radii.r12, color: theme.colors.textPrimary, ...theme.typography.body, marginTop: theme.spacing.md }]}
+                value={newMemberEmail}
+                onChangeText={setNewMemberEmail}
+                placeholder={t('business.profile.memberEmail')}
+                placeholderTextColor={theme.colors.muted}
+                keyboardType="email-address"
+                autoCapitalize="none"
+              />
 
-            {(['admin', 'member'] as const).map((role) => {
-              const isSelected = newMemberRole === role;
-              const roleColor = role === 'admin' ? '#2563eb' : '#ea580c';
-              const roleLabel = role === 'admin' ? t('business.profile.admin') : t('business.profile.restricted');
-              return (
+              {/* Password field */}
+              <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: theme.spacing.md, gap: 8 }}>
+                <TextInput
+                  style={[styles.modalInput, { backgroundColor: theme.colors.bg, borderRadius: theme.radii.r12, color: theme.colors.textPrimary, ...theme.typography.body, flex: 1 }]}
+                  value={newMemberPassword}
+                  onChangeText={setNewMemberPassword}
+                  placeholder={t('business.profile.tempPassword') || 'Temporary password'}
+                  placeholderTextColor={theme.colors.muted}
+                />
                 <TouchableOpacity
-                  key={role}
-                  onPress={() => setNewMemberRole(role)}
+                  onPress={() => setNewMemberPassword(generatePassword())}
                   style={[{
-                    flexDirection: 'row',
-                    alignItems: 'center',
-                    padding: theme.spacing.md,
+                    backgroundColor: theme.colors.bg,
                     borderRadius: theme.radii.r12,
-                    marginBottom: theme.spacing.xs,
-                    backgroundColor: isSelected ? roleColor + '15' : theme.colors.bg,
-                    borderWidth: isSelected ? 1.5 : 0,
-                    borderColor: roleColor,
+                    paddingHorizontal: 12,
+                    height: 48,
+                    justifyContent: 'center',
                   }]}
                 >
-                  <Shield size={16} color={roleColor} />
-                  <Text style={[{ color: isSelected ? roleColor : theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: isSelected ? ('600' as const) : ('400' as const), marginLeft: 10 }]}>
-                    {roleLabel}
-                  </Text>
+                  <Key size={18} color={theme.colors.primary} />
                 </TouchableOpacity>
-              );
-            })}
+              </View>
 
-            {locations.length > 0 && !selectedLocation && (
-              <View style={{ marginTop: theme.spacing.md }}>
-                <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, marginBottom: theme.spacing.sm }}>
-                  {t('business.team.assignLocation', { defaultValue: 'Assign to Location' })}
-                </Text>
-                {locations.map((loc: any) => (
+              {/* ── Role Presets ──────────────────────────────────────────── */}
+              <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '600', marginTop: theme.spacing.lg, marginBottom: theme.spacing.sm }}>
+                Role
+              </Text>
+
+              {ROLE_PRESETS.map((preset) => {
+                const isSelected = selectedPreset === preset.id;
+                return (
                   <TouchableOpacity
-                    key={loc.id}
-                    onPress={() => setNewMemberLocationId(loc.id)}
+                    key={preset.id}
+                    onPress={() => handleSelectPreset(preset)}
                     style={{
                       flexDirection: 'row',
                       alignItems: 'center',
                       padding: theme.spacing.md,
                       borderRadius: theme.radii.r12,
                       marginBottom: theme.spacing.xs,
-                      backgroundColor: newMemberLocationId === loc.id ? theme.colors.primary + '15' : theme.colors.bg,
-                      borderWidth: newMemberLocationId === loc.id ? 1.5 : 0,
-                      borderColor: theme.colors.primary,
+                      backgroundColor: isSelected ? theme.colors.primary + '12' : theme.colors.bg,
+                      borderWidth: isSelected ? 1.5 : 1,
+                      borderColor: isSelected ? theme.colors.primary : theme.colors.divider,
                     }}
                   >
-                    <MapPin size={14} color={theme.colors.primary} />
-                    <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, marginLeft: 8 }}>
-                      {loc.name ?? loc.address ?? 'Location'}
-                    </Text>
+                    <View style={{
+                      width: 18,
+                      height: 18,
+                      borderRadius: 9,
+                      borderWidth: 2,
+                      borderColor: isSelected ? theme.colors.primary : theme.colors.muted,
+                      backgroundColor: isSelected ? theme.colors.primary : 'transparent',
+                      marginRight: 10,
+                      justifyContent: 'center',
+                      alignItems: 'center',
+                    }}>
+                      {isSelected && (
+                        <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: '#fff' }} />
+                      )}
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ color: isSelected ? theme.colors.primary : theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: isSelected ? '600' : '400' }}>
+                        {preset.label}
+                      </Text>
+                      <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, marginTop: 1 }}>
+                        {preset.description}
+                      </Text>
+                    </View>
                   </TouchableOpacity>
-                ))}
-              </View>
-            )}
+                );
+              })}
 
-            <TouchableOpacity
-              onPress={() => addMemberMutation.mutate()}
-              disabled={addMemberMutation.isPending || !canAddMember}
-              style={[{
-                backgroundColor: !canAddMember ? theme.colors.muted : theme.colors.primary,
-                borderRadius: theme.radii.r12,
-                padding: theme.spacing.lg,
-                marginTop: theme.spacing.lg,
-              }]}
-            >
-              {addMemberMutation.isPending ? (
-                <ActivityIndicator color="#fff" />
-              ) : (
-                <Text style={[{ color: '#fff', ...theme.typography.button, textAlign: 'center' as const }]}>
-                  {t('common.add')}
+              {/* ── Advanced permissions (expandable) ─────────────────────── */}
+              <TouchableOpacity
+                onPress={() => setShowAdvancedPermissions((prev) => !prev)}
+                style={{
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  marginTop: theme.spacing.md,
+                  paddingVertical: theme.spacing.sm,
+                }}
+              >
+                <Text style={{ color: theme.colors.primary, ...theme.typography.bodySm, fontWeight: '600', flex: 1 }}>
+                  Advanced Permissions
                 </Text>
+                {showAdvancedPermissions
+                  ? <ChevronUp size={16} color={theme.colors.primary} />
+                  : <ChevronDown size={16} color={theme.colors.primary} />
+                }
+              </TouchableOpacity>
+
+              {showAdvancedPermissions && (
+                <View style={{
+                  backgroundColor: theme.colors.bg,
+                  borderRadius: theme.radii.r12,
+                  padding: theme.spacing.md,
+                  marginTop: theme.spacing.xs,
+                }}>
+                  {permissionLabels.map(({ key, label }) => (
+                    <View
+                      key={key}
+                      style={{
+                        flexDirection: 'row',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        paddingVertical: theme.spacing.sm,
+                        borderBottomWidth: 1,
+                        borderBottomColor: theme.colors.divider,
+                      }}
+                    >
+                      <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, flex: 1 }}>
+                        {label}
+                      </Text>
+                      <Switch
+                        value={permissionsState[key]}
+                        onValueChange={(val) => {
+                          setPermissionsState((prev) => ({ ...prev, [key]: val }));
+                          // Deselect preset since user customised
+                          setSelectedPreset(null);
+                        }}
+                        trackColor={{ false: theme.colors.divider, true: theme.colors.primary + '50' }}
+                        thumbColor={permissionsState[key] ? theme.colors.primary : theme.colors.muted}
+                      />
+                    </View>
+                  ))}
+                </View>
               )}
-            </TouchableOpacity>
-          </View>
+
+              {/* Location assignment */}
+              {locations.length > 0 && !selectedLocation && (
+                <View style={{ marginTop: theme.spacing.md }}>
+                  <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '600', marginBottom: theme.spacing.sm }}>
+                    {t('business.team.assignLocation', { defaultValue: 'Assign to Location' })}
+                  </Text>
+                  {locations.map((loc: any) => (
+                    <TouchableOpacity
+                      key={loc.id}
+                      onPress={() => setNewMemberLocationId(newMemberLocationId === loc.id ? null : loc.id)}
+                      style={{
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        padding: theme.spacing.md,
+                        borderRadius: theme.radii.r12,
+                        marginBottom: theme.spacing.xs,
+                        backgroundColor: newMemberLocationId === loc.id ? theme.colors.primary + '15' : theme.colors.bg,
+                        borderWidth: newMemberLocationId === loc.id ? 1.5 : 1,
+                        borderColor: newMemberLocationId === loc.id ? theme.colors.primary : theme.colors.divider,
+                      }}
+                    >
+                      <MapPin size={14} color={theme.colors.primary} />
+                      <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, marginLeft: 8 }}>
+                        {loc.name ?? loc.address ?? 'Location'}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              )}
+
+              {/* Submit */}
+              <TouchableOpacity
+                onPress={() => addMemberMutation.mutate()}
+                disabled={addMemberMutation.isPending || !canAddMember}
+                style={[{
+                  backgroundColor: !canAddMember ? theme.colors.muted : theme.colors.primary,
+                  borderRadius: theme.radii.r12,
+                  padding: theme.spacing.lg,
+                  marginTop: theme.spacing.lg,
+                }]}
+              >
+                {addMemberMutation.isPending ? (
+                  <ActivityIndicator color="#fff" />
+                ) : (
+                  <Text style={[{ color: '#fff', ...theme.typography.button, textAlign: 'center' as const }]}>
+                    {t('common.add')}
+                  </Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </ScrollView>
         </TouchableOpacity>
       </Modal>
 
-      {/* Permissions Modal */}
+      {/* ── Permissions Modal ─────────────────────────────────────────────── */}
       <Modal visible={showPermissionsModal !== null} transparent animationType="fade" onRequestClose={() => setShowPermissionsModal(null)}>
         <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setShowPermissionsModal(null)}>
           <View
@@ -966,7 +1352,7 @@ export default function TeamScreen() {
         </TouchableOpacity>
       </Modal>
 
-      {/* Add Location Modal */}
+      {/* ── Add Location Modal ────────────────────────────────────────────── */}
       <Modal visible={showAddLocationModal} transparent animationType="fade" onRequestClose={() => setShowAddLocationModal(false)}>
         <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setShowAddLocationModal(false)}>
           <View

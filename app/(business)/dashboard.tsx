@@ -1,15 +1,17 @@
 import React, { useState, useCallback } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Modal, Dimensions, ActivityIndicator, Image, Platform, Animated as RNAnimated, StatusBar } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Modal, Dimensions, ActivityIndicator, Image, Animated as RNAnimated } from 'react-native';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import { TrendingUp, ShoppingBag, Banknote, Clock, Leaf, Star, X, Package, AlertCircle, Store, Settings, Bell } from 'lucide-react-native';
 import { useQuery } from '@tanstack/react-query';
 import { useRouter } from 'expo-router';
 import { useTheme } from '@/src/theme/ThemeProvider';
+import { StatusBar } from 'expo-status-bar';
 import { useAuthStore } from '@/src/stores/authStore';
 import { fetchStats, fetchTodayOrders, fetchAnalytics } from '@/src/services/business';
 import { apiClient } from '@/src/lib/api';
 import { LineChart } from '@/src/components/LineChart';
+import { FeatureFlags } from '@/src/lib/featureFlags';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
 
@@ -136,6 +138,7 @@ export default function BusinessDashboard() {
   const theme = useTheme();
   const router = useRouter();
   const { user } = useAuthStore();
+  const insets = useSafeAreaInsets();
 
   const statsQuery = useQuery({
     queryKey: ['business-stats'],
@@ -212,6 +215,20 @@ export default function BusinessDashboard() {
 
   const [showRatingModal, setShowRatingModal] = useState(false);
 
+  // Easter egg: Logo tap × 5
+  const [logoPressCount, setLogoPressCount] = useState(0);
+  const [lastPressTime, setLastPressTime] = useState(0);
+  const [showEggModal, setShowEggModal] = useState(false);
+  const [eggFact, setEggFact] = useState('');
+
+  const FOOD_FACTS = [
+    'Tunisia wastes ~30% of food produced each year 🌾',
+    'The average Tunisian household throws away 80kg of food annually 🗑️',
+    'Food waste accounts for 10% of global greenhouse gases 🌍',
+    'Saving one meal prevents ~2.5kg of CO₂ emissions ♻️',
+    'Barakeat has helped rescue thousands of meals this year 🧺',
+  ];
+
   const reviews = reviewsQuery.data ?? { service: 0, quantite: 0, qualite: 0, variete: 0 };
 
   const handleRatingPress = useCallback(() => {
@@ -245,11 +262,13 @@ export default function BusinessDashboard() {
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]} edges={[]}>
+      {/* Cover photo is always dark/coloured — keep status bar icons white */}
+      <StatusBar style="light" />
       <ScrollView showsVerticalScrollIndicator={false}>
         {/* Floating header - overlays the cover image */}
         <View style={{
           position: 'absolute',
-          top: Platform.OS === 'ios' ? 54 : 36,
+          top: insets.top + 8,
           left: 16,
           right: 16,
           zIndex: 10,
@@ -258,22 +277,37 @@ export default function BusinessDashboard() {
           alignItems: 'center',
         }}>
           {/* Barakeat logo pill */}
-          <View style={{
-            backgroundColor: theme.colors.surface,
-            borderRadius: 20,
-            paddingHorizontal: 14,
-            paddingVertical: 8,
-            flexDirection: 'row',
-            alignItems: 'baseline',
-            ...theme.shadows.shadowMd,
-          }}>
+          <TouchableOpacity
+            activeOpacity={1}
+            style={{
+              backgroundColor: theme.colors.surface,
+              borderRadius: 20,
+              paddingHorizontal: 14,
+              paddingVertical: 8,
+              flexDirection: 'row',
+              alignItems: 'baseline',
+              ...theme.shadows.shadowMd,
+            }}
+            onPress={() => {
+              if (!(FeatureFlags.ENABLE_EASTER_EGGS && FeatureFlags.ENABLE_LOGO_TAP_EASTER_EGG)) return;
+              const now = Date.now();
+              const newCount = now - lastPressTime < 2000 ? logoPressCount + 1 : 1;
+              setLastPressTime(now);
+              setLogoPressCount(newCount);
+              if (newCount >= 5) {
+                setLogoPressCount(0);
+                setEggFact(FOOD_FACTS[Math.floor(Math.random() * FOOD_FACTS.length)]);
+                setShowEggModal(true);
+              }
+            }}
+          >
             <Text style={{ color: theme.colors.primary, fontSize: 16, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
               Barakeat
             </Text>
             <Text style={{ color: '#e3ff5c', fontSize: 16, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
               .
             </Text>
-          </View>
+          </TouchableOpacity>
 
           {/* Settings + Notifications pills */}
           <View style={{
@@ -296,7 +330,7 @@ export default function BusinessDashboard() {
         </View>
 
         {/* Cover photo - extends to absolute top of screen */}
-        <View style={{ position: 'relative', height: 200 + (StatusBar.currentHeight ?? (Platform.OS === 'ios' ? 54 : 36)), backgroundColor: theme.colors.primary + '20', overflow: 'visible', marginTop: 0 }}>
+        <View style={{ position: 'relative', height: 200 + insets.top, backgroundColor: theme.colors.primary + '20', overflow: 'visible', marginTop: 0 }}>
           {profileQuery.data?.cover_image_url ? (
             <Image source={{ uri: profileQuery.data.cover_image_url }} style={{ width: '100%', height: '100%' }} resizeMode="cover" />
           ) : (

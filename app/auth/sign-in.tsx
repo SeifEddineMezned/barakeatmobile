@@ -10,6 +10,7 @@ import { useSplashStore } from '@/src/stores/splashStore';
 import { login } from '@/src/services/auth';
 import { getErrorMessage } from '@/src/lib/api';
 import type { UserRole, User as UserType } from '@/src/types';
+import { StatusBar } from 'expo-status-bar';
 
 export default function SignInScreen() {
   const { t } = useTranslation();
@@ -73,6 +74,7 @@ export default function SignInScreen() {
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: '#114b3c' }]}>
+      <StatusBar style="light" />
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={styles.keyboardView}

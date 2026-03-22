@@ -25,6 +25,7 @@ import { MapFallback } from '@/src/components/MapFallback';
 import { fetchRestaurants } from '@/src/services/restaurants';
 import { normalizeRestaurantToBasket } from '@/src/utils/normalizeRestaurant';
 import type { Basket } from '@/src/types';
+import { FeatureFlags } from '@/src/lib/featureFlags';
 
 let MapView: any = null;
 let Marker: any = null;
@@ -75,8 +76,6 @@ type BasketWithDist = Basket & { dist: number };
 /* ─── Inline radius slider (zero new dependencies) ───────────────────────── */
 const SLIDER_MIN = 1;
 const SLIDER_MAX = 20;
-// Stable module-level offset — never re-created inside a render
-const _THUMB_OFFSET = new Animated.Value(-11);
 
 function RadiusSlider({
   value,
@@ -91,8 +90,12 @@ function RadiusSlider({
 }) {
   const trackWidth = useRef(0);
   const thumbX = useRef(new Animated.Value(0)).current;
-  const isDragging = useRef(false); // guard: skip onLayout reset while user is dragging
-  const lastKm = useRef(value);    // only emit onChange when km actually changes
+  // Per-instance offset (-11 = half of thumb width 22, to center it)
+  const thumbOffset = useRef(new Animated.Value(-11)).current;
+  const isDragging = useRef(false);
+  const lastKm = useRef(value);
+  // Capture the thumb's pixel position when drag begins, so we can use gestureState.dx
+  const startThumbX = useRef(0);
 
   const valueToX = (km: number, width: number) =>
     ((km - SLIDER_MIN) / (SLIDER_MAX - SLIDER_MIN)) * width;
@@ -102,25 +105,35 @@ function RadiusSlider({
     return Math.max(SLIDER_MIN, Math.min(SLIDER_MAX, Math.round(raw)));
   };
 
+  // Sync thumb when value prop changes externally (and we're not dragging)
+  useEffect(() => {
+    if (!isDragging.current && trackWidth.current > 0) {
+      thumbX.setValue(valueToX(value, trackWidth.current));
+    }
+  }, [value]);
+
   const sliderPan = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: () => true,
       onMoveShouldSetPanResponder: () => true,
       onPanResponderGrant: (e) => {
         isDragging.current = true;
+        // Snap to tap position on initial touch (track-style slider behaviour)
         const x = Math.max(0, Math.min(trackWidth.current, e.nativeEvent.locationX));
+        startThumbX.current = x;
         thumbX.setValue(x);
         const km = xToKm(x, trackWidth.current);
         if (km !== lastKm.current) { lastKm.current = km; onChange(km); }
       },
-      onPanResponderMove: (e) => {
-        const x = Math.max(0, Math.min(trackWidth.current, e.nativeEvent.locationX));
+      // Use gestureState.dx (accumulated delta) instead of locationX — prevents jitter
+      onPanResponderMove: (_, gestureState) => {
+        const x = Math.max(0, Math.min(trackWidth.current, startThumbX.current + gestureState.dx));
         thumbX.setValue(x);
         const km = xToKm(x, trackWidth.current);
         if (km !== lastKm.current) { lastKm.current = km; onChange(km); }
       },
-      onPanResponderRelease: (e) => {
-        const x = Math.max(0, Math.min(trackWidth.current, e.nativeEvent.locationX));
+      onPanResponderRelease: (_, gestureState) => {
+        const x = Math.max(0, Math.min(trackWidth.current, startThumbX.current + gestureState.dx));
         const km = xToKm(x, trackWidth.current);
         thumbX.setValue(valueToX(km, trackWidth.current));
         if (km !== lastKm.current) { lastKm.current = km; onChange(km); }
@@ -135,7 +148,6 @@ function RadiusSlider({
       onLayout={(e) => {
         const w = e.nativeEvent.layout.width;
         trackWidth.current = w;
-        // Only sync thumb from prop when not actively dragging
         if (!isDragging.current) {
           thumbX.setValue(valueToX(value, w));
         }
@@ -163,7 +175,7 @@ function RadiusSlider({
             borderRadius: 3,
           }}
         />
-        {/* Thumb — uses stable module-level offset to avoid re-creation on render */}
+        {/* Thumb — per-instance offset so it doesn't share state across renders */}
         <Animated.View
           style={{
             position: 'absolute',
@@ -179,7 +191,7 @@ function RadiusSlider({
             shadowRadius: 4,
             shadowOffset: { width: 0, height: 2 },
             elevation: 5,
-            transform: [{ translateX: Animated.add(thumbX, _THUMB_OFFSET) }],
+            transform: [{ translateX: Animated.add(thumbX, thumbOffset) }],
           }}
         />
       </View>
@@ -207,6 +219,10 @@ export default function DiscoverScreen() {
   const [userLocation, setUserLocation] = useState<{ latitude: number; longitude: number } | null>(null);
   const [locationStatus, setLocationStatus] = useState<'loading' | 'granted' | 'denied'>('loading');
   const mapRef = useRef<any>(null);
+
+  // Easter egg: Map constellation
+  const [showConstellationBanner, setShowConstellationBanner] = useState(false);
+  const constellationShown = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -368,6 +384,19 @@ export default function DiscoverScreen() {
           onPress={handleMapPress}
           showsUserLocation
           showsMyLocationButton={false}
+          onRegionChange={(region: any) => {
+            if (
+              FeatureFlags.ENABLE_EASTER_EGGS &&
+              FeatureFlags.ENABLE_MAP_EASTER_EGG &&
+              region.latitudeDelta > 0.3 &&
+              nearbyBaskets.length >= 2 &&
+              !constellationShown.current
+            ) {
+              constellationShown.current = true;
+              setShowConstellationBanner(true);
+              setTimeout(() => setShowConstellationBanner(false), 4000);
+            }
+          }}
         >
           {/* 🧺 Restaurant / business basket markers */}
           {nearbyBaskets.map((basket) =>
@@ -596,6 +625,32 @@ export default function DiscoverScreen() {
           <MapPin size={14} color="#fff" />
           <Text style={{ color: '#fff', fontSize: 12, marginLeft: 6, flex: 1, fontFamily: 'Poppins_500Medium' }}>
             Location access denied — results based on Tunis center
+          </Text>
+        </View>
+      )}
+
+      {/* Easter egg: Map constellation banner */}
+      {showConstellationBanner && (
+        <View style={{
+          position: 'absolute',
+          bottom: COLLAPSED_HEIGHT + 20,
+          left: 16,
+          right: 16,
+          zIndex: 30,
+          backgroundColor: '#114b3c',
+          borderRadius: 16,
+          paddingVertical: 14,
+          paddingHorizontal: 18,
+          flexDirection: 'row',
+          alignItems: 'center',
+          shadowColor: '#000',
+          shadowOpacity: 0.25,
+          shadowRadius: 8,
+          elevation: 8,
+        }}>
+          <Text style={{ fontSize: 18, marginRight: 10 }}>🌟</Text>
+          <Text style={{ color: '#fff', fontSize: 13, fontWeight: '600', fontFamily: 'Poppins_600SemiBold', flex: 1 }}>
+            You found the Barakeat Constellation! +50 XP
           </Text>
         </View>
       )}

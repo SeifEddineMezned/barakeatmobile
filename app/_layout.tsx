@@ -15,6 +15,7 @@ import {
 } from '@expo-google-fonts/poppins';
 import { useAuthStore } from "@/src/stores/authStore";
 import { SplashAnimation } from "@/src/components/SplashAnimation";
+import { ErrorBoundary } from "@/src/components/ErrorBoundary";
 import { useFavoritesStore } from "@/src/stores/favoritesStore";
 import { useSplashStore } from "@/src/stores/splashStore";
 
@@ -129,6 +130,7 @@ export default function RootLayout() {
     <QueryClientProvider client={queryClient}>
       <ThemeProvider>
         <GestureHandlerRootView style={styles.container}>
+          <ErrorBoundary>
           <RootLayoutNav />
           {showSplash && (
             <SplashAnimation onFinish={() => {
@@ -231,6 +233,7 @@ export default function RootLayout() {
               </View>
             </Modal>
           )}
+          </ErrorBoundary>
         </GestureHandlerRootView>
       </ThemeProvider>
     </QueryClientProvider>

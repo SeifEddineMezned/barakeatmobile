@@ -5,7 +5,7 @@ import { useTranslation } from 'react-i18next';
 import { useRouter } from 'expo-router';
 import {
   ArrowLeft, Globe, Bell as BellIcon, Shield, HelpCircle, Info, LogOut,
-  ChevronRight, Lock, FileText, Headphones, X,
+  ChevronRight, Lock, FileText, Headphones, X, Trash2,
 } from 'lucide-react-native';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { useAuthStore } from '@/src/stores/authStore';
@@ -107,6 +107,23 @@ export default function SettingsScreen() {
       setPwLoading(false);
     }
   };
+
+  const deleteAccount = useCallback(() => {
+    Alert.alert(
+      'Delete Account',
+      'Are you sure you want to permanently delete your account? This action cannot be undone.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: () => {
+            Alert.alert('Feature coming soon', 'Account deletion will be available in a future update.');
+          },
+        },
+      ]
+    );
+  }, []);
 
   const handleSignOut = useCallback(async () => {
     await logout();
@@ -287,10 +304,19 @@ export default function SettingsScreen() {
         {/* Sign Out */}
         <TouchableOpacity
           onPress={() => void handleSignOut()}
-          style={[{ backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, ...theme.shadows.shadowSm, padding: theme.spacing.lg, flexDirection: 'row', justifyContent: 'center', alignItems: 'center' }]}
+          style={[{ backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, ...theme.shadows.shadowSm, padding: theme.spacing.lg, flexDirection: 'row', justifyContent: 'center', alignItems: 'center', marginBottom: theme.spacing.lg }]}
         >
           <LogOut size={20} color={theme.colors.error} />
           <Text style={[{ color: theme.colors.error, ...theme.typography.body, marginLeft: 12 }]}>{t('profile.signOut')}</Text>
+        </TouchableOpacity>
+
+        {/* Delete Account */}
+        <TouchableOpacity
+          onPress={deleteAccount}
+          style={[{ backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, ...theme.shadows.shadowSm, padding: theme.spacing.lg, flexDirection: 'row', justifyContent: 'center', alignItems: 'center' }]}
+        >
+          <Trash2 size={20} color="#e53e3e" />
+          <Text style={[{ color: '#e53e3e', ...theme.typography.body, marginLeft: 12 }]}>Delete Account</Text>
         </TouchableOpacity>
 
         <View style={{ height: 80 }} />
