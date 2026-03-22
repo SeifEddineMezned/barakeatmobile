@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useCallback } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Linking, Alert } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Linking, Alert, Modal, TextInput, KeyboardAvoidingView, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import { Phone, CheckCircle, XCircle, Clock, Package, QrCode, ClipboardList } from 'lucide-react-native';
@@ -28,43 +28,41 @@ export default function IncomingOrdersScreen() {
   });
 
   // Normalize API orders to match the existing Order type shape
-  const orders = (todayQuery.data ?? []).length > 0
-    ? (todayQuery.data ?? []).map((o: TodayReservationFromAPI) => {
-        const pickupStart = (o.pickup_start_time as string)?.substring(0, 5) ?? '';
-        const pickupEnd = (o.pickup_end_time as string)?.substring(0, 5) ?? '';
-        return {
-          id: String(o.id),
-          basketId: String(o.restaurant_id ?? ''),
-          basket: {
-            id: String(o.restaurant_id ?? ''),
-            merchantId: String(o.restaurant_id ?? ''),
-            merchantName: (o as any).restaurant_name ?? '',
-            name: (o as any).restaurant_name ?? '',
-            category: '',
-            originalPrice: Number(o.original_price ?? 0),
-            discountedPrice: Number(o.price_tier ?? 0),
-            discountPercentage: 50,
-            pickupWindow: { start: pickupStart, end: pickupEnd },
-            quantityLeft: 0,
-            quantityTotal: 0,
-            distance: 0,
-            address: '',
-            latitude: 0,
-            longitude: 0,
-            exampleItems: [],
-            isActive: true,
-          },
-          quantity: o.quantity ?? 1,
-          total: Number(o.price_tier ?? 0) * (o.quantity ?? 1),
-          pickupWindow: { start: pickupStart, end: pickupEnd },
-          pickupCode: o.pickup_code ?? '',
-          status: (o.status ?? 'confirmed') as any,
-          createdAt: o.created_at ?? new Date().toISOString(),
-          customerName: o.buyer_name ?? 'Client',
-          customerPhone: o.buyer_phone ?? undefined,
-        };
-      })
-    : store.orders;
+  const orders = (todayQuery.data ?? []).map((o: TodayReservationFromAPI) => {
+    const pickupStart = (o.pickup_start_time as string)?.substring(0, 5) ?? '';
+    const pickupEnd = (o.pickup_end_time as string)?.substring(0, 5) ?? '';
+    return {
+      id: String(o.id),
+      basketId: String(o.restaurant_id ?? ''),
+      basket: {
+        id: String(o.restaurant_id ?? ''),
+        merchantId: String(o.restaurant_id ?? ''),
+        merchantName: (o as any).restaurant_name ?? '',
+        name: (o as any).restaurant_name ?? '',
+        category: '',
+        originalPrice: Number(o.original_price ?? 0),
+        discountedPrice: Number(o.price_tier ?? 0),
+        discountPercentage: 50,
+        pickupWindow: { start: pickupStart, end: pickupEnd },
+        quantityLeft: 0,
+        quantityTotal: 0,
+        distance: 0,
+        address: '',
+        latitude: 0,
+        longitude: 0,
+        exampleItems: [],
+        isActive: true,
+      },
+      quantity: o.quantity ?? 1,
+      total: Number(o.price_tier ?? 0) * (o.quantity ?? 1),
+      pickupWindow: { start: pickupStart, end: pickupEnd },
+      pickupCode: o.pickup_code ?? '',
+      status: (o.status ?? 'confirmed') as any,
+      createdAt: o.created_at ?? new Date().toISOString(),
+      customerName: o.buyer_name ?? 'Client',
+      customerPhone: o.buyer_phone ?? undefined,
+    };
+  });
 
   const updateOrderStatus = store.updateOrderStatus;
 
@@ -79,6 +77,10 @@ export default function IncomingOrdersScreen() {
   );
 
   const displayedOrders = activeTab === 'incoming' ? incomingOrders : completedOrders;
+
+  const [verifyModalOrderId, setVerifyModalOrderId] = useState<string | null>(null);
+  const [typedCode, setTypedCode] = useState('');
+  const [verifyError, setVerifyError] = useState('');
 
   const handleMarkReady = useCallback((orderId: string) => {
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
@@ -98,14 +100,31 @@ export default function IncomingOrdersScreen() {
   });
 
   const handleMarkCollected = useCallback((orderId: string) => {
-    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    const order = orders.find((o) => o.id === orderId);
-    if (order?.pickupCode) {
-      collectMutation.mutate({ orderId, code: order.pickupCode });
+    // Open verify modal — do NOT auto-pass the code
+    setTypedCode('');
+    setVerifyError('');
+    setVerifyModalOrderId(orderId);
+  }, []);
+
+  const handleVerifyCode = useCallback(() => {
+    if (!verifyModalOrderId) return;
+    const order = orders.find((o) => o.id === verifyModalOrderId);
+    if (!order) return;
+    const expected = (order.pickupCode ?? '').trim().toUpperCase();
+    const entered = typedCode.trim().toUpperCase();
+    if (!entered) {
+      setVerifyError('Please enter the pickup code.');
+      return;
     }
-    // Update local store to 'picked_up' to match what the DB will return
-    updateOrderStatus(orderId, 'picked_up');
-  }, [updateOrderStatus, orders, collectMutation]);
+    if (entered !== expected) {
+      setVerifyError('Incorrect code. Please try again.');
+      return;
+    }
+    // Code matches — confirm via backend
+    collectMutation.mutate({ orderId: verifyModalOrderId, code: order.pickupCode });
+    updateOrderStatus(verifyModalOrderId, 'collected');
+    setVerifyModalOrderId(null);
+  }, [verifyModalOrderId, typedCode, orders, collectMutation, updateOrderStatus]);
 
   const handleCancel = useCallback((orderId: string) => {
     Alert.alert(
@@ -276,14 +295,7 @@ export default function IncomingOrdersScreen() {
                   </View>
                 </View>
 
-                <View style={[styles.codeSection, { marginTop: theme.spacing.md, backgroundColor: theme.colors.bg, borderRadius: theme.radii.r12, padding: theme.spacing.md }]}>
-                  <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption }]}>
-                    {t('business.orders.pickupCode')}
-                  </Text>
-                  <Text style={[{ color: theme.colors.primary, ...theme.typography.h2, letterSpacing: 3, fontWeight: '700' as const }]}>
-                    {order.pickupCode}
-                  </Text>
-                </View>
+                {/* Hidden section — pickup code NOT shown passively */}
 
                 <View style={[styles.orderDetails, { marginTop: theme.spacing.md }]}>
                   <View style={styles.detailRow}>
@@ -372,6 +384,106 @@ export default function IncomingOrdersScreen() {
       >
         <QrCode size={24} color="#fff" />
       </TouchableOpacity>
+
+      {/* Code verification modal */}
+      <Modal
+        visible={verifyModalOrderId !== null}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setVerifyModalOrderId(null)}
+      >
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={{ flex: 1 }}
+        >
+          <TouchableOpacity
+            style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' }}
+            activeOpacity={1}
+            onPress={() => setVerifyModalOrderId(null)}
+          >
+            <View
+              style={{
+                backgroundColor: theme.colors.surface,
+                borderTopLeftRadius: 24,
+                borderTopRightRadius: 24,
+                padding: 24,
+                paddingBottom: 40,
+                ...theme.shadows.shadowLg,
+              }}
+              onStartShouldSetResponder={() => true}
+            >
+              {/* Handle */}
+              <View style={{ alignItems: 'center', marginBottom: 16 }}>
+                <View style={{ width: 36, height: 4, borderRadius: 2, backgroundColor: theme.colors.divider }} />
+              </View>
+
+              <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h2, marginBottom: 8 }}>
+                {t('business.orders.verifyPickup', { defaultValue: 'Verify Pickup' })}
+              </Text>
+              <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm, marginBottom: 20, lineHeight: 20 }}>
+                {t('business.orders.verifyDesc', { defaultValue: 'Ask the customer for their pickup code and enter it below, or use the QR scanner.' })}
+              </Text>
+
+              <TextInput
+                style={{
+                  height: 56,
+                  backgroundColor: theme.colors.bg,
+                  borderRadius: theme.radii.r12,
+                  paddingHorizontal: 18,
+                  color: theme.colors.textPrimary,
+                  ...theme.typography.h3,
+                  letterSpacing: 3,
+                  textAlign: 'center',
+                  borderWidth: verifyError ? 1 : 0,
+                  borderColor: verifyError ? theme.colors.error : 'transparent',
+                  marginBottom: 8,
+                }}
+                value={typedCode}
+                onChangeText={(v) => { setTypedCode(v); setVerifyError(''); }}
+                placeholder="ABC123"
+                placeholderTextColor={theme.colors.muted}
+                autoCapitalize="characters"
+                autoCorrect={false}
+              />
+              {verifyError ? (
+                <Text style={{ color: theme.colors.error, ...theme.typography.caption, textAlign: 'center', marginBottom: 12 }}>
+                  {verifyError}
+                </Text>
+              ) : <View style={{ height: 12 }} />}
+
+              <TouchableOpacity
+                onPress={handleVerifyCode}
+                style={{
+                  backgroundColor: theme.colors.primary,
+                  borderRadius: theme.radii.r12,
+                  paddingVertical: 16,
+                  alignItems: 'center',
+                  marginBottom: 12,
+                }}
+              >
+                <Text style={{ color: '#fff', ...theme.typography.button }}>
+                  {t('business.orders.confirmCode', { defaultValue: 'Confirm Code' })}
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                onPress={() => { setVerifyModalOrderId(null); router.push('/business/scan-qr' as never); }}
+                style={{
+                  borderRadius: theme.radii.r12,
+                  paddingVertical: 14,
+                  alignItems: 'center',
+                  borderWidth: 1,
+                  borderColor: theme.colors.primary,
+                }}
+              >
+                <Text style={{ color: theme.colors.primary, ...theme.typography.button }}>
+                  {t('business.orders.scanQR', { defaultValue: 'Scan QR Code Instead' })}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </TouchableOpacity>
+        </KeyboardAvoidingView>
+      </Modal>
     </SafeAreaView>
   );
 }

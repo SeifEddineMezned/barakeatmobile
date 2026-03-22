@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Animated, Image, ActivityIndicator, Linking } from 'react-native';
 import { useTranslation } from 'react-i18next';
-import { MapPin, Clock, Navigation, X as XIcon, QrCode, Star } from 'lucide-react-native';
+import { MapPin, Clock, Navigation, X as XIcon, QrCode, Star, ChevronDown, ChevronUp } from 'lucide-react-native';
 import { useRouter } from 'expo-router';
 import * as Haptics from 'expo-haptics';
 import { useTheme } from '@/src/theme/ThemeProvider';
@@ -22,6 +22,7 @@ export function ReservationCard({ reservation, onCancel, onHide: _onHide }: Rese
   const [qrExpanded, setQrExpanded] = useState(false);
   const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
   const [qrLoading, setQrLoading] = useState(false);
+  const [isExpanded, setIsExpanded] = useState(false);
 
   const basket = reservation.basket;
   const merchantName = basket?.merchantName ?? (basket as any)?.merchant_name ?? (basket as any)?.businessName ?? 'Unknown';
@@ -41,6 +42,7 @@ export function ReservationCard({ reservation, onCancel, onHide: _onHide }: Rese
       Animated.timing(scaleAnim, { toValue: 0.98, duration: 100, useNativeDriver: true }),
       Animated.timing(scaleAnim, { toValue: 1, duration: 100, useNativeDriver: true }),
     ]).start();
+    setIsExpanded((prev) => !prev);
   };
 
   const handleToggleQR = async () => {
@@ -112,29 +114,35 @@ export function ReservationCard({ reservation, onCancel, onHide: _onHide }: Rese
         {
           backgroundColor: theme.colors.surface,
           borderRadius: theme.radii.r16,
-          padding: theme.spacing.lg,
-          marginBottom: theme.spacing.md,
-          ...theme.shadows.shadowMd,
+          paddingHorizontal: theme.spacing.lg,
+          paddingVertical: theme.spacing.md,
+          marginBottom: theme.spacing.sm,
+          ...theme.shadows.shadowSm,
           transform: [{ scale: scaleAnim }],
         },
       ]}
     >
-      <TouchableOpacity onPress={handlePress} activeOpacity={0.9}>
-        <View style={styles.header}>
-          <View style={styles.headerLeft}>
-            <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3 }]}>
+      {/* Collapsed header — always visible */}
+      <TouchableOpacity onPress={handlePress} activeOpacity={0.85}>
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+          <View style={{ flex: 1 }}>
+            <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.body, fontWeight: '600' as const }]} numberOfLines={1}>
               {merchantName}
             </Text>
+            {basketName ? (
+              <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, marginTop: 2 }]} numberOfLines={1}>
+                {basketName} × {quantity}{total > 0 ? ` · ${total} TND` : ''}
+              </Text>
+            ) : null}
+          </View>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
             <View
               style={[
-                styles.statusBadge,
                 {
                   backgroundColor: getStatusColor() + '20',
                   borderRadius: theme.radii.r8,
-                  paddingHorizontal: theme.spacing.md,
-                  paddingVertical: theme.spacing.xs,
-                  marginTop: theme.spacing.sm,
-                  alignSelf: 'flex-start',
+                  paddingHorizontal: theme.spacing.sm,
+                  paddingVertical: 3,
                 },
               ]}
             >
@@ -142,165 +150,170 @@ export function ReservationCard({ reservation, onCancel, onHide: _onHide }: Rese
                 {getStatusLabel()}
               </Text>
             </View>
-          </View>
-          {isUpcoming && onCancel && (
-            <TouchableOpacity
-              onPress={() => onCancel(reservation.id)}
-              style={[{ padding: 4 }]}
-            >
-              <XIcon size={18} color={theme.colors.error} />
-            </TouchableOpacity>
-          )}
-        </View>
-
-        <View style={[styles.divider, { marginVertical: theme.spacing.md, backgroundColor: theme.colors.divider }]} />
-
-        <View style={styles.details}>
-          {pickupWindow && (
-            <View style={[styles.row, { marginBottom: theme.spacing.md }]}>
-              <Clock size={16} color={theme.colors.textSecondary} />
-              <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.bodySm, marginLeft: theme.spacing.sm }]}>
-                {pickupWindow.start} - {pickupWindow.end}
-              </Text>
-            </View>
-          )}
-
-          {address ? (
-            <View style={[styles.row, { marginBottom: theme.spacing.md }]}>
-              <MapPin size={16} color={theme.colors.textSecondary} />
-              <Text
-                style={[{ color: theme.colors.textSecondary, ...theme.typography.bodySm, marginLeft: theme.spacing.sm, flex: 1 }]}
-                numberOfLines={1}
-              >
-                {address}
-              </Text>
-            </View>
-          ) : null}
-
-          {pickupCode ? (
-            <View
-              style={[
-                styles.pickupCodeContainer,
-                {
-                  backgroundColor: theme.colors.primaryLight,
-                  borderRadius: theme.radii.r12,
-                  padding: theme.spacing.lg,
-                  marginTop: theme.spacing.md,
-                },
-              ]}
-            >
-              <View style={styles.pickupCodeRow}>
-                <View style={{ flex: 1 }}>
-                  <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, marginBottom: theme.spacing.xs }]}>
-                    {t('orders.pickupCode')}
-                  </Text>
-                  <Text
-                    style={[{ color: theme.colors.primary, ...theme.typography.h2, fontWeight: '700' as const, letterSpacing: 2 }]}
-                  >
-                    {pickupCode}
-                  </Text>
-                </View>
-                {isUpcoming && (
-                  <TouchableOpacity
-                    onPress={handleToggleQR}
-                    style={[
-                      styles.qrButton,
-                      {
-                        backgroundColor: theme.colors.primary + '20',
-                        borderRadius: theme.radii.r12,
-                        padding: theme.spacing.md,
-                      },
-                    ]}
-                  >
-                    {qrLoading ? (
-                      <ActivityIndicator size="small" color={theme.colors.primary} />
-                    ) : (
-                      <QrCode size={22} color={theme.colors.primary} />
-                    )}
-                  </TouchableOpacity>
-                )}
-              </View>
-              {qrExpanded && qrDataUrl ? (
-                <View style={[styles.qrContainer, { marginTop: theme.spacing.lg, alignItems: 'center' }]}>
-                  <Image
-                    source={{ uri: qrDataUrl }}
-                    style={{ width: 180, height: 180, borderRadius: theme.radii.r8 }}
-                    resizeMode="contain"
-                  />
-                  <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, marginTop: theme.spacing.sm, textAlign: 'center' }]}>
-                    {t('orders.showQrCode')}
-                  </Text>
-                </View>
-              ) : null}
-            </View>
-          ) : null}
-
-          <View style={[styles.footer, { marginTop: theme.spacing.lg }]}>
-            <View>
-              {basketName ? (
-                <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.bodySm }]}>
-                  {basketName} × {quantity}
-                </Text>
-              ) : null}
-              {total > 0 && (
-                <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h2, fontWeight: '700' as const, marginTop: theme.spacing.xs }]}>
-                  {total} TND
-                </Text>
-              )}
-            </View>
-
-            {latitude !== 0 && longitude !== 0 && (
-              <TouchableOpacity
-                style={[
-                  styles.directionsButton,
-                  {
-                    backgroundColor: theme.colors.primary,
-                    borderRadius: theme.radii.r12,
-                    paddingHorizontal: theme.spacing.lg,
-                    paddingVertical: theme.spacing.md,
-                    flexDirection: 'row',
-                    alignItems: 'center',
-                  },
-                ]}
-                onPress={handleDirections}
-              >
-                <Navigation size={16} color={theme.colors.surface} />
-                <Text
-                  style={[{ color: theme.colors.surface, ...theme.typography.bodySm, fontWeight: '600' as const, marginLeft: theme.spacing.sm }]}
-                >
-                  {t('basket.directions')}
-                </Text>
-              </TouchableOpacity>
-            )}
-
-            {isPast && (
-              <TouchableOpacity
-                style={[
-                  {
-                    backgroundColor: theme.colors.accentWarm,
-                    borderRadius: theme.radii.r12,
-                    paddingHorizontal: theme.spacing.lg,
-                    paddingVertical: theme.spacing.md,
-                    flexDirection: 'row',
-                    alignItems: 'center',
-                  },
-                ]}
-                onPress={() => {
-                  const restaurantId = basket?.merchantId ?? (basket as any)?.restaurant_id ?? '';
-                  router.push(`/review?restaurantId=${restaurantId}&reservationId=${reservation.id}` as never);
-                }}
-              >
-                <Star size={16} color="#fff" fill="#fff" />
-                <Text
-                  style={[{ color: '#fff', ...theme.typography.bodySm, fontWeight: '600' as const, marginLeft: theme.spacing.sm }]}
-                >
-                  {t('orders.leaveReview')}
-                </Text>
-              </TouchableOpacity>
-            )}
+            {isExpanded
+              ? <ChevronUp size={16} color={theme.colors.muted} />
+              : <ChevronDown size={16} color={theme.colors.muted} />}
           </View>
         </View>
       </TouchableOpacity>
+
+      {/* Expanded details */}
+      {isExpanded && (
+        <View>
+          <View style={[styles.divider, { marginVertical: theme.spacing.md, backgroundColor: theme.colors.divider }]} />
+
+          <View style={styles.details}>
+            {pickupWindow && (
+              <View style={[styles.row, { marginBottom: theme.spacing.md }]}>
+                <Clock size={16} color={theme.colors.textSecondary} />
+                <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.bodySm, marginLeft: theme.spacing.sm }]}>
+                  {pickupWindow.start} - {pickupWindow.end}
+                </Text>
+              </View>
+            )}
+
+            {address ? (
+              <View style={[styles.row, { marginBottom: theme.spacing.md }]}>
+                <MapPin size={16} color={theme.colors.textSecondary} />
+                <Text
+                  style={[{ color: theme.colors.textSecondary, ...theme.typography.bodySm, marginLeft: theme.spacing.sm, flex: 1 }]}
+                  numberOfLines={1}
+                >
+                  {address}
+                </Text>
+              </View>
+            ) : null}
+
+            {pickupCode ? (
+              <View
+                style={[
+                  styles.pickupCodeContainer,
+                  {
+                    backgroundColor: theme.colors.primaryLight,
+                    borderRadius: theme.radii.r12,
+                    padding: theme.spacing.lg,
+                    marginTop: theme.spacing.md,
+                  },
+                ]}
+              >
+                <View style={styles.pickupCodeRow}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, marginBottom: theme.spacing.xs }]}>
+                      {t('orders.pickupCode')}
+                    </Text>
+                    <Text
+                      style={[{ color: theme.colors.primary, ...theme.typography.h2, fontWeight: '700' as const, letterSpacing: 2 }]}
+                    >
+                      {pickupCode}
+                    </Text>
+                  </View>
+                  {isUpcoming && (
+                    <TouchableOpacity
+                      onPress={handleToggleQR}
+                      style={[
+                        styles.qrButton,
+                        {
+                          backgroundColor: theme.colors.primary + '20',
+                          borderRadius: theme.radii.r12,
+                          padding: theme.spacing.md,
+                        },
+                      ]}
+                    >
+                      {qrLoading ? (
+                        <ActivityIndicator size="small" color={theme.colors.primary} />
+                      ) : (
+                        <QrCode size={22} color={theme.colors.primary} />
+                      )}
+                    </TouchableOpacity>
+                  )}
+                </View>
+                {qrExpanded && qrDataUrl ? (
+                  <View style={[styles.qrContainer, { marginTop: theme.spacing.lg, alignItems: 'center' }]}>
+                    <Image
+                      source={{ uri: qrDataUrl }}
+                      style={{ width: 180, height: 180, borderRadius: theme.radii.r8 }}
+                      resizeMode="contain"
+                    />
+                    <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, marginTop: theme.spacing.sm, textAlign: 'center' }]}>
+                      {t('orders.showQrCode')}
+                    </Text>
+                  </View>
+                ) : null}
+              </View>
+            ) : null}
+
+            <View style={[styles.footer, { marginTop: theme.spacing.lg }]}>
+              <View>
+                {total > 0 && (
+                  <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, fontWeight: '700' as const }]}>
+                    {total} TND
+                  </Text>
+                )}
+              </View>
+
+              <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
+                {isUpcoming && onCancel && (
+                  <TouchableOpacity
+                    onPress={() => onCancel(reservation.id)}
+                    style={[{ padding: 6, backgroundColor: theme.colors.error + '15', borderRadius: theme.radii.r8 }]}
+                  >
+                    <XIcon size={16} color={theme.colors.error} />
+                  </TouchableOpacity>
+                )}
+                {latitude !== 0 && longitude !== 0 && (
+                  <TouchableOpacity
+                    style={[
+                      styles.directionsButton,
+                      {
+                        backgroundColor: theme.colors.primary,
+                        borderRadius: theme.radii.r12,
+                        paddingHorizontal: theme.spacing.md,
+                        paddingVertical: theme.spacing.sm,
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                      },
+                    ]}
+                    onPress={handleDirections}
+                  >
+                    <Navigation size={14} color={theme.colors.surface} />
+                    <Text
+                      style={[{ color: theme.colors.surface, ...theme.typography.caption, fontWeight: '600' as const, marginLeft: 4 }]}
+                    >
+                      {t('basket.directions')}
+                    </Text>
+                  </TouchableOpacity>
+                )}
+
+                {isPast && (
+                  <TouchableOpacity
+                    style={[
+                      {
+                        backgroundColor: theme.colors.accentWarm,
+                        borderRadius: theme.radii.r12,
+                        paddingHorizontal: theme.spacing.md,
+                        paddingVertical: theme.spacing.sm,
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                      },
+                    ]}
+                    onPress={() => {
+                      const restaurantId = basket?.merchantId ?? (basket as any)?.restaurant_id ?? '';
+                      router.push(`/review?restaurantId=${restaurantId}&reservationId=${reservation.id}` as never);
+                    }}
+                  >
+                    <Star size={14} color="#fff" fill="#fff" />
+                    <Text
+                      style={[{ color: '#fff', ...theme.typography.caption, fontWeight: '600' as const, marginLeft: 4 }]}
+                    >
+                      {t('orders.leaveReview')}
+                    </Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            </View>
+          </View>
+        </View>
+      )}
     </Animated.View>
   );
 }

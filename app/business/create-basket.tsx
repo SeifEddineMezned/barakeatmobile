@@ -352,7 +352,8 @@ export default function CreateBasketScreen() {
             </View>
           )}
 
-          {/* Quantity */}
+          {/* Quantity — only shown when creating, not editing */}
+          {!isEditing && (
           <View style={[styles.field, { marginBottom: theme.spacing.xl }]}>
             <Text style={[styles.label, { color: theme.colors.textPrimary, ...theme.typography.bodySm, marginBottom: theme.spacing.sm }]}>
               {t('business.availability.quantity')} *
@@ -383,8 +384,10 @@ export default function CreateBasketScreen() {
               </TouchableOpacity>
             </View>
           </View>
+          )}
 
-          {/* Pickup Window */}
+          {/* Pickup Window — only shown when creating, not editing */}
+          {!isEditing && (
           <View style={[styles.field, { marginBottom: theme.spacing.xl }]}>
             <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: theme.spacing.sm }}>
               <Clock size={14} color={theme.colors.primary} />
@@ -429,6 +432,7 @@ export default function CreateBasketScreen() {
               </View>
             </View>
           </View>
+          )}
         </ScrollView>
 
         <View style={[styles.footer, { backgroundColor: theme.colors.surface, paddingHorizontal: theme.spacing.xl, paddingVertical: theme.spacing.lg, borderTopWidth: 1, borderTopColor: theme.colors.divider, ...theme.shadows.shadowLg }]}>
