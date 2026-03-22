@@ -47,7 +47,7 @@ export default function HomeScreen() {
   const [heroVisible, setHeroVisible] = useState(true);
   const setHeroVisibleGlobal = useHeroStore((s) => s.setHeroVisible);
 
-  const HERO_HEIGHT = 220;
+  const HERO_HEIGHT = 340;
 
   // Track the raw animated value for drag
   const heroRawRef = useRef(1);

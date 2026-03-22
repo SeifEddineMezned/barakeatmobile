@@ -75,8 +75,10 @@ type BasketWithDist = Basket & { dist: number };
 /* ─── Inline radius slider (zero new dependencies) ───────────────────────── */
 const SLIDER_MIN = 1;
 const SLIDER_MAX = 20;
-// Stable module-level offset — never re-created inside a render
-const _THUMB_OFFSET = new Animated.Value(-11);
+const THUMB_SIZE = 24;
+const THUMB_HALF = THUMB_SIZE / 2;
+// Module-level stable offset constant for the thumb centering
+const _THUMB_HALF_ANIM = new Animated.Value(THUMB_HALF);
 
 function RadiusSlider({
   value,
@@ -89,41 +91,92 @@ function RadiusSlider({
   primaryColor: string;
   trackColor: string;
 }) {
+  // Stable refs — never recreated
   const trackWidth = useRef(0);
+  const trackPageX = useRef(0);       // absolute X of track on screen (stable anchor)
+  const isDragging = useRef(false);   // skip external sync while dragging
+  const lastKm = useRef(value);       // only fire onChange when km integer changes
   const thumbX = useRef(new Animated.Value(0)).current;
-  const isDragging = useRef(false); // guard: skip onLayout reset while user is dragging
-  const lastKm = useRef(value);    // only emit onChange when km actually changes
 
-  const valueToX = (km: number, width: number) =>
+  // Store callbacks in refs so PanResponder (created once) always has fresh versions
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
+
+  // Convert km → pixel position (0 to trackWidth)
+  const kmToXFn = (km: number, width: number) =>
     ((km - SLIDER_MIN) / (SLIDER_MAX - SLIDER_MIN)) * width;
 
-  const xToKm = (x: number, width: number) => {
-    const raw = (x / width) * (SLIDER_MAX - SLIDER_MIN) + SLIDER_MIN;
+  // Convert absolute screen X → clamped integer km
+  const absToKmFn = (absX: number, width: number) => {
+    const localX = absX - trackPageX.current;
+    const clamped = Math.max(0, Math.min(width, localX));
+    const raw = (clamped / width) * (SLIDER_MAX - SLIDER_MIN) + SLIDER_MIN;
     return Math.max(SLIDER_MIN, Math.min(SLIDER_MAX, Math.round(raw)));
   };
+
+  // Stable function refs for pan handler closures
+  const kmToXRef = useRef(kmToXFn);
+  const absToKmRef = useRef(absToKmFn);
+
+  // Internal helper — set thumb to km value
+  const setThumbToKm = (km: number, width: number) => {
+    thumbX.setValue(kmToXRef.current(km, width));
+  };
+
+  // Sync thumb from prop only when not dragging
+  const syncFromProp = (km: number) => {
+    if (!isDragging.current && trackWidth.current > 0) {
+      setThumbToKm(km, trackWidth.current);
+      lastKm.current = km;
+    }
+  };
+
+  // Keep in sync when 'value' prop changes (e.g. external reset)
+  const valueRef = useRef(value);
+  if (valueRef.current !== value) {
+    valueRef.current = value;
+    syncFromProp(value);
+  }
 
   const sliderPan = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: () => true,
       onMoveShouldSetPanResponder: () => true,
-      onPanResponderGrant: (e) => {
+      // Capture start — use absolute coords to avoid locationX origin jumps
+      onPanResponderGrant: (_, gs) => {
         isDragging.current = true;
-        const x = Math.max(0, Math.min(trackWidth.current, e.nativeEvent.locationX));
-        thumbX.setValue(x);
-        const km = xToKm(x, trackWidth.current);
-        if (km !== lastKm.current) { lastKm.current = km; onChange(km); }
+        const w = trackWidth.current;
+        if (w <= 0) return;
+        const km = absToKmRef.current(gs.x0, w);
+        thumbX.setValue(kmToXRef.current(km, w));
+        if (km !== lastKm.current) {
+          lastKm.current = km;
+          onChangeRef.current(km);
+        }
       },
-      onPanResponderMove: (e) => {
-        const x = Math.max(0, Math.min(trackWidth.current, e.nativeEvent.locationX));
-        thumbX.setValue(x);
-        const km = xToKm(x, trackWidth.current);
-        if (km !== lastKm.current) { lastKm.current = km; onChange(km); }
+      // Move — use gestureState.moveX (stable absolute X, no origin hop)
+      onPanResponderMove: (_, gs) => {
+        const w = trackWidth.current;
+        if (w <= 0) return;
+        const km = absToKmRef.current(gs.moveX, w);
+        const px = Math.max(0, Math.min(w, gs.moveX - trackPageX.current));
+        thumbX.setValue(px);
+        if (km !== lastKm.current) {
+          lastKm.current = km;
+          onChangeRef.current(km);
+          void Haptics.selectionAsync();
+        }
       },
-      onPanResponderRelease: (e) => {
-        const x = Math.max(0, Math.min(trackWidth.current, e.nativeEvent.locationX));
-        const km = xToKm(x, trackWidth.current);
-        thumbX.setValue(valueToX(km, trackWidth.current));
-        if (km !== lastKm.current) { lastKm.current = km; onChange(km); }
+      // Release — snap thumb to final integer km
+      onPanResponderRelease: (_, gs) => {
+        const w = trackWidth.current;
+        if (w <= 0) { isDragging.current = false; return; }
+        const km = absToKmRef.current(gs.moveX, w);
+        thumbX.setValue(kmToXRef.current(km, w)); // snap to exact integer position
+        if (km !== lastKm.current) {
+          lastKm.current = km;
+          onChangeRef.current(km);
+        }
         isDragging.current = false;
       },
     }),
@@ -131,13 +184,24 @@ function RadiusSlider({
 
   return (
     <View
-      style={{ paddingVertical: 6, paddingHorizontal: 2 }}
+      style={{ paddingVertical: 8, paddingHorizontal: 2 }}
       onLayout={(e) => {
-        const w = e.nativeEvent.layout.width;
-        trackWidth.current = w;
-        // Only sync thumb from prop when not actively dragging
+        const { width, x } = e.nativeEvent.layout;
+        trackWidth.current = width;
+        // Measure absolute position on screen for stable anchor
+        // We'll capture it via a ref measure below; use layout x as initial fallback
         if (!isDragging.current) {
-          thumbX.setValue(valueToX(value, w));
+          setThumbToKm(lastKm.current, width);
+        }
+      }}
+      ref={(ref: any) => {
+        // Capture absolute pageX so gesture math is screen-relative
+        if (ref && ref.measure) {
+          ref.measure((_x: number, _y: number, _w: number, _h: number, px: number) => {
+            if (px !== undefined && px !== null) {
+              trackPageX.current = px;
+            }
+          });
         }
       }}
       {...sliderPan.panHandlers}
@@ -151,7 +215,7 @@ function RadiusSlider({
           overflow: 'visible',
         }}
       >
-        {/* Fill */}
+        {/* Filled portion */}
         <Animated.View
           style={{
             position: 'absolute',
@@ -163,14 +227,14 @@ function RadiusSlider({
             borderRadius: 3,
           }}
         />
-        {/* Thumb — uses stable module-level offset to avoid re-creation on render */}
+        {/* Thumb */}
         <Animated.View
           style={{
             position: 'absolute',
-            top: -9,
-            width: 22,
-            height: 22,
-            borderRadius: 11,
+            top: -(THUMB_HALF - 2),
+            width: THUMB_SIZE,
+            height: THUMB_SIZE,
+            borderRadius: THUMB_HALF,
             backgroundColor: primaryColor,
             borderWidth: 3,
             borderColor: '#fff',
@@ -179,12 +243,12 @@ function RadiusSlider({
             shadowRadius: 4,
             shadowOffset: { width: 0, height: 2 },
             elevation: 5,
-            transform: [{ translateX: Animated.add(thumbX, _THUMB_OFFSET) }],
+            transform: [{ translateX: Animated.subtract(thumbX, _THUMB_HALF_ANIM) }],
           }}
         />
       </View>
       {/* Min / max labels */}
-      <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 12 }}>
+      <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 14 }}>
         <Text style={{ fontSize: 10, color: trackColor, fontFamily: 'Poppins_500Medium' }}>1 km</Text>
         <Text style={{ fontSize: 10, color: trackColor, fontFamily: 'Poppins_500Medium' }}>20 km</Text>
       </View>
@@ -461,13 +525,13 @@ export default function DiscoverScreen() {
             </Marker>
           )}
 
-          {/* Radius circle — red, clearly visible */}
+          {/* Radius circle — clean teal, subtle but visible */}
           {Circle && (
             <Circle
               center={center}
               radius={radius * 1000}
-              fillColor="rgba(220, 50, 50, 0.10)"
-              strokeColor="rgba(220, 50, 50, 0.80)"
+              fillColor="rgba(17, 75, 60, 0.08)"
+              strokeColor="rgba(17, 75, 60, 0.55)"
               strokeWidth={2.5}
             />
           )}
@@ -545,7 +609,6 @@ export default function DiscoverScreen() {
               value={radius}
               onChange={(km) => {
                 setRadius(km);
-                void Haptics.selectionAsync();
               }}
               primaryColor={theme.colors.primary}
               trackColor={theme.colors.muted ?? '#ccc'}

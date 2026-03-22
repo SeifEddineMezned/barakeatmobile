@@ -8,7 +8,8 @@ import * as Haptics from 'expo-haptics';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { useBusinessStore } from '@/src/stores/businessStore';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { fetchMyBaskets, deleteBasket as deleteBasketAPI, fetchMyProfile, updateQuantity, updateBasket as updateBasketAPI, type BusinessBasketFromAPI } from '@/src/services/business';
+import { fetchMyBaskets, deleteBasket as deleteBasketAPI, fetchMyProfile, updateQuantity, updateBasket as updateBasketAPI, updateBasketWithImage, type BusinessBasketFromAPI } from '@/src/services/business';
+import * as ImagePicker from 'expo-image-picker';
 import { getErrorMessage } from '@/src/lib/api';
 
 export default function MyBasketsScreen() {
@@ -183,6 +184,36 @@ export default function MyBasketsScreen() {
     }
   }, [quantityModalBasket, tempQuantity, updateBasket]);
 
+  // ─── Change Photo ────────────────────────────────────────────────────────────
+  const handleChangePhoto = useCallback(async (basketId: string) => {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Permission needed', 'Please allow photo library access to change the basket photo.');
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsEditing: true,
+      aspect: [4, 3],
+      quality: 0.8,
+    });
+    if (result.canceled || !result.assets?.length) return;
+    const asset = result.assets[0];
+    const formData = new FormData();
+    formData.append('image', {
+      uri: asset.uri,
+      name: asset.fileName ?? 'basket.jpg',
+      type: asset.mimeType ?? 'image/jpeg',
+    } as any);
+    try {
+      await updateBasketWithImage(basketId, formData);
+      void queryClient.invalidateQueries({ queryKey: ['my-baskets'] });
+      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    } catch (err: any) {
+      Alert.alert('Error', err?.message ?? 'Failed to upload photo');
+    }
+  }, [queryClient]);
+
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]} edges={[]}>
       <View style={[styles.header, { paddingHorizontal: theme.spacing.xl, paddingTop: theme.spacing.xs, paddingBottom: theme.spacing.md }]}>
@@ -314,29 +345,18 @@ export default function MyBasketsScreen() {
                   </View>
                 )}
 
-                {/* Bottom action bar with quantity + adjust button */}
+                {/* Bottom info bar: quantity only */}
                 <View style={{
                   borderTopWidth: 1,
                   borderTopColor: theme.colors.divider,
                   paddingHorizontal: theme.spacing.lg,
                   paddingVertical: theme.spacing.sm,
                   flexDirection: 'row',
-                  justifyContent: 'space-between',
                   alignItems: 'center',
                 }}>
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                    <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption }}>
-                      {basket.quantityLeft}/{basket.quantityTotal}
-                    </Text>
-                  </View>
-                  <TouchableOpacity
-                    onPress={() => { setMenuOpenId(null); setDetailBasket(basket); setDetailTodayQty(basket.quantityLeft); setDetailDailyQty(basket.quantityTotal); setShowFullDesc(false); setPickupStartTime(basket.pickupWindow.start); setPickupEndTime(basket.pickupWindow.end); setShowPickupEditor(false); setUseBusinessHours(false); setDetailMaxPerCustomer((basket as any).maxPerCustomer ?? 5); }}
-                    style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}
-                  >
-                    <Text style={{ color: theme.colors.primary, ...theme.typography.caption, fontWeight: '600' }}>
-                      {t('business.baskets.adjustAvailability', { defaultValue: 'Adjust' })}
-                    </Text>
-                  </TouchableOpacity>
+                  <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption }}>
+                    {basket.quantityLeft}/{basket.quantityTotal}
+                  </Text>
                 </View>
 
               </View>
@@ -406,7 +426,7 @@ export default function MyBasketsScreen() {
                 )}
                 {/* Camera button */}
                 <TouchableOpacity
-                  onPress={() => {/* TODO: image picker */}}
+                  onPress={() => detailBasket && void handleChangePhoto(detailBasket.id)}
                   style={{
                     position: 'absolute',
                     bottom: 12,

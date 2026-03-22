@@ -36,7 +36,7 @@ export function BasketCard({ basket, onFavoritePress, isFavorite = false }: Bask
   }, [scaleAnim]);
 
   const handlePress = useCallback(() => {
-    router.push(`/business-detail/${basket.merchantId ?? basket.id}` as never);
+    router.push(`/basket/${basket.id}` as never);
   }, [basket.id, router]);
 
   const handleFavoritePress = useCallback(() => {
