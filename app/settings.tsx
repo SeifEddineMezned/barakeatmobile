@@ -17,9 +17,9 @@ import { updatePassword } from '@/src/services/profile';
 import i18n from '@/src/i18n';
 
 const LANGUAGES = [
-  { code: 'fr', label: 'Fran\u00e7ais', flag: '\u{1F1EB}\u{1F1F7}' },
-  { code: 'en', label: 'English', flag: '\u{1F1EC}\u{1F1E7}' },
-  { code: 'ar', label: '\u0627\u0644\u0639\u0631\u0628\u064A\u0629', flag: '\u{1F1F9}\u{1F1F3}' },
+  { code: 'fr', label: 'Français' },
+  { code: 'en', label: 'English' },
+  { code: 'ar', label: 'العربية' },
 ];
 
 export default function SettingsScreen() {
@@ -164,7 +164,7 @@ export default function SettingsScreen() {
             </View>
             <View style={{ flexDirection: 'row', alignItems: 'center' }}>
               <Text style={[{ color: theme.colors.muted, ...theme.typography.bodySm, marginRight: 6 }]}>
-                {currentLangObj.flag} {currentLangObj.label}
+                {currentLangObj.label}
               </Text>
               <ChevronRight size={18} color={theme.colors.muted} />
             </View>
@@ -353,7 +353,6 @@ export default function SettingsScreen() {
                     borderColor: theme.colors.primary,
                   }]}
                 >
-                  <Text style={{ fontSize: 22, marginRight: 12 }}>{lang.flag}</Text>
                   <Text style={[{
                     color: isSelected ? theme.colors.primary : theme.colors.textPrimary,
                     ...theme.typography.body,

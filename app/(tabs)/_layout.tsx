@@ -1,5 +1,5 @@
 import { Tabs } from "expo-router";
-import { Search, ShoppingBag, Heart, User, Bell, MapPin, Settings } from "lucide-react-native";
+import { Search, ShoppingBag, Heart, User, Bell, Settings } from "lucide-react-native";
 import React from "react";
 import { useTranslation } from "react-i18next";
 import { View, Text, TouchableOpacity, Animated, Dimensions, PanResponder } from "react-native";
@@ -38,7 +38,7 @@ export default function TabLayout() {
   const unreadCount = useNotificationStore((s) => s.unreadCount);
   const brandAnim = React.useRef(new Animated.Value(0)).current;
 
-  const tabCount = 5;
+  const tabCount = 4;
   const navWidth = Dimensions.get('window').width - 64;
   const tabWidth = navWidth / tabCount;
   const glassAnim = React.useRef(new Animated.Value(0)).current;
@@ -216,9 +216,16 @@ export default function TabLayout() {
         navStateRef.current = state;
         navRef.current = navigation;
 
+        // Build the filtered (visible) routes — same as what we render below.
+        // We need the VISUAL index of the active route so the glass pill
+        // lands on the correct tab even though 'nearby' is hidden.
+        const visibleRoutes = state.routes.filter((r) => r.name !== 'nearby');
+        const focusedRouteName = state.routes[state.index]?.name ?? '';
+        const visualActiveIndex = visibleRoutes.findIndex((r) => r.name === focusedRouteName);
+        const targetX = Math.max(0, visualActiveIndex) * tabWidth;
+
         // Defer state update to avoid "cannot update during render" warning
-        const targetX = state.index * tabWidth;
-        if (activeIndex !== state.index) {
+        if (activeIndex !== visualActiveIndex && visualActiveIndex >= 0) {
           requestAnimationFrame(() => {
             Animated.spring(glassAnim, {
               toValue: targetX,
@@ -226,7 +233,7 @@ export default function TabLayout() {
               friction: 10,
               tension: 100,
             }).start();
-            setActiveIndex(state.index);
+            setActiveIndex(visualActiveIndex);
           });
         }
 
@@ -267,9 +274,12 @@ export default function TabLayout() {
               }}
             />
 
-            {state.routes.map((route, index) => {
+            {visibleRoutes
+              .map((route, index) => {
               const { options } = descriptors[route.key];
-              const isFocused = state.index === index;
+              // Derive isFocused from route NAME, not from filtered array index,
+              // so it's always correct regardless of how 'nearby' shifts raw indexes.
+              const isFocused = route.name === focusedRouteName;
               const color = isFocused ? theme.colors.primary : theme.colors.textSecondary;
 
               const onPress = () => {
@@ -288,7 +298,6 @@ export default function TabLayout() {
               const fill = isFocused ? color : 'transparent';
               switch (route.name) {
                 case 'index': icon = <TabIcon icon={Search} color={color} size={iconSize} focused={isFocused} fill={fill} />; break;
-                case 'nearby': icon = <TabIcon icon={MapPin} color={color} size={iconSize} focused={isFocused} fill={fill} />; break;
                 case 'orders': icon = <TabIcon icon={ShoppingBag} color={color} size={iconSize} focused={isFocused} fill={fill} />; break;
                 case 'favorites': icon = <TabIcon icon={Heart} color={color} size={iconSize} focused={isFocused} fill={fill} />; break;
                 case 'profile': icon = <TabIcon icon={User} color={color} size={iconSize} focused={isFocused} fill={fill} />; break;
@@ -331,18 +340,17 @@ export default function TabLayout() {
       <Tabs.Screen
         name="index"
         options={{
-          title: t('home.search'),
+          title: t('home.discover'),
           headerShown: false,
           tabBarIcon: ({ color, size, focused }) => <TabIcon icon={Search} color={color} size={size} focused={focused} fill={focused ? color : 'transparent'} />,
         }}
       />
+      {/* nearby = no tab entry; accessed via router.push from Découvrir */}
+
+      {/* nearby is NOT a tab — href:null hides it; filter in custom tabBar removes any residual render */}
       <Tabs.Screen
         name="nearby"
-        options={{
-          title: t('home.discover'),
-          headerShown: false,
-          tabBarIcon: ({ color, size, focused }) => <TabIcon icon={MapPin} color={color} size={size} focused={focused} fill={focused ? color : 'transparent'} />,
-        }}
+        options={{ href: null, headerShown: false }}
       />
       <Tabs.Screen
         name="orders"

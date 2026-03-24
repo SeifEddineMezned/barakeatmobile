@@ -327,7 +327,7 @@ export default function DiscoverScreen() {
     return () => { cancelled = true; };
   }, []);
 
-  // Re-center the map on the user's real position
+  // Re-center the map AND pin the user's current device location
   const handleRecenter = useCallback(() => {
     if (mapRef.current && userLocation) {
       mapRef.current.animateToRegion({
@@ -337,6 +337,36 @@ export default function DiscoverScreen() {
       }, 600);
     }
   }, [userLocation, radius]);
+
+  // Fix 3C: Pin my current location — fetch GPS coords, update existing state
+  const [locLoading, setLocLoading] = useState(false);
+  const handlePinMyLocation = useCallback(async () => {
+    setLocLoading(true);
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        setLocationStatus('denied');
+        setLocLoading(false);
+        return;
+      }
+      setLocationStatus('granted');
+      const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+      const coords = { latitude: pos.coords.latitude, longitude: pos.coords.longitude };
+      setUserLocation(coords);
+      if (mapRef.current) {
+        mapRef.current.animateToRegion({
+          ...coords,
+          latitudeDelta: Math.max(0.02, radius * 0.015),
+          longitudeDelta: Math.max(0.02, radius * 0.015),
+        }, 600);
+      }
+    } catch (e) {
+      console.log('[Nearby] Pin location error:', e);
+      setLocationStatus('denied');
+    } finally {
+      setLocLoading(false);
+    }
+  }, [radius]);
 
   // Effective center for radius filtering: real user location or Tunis fallback
   const center = userLocation ?? DEFAULT_CENTER;
@@ -659,7 +689,7 @@ export default function DiscoverScreen() {
         </View>
       </View>
 
-      {/* ── Location button ── */}
+      {/* ── Location re-center button ── */}
       <TouchableOpacity
         style={[
           styles.locationButton,
@@ -674,6 +704,7 @@ export default function DiscoverScreen() {
           },
         ]}
         onPress={handleRecenter}
+        accessibilityLabel="Re-center map to my location"
       >
         {locationStatus === 'loading' ? (
           <ActivityIndicator size="small" color={theme.colors.primary} />
@@ -681,6 +712,46 @@ export default function DiscoverScreen() {
           <Navigation size={20} color={userLocation ? theme.colors.primary : theme.colors.muted} />
         )}
       </TouchableOpacity>
+
+      {/* ── Fix 3C: Explicit “Use current location” text button — replaces icon-only crosshair ── */}
+      <View
+        style={{
+          position: 'absolute',
+          bottom: COLLAPSED_HEIGHT + 16,
+          left: 16,
+          right: 72,
+          zIndex: 10,
+        }}
+      >
+        <TouchableOpacity
+          onPress={() => void handlePinMyLocation()}
+          accessibilityLabel="Use current location"
+          style={{
+            flexDirection: 'row',
+            alignItems: 'center',
+            justifyContent: 'center',
+            backgroundColor: theme.colors.primary,
+            borderRadius: 24,
+            paddingVertical: 11,
+            paddingHorizontal: 18,
+            ...theme.shadows.shadowLg,
+          }}
+        >
+          {locLoading ? (
+            <ActivityIndicator size="small" color="#fff" style={{ marginRight: 8 }} />
+          ) : (
+            <Navigation size={16} color="#fff" style={{ marginRight: 8 }} />
+          )}
+          <Text style={{
+            color: '#fff',
+            fontFamily: 'Poppins_600SemiBold',
+            fontSize: 13,
+            fontWeight: '600',
+          }}>
+            Use current location
+          </Text>
+        </TouchableOpacity>
+      </View>
 
       {/* ── Location permission denied banner ── */}
       {locationStatus === 'denied' && (

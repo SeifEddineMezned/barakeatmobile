@@ -167,14 +167,15 @@ export default function ProfileScreen() {
   };
 
   return (
-    <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]} edges={[]}>
+    <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]} edges={['top']}>
       <StatusBar style="dark" />
-      <View style={[styles.header, { paddingHorizontal: theme.spacing.xl, paddingTop: theme.spacing.xs, paddingBottom: theme.spacing.sm }]}>
+      <View style={[styles.header, { paddingHorizontal: theme.spacing.xl, paddingTop: theme.spacing.md, paddingBottom: theme.spacing.md, borderBottomWidth: 0 }]}>
         <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h1 }]}>{t('profile.title')}</Text>
       </View>
 
-      <ScrollView style={styles.content} contentContainerStyle={[{ padding: theme.spacing.xl, paddingBottom: 100 }]} showsVerticalScrollIndicator={false}>
+      <ScrollView style={styles.content} contentContainerStyle={[{ padding: theme.spacing.xl, paddingBottom: 120 }]} showsVerticalScrollIndicator={false}>
         {/* User Card with XP bar, level badge, streak */}
+        {/* Fix 8: User card — consistent spacing, shadow, avatar alignment */}
         <View
           style={[
             styles.userCard,
@@ -183,18 +184,23 @@ export default function ProfileScreen() {
               borderRadius: theme.radii.r16,
               padding: theme.spacing.xl,
               marginBottom: theme.spacing.lg,
+              shadowColor: '#000',
+              shadowOpacity: 0.12,
+              shadowRadius: 12,
+              shadowOffset: { width: 0, height: 4 },
+              elevation: 6,
             },
           ]}
         >
           <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-            <View style={[styles.userAvatar, { backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 28, width: 56, height: 56 }]}>
+            <View style={[styles.userAvatar, { backgroundColor: 'rgba(255,255,255,0.18)', borderRadius: 30, width: 60, height: 60, borderWidth: 2, borderColor: 'rgba(255,255,255,0.35)' }]}>
               <User size={28} color="#fff" />
             </View>
-            <View style={styles.userInfo}>
-              <Text style={[{ color: '#fff', ...theme.typography.h2 }]}>
+            <View style={[styles.userInfo, { marginLeft: 14 }]}>
+              <Text style={[{ color: '#fff', ...theme.typography.h2, fontFamily: 'Poppins_700Bold' }]} numberOfLines={1}>
                 {user?.name ?? 'Utilisateur'}
               </Text>
-              <Text style={[{ color: 'rgba(255,255,255,0.7)', ...theme.typography.bodySm, marginTop: 2 }]}>
+              <Text style={[{ color: 'rgba(255,255,255,0.72)', ...theme.typography.bodySm, marginTop: 2 }]} numberOfLines={1}>
                 {user?.email ?? ''}
               </Text>
             </View>

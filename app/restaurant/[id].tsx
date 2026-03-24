@@ -7,7 +7,8 @@ import { useTheme } from '@/src/theme/ThemeProvider';
 import { useTranslation } from 'react-i18next';
 import { StatusBar } from 'expo-status-bar';
 import { fetchRestaurantById } from '@/src/services/restaurants';
-import { fetchBasketsByLocation } from '@/src/services/baskets';
+import { fetchBaskets } from '@/src/services/baskets';
+import { fetchReviewsByRestaurant } from '@/src/services/reviews';
 import { normalizeRawBasketToBasket } from '@/src/utils/normalizeRestaurant';
 
 const DESC_COLLAPSED_LINES = 3;
@@ -25,22 +26,44 @@ export default function RestaurantScreen() {
     enabled: !!id,
   });
 
+  // Use GET /api/baskets (works in production) and filter client-side by restaurant_id.
+  // GET /api/baskets/location/:id returns 500 due to schema drift on the production DB.
   const basketsQuery = useQuery({
-    queryKey: ['restaurant-baskets', id],
-    queryFn: () => fetchBasketsByLocation(String(id)),
+    queryKey: ['all-baskets-for-restaurant', id],
+    queryFn: fetchBaskets,
     enabled: !!id,
+    staleTime: 60_000,
+    retry: 1,
   });
 
   const restaurant = restaurantQuery.data;
 
-  const rawBaskets = basketsQuery.data ?? [];
+  // Filter all baskets to only those belonging to this restaurant.
+  // Use String() on both sides to guard against number vs string mismatch.
+  const rawBaskets = (basketsQuery.data ?? []).filter(
+    (b) => String((b as any).restaurant_id) === String(id)
+  );
   const baskets = rawBaskets.map((b) => normalizeRawBasketToBasket(b as any, restaurant?.name));
 
-  const isLoading = restaurantQuery.isLoading;
+  const reviewsQuery = useQuery({
+    queryKey: ['restaurant-reviews', id],
+    queryFn: () => fetchReviewsByRestaurant(String(id)),
+    enabled: !!id,
+  });
+  const reviews = reviewsQuery.data ?? [];
 
-  const avgRating = (restaurant as any)?.avg_rating != null
-    ? Number((restaurant as any).avg_rating)
+  // Compute avg from real fetched reviews; fall back to restaurant.avg_rating
+  const computedAvg = reviews.length > 0
+    ? reviews.reduce((sum, r) => sum + Number(r.rating), 0) / reviews.length
     : null;
+  const avgRating =
+    computedAvg != null ? computedAvg
+    : (restaurant as any)?.avg_rating != null ? Number((restaurant as any).avg_rating)
+    : null;
+
+  const reviewCount = reviews.length;
+
+  const isLoading = restaurantQuery.isLoading;
 
   // Use bag_description as the primary description, fall back to description
   const description = (restaurant as any)?.bag_description?.trim() || restaurant?.description?.trim() || null;
@@ -122,11 +145,15 @@ export default function RestaurantScreen() {
               <Text style={[{ color: avgRating != null ? theme.colors.textPrimary : theme.colors.textSecondary, ...theme.typography.caption, fontWeight: '700' as const, marginLeft: 4 }]}>
                 {avgRating != null ? avgRating.toFixed(1) : t('review.noRating')}
               </Text>
-              {avgRating == null && (
+              {reviewCount > 0 ? (
+                <Text style={[{ color: theme.colors.muted, ...theme.typography.caption, marginLeft: 3 }]}>
+                  ({reviewCount})
+                </Text>
+              ) : avgRating == null ? (
                 <Text style={[{ color: theme.colors.muted, ...theme.typography.caption, marginLeft: 3 }]}>
                   {t('review.noReviews')}
                 </Text>
-              )}
+              ) : null}
             </View>
           </View>
 
@@ -156,6 +183,9 @@ export default function RestaurantScreen() {
 
           {basketsQuery.isLoading ? (
             <ActivityIndicator size="small" color={theme.colors.primary} style={{ marginTop: 20 }} />
+          ) : basketsQuery.isError ? (
+            // Fetch failed (500) — do not mislead user with "no baskets" message, just show nothing
+            null
           ) : baskets.length === 0 ? (
             <View style={styles.emptyState}>
               <ShoppingBag size={48} color={theme.colors.muted} />
@@ -235,6 +265,53 @@ export default function RestaurantScreen() {
             ))
           )}
         </View>
+
+        {/* ── Reviews section — real comments from backend ── */}
+        {reviews.length > 0 && (
+          <View style={{ paddingHorizontal: 16, paddingBottom: 32 }}>
+            <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, fontWeight: '600' as const, marginBottom: 12 }]}>
+              {t('review.title')}
+            </Text>
+            {reviews.map((review) => {
+              const stars = Math.round(Number(review.rating));
+              const hasComment = review.comment && review.comment.trim().length > 0;
+              return (
+                <View
+                  key={review.id}
+                  style={{
+                    backgroundColor: theme.colors.surface,
+                    borderRadius: theme.radii.r12,
+                    padding: 14,
+                    marginBottom: 10,
+                    ...theme.shadows.shadowSm,
+                  }}
+                >
+                  {/* Stars row */}
+                  <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: hasComment ? 6 : 0 }}>
+                    {[1, 2, 3, 4, 5].map((s) => (
+                      <Star
+                        key={s}
+                        size={13}
+                        color={theme.colors.starYellow}
+                        fill={s <= stars ? theme.colors.starYellow : 'transparent'}
+                        style={{ marginRight: 2 }}
+                      />
+                    ))}
+                    <Text style={[{ color: theme.colors.muted, ...theme.typography.caption, marginLeft: 6 }]}>
+                      {review.created_at ? new Date(review.created_at).toLocaleDateString() : ''}
+                    </Text>
+                  </View>
+                  {/* Comment */}
+                  {hasComment && (
+                    <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.bodySm, lineHeight: 19 }]}>
+                      {review.comment!.trim()}
+                    </Text>
+                  )}
+                </View>
+              );
+            })}
+          </View>
+        )}
       </ScrollView>
     </View>
   );

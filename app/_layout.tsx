@@ -47,6 +47,7 @@ function RootLayoutNav() {
       <Stack.Screen name="business/scan-qr" options={{ presentation: "modal", headerShown: false }} />
       <Stack.Screen name="business/team" options={{ presentation: "modal", headerShown: false }} />
       <Stack.Screen name="settings" options={{ headerShown: false }} />
+      <Stack.Screen name="map-view" options={{ headerShown: false }} />
     </Stack>
   );
 }

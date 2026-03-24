@@ -130,22 +130,58 @@ export function normalizeRestaurantToBasket(r: RestaurantFromAPI): Basket {
 }
 
 function mapCategory(cat: string | null | undefined): string {
-  if (!cat) return 'Tous';
-  switch (cat.toLowerCase()) {
+  if (!cat || typeof cat !== 'string') return 'Tous';
+  switch (cat.toLowerCase().trim()) {
+    // Bakery
     case 'bakery':
+    case 'boulangerie':
+    case 'patisserie':
+    case 'pastry':
+    case 'baked_goods':
+    case 'baked goods':
       return 'Patisseries/Boulangeries';
+    // Restaurants / meals
     case 'meals':
     case 'restaurant':
     case 'restaurants':
+    case 'meal':
+    case 'food':
+    case 'traiteur':
       return 'Restaurants';
+    // Supermarket / grocery
     case 'supermarket':
     case 'grocery':
+    case 'groceries':
+    case 'supermarche':
+    case 'supermarché':
+    case 'epicerie':
+    case 'épicerie':
       return 'Supermarché';
+    // Fresh produce
     case 'fresh':
     case 'produits frais':
+    case 'fresh_produce':
+    case 'fruits':
+    case 'legumes':
+    case 'légumes':
       return 'Produits frais';
+    // Café / drinks
+    case 'cafe':
+    case 'café':
+    case 'coffee':
+    case 'drinks':
+    case 'beverages':
+      return 'Café';
+    // Fast food
+    case 'fast_food':
+    case 'fast food':
+    case 'fastfood':
+    case 'snack':
+    case 'sandwich':
+      return 'Fast Food';
     default:
-      return cat;
+      // Capitalize first letter for any unrecognized backend value
+      return cat.charAt(0).toUpperCase() + cat.slice(1);
   }
 }
 

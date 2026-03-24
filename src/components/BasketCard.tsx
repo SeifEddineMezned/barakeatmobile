@@ -151,6 +151,11 @@ export function BasketCard({ basket, onFavoritePress, isFavorite = false }: Bask
                 <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.caption, fontWeight: '700' as const, marginLeft: 3 }]}>
                   {basket.merchantRating.toFixed(1)}
                 </Text>
+                {basket.reviewCount != null && basket.reviewCount > 0 && (
+                  <Text style={[{ color: theme.colors.muted, ...theme.typography.caption, marginLeft: 2 }]}>
+                    ({basket.reviewCount})
+                  </Text>
+                )}
               </View>
             )}
           </View>

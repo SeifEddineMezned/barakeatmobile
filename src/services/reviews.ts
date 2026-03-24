@@ -43,6 +43,23 @@ export async function fetchMyReviews(): Promise<ReviewFromAPI[]> {
   return [];
 }
 
+/** Fetch all public reviews (used to compute per-restaurant averages on the list page). */
+export async function fetchAllReviews(): Promise<ReviewFromAPI[]> {
+  console.log('[Reviews] Fetching all reviews');
+  try {
+    const res = await apiClient.get<ReviewFromAPI[] | { reviews: ReviewFromAPI[] }>('/api/reviews');
+    const data = res.data;
+    if (Array.isArray(data)) return data;
+    if (data && typeof data === 'object' && 'reviews' in data && Array.isArray((data as any).reviews)) {
+      return (data as any).reviews;
+    }
+    return [];
+  } catch (e) {
+    console.log('[Reviews] fetchAllReviews error (non-critical):', e);
+    return [];
+  }
+}
+
 export async function canReview(restaurantId: number | string): Promise<boolean> {
   console.log('[Reviews] Checking can review:', restaurantId);
   try {
@@ -53,5 +70,23 @@ export async function canReview(restaurantId: number | string): Promise<boolean>
     return false;
   } catch {
     return false;
+  }
+}
+
+export async function fetchReviewsByRestaurant(restaurantId: number | string): Promise<ReviewFromAPI[]> {
+  console.log('[Reviews] Fetching reviews for restaurant:', restaurantId);
+  try {
+    const res = await apiClient.get<ReviewFromAPI[] | { reviews: ReviewFromAPI[] }>(
+      `/api/reviews/restaurant/${restaurantId}`
+    );
+    const data = res.data;
+    if (Array.isArray(data)) return data;
+    if (data && typeof data === 'object' && 'reviews' in data && Array.isArray((data as any).reviews)) {
+      return (data as any).reviews;
+    }
+    return [];
+  } catch (e) {
+    console.log('[Reviews] fetchReviewsByRestaurant error:', e);
+    return [];
   }
 }

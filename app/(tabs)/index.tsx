@@ -2,7 +2,8 @@ import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react'
 import { View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity, Modal, Platform, Dimensions, Animated, PanResponder, Image } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
-import { Search, X, RefreshCw, Settings, Bell, MapPin, ChevronDown, Navigation } from 'lucide-react-native';
+import { Search, X, RefreshCw, Settings, Bell, MapPin, ChevronDown } from 'lucide-react-native';
+
 import { useRouter } from 'expo-router';
 import { useQuery } from '@tanstack/react-query';
 import { useTheme } from '@/src/theme/ThemeProvider';
@@ -12,6 +13,7 @@ import { useFavoritesStore } from '@/src/stores/favoritesStore';
 import { useAuthStore } from '@/src/stores/authStore';
 import { MapFallback } from '@/src/components/MapFallback';
 import { fetchRestaurants } from '@/src/services/restaurants';
+import { fetchReviewsByRestaurant } from '@/src/services/reviews';
 import { normalizeRestaurantToBasket } from '@/src/utils/normalizeRestaurant';
 import { useHeroStore } from '@/src/stores/heroStore';
 import { useAddressStore } from '@/src/stores/addressStore';
@@ -130,10 +132,43 @@ export default function HomeScreen() {
     retry: 2,
   });
 
+  // Fetch reviews per-restaurant in parallel — GET /api/reviews returns 404 so we use per-id endpoint
+  const restaurantIds = restaurantsQuery.data?.map((r) => r.id) ?? [];
+  const reviewsQuery = useQuery({
+    queryKey: ['review-map', restaurantIds],
+    queryFn: async () => {
+      if (!restaurantIds.length) return {} as Record<string, { avg: number; count: number }>;
+      const results = await Promise.allSettled(
+        restaurantIds.map((id) => fetchReviewsByRestaurant(id))
+      );
+      const map: Record<string, { avg: number; count: number }> = {};
+      restaurantIds.forEach((id, i) => {
+        const r = results[i];
+        if (r.status === 'fulfilled' && r.value.length > 0) {
+          const total = r.value.reduce((s, rev) => s + Number(rev.rating), 0);
+          map[String(id)] = { avg: total / r.value.length, count: r.value.length };
+        }
+      });
+      return map;
+    },
+    enabled: restaurantIds.length > 0,
+    staleTime: 120_000,
+    retry: 0,
+  });
+
   const baskets = useMemo(() => {
     if (!restaurantsQuery.data) return [];
-    return restaurantsQuery.data.map(normalizeRestaurantToBasket);
-  }, [restaurantsQuery.data]);
+    const rmap = reviewsQuery.data ?? {};
+    return restaurantsQuery.data.map((r) => {
+      const basket = normalizeRestaurantToBasket(r);
+      const summary = rmap[String(r.id)];
+      if (summary) {
+        basket.merchantRating = summary.avg;
+        basket.reviewCount = summary.count;
+      }
+      return basket;
+    });
+  }, [restaurantsQuery.data, reviewsQuery.data]);
 
   const availableCategories = useMemo(() => {
     const cats = new Set<string>();
@@ -232,6 +267,21 @@ export default function HomeScreen() {
           <ChevronDown size={13} color={heroVisible ? 'rgba(255,255,255,0.7)' : theme.colors.textSecondary} />
         </TouchableOpacity>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+          {/* Map pin button — opens the SAME existing navbar map (nearby tab) */}
+          <TouchableOpacity
+            onPress={() => router.push('/map-view' as never)}
+            style={{
+              width: 34,
+              height: 34,
+              borderRadius: 17,
+              backgroundColor: heroVisible ? 'rgba(255,255,255,0.18)' : theme.colors.surface,
+              justifyContent: 'center',
+              alignItems: 'center',
+            }}
+            accessibilityLabel="Open map"
+          >
+            <MapPin size={17} color={heroVisible ? '#e3ff5c' : theme.colors.primary} />
+          </TouchableOpacity>
           <TouchableOpacity onPress={() => router.push('/settings' as never)}>
             <Settings size={20} color={heroVisible ? '#e3ff5c' : theme.colors.textPrimary} />
           </TouchableOpacity>
@@ -352,7 +402,7 @@ export default function HomeScreen() {
           }} />
         </View>
 
-        {/* Search bar */}
+        {/* Search bar — Fix 1: ensure input fills width and placeholder is always visible */}
         <View style={{ paddingHorizontal: theme.spacing.xl }}>
           <View
             style={[
@@ -364,28 +414,58 @@ export default function HomeScreen() {
               },
             ]}
           >
-            <Search size={18} color={theme.colors.muted} />
+            <Search size={18} color={theme.colors.muted} style={{ flexShrink: 0 }} />
             <TextInput
               style={[
                 styles.searchInput,
-                { color: theme.colors.textPrimary, ...theme.typography.body, flex: 1 },
+                { color: theme.colors.textPrimary, fontFamily: 'Poppins_400Regular', fontSize: 14, flex: 1, minWidth: 0 },
               ]}
               placeholder={t('home.searchPlaceholder')}
               placeholderTextColor={theme.colors.muted}
               value={searchQuery}
               onChangeText={setSearchQuery}
+              returnKeyType="search"
+              clearButtonMode="while-editing"
             />
+            {searchQuery.length > 0 && (
+              <TouchableOpacity onPress={() => setSearchQuery('')} style={{ padding: 4 }}>
+                <X size={16} color={theme.colors.muted} />
+              </TouchableOpacity>
+            )}
           </View>
         </View>
 
-        {/* Scrollable content */}
+        {/* Scrollable content — Fix 2: paddingBottom accounts for floating tab bar + safe area */}
         <ScrollView
           style={styles.scrollView}
-          contentContainerStyle={{ paddingHorizontal: theme.spacing.xl, paddingTop: theme.spacing.lg, paddingBottom: 100 }}
+          contentContainerStyle={{ paddingHorizontal: theme.spacing.xl, paddingTop: theme.spacing.lg, paddingBottom: 120 }}
           showsVerticalScrollIndicator={false}
         >
+          {/* Small map trigger — tinted pin pill, opens map ABOVE tabs via root stack */}
+          <TouchableOpacity
+            onPress={() => router.push('/map-view' as never)}
+            activeOpacity={0.75}
+            style={{
+              flexDirection: 'row',
+              alignItems: 'center',
+              alignSelf: 'flex-start',
+              backgroundColor: theme.colors.primary + '14',
+              borderRadius: theme.radii.pill,
+              paddingHorizontal: 12,
+              paddingVertical: 6,
+              marginBottom: theme.spacing.md,
+            }}
+          >
+            <MapPin size={13} color={theme.colors.primary} />
+          </TouchableOpacity>
+
+          {/* Fix 2: categories section — explicit height + paddingVertical to prevent Android bottom cut */}
           <View style={[styles.categoriesSection, { marginBottom: theme.spacing.lg }]}>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingRight: theme.spacing.xl }}>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={{ paddingRight: theme.spacing.xl, paddingVertical: 4 }}
+            >
               {availableCategories.map((cat) => {
                 const isActive = activeCategory === cat;
                 return (
@@ -400,7 +480,7 @@ export default function HomeScreen() {
                         borderRadius: theme.radii.pill,
                         marginRight: theme.spacing.sm,
                         paddingHorizontal: theme.spacing.lg,
-                        paddingVertical: theme.spacing.sm,
+                        paddingVertical: 8,
                         ...(isActive ? {} : theme.shadows.shadowSm),
                       },
                     ]}
@@ -453,15 +533,32 @@ export default function HomeScreen() {
               </Text>
             </View>
           ) : (
-            filteredBaskets.map((basket) => (
-              <View key={basket.id} style={{ opacity: basket.isActive && basket.quantityLeft > 0 ? 1 : 0.45 }}>
-                <BasketCard
-                  basket={basket}
-                  isFavorite={isBasketFavorite(basket.id)}
-                  onFavoritePress={() => toggleBasketFavorite(basket.id)}
-                />
-              </View>
-            ))
+            filteredBaskets.map((basket) => {
+              const isAvailable = basket.isActive && basket.quantityLeft > 0;
+              return (
+                <View
+                  key={basket.id}
+                  style={{ position: 'relative' }}
+                >
+                  <BasketCard
+                    basket={basket}
+                    isFavorite={isBasketFavorite(basket.id)}
+                    onFavoritePress={() => toggleBasketFavorite(basket.id)}
+                  />
+                  {/* Fix 5: Android grey bug — use absolute overlay instead of parent opacity to avoid elevation/compositing issues */}
+                  {!isAvailable && (
+                    <View
+                      pointerEvents="none"
+                      style={{
+                        ...StyleSheet.absoluteFillObject,
+                        backgroundColor: 'rgba(255,255,255,0.55)',
+                        borderRadius: 16,
+                      }}
+                    />
+                  )}
+                </View>
+              );
+            })
           )}
         </ScrollView>
       </View>
@@ -561,7 +658,7 @@ export default function HomeScreen() {
               style={[styles.useLocationBtn, { borderColor: theme.colors.primary }]}
               activeOpacity={0.7}
             >
-              <Navigation size={16} color={theme.colors.primary} />
+              <MapPin size={16} color={theme.colors.primary} />
               <Text style={[{ color: theme.colors.primary, ...theme.typography.bodySm, fontWeight: '600' as const, marginLeft: 8 }]}>
                   {t('home.useMyLocation') as string}
               </Text>
