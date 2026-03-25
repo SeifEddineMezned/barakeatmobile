@@ -145,8 +145,23 @@ export default function HomeScreen() {
       restaurantIds.forEach((id, i) => {
         const r = results[i];
         if (r.status === 'fulfilled' && r.value.length > 0) {
-          const total = r.value.reduce((s, rev) => s + Number(rev.rating), 0);
-          map[String(id)] = { avg: total / r.value.length, count: r.value.length };
+          // Derive avg from 4-category fields; fall back to generic rating if all categories are 0/null
+          const catAvgs = r.value.map((rev) => {
+            const cats = [
+              Number(rev.rating_service) || 0,
+              Number(rev.rating_quality) || 0,
+              Number(rev.rating_quantity) || 0,
+              Number(rev.rating_variety) || 0,
+            ].filter((v) => v > 0);
+            if (cats.length > 0) return cats.reduce((a, b) => a + b, 0) / cats.length;
+            return Number(rev.rating) || 0;
+          }).filter((v) => v > 0);
+          if (catAvgs.length > 0) {
+            map[String(id)] = {
+              avg: catAvgs.reduce((a, b) => a + b, 0) / catAvgs.length,
+              count: r.value.length,
+            };
+          }
         }
       });
       return map;

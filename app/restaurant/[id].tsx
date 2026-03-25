@@ -1,18 +1,114 @@
 import React, { useState } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, Image, ActivityIndicator, StyleSheet } from 'react-native';
+import {
+  View,
+  Text,
+  ScrollView,
+  TouchableOpacity,
+  Image,
+  ActivityIndicator,
+  StyleSheet,
+  Modal,
+  TextInput,
+  Platform,
+  Dimensions,
+} from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useQuery } from '@tanstack/react-query';
-import { ChevronLeft, MapPin, ShoppingBag, Clock, Star, Tag } from 'lucide-react-native';
+import { ChevronLeft, MapPin, ShoppingBag, Clock, Star, Tag, Flag, X, ChevronRight } from 'lucide-react-native';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { useTranslation } from 'react-i18next';
 import { StatusBar } from 'expo-status-bar';
 import { fetchRestaurantById } from '@/src/services/restaurants';
 import { fetchBaskets } from '@/src/services/baskets';
-import { fetchReviewsByRestaurant } from '@/src/services/reviews';
+import { fetchReviewsByRestaurant, ReviewFromAPI } from '@/src/services/reviews';
 import { normalizeRawBasketToBasket } from '@/src/utils/normalizeRestaurant';
 
 const DESC_COLLAPSED_LINES = 3;
 
+// ── Report flow types ──────────────────────────────────────────────────────────
+type ReportReason = 'food_quality' | 'wrong_info' | 'hygiene' | 'behavior' | 'other';
+
+interface ReportState {
+  reason: ReportReason | null;
+  comment: string;
+  submitted: boolean;
+}
+
+// ── Category-average helpers ───────────────────────────────────────────────────
+function avg(values: number[]): number | null {
+  const valid = values.filter((v) => Number.isFinite(v) && v > 0);
+  if (!valid.length) return null;
+  return valid.reduce((a, b) => a + b, 0) / valid.length;
+}
+
+function computeCategoryAverages(reviews: ReviewFromAPI[]) {
+  if (!reviews.length) return null;
+  const serviceAvg = avg(reviews.map((r) => Number(r.rating_service)));
+  const qualityAvg = avg(reviews.map((r) => Number(r.rating_quality)));
+  const quantityAvg = avg(reviews.map((r) => Number(r.rating_quantity)));
+  const varietyAvg = avg(reviews.map((r) => Number(r.rating_variety)));
+  const parts = [serviceAvg, qualityAvg, quantityAvg, varietyAvg].filter(
+    (v): v is number => v !== null
+  );
+  const overall = parts.length ? parts.reduce((a, b) => a + b, 0) / parts.length : null;
+  return { serviceAvg, qualityAvg, quantityAvg, varietyAvg, overall };
+}
+
+// ── CategoryRatingRow ──────────────────────────────────────────────────────────
+function CategoryRatingRow({
+  label,
+  value,
+}: {
+  label: string;
+  value: number | null;
+}) {
+  const theme = useTheme();
+  const filled = value != null ? Math.round(value) : 0;
+
+  return (
+    <View style={catStyles.row}>
+      <Text style={[catStyles.label, { color: theme.colors.textSecondary, ...theme.typography.bodySm }]}>
+        {label}
+      </Text>
+      <View style={catStyles.stars}>
+        {[1, 2, 3, 4, 5].map((s) => (
+          <Star
+            key={s}
+            size={12}
+            color={theme.colors.starYellow}
+            fill={s <= filled ? theme.colors.starYellow : 'transparent'}
+            style={{ marginRight: 1 }}
+          />
+        ))}
+        <Text style={[catStyles.value, { color: theme.colors.textPrimary, ...theme.typography.caption, fontWeight: '700' as const }]}>
+          {value != null ? value.toFixed(1) : '—'}
+        </Text>
+      </View>
+    </View>
+  );
+}
+
+const catStyles = StyleSheet.create({
+  row: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+  },
+  label: {},
+  stars: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+  },
+  value: {
+    marginLeft: 6,
+    minWidth: 24,
+    textAlign: 'right',
+  },
+});
+
+// ── Main screen ────────────────────────────────────────────────────────────────
 export default function RestaurantScreen() {
   const { id } = useLocalSearchParams();
   const router = useRouter();
@@ -20,14 +116,28 @@ export default function RestaurantScreen() {
   const { t } = useTranslation();
   const [descExpanded, setDescExpanded] = useState(false);
 
+  // Report modal state — local only, no API
+  const [reportVisible, setReportVisible] = useState(false);
+  const [report, setReport] = useState<ReportState>({
+    reason: null,
+    comment: '',
+    submitted: false,
+  });
+
+  const REPORT_REASONS: { key: ReportReason; label: string }[] = [
+    { key: 'food_quality', label: t('report.reasons.food_quality', { defaultValue: 'Food quality issue' }) },
+    { key: 'wrong_info', label: t('report.reasons.wrong_info', { defaultValue: 'Wrong information' }) },
+    { key: 'hygiene', label: t('report.reasons.hygiene', { defaultValue: 'Hygiene concern' }) },
+    { key: 'behavior', label: t('report.reasons.behavior', { defaultValue: 'Inappropriate behavior' }) },
+    { key: 'other', label: t('report.reasons.other', { defaultValue: 'Other' }) },
+  ];
+
   const restaurantQuery = useQuery({
     queryKey: ['restaurant', id],
     queryFn: () => fetchRestaurantById(String(id)),
     enabled: !!id,
   });
 
-  // Use GET /api/baskets (works in production) and filter client-side by restaurant_id.
-  // GET /api/baskets/location/:id returns 500 due to schema drift on the production DB.
   const basketsQuery = useQuery({
     queryKey: ['all-baskets-for-restaurant', id],
     queryFn: fetchBaskets,
@@ -38,8 +148,6 @@ export default function RestaurantScreen() {
 
   const restaurant = restaurantQuery.data;
 
-  // Filter all baskets to only those belonging to this restaurant.
-  // Use String() on both sides to guard against number vs string mismatch.
   const rawBaskets = (basketsQuery.data ?? []).filter(
     (b) => String((b as any).restaurant_id) === String(id)
   );
@@ -52,27 +160,49 @@ export default function RestaurantScreen() {
   });
   const reviews = reviewsQuery.data ?? [];
 
-  // Compute avg from real fetched reviews; fall back to restaurant.avg_rating
-  const computedAvg = reviews.length > 0
-    ? reviews.reduce((sum, r) => sum + Number(r.rating), 0) / reviews.length
-    : null;
-  const avgRating =
-    computedAvg != null ? computedAvg
-    : (restaurant as any)?.avg_rating != null ? Number((restaurant as any).avg_rating)
-    : null;
+  // ── Compute 4-category averages ───────────────────────────────────────────────
+  const catAvgs = computeCategoryAverages(reviews);
+
+  // Overall rating: derived from 4 category averages, fallback to restaurant.avg_rating
+  const overallRating =
+    catAvgs?.overall != null
+      ? catAvgs.overall
+      : (restaurant as any)?.avg_rating != null
+      ? Number((restaurant as any).avg_rating)
+      : null;
 
   const reviewCount = reviews.length;
 
   const isLoading = restaurantQuery.isLoading;
 
-  // Use bag_description as the primary description, fall back to description
-  const description = (restaurant as any)?.bag_description?.trim() || restaurant?.description?.trim() || null;
+  const description =
+    (restaurant as any)?.bag_description?.trim() || restaurant?.description?.trim() || null;
 
+  // ── Report handlers ────────────────────────────────────────────────────────────
+  const openReport = () => {
+    setReport({ reason: null, comment: '', submitted: false });
+    setReportVisible(true);
+  };
+
+  const closeReport = () => {
+    setReportVisible(false);
+  };
+
+  const submitReport = () => {
+    if (!report.reason) return;
+    // Local-only: no API call, no fake server submission
+    setReport((prev) => ({ ...prev, submitted: true }));
+  };
+
+  // ── Loading state ──────────────────────────────────────────────────────────────
   if (isLoading) {
     return (
       <View style={[styles.container, { backgroundColor: theme.colors.bg, justifyContent: 'center', alignItems: 'center' }]}>
         <StatusBar style="dark" />
-        <TouchableOpacity style={[styles.backBtn, { backgroundColor: 'rgba(255,255,255,0.9)', position: 'absolute', top: 52, left: 16 }]} onPress={() => router.back()}>
+        <TouchableOpacity
+          style={[styles.backBtn, { backgroundColor: 'rgba(255,255,255,0.9)', position: 'absolute', top: 52, left: 16 }]}
+          onPress={() => router.back()}
+        >
           <ChevronLeft size={22} color={theme.colors.textPrimary} />
         </TouchableOpacity>
         <ActivityIndicator size="large" color={theme.colors.primary} />
@@ -101,14 +231,19 @@ export default function RestaurantScreen() {
         </View>
 
         {/* Info card */}
-        <View style={[styles.infoCard, {
-          backgroundColor: theme.colors.surface,
-          marginHorizontal: 16,
-          marginTop: -28,
-          borderRadius: theme.radii.r20,
-          padding: 20,
-          ...theme.shadows.shadowMd,
-        }]}>
+        <View
+          style={[
+            styles.infoCard,
+            {
+              backgroundColor: theme.colors.surface,
+              marginHorizontal: 16,
+              marginTop: -28,
+              borderRadius: theme.radii.r20,
+              padding: 20,
+              ...theme.shadows.shadowMd,
+            },
+          ]}
+        >
           {/* Name + category */}
           <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h2, fontWeight: '700' as const }]}>
             {restaurant?.name ?? ''}
@@ -127,7 +262,10 @@ export default function RestaurantScreen() {
             {restaurant?.address ? (
               <View style={[styles.chip, { backgroundColor: theme.colors.bg, borderRadius: theme.radii.pill }]}>
                 <MapPin size={12} color={theme.colors.textSecondary} />
-                <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, marginLeft: 4 }]} numberOfLines={1}>
+                <Text
+                  style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, marginLeft: 4 }]}
+                  numberOfLines={1}
+                >
                   {restaurant.address}
                 </Text>
               </View>
@@ -136,20 +274,35 @@ export default function RestaurantScreen() {
               <View style={[styles.chip, { backgroundColor: theme.colors.bg, borderRadius: theme.radii.pill }]}>
                 <Clock size={12} color={theme.colors.textSecondary} />
                 <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, marginLeft: 4 }]}>
-                  {restaurant.pickup_start_time.substring(0, 5)}{restaurant.pickup_end_time ? ` - ${restaurant.pickup_end_time.substring(0, 5)}` : ''}
+                  {restaurant.pickup_start_time.substring(0, 5)}
+                  {restaurant.pickup_end_time ? ` - ${restaurant.pickup_end_time.substring(0, 5)}` : ''}
                 </Text>
               </View>
             ) : null}
+            {/* Overall rating chip — derived from 4 category averages */}
             <View style={[styles.chip, { backgroundColor: theme.colors.bg, borderRadius: theme.radii.pill }]}>
-              <Star size={12} color={avgRating != null ? theme.colors.starYellow : theme.colors.muted} fill={avgRating != null ? theme.colors.starYellow : 'transparent'} />
-              <Text style={[{ color: avgRating != null ? theme.colors.textPrimary : theme.colors.textSecondary, ...theme.typography.caption, fontWeight: '700' as const, marginLeft: 4 }]}>
-                {avgRating != null ? avgRating.toFixed(1) : t('review.noRating')}
+              <Star
+                size={12}
+                color={overallRating != null ? theme.colors.starYellow : theme.colors.muted}
+                fill={overallRating != null ? theme.colors.starYellow : 'transparent'}
+              />
+              <Text
+                style={[
+                  {
+                    color: overallRating != null ? theme.colors.textPrimary : theme.colors.textSecondary,
+                    ...theme.typography.caption,
+                    fontWeight: '700' as const,
+                    marginLeft: 4,
+                  },
+                ]}
+              >
+                {overallRating != null ? overallRating.toFixed(1) : t('review.noRating')}
               </Text>
               {reviewCount > 0 ? (
                 <Text style={[{ color: theme.colors.muted, ...theme.typography.caption, marginLeft: 3 }]}>
                   ({reviewCount})
                 </Text>
-              ) : avgRating == null ? (
+              ) : overallRating == null ? (
                 <Text style={[{ color: theme.colors.muted, ...theme.typography.caption, marginLeft: 3 }]}>
                   {t('review.noReviews')}
                 </Text>
@@ -168,28 +321,109 @@ export default function RestaurantScreen() {
               </Text>
               <TouchableOpacity onPress={() => setDescExpanded((v) => !v)} style={{ marginTop: 4 }}>
                 <Text style={[{ color: theme.colors.primary, ...theme.typography.caption, fontWeight: '600' as const }]}>
-                  {descExpanded ? t('common.seeLess', { defaultValue: 'See less' }) : t('common.seeMore', { defaultValue: 'See more' })}
+                  {descExpanded
+                    ? t('common.seeLess', { defaultValue: 'See less' })
+                    : t('common.seeMore', { defaultValue: 'See more' })}
                 </Text>
               </TouchableOpacity>
             </View>
           ) : null}
         </View>
 
+        {/* ── Category ratings section ─────────────────────────────────────────── */}
+        <View style={{ paddingHorizontal: 16, paddingTop: 20 }}>
+          <Text
+            style={[
+              {
+                color: theme.colors.textPrimary,
+                ...theme.typography.h3,
+                fontWeight: '600' as const,
+                marginBottom: 10,
+              },
+            ]}
+          >
+            {t('review.ratingsTitle', { defaultValue: 'Ratings' })}
+          </Text>
+
+          {catAvgs == null ? (
+            /* No ratings yet */
+            <View
+              style={[
+                styles.ratingsCard,
+                {
+                  backgroundColor: theme.colors.surface,
+                  borderRadius: theme.radii.r16,
+                  ...theme.shadows.shadowSm,
+                },
+              ]}
+            >
+              <Text style={[{ color: theme.colors.muted, ...theme.typography.bodySm, textAlign: 'center' as const }]}>
+                {t('review.noReviews', { defaultValue: 'No ratings yet' })}
+              </Text>
+            </View>
+          ) : (
+            <View
+              style={[
+                styles.ratingsCard,
+                {
+                  backgroundColor: theme.colors.surface,
+                  borderRadius: theme.radii.r16,
+                  ...theme.shadows.shadowSm,
+                },
+              ]}
+            >
+              <CategoryRatingRow
+                label={t('review.service', { defaultValue: 'Service' })}
+                value={catAvgs.serviceAvg}
+              />
+              <CategoryRatingRow
+                label={t('review.quality', { defaultValue: 'Quality' })}
+                value={catAvgs.qualityAvg}
+              />
+              <CategoryRatingRow
+                label={t('review.quantity', { defaultValue: 'Quantity' })}
+                value={catAvgs.quantityAvg}
+              />
+              <CategoryRatingRow
+                label={t('review.variety', { defaultValue: 'Variety' })}
+                value={catAvgs.varietyAvg}
+              />
+            </View>
+          )}
+        </View>
+
         {/* Baskets section */}
-        <View style={[styles.body, { paddingHorizontal: 16, paddingTop: 24, paddingBottom: 60 }]}>
-          <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, fontWeight: '600' as const, marginBottom: 12 }]}>
+        <View style={[styles.body, { paddingHorizontal: 16, paddingTop: 24, paddingBottom: 16 }]}>
+          <Text
+            style={[
+              {
+                color: theme.colors.textPrimary,
+                ...theme.typography.h3,
+                fontWeight: '600' as const,
+                marginBottom: 12,
+              },
+            ]}
+          >
             {t('basket.availableBaskets')}
           </Text>
 
           {basketsQuery.isLoading ? (
             <ActivityIndicator size="small" color={theme.colors.primary} style={{ marginTop: 20 }} />
           ) : basketsQuery.isError ? (
-            // Fetch failed (500) — do not mislead user with "no baskets" message, just show nothing
             null
           ) : baskets.length === 0 ? (
             <View style={styles.emptyState}>
               <ShoppingBag size={48} color={theme.colors.muted} />
-              <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.body, marginTop: 12, textAlign: 'center' as const }]}>
+              <Text
+                style={[
+                  {
+                    color: theme.colors.textSecondary,
+                    ...theme.typography.body,
+                    marginTop: 12,
+                    textAlign: 'center' as const,
+                  },
+                ]}
+              >
                 {t('basket.noBaskets')}
               </Text>
             </View>
@@ -211,7 +445,10 @@ export default function RestaurantScreen() {
                 {basket.imageUrl ? (
                   <Image
                     source={{ uri: basket.imageUrl }}
-                    style={[styles.basketImage, { borderTopLeftRadius: theme.radii.r16, borderTopRightRadius: theme.radii.r16 }]}
+                    style={[
+                      styles.basketImage,
+                      { borderTopLeftRadius: theme.radii.r16, borderTopRightRadius: theme.radii.r16 },
+                    ]}
                   />
                 ) : null}
                 <View style={[styles.basketContent, { padding: theme.spacing.md }]}>
@@ -228,7 +465,14 @@ export default function RestaurantScreen() {
                   ) : null}
                   {basket.description ? (
                     <Text
-                      style={[{ color: theme.colors.textSecondary, ...theme.typography.bodySm, marginTop: 4, lineHeight: 19 }]}
+                      style={[
+                        {
+                          color: theme.colors.textSecondary,
+                          ...theme.typography.bodySm,
+                          marginTop: 4,
+                          lineHeight: 19,
+                        },
+                      ]}
                       numberOfLines={2}
                     >
                       {basket.description}
@@ -236,22 +480,56 @@ export default function RestaurantScreen() {
                   ) : null}
                   <View style={styles.basketFooter}>
                     <View style={styles.chipsRow}>
-                      <View style={[styles.basketChip, { backgroundColor: theme.colors.bg, borderRadius: theme.radii.pill }]}>
+                      <View
+                        style={[
+                          styles.basketChip,
+                          { backgroundColor: theme.colors.bg, borderRadius: theme.radii.pill },
+                        ]}
+                      >
                         <Clock size={11} color={theme.colors.textSecondary} />
                         <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, marginLeft: 3 }]}>
                           {basket.pickupWindow.start}-{basket.pickupWindow.end}
                         </Text>
                       </View>
-                      <View style={[styles.basketChip, { backgroundColor: basket.quantityLeft > 0 ? theme.colors.primary : theme.colors.divider, borderRadius: theme.radii.pill }]}>
-                        <ShoppingBag size={11} color={basket.quantityLeft > 0 ? '#fff' : theme.colors.muted} />
-                        <Text style={[{ color: basket.quantityLeft > 0 ? '#fff' : theme.colors.muted, ...theme.typography.caption, marginLeft: 3, fontWeight: '600' as const }]}>
+                      <View
+                        style={[
+                          styles.basketChip,
+                          {
+                            backgroundColor:
+                              basket.quantityLeft > 0 ? theme.colors.primary : theme.colors.divider,
+                            borderRadius: theme.radii.pill,
+                          },
+                        ]}
+                      >
+                        <ShoppingBag
+                          size={11}
+                          color={basket.quantityLeft > 0 ? '#fff' : theme.colors.muted}
+                        />
+                        <Text
+                          style={[
+                            {
+                              color: basket.quantityLeft > 0 ? '#fff' : theme.colors.muted,
+                              ...theme.typography.caption,
+                              marginLeft: 3,
+                              fontWeight: '600' as const,
+                            },
+                          ]}
+                        >
                           {basket.quantityLeft}
                         </Text>
                       </View>
                     </View>
                     <View style={{ alignItems: 'flex-end' }}>
                       {basket.originalPrice > 0 ? (
-                        <Text style={[{ color: theme.colors.muted, ...theme.typography.caption, textDecorationLine: 'line-through' }]}>
+                        <Text
+                          style={[
+                            {
+                              color: theme.colors.muted,
+                              ...theme.typography.caption,
+                              textDecorationLine: 'line-through',
+                            },
+                          ]}
+                        >
                           {basket.originalPrice} TND
                         </Text>
                       ) : null}
@@ -266,53 +544,306 @@ export default function RestaurantScreen() {
           )}
         </View>
 
-        {/* ── Reviews section — real comments from backend ── */}
-        {reviews.length > 0 && (
-          <View style={{ paddingHorizontal: 16, paddingBottom: 32 }}>
-            <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, fontWeight: '600' as const, marginBottom: 12 }]}>
-              {t('review.title')}
+        {/* ── Report this restaurant — visible but unobtrusive ─────────────────── */}
+        <View style={{ paddingHorizontal: 16, paddingBottom: 48 }}>
+          <TouchableOpacity
+            onPress={openReport}
+            style={[
+              styles.reportBtn,
+              {
+                borderColor: theme.colors.divider,
+                borderRadius: theme.radii.r12,
+              },
+            ]}
+            activeOpacity={0.7}
+            accessibilityLabel="Report this restaurant"
+          >
+            <Flag size={15} color={theme.colors.textSecondary} />
+            <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, marginLeft: 8, flex: 1 }]}>
+              {t('report.cta', { defaultValue: 'Report this restaurant' })}
             </Text>
-            {reviews.map((review) => {
-              const stars = Math.round(Number(review.rating));
-              const hasComment = review.comment && review.comment.trim().length > 0;
-              return (
-                <View
-                  key={review.id}
+            <ChevronRight size={14} color={theme.colors.muted} />
+          </TouchableOpacity>
+        </View>
+      </ScrollView>
+
+      {/* ── Report modal ─────────────────────────────────────────── */}
+      <Modal
+        visible={reportVisible}
+        transparent
+        animationType="slide"
+        statusBarTranslucent
+        onRequestClose={closeReport}
+      >
+        <View style={styles.reportOverlay}>
+          {/* Tappable dim backdrop */}
+          <TouchableOpacity
+            style={StyleSheet.absoluteFillObject}
+            activeOpacity={1}
+            onPress={closeReport}
+          />
+
+          {/* ── SHEET ── */}
+          <View
+            style={[
+              styles.reportSheet,
+              { backgroundColor: theme.colors.surface, ...theme.shadows.shadowLg },
+            ]}
+          >
+            {/* Grab handle */}
+            <View style={[styles.sheetHandle, { backgroundColor: theme.colors.divider }]} />
+
+            {/* ── Header ── */}
+            <View style={styles.sheetHeader}>
+              <View style={{ flex: 1, paddingRight: 12 }}>
+                <Text
                   style={{
-                    backgroundColor: theme.colors.surface,
-                    borderRadius: theme.radii.r12,
-                    padding: 14,
-                    marginBottom: 10,
-                    ...theme.shadows.shadowSm,
+                    color: theme.colors.textPrimary,
+                    fontSize: 18,
+                    fontWeight: '700',
+                    letterSpacing: -0.3,
                   }}
                 >
-                  {/* Stars row */}
-                  <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: hasComment ? 6 : 0 }}>
-                    {[1, 2, 3, 4, 5].map((s) => (
-                      <Star
-                        key={s}
-                        size={13}
-                        color={theme.colors.starYellow}
-                        fill={s <= stars ? theme.colors.starYellow : 'transparent'}
-                        style={{ marginRight: 2 }}
-                      />
-                    ))}
-                    <Text style={[{ color: theme.colors.muted, ...theme.typography.caption, marginLeft: 6 }]}>
-                      {review.created_at ? new Date(review.created_at).toLocaleDateString() : ''}
-                    </Text>
-                  </View>
-                  {/* Comment */}
-                  {hasComment && (
-                    <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.bodySm, lineHeight: 19 }]}>
-                      {review.comment!.trim()}
-                    </Text>
-                  )}
+                  Signaler ce restaurant
+                </Text>
+                {!report.submitted && (
+                  <Text
+                    style={{
+                      color: theme.colors.textSecondary,
+                      fontSize: 13,
+                      lineHeight: 18,
+                      marginTop: 4,
+                    }}
+                  >
+                    Dites-nous ce qui ne va pas. Votre retour nous aide à améliorer l’expérience.
+                  </Text>
+                )}
+              </View>
+              {/* Close pill */}
+              <TouchableOpacity
+                onPress={closeReport}
+                style={[
+                  styles.sheetClosePill,
+                  { backgroundColor: theme.colors.bg },
+                ]}
+                accessibilityLabel="Fermer"
+              >
+                <X size={16} color={theme.colors.textSecondary} />
+              </TouchableOpacity>
+            </View>
+
+            {/* ── Body ── */}
+            {report.submitted ? (
+              /* Confirmation screen */
+              <View style={styles.confirmContainer}>
+                <View
+                  style={[
+                    styles.confirmRing,
+                    { backgroundColor: theme.colors.primary + '14', borderColor: theme.colors.primary + '30' },
+                  ]}
+                >
+                  <Flag size={30} color={theme.colors.primary} />
                 </View>
-              );
-            })}
+                <Text
+                  style={{
+                    color: theme.colors.textPrimary,
+                    fontSize: 17,
+                    fontWeight: '700',
+                    marginTop: 20,
+                    textAlign: 'center',
+                    letterSpacing: -0.2,
+                  }}
+                >
+                  Merci pour votre signalement
+                </Text>
+                <Text
+                  style={{
+                    color: theme.colors.textSecondary,
+                    fontSize: 13,
+                    lineHeight: 20,
+                    marginTop: 8,
+                    textAlign: 'center',
+                    paddingHorizontal: 12,
+                  }}
+                >
+                  Votre message a bien été enregistré. Notre équipe en prendra connaissance.
+                </Text>
+                <TouchableOpacity
+                  onPress={closeReport}
+                  style={[
+                    styles.confirmDoneBtn,
+                    {
+                      backgroundColor: theme.colors.primary,
+                      borderRadius: 14,
+                      marginTop: 28,
+                    },
+                  ]}
+                >
+                  <Text style={{ color: '#fff', fontSize: 15, fontWeight: '600', textAlign: 'center' }}>
+                    Fermer
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            ) : (
+              /* Report form */
+              <>
+                <ScrollView
+                  keyboardShouldPersistTaps="handled"
+                  showsVerticalScrollIndicator={false}
+                  contentContainerStyle={styles.sheetScrollContent}
+                >
+                  {/* ── Motif section ── */}
+                  <Text style={[styles.sectionLabel, { color: theme.colors.textSecondary }]}>
+                    MOTIF
+                  </Text>
+
+                  {([
+                    { key: 'food_quality' as ReportReason, label: 'Mauvaise qualité de nourriture' },
+                    { key: 'wrong_info' as ReportReason, label: 'Informations incorrectes' },
+                    { key: 'hygiene' as ReportReason, label: "Problème d’hygiène" },
+                    { key: 'behavior' as ReportReason, label: 'Comportement inapproprié' },
+                    { key: 'other' as ReportReason, label: 'Autre' },
+                  ] as { key: ReportReason; label: string }[]).map(({ key, label }, index, arr) => {
+                    const selected = report.reason === key;
+                    return (
+                      <TouchableOpacity
+                        key={key}
+                        onPress={() => setReport((prev) => ({ ...prev, reason: key }))}
+                        activeOpacity={0.72}
+                        style={[
+                          styles.reasonRow,
+                          {
+                            borderColor: selected
+                              ? theme.colors.primary
+                              : theme.colors.divider,
+                            borderRadius: 14,
+                            backgroundColor: selected
+                              ? theme.colors.primary + '0d'
+                              : theme.colors.surface,
+                            marginBottom: index === arr.length - 1 ? 0 : 8,
+                            borderWidth: selected ? 1.8 : 1,
+                          },
+                        ]}
+                      >
+                        {/* Left radio indicator */}
+                        <View
+                          style={[
+                            styles.radioOuter,
+                            {
+                              borderColor: selected
+                                ? theme.colors.primary
+                                : theme.colors.divider,
+                              backgroundColor: selected
+                                ? theme.colors.primary
+                                : 'transparent',
+                            },
+                          ]}
+                        >
+                          {selected && (
+                            <View style={styles.radioCheckmark} />
+                          )}
+                        </View>
+
+                        {/* Label */}
+                        <Text
+                          style={{
+                            flex: 1,
+                            fontSize: 14,
+                            lineHeight: 20,
+                            color: selected
+                              ? theme.colors.textPrimary
+                              : theme.colors.textSecondary,
+                            fontWeight: selected ? '600' : '400',
+                          }}
+                        >
+                          {label}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+
+                  {/* ── Details section ── */}
+                  <Text
+                    style={[
+                      styles.sectionLabel,
+                      { color: theme.colors.textSecondary, marginTop: 24 },
+                    ]}
+                  >
+                    DÉTAILS SUPPLÉMENTAIRES
+                  </Text>
+                  <TextInput
+                    style={[
+                      styles.commentInput,
+                      {
+                        backgroundColor: theme.colors.bg,
+                        borderRadius: 14,
+                        color: theme.colors.textPrimary,
+                        fontSize: 14,
+                        lineHeight: 20,
+                        borderColor: theme.colors.divider,
+                      },
+                    ]}
+                    placeholder="Ajoutez des détails (optionnel)"
+                    placeholderTextColor={theme.colors.muted}
+                    multiline
+                    numberOfLines={4}
+                    value={report.comment}
+                    onChangeText={(text) => setReport((prev) => ({ ...prev, comment: text }))}
+                    textAlignVertical="top"
+                  />
+                  {/* Confidentiality note */}
+                  <Text
+                    style={{
+                      color: theme.colors.muted,
+                      fontSize: 12,
+                      marginTop: 8,
+                      lineHeight: 16,
+                    }}
+                  >
+                    Votre message restera confidentiel.
+                  </Text>
+                </ScrollView>
+
+                {/* ── Fixed CTA footer ── */}
+                <View
+                  style={[
+                    styles.sheetFooter,
+                    { borderTopColor: theme.colors.divider },
+                  ]}
+                >
+                  <TouchableOpacity
+                    onPress={submitReport}
+                    disabled={!report.reason}
+                    activeOpacity={report.reason ? 0.82 : 1}
+                    style={[
+                      styles.submitBtn,
+                      {
+                        backgroundColor: report.reason
+                          ? theme.colors.primary
+                          : theme.colors.divider,
+                        borderRadius: 14,
+                        opacity: report.reason ? 1 : 0.6,
+                      },
+                    ]}
+                  >
+                    <Text
+                      style={{
+                        color: report.reason ? '#fff' : theme.colors.muted,
+                        fontSize: 15,
+                        fontWeight: '600',
+                        textAlign: 'center',
+                        letterSpacing: 0.1,
+                      }}
+                    >
+                      Envoyer le signalement
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              </>
+            )}
           </View>
-        )}
-      </ScrollView>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -351,6 +882,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 6,
   },
+  ratingsCard: {
+    padding: 16,
+    marginBottom: 4,
+  },
   body: {},
   emptyState: {
     alignItems: 'center',
@@ -381,5 +916,120 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: 8,
     paddingVertical: 3,
+  },
+  // Report button
+  reportBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderWidth: 1,
+  },
+  // ── Report modal styles ──────────────────────────────────────────
+  reportOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.48)',
+    justifyContent: 'flex-end',
+  },
+  reportSheet: {
+    // maxHeight in concrete px so inner ScrollView can size correctly
+    maxHeight: Dimensions.get('window').height * 0.85,
+    borderTopLeftRadius: 26,
+    borderTopRightRadius: 26,
+    // No overflow:hidden — clips children; no flex:1 — let content size the sheet
+  },
+  sheetHandle: {
+    width: 36,
+    height: 4,
+    borderRadius: 2,
+    alignSelf: 'center',
+    marginTop: 12,
+    marginBottom: 6,
+  },
+  sheetHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    paddingHorizontal: 24,
+    paddingTop: 10,
+    paddingBottom: 16,
+  },
+  sheetClosePill: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginTop: 2,
+  },
+  sheetScrollContent: {
+    paddingHorizontal: 24,
+    paddingBottom: 20,
+  },
+  sectionLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0.8,
+    marginBottom: 12,
+    textTransform: 'uppercase',
+  },
+  reasonRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 16,
+    paddingHorizontal: 16,
+  },
+  radioOuter: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    borderWidth: 2,
+    marginRight: 14,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  radioCheckmark: {
+    // White checkmark square (rendered as a smaller white dot inside filled circle)
+    width: 8,
+    height: 8,
+    borderRadius: 2,
+    backgroundColor: '#fff',
+  },
+  commentInput: {
+    padding: 16,
+    minHeight: 110,
+    borderWidth: 1,
+    lineHeight: 20,
+  },
+  sheetFooter: {
+    paddingHorizontal: 24,
+    paddingTop: 14,
+    paddingBottom: Platform.OS === 'ios' ? 38 : 22,
+    borderTopWidth: StyleSheet.hairlineWidth,
+  },
+  submitBtn: {
+    paddingVertical: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  // Confirmation screen
+  confirmContainer: {
+    alignItems: 'center',
+    paddingHorizontal: 28,
+    paddingTop: 8,
+    paddingBottom: 36,
+  },
+  confirmRing: {
+    width: 76,
+    height: 76,
+    borderRadius: 38,
+    borderWidth: 1.5,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  confirmDoneBtn: {
+    paddingVertical: 15,
+    alignSelf: 'stretch',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 });

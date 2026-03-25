@@ -5,7 +5,6 @@ import {
   StyleSheet,
   ScrollView,
   TouchableOpacity,
-  TextInput,
   Alert,
   KeyboardAvoidingView,
   Platform,
@@ -96,7 +95,6 @@ export default function ReviewScreen() {
   const [ratingQuantity, setRatingQuantity] = useState(0);
   const [ratingQuality, setRatingQuality] = useState(0);
   const [ratingVariety, setRatingVariety] = useState(0);
-  const [comment, setComment] = useState('');
 
   const overallRating = Math.round(
     (ratingService + ratingQuantity + ratingQuality + ratingVariety) / 4
@@ -112,7 +110,6 @@ export default function ReviewScreen() {
         rating_quantity: ratingQuantity,
         rating_quality: ratingQuality,
         rating_variety: ratingVariety,
-        comment: comment.trim() || undefined,
       }),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['reservations'] });
@@ -200,48 +197,6 @@ export default function ReviewScreen() {
             />
           </View>
 
-          <View
-            style={[
-              {
-                backgroundColor: theme.colors.surface,
-                borderRadius: theme.radii.r16,
-                padding: theme.spacing.xl,
-                marginBottom: theme.spacing.xl,
-                ...theme.shadows.shadowSm,
-              },
-            ]}
-          >
-            <Text
-              style={[
-                {
-                  color: theme.colors.textPrimary,
-                  ...theme.typography.body,
-                  marginBottom: theme.spacing.md,
-                },
-              ]}
-            >
-              {t('review.comment')}
-            </Text>
-            <TextInput
-              style={[
-                {
-                  backgroundColor: theme.colors.bg,
-                  borderRadius: theme.radii.r12,
-                  padding: theme.spacing.lg,
-                  color: theme.colors.textPrimary,
-                  ...theme.typography.body,
-                  minHeight: 100,
-                  textAlignVertical: 'top',
-                },
-              ]}
-              placeholder={t('review.commentPlaceholder')}
-              placeholderTextColor={theme.colors.muted}
-              multiline
-              numberOfLines={4}
-              value={comment}
-              onChangeText={setComment}
-            />
-          </View>
         </ScrollView>
 
         <View

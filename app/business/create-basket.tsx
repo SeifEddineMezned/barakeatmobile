@@ -70,6 +70,9 @@ export default function CreateBasketScreen() {
   const [quantity, setQuantity] = useState(
     apiBasket?.quantity ?? storeBasket?.quantityTotal ?? 5
   );
+  const [maxPerCustomer, setMaxPerCustomer] = useState<number>(
+    (apiBasket as any)?.max_per_customer ?? (storeBasket as any)?.maxPerCustomer ?? 5
+  );
 
   // Pickup times: use basket-specific times if editing, else profile-level defaults
   const defaultStart =
@@ -125,6 +128,8 @@ export default function CreateBasketScreen() {
       if (apiBasket.quantity != null) setQuantity(apiBasket.quantity);
       if (apiBasket.pickup_start_time) setPickupStart(apiBasket.pickup_start_time.substring(0, 5));
       if (apiBasket.pickup_end_time) setPickupEnd(apiBasket.pickup_end_time.substring(0, 5));
+      const mpc = (apiBasket as any).max_per_customer;
+      if (mpc != null) setMaxPerCustomer(mpc);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [apiBasket?.id]);
@@ -173,6 +178,7 @@ export default function CreateBasketScreen() {
         original_price: originalPrice ? parseFloat(originalPrice) : undefined,
         selling_price: parseFloat(sellingPrice),
         quantity,
+        max_per_customer: maxPerCustomer,
         pickup_start_time: toTimeField(pickupStart),
         pickup_end_time: toTimeField(pickupEnd),
       }),
@@ -348,11 +354,12 @@ export default function CreateBasketScreen() {
             </View>
           )}
 
-          {/* Quantity — only shown when creating, not editing */}
-          {!isEditing && (
+          {/* Daily Reinitialization Quantity — always shown (label differs by mode) */}
           <View style={[styles.field, { marginBottom: theme.spacing.xl }]}>
             <Text style={[styles.label, { color: theme.colors.textPrimary, ...theme.typography.bodySm, marginBottom: theme.spacing.sm }]}>
-              {t('business.availability.quantity')} *
+              {isEditing
+                ? t('business.baskets.defaultQty', { defaultValue: 'Daily reinitialization quantity' })
+                : t('business.availability.quantity')}{!isEditing ? ' *' : ''}
             </Text>
             <View style={{ flexDirection: 'row', alignItems: 'center' }}>
               <TouchableOpacity
@@ -374,6 +381,39 @@ export default function CreateBasketScreen() {
               />
               <TouchableOpacity
                 onPress={() => setQuantity(quantity + 1)}
+                style={{ backgroundColor: theme.colors.surface, borderRadius: 10, width: 42, height: 42, justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: theme.colors.divider }}
+              >
+                <Plus size={16} color={theme.colors.textPrimary} />
+              </TouchableOpacity>
+            </View>
+          </View>
+
+          {/* Max Per Customer — only shown when editing */}
+          {isEditing && FeatureFlags.ENABLE_MAX_PER_CUSTOMER && (
+          <View style={[styles.field, { marginBottom: theme.spacing.xl }]}>
+            <Text style={[styles.label, { color: theme.colors.textPrimary, ...theme.typography.bodySm, marginBottom: theme.spacing.sm }]}>
+              {t('business.baskets.maxPerCustomer', { defaultValue: 'Max bags per customer' })}
+            </Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              <TouchableOpacity
+                onPress={() => setMaxPerCustomer(Math.max(1, maxPerCustomer - 1))}
+                style={{ backgroundColor: theme.colors.surface, borderRadius: 10, width: 42, height: 42, justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: theme.colors.divider }}
+              >
+                <Minus size={16} color={theme.colors.textPrimary} />
+              </TouchableOpacity>
+              <TextInput
+                style={[{
+                  flex: 1, textAlign: 'center', backgroundColor: theme.colors.surface,
+                  borderRadius: theme.radii.r12, color: theme.colors.textPrimary,
+                  ...theme.typography.h3, height: 42, marginHorizontal: 12,
+                  borderWidth: 1, borderColor: theme.colors.divider,
+                }]}
+                value={String(maxPerCustomer)}
+                onChangeText={(v) => { const n = parseInt(v); if (!isNaN(n) && n >= 1) setMaxPerCustomer(n); }}
+                keyboardType="number-pad"
+              />
+              <TouchableOpacity
+                onPress={() => setMaxPerCustomer(maxPerCustomer + 1)}
                 style={{ backgroundColor: theme.colors.surface, borderRadius: 10, width: 42, height: 42, justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: theme.colors.divider }}
               >
                 <Plus size={16} color={theme.colors.textPrimary} />

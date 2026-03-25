@@ -194,13 +194,16 @@
   "review": {
     "title": "Leave a Review",
     "rateExperience": "Rate your experience",
-    "comment": "Comment (optional)",
-    "commentPlaceholder": "Tell us about your experience...",
     "submit": "Submit Review",
     "success": "Thank you for your review!",
     "error": "Could not submit review",
     "noRating": "N/A",
-    "noReviews": "(0 reviews)"
+    "noReviews": "No ratings yet",
+    "ratingsTitle": "Ratings",
+    "service": "Service",
+    "quality": "Quality",
+    "quantity": "Quantity",
+    "variety": "Variety"
   },
   "favorites": {
     "title": "Favorites",
@@ -281,14 +284,22 @@
     }
   },
   "report": {
-    "title": "Report",
-    "reasonLabel": "Reason",
-    "reasonPlaceholder": "Select a reason...",
-    "detailsLabel": "Details (optional)",
-    "detailsPlaceholder": "Provide more details...",
+    "title": "Report Restaurant",
+    "cta": "Report this restaurant",
+    "reasonLabel": "Select a reason",
+    "detailsLabel": "Additional details (optional)",
+    "detailsPlaceholder": "Describe the issue...",
     "submit": "Submit Report",
-    "success": "Report submitted. Thank you.",
-    "error": "Could not submit report."
+    "localConfirmTitle": "Report recorded",
+    "localConfirmMsg": "Thank you. Your report has been saved locally and will be reviewed when our team syncs reports.",
+    "done": "Done",
+    "reasons": {
+      "food_quality": "Food quality issue",
+      "wrong_info": "Wrong information",
+      "hygiene": "Hygiene concern",
+      "behavior": "Inappropriate behavior",
+      "other": "Other"
+    }
   },
   "map": {
     "title": "Nearby",

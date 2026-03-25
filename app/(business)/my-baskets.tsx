@@ -518,56 +518,6 @@ export default function MyBasketsScreen() {
                   </View>
                 </View>
 
-                {/* Daily Reinit Quantity */}
-                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-                  <Text style={{ color: theme.colors.textPrimary, ...theme.typography.body }}>
-                    {t('business.baskets.defaultQty')}
-                  </Text>
-                  <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                    <TouchableOpacity
-                      onPress={() => setDetailDailyQty(Math.max(0, detailDailyQty - 1))}
-                      style={{ backgroundColor: theme.colors.bg, borderRadius: 8, width: 36, height: 36, justifyContent: 'center', alignItems: 'center' }}
-                    >
-                      <Minus size={16} color={theme.colors.textPrimary} />
-                    </TouchableOpacity>
-                    <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3, marginHorizontal: 16, minWidth: 24, textAlign: 'center' }}>
-                      {detailDailyQty}
-                    </Text>
-                    <TouchableOpacity
-                      onPress={() => setDetailDailyQty(detailDailyQty + 1)}
-                      style={{ backgroundColor: theme.colors.bg, borderRadius: 8, width: 36, height: 36, justifyContent: 'center', alignItems: 'center' }}
-                    >
-                      <Plus size={16} color={theme.colors.textPrimary} />
-                    </TouchableOpacity>
-                  </View>
-                </View>
-
-                {/* Max per customer */}
-                {FeatureFlags.ENABLE_MAX_PER_CUSTOMER && (
-                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-                  <Text style={{ color: theme.colors.textPrimary, ...theme.typography.body }}>
-                    {t('business.baskets.maxPerCustomer', { defaultValue: 'Max per customer' })}
-                  </Text>
-                  <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                    <TouchableOpacity
-                      onPress={() => setDetailMaxPerCustomer(Math.max(1, detailMaxPerCustomer - 1))}
-                      style={{ backgroundColor: theme.colors.bg, borderRadius: 8, width: 36, height: 36, justifyContent: 'center', alignItems: 'center' }}
-                    >
-                      <Minus size={16} color={theme.colors.textPrimary} />
-                    </TouchableOpacity>
-                    <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3, marginHorizontal: 16, minWidth: 24, textAlign: 'center' }}>
-                      {detailMaxPerCustomer}
-                    </Text>
-                    <TouchableOpacity
-                      onPress={() => setDetailMaxPerCustomer(detailMaxPerCustomer + 1)}
-                      style={{ backgroundColor: theme.colors.bg, borderRadius: 8, width: 36, height: 36, justifyContent: 'center', alignItems: 'center' }}
-                    >
-                      <Plus size={16} color={theme.colors.textPrimary} />
-                    </TouchableOpacity>
-                  </View>
-                </View>
-                )}
-
                 {/* Pickup Time */}
                 <TouchableOpacity
                   onPress={() => setShowPickupEditor(!showPickupEditor)}
