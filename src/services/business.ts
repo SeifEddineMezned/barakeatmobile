@@ -29,6 +29,11 @@ export interface BusinessProfileFromAPI {
   organization_id?: number | null;
   reserved_today?: number;
   permissions?: Record<string, unknown> | null;
+  // Organization/location fields (new model)
+  org_name?: string | null;
+  display_name?: string | null;
+  location_name?: string | null;
+  team_context?: { role?: string; permissions?: Record<string, unknown> | null; organization_id?: number } | null;
 }
 
 export async function fetchMyProfile(): Promise<BusinessProfileFromAPI> {
@@ -58,13 +63,14 @@ export async function updateMyProfile(formData: FormData, userId?: number): Prom
 export interface BusinessBasketFromAPI {
   id: number;
   restaurant_id?: number;
+  location_id?: number;
   name: string;
   description?: string | null;
   category?: string | null;
   original_price?: string | number;
   selling_price?: string | number;
   quantity?: number;
-  available_quantity?: number;
+  daily_reinitialization_quantity?: number;
   restaurant_available_quantity?: number | null;
   pickup_start_time?: string | null;
   pickup_end_time?: string | null;
@@ -78,10 +84,12 @@ export async function fetchMyBaskets(): Promise<BusinessBasketFromAPI[]> {
   console.log('[Business] Fetching my baskets');
   const res = await apiClient.get<BusinessBasketFromAPI[] | { baskets: BusinessBasketFromAPI[] } | { data: BusinessBasketFromAPI[] }>('/api/baskets/my/baskets');
   const data = res.data;
-  if (Array.isArray(data)) return data;
-  if (data && typeof data === 'object' && 'baskets' in data) return (data as any).baskets;
-  if (data && typeof data === 'object' && 'data' in data) return (data as any).data;
-  return [];
+  let baskets: BusinessBasketFromAPI[] = [];
+  if (Array.isArray(data)) baskets = data;
+  else if (data && typeof data === 'object' && 'baskets' in data) baskets = (data as any).baskets;
+  else if (data && typeof data === 'object' && 'data' in data) baskets = (data as any).data;
+  console.log('[Business] Baskets raw:', baskets.map(b => ({ id: b.id, quantity: b.quantity, daily_reinitialization_quantity: b.daily_reinitialization_quantity, status: b.status })));
+  return baskets;
 }
 
 export async function createBasket(formData: FormData): Promise<BusinessBasketFromAPI> {

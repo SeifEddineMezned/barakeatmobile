@@ -281,6 +281,8 @@ export default function TabLayout() {
               // so it's always correct regardless of how 'nearby' shifts raw indexes.
               const isFocused = route.name === focusedRouteName;
               const color = isFocused ? theme.colors.primary : theme.colors.textSecondary;
+              const iconStroke = isFocused ? '#FFFFFF' : theme.colors.textSecondary;
+              const iconFill = isFocused ? theme.colors.primary : 'transparent';
 
               const onPress = () => {
                 const event = navigation.emit({
@@ -295,12 +297,11 @@ export default function TabLayout() {
 
               let icon = null;
               const iconSize = 22;
-              const fill = isFocused ? color : 'transparent';
               switch (route.name) {
-                case 'index': icon = <TabIcon icon={Search} color={color} size={iconSize} focused={isFocused} fill={fill} />; break;
-                case 'orders': icon = <TabIcon icon={ShoppingBag} color={color} size={iconSize} focused={isFocused} fill={fill} />; break;
-                case 'favorites': icon = <TabIcon icon={Heart} color={color} size={iconSize} focused={isFocused} fill={fill} />; break;
-                case 'profile': icon = <TabIcon icon={User} color={color} size={iconSize} focused={isFocused} fill={fill} />; break;
+                case 'index': icon = <TabIcon icon={Search} color={color} size={iconSize} focused={isFocused} fill={iconFill} />; break;
+                case 'orders': icon = <TabIcon icon={ShoppingBag} color={color} size={iconSize} focused={isFocused} fill={iconFill} />; break;
+                case 'favorites': icon = <TabIcon icon={Heart} color={color} size={iconSize} focused={isFocused} fill={iconFill} />; break;
+                case 'profile': icon = <TabIcon icon={User} color={color} size={iconSize} focused={isFocused} fill={iconFill} />; break;
               }
 
               return (
@@ -342,7 +343,7 @@ export default function TabLayout() {
         options={{
           title: t('home.discover'),
           headerShown: false,
-          tabBarIcon: ({ color, size, focused }) => <TabIcon icon={Search} color={color} size={size} focused={focused} fill={focused ? color : 'transparent'} />,
+          tabBarIcon: ({ size, focused }) => <TabIcon icon={Search} color={focused ? '#FFFFFF' : theme.colors.textSecondary} size={size} focused={focused} fill={focused ? theme.colors.primary : 'transparent'} />,
         }}
       />
       {/* nearby = no tab entry; accessed via router.push from Découvrir */}
@@ -356,15 +357,15 @@ export default function TabLayout() {
         name="orders"
         options={{
           title: t('orders.title'),
-          tabBarIcon: ({ color, size, focused }) => <TabIcon icon={ShoppingBag} color={color} size={size} focused={focused} fill={focused ? color : 'transparent'} />,
+          tabBarIcon: ({ size, focused }) => <TabIcon icon={ShoppingBag} color={focused ? '#FFFFFF' : theme.colors.textSecondary} size={size} focused={focused} fill={focused ? theme.colors.primary : 'transparent'} />,
         }}
       />
       <Tabs.Screen
         name="favorites"
         options={{
           title: t('favorites.title'),
-          tabBarIcon: ({ color, size, focused }) => (
-            <TabIcon icon={Heart} color={color} size={size} focused={focused} fill={focused ? color : 'transparent'} />
+          tabBarIcon: ({ size, focused }) => (
+            <TabIcon icon={Heart} color={focused ? '#FFFFFF' : theme.colors.textSecondary} size={size} focused={focused} fill={focused ? theme.colors.primary : 'transparent'} />
           ),
         }}
       />
@@ -372,7 +373,7 @@ export default function TabLayout() {
         name="profile"
         options={{
           title: t('profile.title'),
-          tabBarIcon: ({ color, size, focused }) => <TabIcon icon={User} color={color} size={size} focused={focused} fill={focused ? color : 'transparent'} />,
+          tabBarIcon: ({ size, focused }) => <TabIcon icon={User} color={focused ? '#FFFFFF' : theme.colors.textSecondary} size={size} focused={focused} fill={focused ? theme.colors.primary : 'transparent'} />,
         }}
       />
     </Tabs>

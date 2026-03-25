@@ -693,11 +693,11 @@ export default function ProfileScreen() {
       <Modal
         visible={statModal !== null}
         transparent
-        animationType="slide"
+        animationType="fade"
         onRequestClose={() => setStatModal(null)}
       >
         <TouchableOpacity
-          style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' }}
+          style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 24 }}
           activeOpacity={1}
           onPress={() => setStatModal(null)}
         >
@@ -706,23 +706,13 @@ export default function ProfileScreen() {
             onPress={() => {}}
             style={{
               backgroundColor: theme.colors.surface,
-              borderTopLeftRadius: 24,
-              borderTopRightRadius: 24,
+              borderRadius: 24,
               padding: 24,
               maxHeight: '70%',
+              width: '100%',
+              maxWidth: 400,
             }}
           >
-            {/* Drag handle */}
-            <View
-              style={{
-                width: 40,
-                height: 4,
-                backgroundColor: theme.colors.divider,
-                borderRadius: 2,
-                alignSelf: 'center',
-                marginBottom: theme.spacing.lg,
-              }}
-            />
 
             {/* Money Saved */}
             {statModal === 'money' && (() => {

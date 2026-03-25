@@ -17,7 +17,7 @@ import { fetchReviewsByRestaurant } from '@/src/services/reviews';
 import { normalizeRestaurantToBasket } from '@/src/utils/normalizeRestaurant';
 import { useHeroStore } from '@/src/stores/heroStore';
 import { useAddressStore } from '@/src/stores/addressStore';
-import { LocationPickerModal } from '@/src/components/LocationPickerModal';
+// LocationPickerModal replaced by full-page /address-picker route
 import { StatusBar } from 'expo-status-bar';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
@@ -47,7 +47,7 @@ export default function HomeScreen() {
   const [radius, setRadius] = useState(5);
   const [carouselPage, setCarouselPage] = useState(0);
   const carouselRef = useRef<ScrollView>(null);
-  const [showAddressModal, setShowAddressModal] = useState(false);
+  // Address picker is now a full-page route
   const { addresses, selectedId, hydrate: hydrateAddresses } = useAddressStore();
   const selectedAddress = addresses.find((a) => a.id === selectedId) ?? null;
 
@@ -65,6 +65,7 @@ export default function HomeScreen() {
   // Track the raw animated value for drag
   const heroRawRef = useRef(1);
   const dragStartRef = useRef(1);
+  const scrollOffsetRef = useRef(0);
 
   useEffect(() => {
     const listenerId = heroHeight.addListener(({ value }) => { heroRawRef.current = value; });
@@ -82,22 +83,30 @@ export default function HomeScreen() {
     setHeroVisibleGlobal(visible);
   }, [heroHeight, setHeroVisibleGlobal]);
 
-  const dragPanResponder = useMemo(() =>
+  // PanResponder on the entire content section (search + cards area)
+  // Uses capture phase to intercept before ScrollView claims the gesture
+  const contentPanResponder = useMemo(() =>
     PanResponder.create({
-      onStartShouldSetPanResponder: () => true,
-      onMoveShouldSetPanResponder: (_, g) => Math.abs(g.dy) > 5,
+      onStartShouldSetPanResponder: () => false,
+      onMoveShouldSetPanResponder: () => false,
+      onMoveShouldSetPanResponderCapture: (_, g) => {
+        // Only intercept clearly vertical gestures
+        if (Math.abs(g.dy) <= Math.abs(g.dx) || Math.abs(g.dy) < 12) return false;
+        // Swipe up while hero is visible → capture to hide hero
+        if (heroRawRef.current > 0.1 && g.dy < -12) return true;
+        // Swipe down while hero is hidden AND scroll is at top → capture to show hero
+        if (heroRawRef.current < 0.1 && g.dy > 12 && scrollOffsetRef.current <= 2) return true;
+        return false;
+      },
       onPanResponderGrant: () => {
-        // Capture starting value when drag begins
         dragStartRef.current = heroRawRef.current;
       },
       onPanResponderMove: (_, g) => {
-        // dy negative = dragging up = shrink hero
         const newVal = dragStartRef.current + (g.dy / HERO_HEIGHT);
         heroHeight.setValue(Math.max(0, Math.min(1, newVal)));
       },
       onPanResponderRelease: (_, g) => {
         const currentVal = heroRawRef.current;
-        // Use velocity for quick flicks, position for slow drags
         if (g.vy < -0.5 || currentVal < 0.4) {
           snapHero(false);
         } else if (g.vy > 0.5 || currentVal > 0.6) {
@@ -261,7 +270,7 @@ export default function HomeScreen() {
         alignItems: 'center',
       }}>
         <TouchableOpacity
-          onPress={() => setShowAddressModal(true)}
+          onPress={() => router.push('/address-picker' as never)}
           style={{
             flexDirection: 'row',
             alignItems: 'center',
@@ -391,24 +400,20 @@ export default function HomeScreen() {
         </View>
       </Animated.View>
 
-      {/* Content section with curved top */}
-      <View style={{
-        flex: 1,
-        backgroundColor: theme.colors.bg,
-        borderTopLeftRadius: 28,
-        borderTopRightRadius: 28,
-        paddingTop: 0,
-        marginTop: -10,
-      }}>
-        {/* Drag handle — drag up to hide hero, drag down to show */}
-        <View
-          {...dragPanResponder.panHandlers}
-          style={{
-            alignItems: 'center',
-            paddingTop: 12,
-            paddingBottom: 12,
-          }}
-        >
+      {/* Content section with curved top — panHandlers on entire section for hero show/hide */}
+      <View
+        {...contentPanResponder.panHandlers}
+        style={{
+          flex: 1,
+          backgroundColor: theme.colors.bg,
+          borderTopLeftRadius: 28,
+          borderTopRightRadius: 28,
+          paddingTop: 0,
+          marginTop: -10,
+        }}
+      >
+        {/* Drag handle (visual indicator) */}
+        <View style={{ alignItems: 'center', paddingTop: 12, paddingBottom: 12 }}>
           <View style={{
             width: 44,
             height: 5,
@@ -455,6 +460,8 @@ export default function HomeScreen() {
           style={styles.scrollView}
           contentContainerStyle={{ paddingHorizontal: theme.spacing.xl, paddingTop: theme.spacing.lg, paddingBottom: 120 }}
           showsVerticalScrollIndicator={false}
+          scrollEventThrottle={16}
+          onScroll={(e) => { scrollOffsetRef.current = e.nativeEvent.contentOffset.y; }}
         >
           {/* Small map trigger — tinted pin pill, opens map ABOVE tabs via root stack */}
           <TouchableOpacity
@@ -696,7 +703,6 @@ export default function HomeScreen() {
         </View>
       </Modal>
 
-      <LocationPickerModal visible={showAddressModal} onClose={() => setShowAddressModal(false)} />
     </Animated.View>
   );
 }

@@ -46,7 +46,7 @@ export default function BusinessDetailScreen() {
         name: b.name === restaurant?.name ? 'Panier Surprise' : (b.name ?? 'Panier Surprise'),
         originalPrice: Number(b.originalPrice ?? b.original_price ?? 0),
         discountedPrice: Number(b.discountedPrice ?? b.selling_price ?? 0),
-        quantityLeft: b.quantityLeft ?? b.available_quantity ?? 0,
+        quantityLeft: b.quantityLeft ?? b.quantity ?? 0,
         pickupStart: (b.pickupWindow?.start ?? b.pickup_start_time?.substring(0, 5)) || null,
         pickupEnd: (b.pickupWindow?.end ?? b.pickup_end_time?.substring(0, 5)) || null,
         imageUrl: b.imageUrl ?? b.image_url ?? null,
@@ -197,7 +197,7 @@ export default function BusinessDetailScreen() {
             displayBaskets.map((basket) => (
               <TouchableOpacity
                 key={basket.id}
-                onPress={() => router.push(`/basket/${restaurant.id}` as never)}
+                onPress={() => router.push(`/basket/${basket.id}` as never)}
                 style={{
                   backgroundColor: theme.colors.surface,
                   borderRadius: theme.radii.r16,

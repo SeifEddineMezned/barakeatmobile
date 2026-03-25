@@ -101,7 +101,7 @@ export default function BusinessTabLayout() {
   const todayOrdersQuery = useQuery({
     queryKey: ['today-orders-count'],
     queryFn: fetchTodayOrders,
-    enabled: isAuthenticated,
+    enabled: isAuthenticated && user?.role === 'business',
     refetchInterval: 30_000,
     staleTime: 15_000,
   });
@@ -258,6 +258,8 @@ export default function BusinessTabLayout() {
               const { options } = descriptors[route.key];
               const isFocused = state.index === index;
               const color = isFocused ? theme.colors.primary : theme.colors.textSecondary;
+              const iconStroke = isFocused ? '#FFFFFF' : theme.colors.textSecondary;
+              const iconFill = isFocused ? theme.colors.primary : 'transparent';
 
               const onPress = () => {
                 const event = navigation.emit({
@@ -273,17 +275,16 @@ export default function BusinessTabLayout() {
               let icon = null;
               let badge = 0;
               const iconSize = 22;
-              const fill = isFocused ? color : 'transparent';
               switch (route.name) {
-                case 'dashboard': icon = <LayoutDashboard size={iconSize} color={color} fill={fill} />; break;
-                case 'my-baskets': icon = <ShoppingBag size={iconSize} color={color} fill={fill} />; break;
+                case 'dashboard': icon = <LayoutDashboard size={iconSize} color={iconStroke} fill={iconFill} />; break;
+                case 'my-baskets': icon = <ShoppingBag size={iconSize} color={iconStroke} fill={iconFill} />; break;
                 case 'incoming-orders':
-                  icon = <ClipboardList size={iconSize} color={color} fill={fill} />;
+                  icon = <ClipboardList size={iconSize} color={iconStroke} fill={iconFill} />;
                   if (pendingOrderCount > 0) {
                     badge = pendingOrderCount;
                   }
                   break;
-                case 'business-profile': icon = <User size={iconSize} color={color} fill={fill} />; break;
+                case 'business-profile': icon = <User size={iconSize} color={iconStroke} fill={iconFill} />; break;
               }
 
               return (
@@ -343,28 +344,28 @@ export default function BusinessTabLayout() {
         options={{
           title: t('business.dashboard.title'),
           headerShown: false,
-          tabBarIcon: ({ color, size, focused }) => <LayoutDashboard size={size} color={color} fill={focused ? color : 'transparent'} />,
+          tabBarIcon: ({ size, focused }) => <LayoutDashboard size={size} color={focused ? '#FFFFFF' : theme.colors.textSecondary} fill={focused ? theme.colors.primary : 'transparent'} />,
         }}
       />
       <Tabs.Screen
         name="my-baskets"
         options={{
           title: t('business.baskets.title'),
-          tabBarIcon: ({ color, size, focused }) => <ShoppingBag size={size} color={color} fill={focused ? color : 'transparent'} />,
+          tabBarIcon: ({ size, focused }) => <ShoppingBag size={size} color={focused ? '#FFFFFF' : theme.colors.textSecondary} fill={focused ? theme.colors.primary : 'transparent'} />,
         }}
       />
       <Tabs.Screen
         name="incoming-orders"
         options={{
           title: t('business.orders.title'),
-          tabBarIcon: ({ color, size, focused }) => <ClipboardList size={size} color={color} fill={focused ? color : 'transparent'} />,
+          tabBarIcon: ({ size, focused }) => <ClipboardList size={size} color={focused ? '#FFFFFF' : theme.colors.textSecondary} fill={focused ? theme.colors.primary : 'transparent'} />,
         }}
       />
       <Tabs.Screen
         name="business-profile"
         options={{
           title: t('business.profile.title'),
-          tabBarIcon: ({ color, size, focused }) => <User size={size} color={color} fill={focused ? color : 'transparent'} />,
+          tabBarIcon: ({ size, focused }) => <User size={size} color={focused ? '#FFFFFF' : theme.colors.textSecondary} fill={focused ? theme.colors.primary : 'transparent'} />,
         }}
       />
     </Tabs>

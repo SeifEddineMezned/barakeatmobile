@@ -48,16 +48,27 @@ export default function MyBasketsScreen() {
   const basketUpdateMutation = useMutation({
     mutationFn: async ({ id, data }: { id: string; data: Record<string, any> }) => {
       console.log('[MyBaskets] Saving basket', id, 'with:', JSON.stringify(data));
-      return updateBasketAPI(id, data);
+      const result = await updateBasketAPI(id, data);
+      console.log('[MyBaskets] Server returned:', JSON.stringify({ id: result?.id, quantity: result?.quantity, daily_reinitialization_quantity: result?.daily_reinitialization_quantity, status: result?.status }));
+      return result;
     },
-    onSuccess: () => {
-      console.log('[MyBaskets] Basket saved OK');
+    onSuccess: (updatedBasket: BusinessBasketFromAPI) => {
+      console.log('[MyBaskets] Basket saved OK, quantity:', updatedBasket?.quantity);
+      // Immediately patch the React Query cache so the UI updates without waiting for refetch
+      queryClient.setQueryData<BusinessBasketFromAPI[]>(['my-baskets'], (old) => {
+        if (!old) return old;
+        return old.map((b) =>
+          String(b.id) === String(updatedBasket.id)
+            ? { ...b, ...updatedBasket }
+            : b
+        );
+      });
       void queryClient.invalidateQueries({ queryKey: ['my-baskets'] });
       void queryClient.invalidateQueries({ queryKey: ['my-profile'] });
     },
     onError: (err: any) => {
-      console.error('[MyBaskets] Save FAILED:', err?.response?.status, JSON.stringify(err?.response?.data), err?.message);
-      Alert.alert('Error', err?.response?.data?.error ?? err?.message ?? 'Failed to save');
+      console.error('[MyBaskets] Save FAILED:', err?.status, err?.message, JSON.stringify(err?.data));
+      Alert.alert('Error', err?.data?.error ?? err?.message ?? 'Failed to save');
     },
   });
 
@@ -78,15 +89,15 @@ export default function MyBasketsScreen() {
           start: b.pickup_start_time?.substring(0, 5) ?? '18:00',
           end: b.pickup_end_time?.substring(0, 5) ?? '19:00',
         },
-        quantityLeft: b.restaurant_available_quantity ?? b.available_quantity ?? b.quantity ?? 0,
-        quantityTotal: b.quantity ?? 0,
+        quantityLeft: Number(b.quantity) || 0,
+        quantityTotal: Number(b.daily_reinitialization_quantity) || 0,
         distance: 0,
         address: '',
         latitude: 0,
         longitude: 0,
         exampleItems: [],
         imageUrl: b.image_url ?? undefined,
-        isActive: b.status !== 'deleted' && (b.restaurant_available_quantity ?? b.available_quantity ?? b.quantity ?? 0) > 0,
+        isActive: b.status !== 'deleted' && Number(b.quantity) > 0,
         description: b.description ?? undefined,
         maxPerCustomer: (b as any).max_per_customer ?? 5,
       }))
@@ -300,12 +311,14 @@ export default function MyBasketsScreen() {
                       </View>
                       <View style={[styles.metaRow, { marginTop: 6 }]}>
                         <View style={[styles.metaChip, { backgroundColor: isSoldOut ? theme.colors.error + '15' : theme.colors.primary + '12', borderRadius: theme.radii.pill, paddingHorizontal: 8, paddingVertical: 3 }]}>
+                          <ShoppingBag size={10} color={isSoldOut ? theme.colors.error : theme.colors.primary} />
                           <Text style={[{
                             color: isSoldOut ? theme.colors.error : theme.colors.primary,
                             ...theme.typography.caption,
                             fontWeight: '600' as const,
+                            marginLeft: 4,
                           }]}>
-                            {isSoldOut ? t('business.baskets.soldOut') : `${basket.quantityLeft} ${t('business.baskets.of')} ${basket.quantityTotal}`}
+                            {isSoldOut ? t('business.baskets.soldOut') : basket.quantityLeft}
                           </Text>
                         </View>
                         <View style={[styles.metaChip, { backgroundColor: theme.colors.bg, borderRadius: theme.radii.pill, paddingHorizontal: 8, paddingVertical: 3, marginLeft: 6 }]}>
@@ -348,19 +361,6 @@ export default function MyBasketsScreen() {
                   </View>
                 )}
 
-                {/* Bottom info bar: quantity only */}
-                <View style={{
-                  borderTopWidth: 1,
-                  borderTopColor: theme.colors.divider,
-                  paddingHorizontal: theme.spacing.lg,
-                  paddingVertical: theme.spacing.sm,
-                  flexDirection: 'row',
-                  alignItems: 'center',
-                }}>
-                  <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption }}>
-                    {basket.quantityLeft}/{basket.quantityTotal}
-                  </Text>
-                </View>
 
               </View>
             );
@@ -368,20 +368,17 @@ export default function MyBasketsScreen() {
         )}
       </ScrollView>
 
-      {/* Detail Bottom Sheet Modal */}
-      <Modal visible={detailBasket !== null} transparent animationType="slide" onRequestClose={() => setDetailBasket(null)}>
-        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' }}>
+      {/* Detail Modal */}
+      <Modal visible={detailBasket !== null} transparent animationType="fade" onRequestClose={() => setDetailBasket(null)}>
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', alignItems: 'center', padding: 16 }}>
           <View style={{
             backgroundColor: theme.colors.bg,
-            borderTopLeftRadius: 28,
-            borderTopRightRadius: 28,
+            borderRadius: 24,
             maxHeight: '90%',
+            width: '100%',
+            maxWidth: 420,
             ...theme.shadows.shadowLg,
           }}>
-            {/* Drag handle */}
-            <View style={{ alignItems: 'center', paddingVertical: 10 }}>
-              <View style={{ width: 36, height: 4, borderRadius: 2, backgroundColor: theme.colors.divider }} />
-            </View>
 
             <ScrollView showsVerticalScrollIndicator={false}>
               {/* Pause pill + close button header */}
@@ -650,10 +647,7 @@ export default function MyBasketsScreen() {
               <TouchableOpacity
                 onPress={() => {
                   if (detailBasket) {
-                    // Also update restaurant-level available_quantity for backward compat
-                    qtyMutation.mutate(detailTodayQty);
-                    // Send ALL fields to PUT /api/baskets/:id including available_quantity
-                    // Close modal only after save succeeds so the list refetches first
+                    // Update the basket's available_quantity (backend also syncs to location)
                     basketUpdateMutation.mutate(
                       {
                         id: detailBasket.id,
@@ -661,15 +655,14 @@ export default function MyBasketsScreen() {
                           name: detailBasket.name,
                           original_price: detailBasket.originalPrice,
                           selling_price: detailBasket.discountedPrice,
-                          quantity: detailDailyQty,
-                          available_quantity: detailTodayQty,
+                          daily_reinitialization_quantity: detailDailyQty,
+                          quantity: detailTodayQty,
                           pickup_start_time: `${pickupStartTime}:00`,
                           pickup_end_time: `${pickupEndTime}:00`,
                         },
                       },
                       {
                         onSuccess: () => {
-                          updateBasket(detailBasket.id, { quantityLeft: detailTodayQty, quantityTotal: detailDailyQty });
                           setDetailBasket(null);
                         },
                       }

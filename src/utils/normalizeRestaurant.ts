@@ -5,12 +5,13 @@ import type { RestaurantFromAPI } from '@/src/services/restaurants';
 export interface RawBasketFromAPI {
   id: number | string;
   restaurant_id?: number | string;
+  location_id?: number | string | null;
   name?: string | null;
   description?: string | null;
   original_price?: number | string | null;
   selling_price?: number | string | null;
   quantity?: number | null;
-  available_quantity?: number | null;
+  daily_reinitialization_quantity?: number | null;
   pickup_start_time?: string | null;
   pickup_end_time?: string | null;
   status?: string | null;
@@ -19,6 +20,10 @@ export interface RawBasketFromAPI {
   restaurant_name?: string | null;
   restaurant_address?: string | null;
   restaurant_image?: string | null;
+  // Organization/location fields (new model)
+  org_name?: string | null;
+  org_image_url?: string | null;
+  location_address?: string | null;
   [key: string]: unknown;
 }
 
@@ -29,14 +34,14 @@ export function normalizeRawBasketToBasket(b: RawBasketFromAPI, fallbackRestaura
     ? Math.round(((originalPrice - discountedPrice) / originalPrice) * 100)
     : 0;
 
-  const quantityLeft = Number(b.available_quantity ?? b.quantity ?? 0);
-  const quantityTotal = Number(b.quantity ?? 0);
+  const quantityLeft = Number(b.quantity ?? 0);
+  const quantityTotal = Number(b.daily_reinitialization_quantity ?? 0);
 
   return {
     id: String(b.id),
-    merchantId: String(b.restaurant_id ?? ''),
-    merchantName: b.restaurant_name ?? fallbackRestaurantName ?? 'Unknown',
-    merchantLogo: b.restaurant_image ?? undefined,
+    merchantId: String(b.location_id ?? b.restaurant_id ?? ''),
+    merchantName: b.org_name ?? b.restaurant_name ?? fallbackRestaurantName ?? 'Unknown',
+    merchantLogo: b.org_image_url ?? b.restaurant_image ?? undefined,
     merchantRating: undefined,
     reviewCount: undefined,
     reviews: undefined,
@@ -53,7 +58,7 @@ export function normalizeRawBasketToBasket(b: RawBasketFromAPI, fallbackRestaura
     quantityLeft,
     quantityTotal: Math.max(quantityTotal, quantityLeft),
     distance: 0,
-    address: b.restaurant_address ?? '',
+    address: b.location_address ?? b.restaurant_address ?? '',
     latitude: null as unknown as number,
     longitude: null as unknown as number,
     hasCoords: false,
@@ -80,8 +85,8 @@ export function normalizeRestaurantToBasket(r: RestaurantFromAPI): Basket {
     ? Math.round(((originalPrice - discountedPrice) / originalPrice) * 100)
     : 0;
 
-  const availableLeft = r.available_left ?? r.available_quantity ?? 0;
-  const quantityTotal = r.available_quantity ?? r.default_daily_quantity ?? 0;
+  const availableLeft = Number(r.available_left ?? r.available_quantity ?? 0);
+  const quantityTotal = Number(r.available_quantity || r.default_daily_quantity || 0);
 
   const isActive = !r.is_paused
     && r.availability_status !== 'paused'

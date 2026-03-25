@@ -56,16 +56,12 @@ export function LocationPickerModal({ visible, onClose }: Props) {
   };
 
   return (
-    <Modal visible={visible} animationType="slide" transparent onRequestClose={handleClose}>
+    <Modal visible={visible} animationType="fade" transparent onRequestClose={handleClose}>
       <View style={styles.overlay}>
 
         {/* ── Step: Address List ────────────────────────────────────── */}
         {step === 'list' && (
-          <View style={[styles.sheet, { backgroundColor: theme.colors.bg, maxHeight: SCREEN_HEIGHT * 0.75 }]}>
-            <View style={styles.handle}>
-              <View style={[styles.handleBar, { backgroundColor: theme.colors.divider }]} />
-            </View>
-
+          <View style={[styles.sheet, { backgroundColor: theme.colors.bg, maxHeight: SCREEN_HEIGHT * 0.7 }]}>
             <View style={[styles.sheetHeader, { borderBottomColor: theme.colors.divider }]}>
               <Text style={[theme.typography.h2, { color: theme.colors.textPrimary, flex: 1 }]}>Addresses</Text>
               <TouchableOpacity onPress={handleClose} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
@@ -132,7 +128,7 @@ export function LocationPickerModal({ visible, onClose }: Props) {
 
         {/* ── Step: Map Pin Picker ──────────────────────────────────── */}
         {step === 'map' && (
-          <View style={[styles.mapSheet, { backgroundColor: theme.colors.bg, height: SCREEN_HEIGHT * 0.85 }]}>
+          <View style={[styles.mapSheet, { backgroundColor: theme.colors.bg, height: SCREEN_HEIGHT * 0.75 }]}>
             <View style={[styles.mapHeader, { backgroundColor: theme.colors.bg, borderBottomColor: theme.colors.divider }]}>
               <TouchableOpacity onPress={() => setStep('list')} style={{ marginRight: 12 }}>
                 <ChevronLeft size={24} color={theme.colors.textPrimary} />
@@ -192,10 +188,6 @@ export function LocationPickerModal({ visible, onClose }: Props) {
         {/* ── Step: Label Form ──────────────────────────────────────── */}
         {step === 'form' && (
           <View style={[styles.sheet, { backgroundColor: theme.colors.bg }]}>
-            <View style={styles.handle}>
-              <View style={[styles.handleBar, { backgroundColor: theme.colors.divider }]} />
-            </View>
-
             <View style={[styles.sheetHeader, { borderBottomColor: theme.colors.divider }]}>
               <TouchableOpacity onPress={() => setStep('map')} style={{ marginRight: 12 }}>
                 <ChevronLeft size={24} color={theme.colors.textPrimary} />
@@ -269,21 +261,14 @@ const styles = StyleSheet.create({
   overlay: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.45)',
-    justifyContent: 'flex-end',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
   },
   sheet: {
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-  },
-  handle: {
-    alignItems: 'center',
-    paddingTop: 12,
-    paddingBottom: 4,
-  },
-  handleBar: {
-    width: 40,
-    height: 4,
-    borderRadius: 2,
+    borderRadius: 24,
+    width: '100%',
+    maxWidth: 420,
   },
   sheetHeader: {
     flexDirection: 'row',
@@ -310,9 +295,10 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
   },
   mapSheet: {
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
+    borderRadius: 24,
     overflow: 'hidden',
+    width: '100%',
+    maxWidth: 420,
   },
   mapHeader: {
     flexDirection: 'row',

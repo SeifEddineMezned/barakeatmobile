@@ -27,6 +27,11 @@ export interface RestaurantFromAPI {
   pickup_expired?: boolean;
   created_at?: string;
   updated_at?: string;
+  // Organization/location fields (new model)
+  organization_id?: number | null;
+  org_name?: string | null;
+  cover_image_url?: string | null;
+  display_name?: string | null;
 }
 
 export async function fetchRestaurants(): Promise<RestaurantFromAPI[]> {
