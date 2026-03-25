@@ -183,6 +183,7 @@
     "emptyTitle": "Aucune commande pour l'instant",
     "emptyDesc": "Réservez un panier surprise pour économiser de la nourriture et de l'argent !",
     "findBasket": "Trouver un Panier Surprise",
+    "emptyPastDesc": "Vos commandes terminées et annulées apparaîtront ici.",
     "yourImpact": "Votre Impact",
     "todayPickups": "Retraits d'Aujourd'hui",
     "startsIn": "Commence dans",
@@ -289,6 +290,18 @@
     "submit": "Envoyer le signalement",
     "success": "Signalement envoyé. Merci.",
     "error": "Impossible d'envoyer le signalement."
+  },
+  "addressPicker": {
+    "title": "Mes Adresses",
+    "chooseLocation": "Choisir l'emplacement",
+    "labelPlace": "Nommer ce lieu",
+    "addNew": "Ajouter une adresse",
+    "savedAddresses": "Adresses enregistrées",
+    "editLocation": "Modifier l'emplacement",
+    "confirmLocation": "Confirmer l'emplacement",
+    "saveAddress": "Enregistrer l'adresse",
+    "coordinates": "Coordonnées",
+    "dragToMove": "Déplacez la carte pour repositionner le repère"
   },
   "map": {
     "title": "À Proximité",

@@ -1,13 +1,14 @@
 import React, { useState } from 'react';
 import {
   View, Text, TouchableOpacity, ScrollView,
-  TextInput, Platform, Dimensions, StyleSheet,
+  TextInput, Platform, StyleSheet,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { MapPin, Home, Briefcase, Plus, ChevronLeft, Check, Trash2 } from 'lucide-react-native';
+import { MapPin, Home, Briefcase, Plus, ChevronLeft, Check, Trash2, Edit3 } from 'lucide-react-native';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { useAddressStore, type SavedAddress } from '@/src/stores/addressStore';
 import { useRouter } from 'expo-router';
+import { useTranslation } from 'react-i18next';
 
 let MapView: any = null;
 let Marker: any = null;
@@ -17,36 +18,52 @@ if (Platform.OS !== 'web') {
   Marker = maps.Marker;
 }
 
-const SCREEN_HEIGHT = Dimensions.get('window').height;
 const QUICK_LABELS = ['Home', 'Work'];
 
-type Step = 'list' | 'map' | 'form';
+type Step = 'list' | 'map' | 'form' | 'edit';
 
 export default function AddressPickerScreen() {
   const theme = useTheme();
   const router = useRouter();
-  const { addresses, selectedId, addAddress, removeAddress, selectAddress } = useAddressStore();
+  const { t } = useTranslation();
+  const { addresses, selectedId, addAddress, updateAddress, removeAddress, selectAddress } = useAddressStore();
 
   const [step, setStep] = useState<Step>('list');
   const [pendingRegion, setPendingRegion] = useState({ lat: 36.8065, lng: 10.1815 });
   const [labelInput, setLabelInput] = useState('');
-  const [previewAddress, setPreviewAddress] = useState<SavedAddress | null>(null);
+  const [editingAddress, setEditingAddress] = useState<SavedAddress | null>(null);
+
+  // Default: show map of the currently selected address
+  const selectedAddress = addresses.find((a) => a.id === selectedId) ?? null;
 
   const reset = () => {
     setStep('list');
     setLabelInput('');
-    setPreviewAddress(null);
+    setEditingAddress(null);
   };
 
   const handleBack = () => {
     if (step === 'form') { setStep('map'); return; }
     if (step === 'map') { reset(); return; }
+    if (step === 'edit') { reset(); return; }
     router.back();
   };
 
   const handleSelectAddress = (addr: SavedAddress) => {
-    setPreviewAddress(addr);
     selectAddress(addr.id);
+  };
+
+  const handleEditAddress = (addr: SavedAddress) => {
+    setEditingAddress(addr);
+    setPendingRegion({ lat: addr.lat, lng: addr.lng });
+    setStep('edit');
+  };
+
+  const handleEditConfirm = () => {
+    if (editingAddress) {
+      void updateAddress(editingAddress.id, { lat: pendingRegion.lat, lng: pendingRegion.lng });
+    }
+    reset();
   };
 
   const handleMapConfirm = () => setStep('form');
@@ -57,7 +74,11 @@ export default function AddressPickerScreen() {
     reset();
   };
 
-  const title = step === 'list' ? 'Addresses' : step === 'map' ? 'Choose location' : 'Label this place';
+  const title =
+    step === 'list' ? t('addressPicker.title')
+    : step === 'map' ? t('addressPicker.chooseLocation')
+    : step === 'edit' ? t('addressPicker.editLocation')
+    : t('addressPicker.labelPlace');
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]} edges={['top']}>
@@ -74,15 +95,15 @@ export default function AddressPickerScreen() {
       {/* ── Step: Address List ──────────────────────────────── */}
       {step === 'list' && (
         <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 48, paddingTop: 16 }}>
-          {/* Map preview for selected address */}
-          {previewAddress && (
+          {/* Map preview for selected address — shown by default */}
+          {selectedAddress && (
             <View style={[styles.mapPreview, { borderRadius: theme.radii.r16, overflow: 'hidden', ...theme.shadows.shadowSm, marginBottom: 20 }]}>
               {MapView && Platform.OS !== 'web' ? (
                 <MapView
                   style={{ width: '100%', height: 200 }}
                   region={{
-                    latitude: previewAddress.lat,
-                    longitude: previewAddress.lng,
+                    latitude: selectedAddress.lat,
+                    longitude: selectedAddress.lng,
                     latitudeDelta: 0.005,
                     longitudeDelta: 0.005,
                   }}
@@ -93,7 +114,7 @@ export default function AddressPickerScreen() {
                 >
                   {Marker && (
                     <Marker
-                      coordinate={{ latitude: previewAddress.lat, longitude: previewAddress.lng }}
+                      coordinate={{ latitude: selectedAddress.lat, longitude: selectedAddress.lng }}
                     />
                   )}
                 </MapView>
@@ -101,10 +122,10 @@ export default function AddressPickerScreen() {
                 <View style={{ width: '100%', height: 200, backgroundColor: theme.colors.divider, alignItems: 'center', justifyContent: 'center' }}>
                   <MapPin size={32} color={theme.colors.muted} />
                   <Text style={[theme.typography.bodySm, { color: theme.colors.muted, marginTop: 8 }]}>
-                    {previewAddress.label}
+                    {selectedAddress.label}
                   </Text>
                   <Text style={[theme.typography.caption, { color: theme.colors.textSecondary, marginTop: 4 }]}>
-                    {previewAddress.lat.toFixed(4)}, {previewAddress.lng.toFixed(4)}
+                    {selectedAddress.lat.toFixed(4)}, {selectedAddress.lng.toFixed(4)}
                   </Text>
                 </View>
               )}
@@ -120,7 +141,7 @@ export default function AddressPickerScreen() {
               <Plus size={18} color={theme.colors.primary} />
             </View>
             <Text style={[theme.typography.body, { color: theme.colors.primary, fontWeight: '600' as const }]}>
-              Add new address
+              {t('addressPicker.addNew')}
             </Text>
           </TouchableOpacity>
 
@@ -128,7 +149,7 @@ export default function AddressPickerScreen() {
           {addresses.length > 0 && (
             <>
               <Text style={[theme.typography.caption, { color: theme.colors.textSecondary, fontWeight: '600' as const, marginBottom: 8, letterSpacing: 0.5, textTransform: 'uppercase' as const }]}>
-                Saved addresses
+                {t('addressPicker.savedAddresses')}
               </Text>
               {addresses.map((addr) => {
                 const isSelected = addr.id === selectedId;
@@ -141,23 +162,36 @@ export default function AddressPickerScreen() {
                     style={[styles.addrRow, { borderBottomColor: theme.colors.divider }]}
                   >
                     <Icon size={20} color={isSelected ? theme.colors.primary : theme.colors.textSecondary} />
-                    <Text
-                      style={[
-                        theme.typography.body,
-                        { color: theme.colors.textPrimary, flex: 1, marginLeft: 14, fontWeight: isSelected ? ('600' as const) : ('400' as const) },
-                      ]}
-                      numberOfLines={1}
-                    >
-                      {addr.label}
-                    </Text>
+                    <View style={{ flex: 1, marginLeft: 14 }}>
+                      <Text
+                        style={[
+                          theme.typography.body,
+                          { color: theme.colors.textPrimary, fontWeight: isSelected ? ('600' as const) : ('400' as const) },
+                        ]}
+                        numberOfLines={1}
+                      >
+                        {addr.label}
+                      </Text>
+                      {/* Show coordinates as address detail */}
+                      <Text style={[theme.typography.caption, { color: theme.colors.textSecondary, marginTop: 2 }]}>
+                        {addr.lat.toFixed(4)}, {addr.lng.toFixed(4)}
+                      </Text>
+                    </View>
                     {isSelected && <Check size={18} color={theme.colors.primary} />}
+                    {/* Edit button */}
+                    <TouchableOpacity
+                      onPress={() => handleEditAddress(addr)}
+                      hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                      style={{ marginLeft: 10 }}
+                    >
+                      <Edit3 size={16} color={theme.colors.primary} />
+                    </TouchableOpacity>
                     <TouchableOpacity
                       onPress={() => {
                         void removeAddress(addr.id);
-                        if (previewAddress?.id === addr.id) setPreviewAddress(null);
                       }}
                       hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                      style={{ marginLeft: 12 }}
+                      style={{ marginLeft: 10 }}
                     >
                       <Trash2 size={16} color={theme.colors.muted} />
                     </TouchableOpacity>
@@ -169,7 +203,7 @@ export default function AddressPickerScreen() {
         </ScrollView>
       )}
 
-      {/* ── Step: Map Pin Picker ──────────────────────────── */}
+      {/* ── Step: Map Pin Picker (new address) ─────────────── */}
       {step === 'map' && (
         <View style={{ flex: 1 }}>
           <View style={{ flex: 1 }}>
@@ -205,7 +239,7 @@ export default function AddressPickerScreen() {
             <View style={[styles.tooltip, { backgroundColor: 'rgba(0,0,0,0.75)' }]}>
               <MapPin size={14} color="#fff" />
               <Text style={[theme.typography.caption, { color: '#fff', marginLeft: 6 }]}>
-                Move the map to position the pin
+                {t('addressPicker.dragToMove', { defaultValue: 'Move the map to position the pin' })}
               </Text>
             </View>
           </View>
@@ -215,7 +249,59 @@ export default function AddressPickerScreen() {
               onPress={handleMapConfirm}
               style={[styles.confirmBtn, { backgroundColor: theme.colors.primary, borderRadius: theme.radii.r16 }]}
             >
-              <Text style={[theme.typography.button, { color: '#fff' }]}>Confirm location</Text>
+              <Text style={[theme.typography.button, { color: '#fff' }]}>{t('addressPicker.confirmLocation')}</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
+
+      {/* ── Step: Edit existing address location ────────────── */}
+      {step === 'edit' && editingAddress && (
+        <View style={{ flex: 1 }}>
+          <View style={{ flex: 1 }}>
+            {MapView && Platform.OS !== 'web' ? (
+              <MapView
+                style={StyleSheet.absoluteFillObject}
+                initialRegion={{
+                  latitude: editingAddress.lat,
+                  longitude: editingAddress.lng,
+                  latitudeDelta: 0.01,
+                  longitudeDelta: 0.01,
+                }}
+                onRegionChangeComplete={(region: any) => {
+                  setPendingRegion({ lat: region.latitude, lng: region.longitude });
+                }}
+              />
+            ) : (
+              <View style={[StyleSheet.absoluteFillObject, { backgroundColor: theme.colors.divider, alignItems: 'center', justifyContent: 'center' }]}>
+                <MapPin size={32} color={theme.colors.muted} />
+                <Text style={[theme.typography.bodySm, { color: theme.colors.muted, marginTop: 8 }]}>
+                  Map unavailable on this platform
+                </Text>
+              </View>
+            )}
+
+            {/* Fixed center pin */}
+            <View style={styles.centerPin} pointerEvents="none">
+              <View style={[styles.pinDot, { backgroundColor: theme.colors.primary }]} />
+              <View style={[styles.pinStem, { backgroundColor: theme.colors.primary }]} />
+            </View>
+
+            {/* Editing label */}
+            <View style={[styles.tooltip, { backgroundColor: 'rgba(0,0,0,0.75)' }]}>
+              <Edit3 size={14} color="#fff" />
+              <Text style={[theme.typography.caption, { color: '#fff', marginLeft: 6 }]}>
+                {t('addressPicker.editLocation')} — {editingAddress.label}
+              </Text>
+            </View>
+          </View>
+
+          <View style={[styles.mapFooter, { backgroundColor: theme.colors.bg }]}>
+            <TouchableOpacity
+              onPress={handleEditConfirm}
+              style={[styles.confirmBtn, { backgroundColor: theme.colors.primary, borderRadius: theme.radii.r16 }]}
+            >
+              <Text style={[theme.typography.button, { color: '#fff' }]}>{t('addressPicker.confirmLocation')}</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -275,7 +361,7 @@ export default function AddressPickerScreen() {
             onPress={handleFormSave}
             style={[styles.confirmBtn, { backgroundColor: theme.colors.primary, borderRadius: theme.radii.r16 }]}
           >
-            <Text style={[theme.typography.button, { color: '#fff' }]}>Save address</Text>
+            <Text style={[theme.typography.button, { color: '#fff' }]}>{t('addressPicker.saveAddress')}</Text>
           </TouchableOpacity>
         </View>
       )}
@@ -291,7 +377,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 20,
-    paddingVertical: 16,
+    paddingVertical: 14,
     borderBottomWidth: 1,
   },
   mapPreview: {

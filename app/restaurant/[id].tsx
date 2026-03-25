@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useCallback } from 'react';
 import {
   View,
   Text,
@@ -12,9 +12,10 @@ import {
   Platform,
   Dimensions,
 } from 'react-native';
+import type { NativeSyntheticEvent, TextLayoutEventData } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useQuery } from '@tanstack/react-query';
-import { ChevronLeft, MapPin, ShoppingBag, Clock, Star, Tag, Flag, X, ChevronRight } from 'lucide-react-native';
+import { ChevronLeft, MapPin, ShoppingBag, Clock, Star, Tag, Flag, X, ChevronRight, MoreVertical } from 'lucide-react-native';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { useTranslation } from 'react-i18next';
 import { StatusBar } from 'expo-status-bar';
@@ -115,6 +116,9 @@ export default function RestaurantScreen() {
   const theme = useTheme();
   const { t } = useTranslation();
   const [descExpanded, setDescExpanded] = useState(false);
+  const [descNeedsSeeMore, setDescNeedsSeeMore] = useState(false);
+  const [ratingsPopupVisible, setRatingsPopupVisible] = useState(false);
+  const [menuVisible, setMenuVisible] = useState(false);
 
   // Report modal state — local only, no API
   const [reportVisible, setReportVisible] = useState(false);
@@ -178,8 +182,15 @@ export default function RestaurantScreen() {
   const description =
     (restaurant as any)?.bag_description?.trim() || restaurant?.description?.trim() || null;
 
+  const onDescTextLayout = useCallback((e: NativeSyntheticEvent<TextLayoutEventData>) => {
+    if (!descExpanded && e.nativeEvent.lines.length >= DESC_COLLAPSED_LINES) {
+      setDescNeedsSeeMore(true);
+    }
+  }, [descExpanded]);
+
   // ── Report handlers ────────────────────────────────────────────────────────────
   const openReport = () => {
+    setMenuVisible(false);
     setReport({ reason: null, comment: '', submitted: false });
     setReportVisible(true);
   };
@@ -227,6 +238,13 @@ export default function RestaurantScreen() {
             onPress={() => router.back()}
           >
             <ChevronLeft size={22} color={theme.colors.textPrimary} />
+          </TouchableOpacity>
+          {/* 3-dots menu — top right */}
+          <TouchableOpacity
+            style={[styles.menuBtn, { backgroundColor: 'rgba(255,255,255,0.9)', ...theme.shadows.shadowMd }]}
+            onPress={() => setMenuVisible(true)}
+          >
+            <MoreVertical size={20} color={theme.colors.textPrimary} />
           </TouchableOpacity>
         </View>
 
@@ -279,8 +297,12 @@ export default function RestaurantScreen() {
                 </Text>
               </View>
             ) : null}
-            {/* Overall rating chip — derived from 4 category averages */}
-            <View style={[styles.chip, { backgroundColor: theme.colors.bg, borderRadius: theme.radii.pill }]}>
+            {/* Overall rating chip — tap to expand detailed ratings */}
+            <TouchableOpacity
+              onPress={() => setRatingsPopupVisible(true)}
+              activeOpacity={0.7}
+              style={[styles.chip, { backgroundColor: theme.colors.bg, borderRadius: theme.radii.pill }]}
+            >
               <Star
                 size={12}
                 color={overallRating != null ? theme.colors.starYellow : theme.colors.muted}
@@ -307,89 +329,31 @@ export default function RestaurantScreen() {
                   {t('review.noReviews')}
                 </Text>
               ) : null}
-            </View>
+              <ChevronRight size={10} color={theme.colors.muted} style={{ marginLeft: 2 }} />
+            </TouchableOpacity>
           </View>
 
-          {/* Description with "see more" */}
+          {/* Description with "see more" — only shows toggle when text actually overflows */}
           {description ? (
             <View style={{ marginTop: 14 }}>
               <Text
                 style={[{ color: theme.colors.textSecondary, ...theme.typography.bodySm, lineHeight: 20 }]}
                 numberOfLines={descExpanded ? undefined : DESC_COLLAPSED_LINES}
+                onTextLayout={onDescTextLayout}
               >
                 {description}
               </Text>
-              <TouchableOpacity onPress={() => setDescExpanded((v) => !v)} style={{ marginTop: 4 }}>
-                <Text style={[{ color: theme.colors.primary, ...theme.typography.caption, fontWeight: '600' as const }]}>
-                  {descExpanded
-                    ? t('common.seeLess', { defaultValue: 'See less' })
-                    : t('common.seeMore', { defaultValue: 'See more' })}
-                </Text>
-              </TouchableOpacity>
+              {(descNeedsSeeMore || descExpanded) && (
+                <TouchableOpacity onPress={() => setDescExpanded((v) => !v)} style={{ marginTop: 4 }}>
+                  <Text style={[{ color: theme.colors.primary, ...theme.typography.caption, fontWeight: '600' as const }]}>
+                    {descExpanded
+                      ? t('common.seeLess', { defaultValue: 'See less' })
+                      : t('common.seeMore', { defaultValue: 'See more' })}
+                  </Text>
+                </TouchableOpacity>
+              )}
             </View>
           ) : null}
-        </View>
-
-        {/* ── Category ratings section ─────────────────────────────────────────── */}
-        <View style={{ paddingHorizontal: 16, paddingTop: 20 }}>
-          <Text
-            style={[
-              {
-                color: theme.colors.textPrimary,
-                ...theme.typography.h3,
-                fontWeight: '600' as const,
-                marginBottom: 10,
-              },
-            ]}
-          >
-            {t('review.ratingsTitle', { defaultValue: 'Ratings' })}
-          </Text>
-
-          {catAvgs == null ? (
-            /* No ratings yet */
-            <View
-              style={[
-                styles.ratingsCard,
-                {
-                  backgroundColor: theme.colors.surface,
-                  borderRadius: theme.radii.r16,
-                  ...theme.shadows.shadowSm,
-                },
-              ]}
-            >
-              <Text style={[{ color: theme.colors.muted, ...theme.typography.bodySm, textAlign: 'center' as const }]}>
-                {t('review.noReviews', { defaultValue: 'No ratings yet' })}
-              </Text>
-            </View>
-          ) : (
-            <View
-              style={[
-                styles.ratingsCard,
-                {
-                  backgroundColor: theme.colors.surface,
-                  borderRadius: theme.radii.r16,
-                  ...theme.shadows.shadowSm,
-                },
-              ]}
-            >
-              <CategoryRatingRow
-                label={t('review.service', { defaultValue: 'Service' })}
-                value={catAvgs.serviceAvg}
-              />
-              <CategoryRatingRow
-                label={t('review.quality', { defaultValue: 'Quality' })}
-                value={catAvgs.qualityAvg}
-              />
-              <CategoryRatingRow
-                label={t('review.quantity', { defaultValue: 'Quantity' })}
-                value={catAvgs.quantityAvg}
-              />
-              <CategoryRatingRow
-                label={t('review.variety', { defaultValue: 'Variety' })}
-                value={catAvgs.varietyAvg}
-              />
-            </View>
-          )}
         </View>
 
         {/* Baskets section */}
@@ -544,28 +508,93 @@ export default function RestaurantScreen() {
           )}
         </View>
 
-        {/* ── Report this restaurant — visible but unobtrusive ─────────────────── */}
-        <View style={{ paddingHorizontal: 16, paddingBottom: 48 }}>
+        {/* Bottom spacing */}
+        <View style={{ height: 48 }} />
+      </ScrollView>
+
+      {/* ── 3-dots menu popup ──────────────────────────────────────── */}
+      <Modal
+        visible={menuVisible}
+        transparent
+        animationType="fade"
+        statusBarTranslucent
+        onRequestClose={() => setMenuVisible(false)}
+      >
+        <TouchableOpacity
+          style={StyleSheet.absoluteFillObject}
+          activeOpacity={1}
+          onPress={() => setMenuVisible(false)}
+        />
+        <View style={[styles.menuPopup, { backgroundColor: theme.colors.surface, ...theme.shadows.shadowLg, borderRadius: theme.radii.r12 }]}>
           <TouchableOpacity
             onPress={openReport}
-            style={[
-              styles.reportBtn,
-              {
-                borderColor: theme.colors.divider,
-                borderRadius: theme.radii.r12,
-              },
-            ]}
+            style={styles.menuItem}
             activeOpacity={0.7}
-            accessibilityLabel="Report this restaurant"
           >
-            <Flag size={15} color={theme.colors.textSecondary} />
-            <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, marginLeft: 8, flex: 1 }]}>
+            <Flag size={16} color={theme.colors.textSecondary} />
+            <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.body, marginLeft: 12 }]}>
               {t('report.cta', { defaultValue: 'Report this restaurant' })}
             </Text>
-            <ChevronRight size={14} color={theme.colors.muted} />
           </TouchableOpacity>
         </View>
-      </ScrollView>
+      </Modal>
+
+      {/* ── Ratings popup modal ────────────────────────────────────── */}
+      <Modal
+        visible={ratingsPopupVisible}
+        transparent
+        animationType="fade"
+        statusBarTranslucent
+        onRequestClose={() => setRatingsPopupVisible(false)}
+      >
+        <View style={styles.reportOverlay}>
+          <TouchableOpacity
+            style={StyleSheet.absoluteFillObject}
+            activeOpacity={1}
+            onPress={() => setRatingsPopupVisible(false)}
+          />
+          <View style={[styles.ratingsPopupSheet, { backgroundColor: theme.colors.surface, borderTopLeftRadius: 26, borderTopRightRadius: 26, ...theme.shadows.shadowLg }]}>
+            <View style={[styles.sheetHandle, { backgroundColor: theme.colors.divider }]} />
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 24, paddingTop: 10, paddingBottom: 16 }}>
+              <Text style={{ color: theme.colors.textPrimary, fontSize: 18, fontWeight: '700', letterSpacing: -0.3 }}>
+                {t('review.ratingsTitle', { defaultValue: 'Ratings' })}
+              </Text>
+              <TouchableOpacity
+                onPress={() => setRatingsPopupVisible(false)}
+                style={[styles.sheetClosePill, { backgroundColor: theme.colors.bg }]}
+              >
+                <X size={16} color={theme.colors.textSecondary} />
+              </TouchableOpacity>
+            </View>
+            <View style={{ paddingHorizontal: 24, paddingBottom: 32 }}>
+              {/* Overall rating */}
+              <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 20 }}>
+                <Star size={24} color={theme.colors.starYellow} fill={overallRating != null ? theme.colors.starYellow : 'transparent'} />
+                <Text style={{ color: theme.colors.textPrimary, fontSize: 28, fontWeight: '700', marginLeft: 8 }}>
+                  {overallRating != null ? overallRating.toFixed(1) : '—'}
+                </Text>
+                {reviewCount > 0 && (
+                  <Text style={{ color: theme.colors.muted, ...theme.typography.bodySm, marginLeft: 8 }}>
+                    ({reviewCount} {reviewCount === 1 ? 'review' : 'reviews'})
+                  </Text>
+                )}
+              </View>
+              {catAvgs == null ? (
+                <Text style={[{ color: theme.colors.muted, ...theme.typography.bodySm, textAlign: 'center' as const }]}>
+                  {t('review.noReviews', { defaultValue: 'No ratings yet' })}
+                </Text>
+              ) : (
+                <>
+                  <CategoryRatingRow label={t('review.service', { defaultValue: 'Service' })} value={catAvgs.serviceAvg} />
+                  <CategoryRatingRow label={t('review.quality', { defaultValue: 'Quality' })} value={catAvgs.qualityAvg} />
+                  <CategoryRatingRow label={t('review.quantity', { defaultValue: 'Quantity' })} value={catAvgs.quantityAvg} />
+                  <CategoryRatingRow label={t('review.variety', { defaultValue: 'Variety' })} value={catAvgs.varietyAvg} />
+                </>
+              )}
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       {/* ── Report modal ─────────────────────────────────────────── */}
       <Modal
@@ -874,6 +903,32 @@ const styles = StyleSheet.create({
     borderRadius: 19,
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  menuBtn: {
+    position: 'absolute',
+    top: 52,
+    right: 16,
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  menuPopup: {
+    position: 'absolute',
+    top: 100,
+    right: 16,
+    minWidth: 220,
+    paddingVertical: 4,
+  },
+  menuItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+  },
+  ratingsPopupSheet: {
+    maxHeight: Dimensions.get('window').height * 0.5,
   },
   infoCard: {},
   chip: {

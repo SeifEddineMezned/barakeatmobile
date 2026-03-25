@@ -183,6 +183,7 @@
     "emptyTitle": "No orders yet",
     "emptyDesc": "Reserve a surprise bag to save food and money!",
     "findBasket": "Find a Surprise Bag",
+    "emptyPastDesc": "Your completed and cancelled orders will appear here.",
     "yourImpact": "Your Impact",
     "todayPickups": "Today's Pickups",
     "startsIn": "Starts in",
@@ -300,6 +301,18 @@
       "behavior": "Inappropriate behavior",
       "other": "Other"
     }
+  },
+  "addressPicker": {
+    "title": "My Addresses",
+    "chooseLocation": "Choose location",
+    "labelPlace": "Label this place",
+    "addNew": "Add new address",
+    "savedAddresses": "Saved addresses",
+    "editLocation": "Edit location",
+    "confirmLocation": "Confirm location",
+    "saveAddress": "Save address",
+    "coordinates": "Coordinates",
+    "dragToMove": "Drag the map to reposition the pin"
   },
   "map": {
     "title": "Nearby",

@@ -363,18 +363,55 @@ export default function OrdersScreen() {
 
             {/* Order History */}
             {displayedOrders.length === 0 ? (
-              <View style={styles.emptyState}>
-                <Text
-                  style={[
-                    {
-                      color: theme.colors.textSecondary,
-                      ...theme.typography.body,
-                      textAlign: 'center',
-                    },
-                  ]}
-                >
-                  {t('orders.emptyState')}
+              <View style={{ alignItems: 'center', paddingTop: 40, paddingHorizontal: 20 }}>
+                {/* Illustration — mock order card with a bag icon */}
+                <View style={{ marginBottom: 24, alignItems: 'center' }}>
+                  <View style={{
+                    width: 160, height: 120,
+                    backgroundColor: theme.colors.surface,
+                    borderRadius: theme.radii.r16,
+                    ...theme.shadows.shadowMd,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    overflow: 'hidden',
+                  }}>
+                    <View style={{
+                      width: 56, height: 56, borderRadius: 28,
+                      backgroundColor: theme.colors.primary + '14',
+                      alignItems: 'center', justifyContent: 'center',
+                    }}>
+                      <ShoppingBag size={28} color={theme.colors.primary} />
+                    </View>
+                    <View style={{ marginTop: 10, flexDirection: 'row', gap: 6 }}>
+                      <View style={{ width: 40, height: 6, borderRadius: 3, backgroundColor: theme.colors.divider }} />
+                      <View style={{ width: 24, height: 6, borderRadius: 3, backgroundColor: theme.colors.divider }} />
+                    </View>
+                  </View>
+                </View>
+                <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3, textAlign: 'center' }}>
+                  {activeTab === 'upcoming'
+                    ? t('orders.emptyTitle', { defaultValue: 'No upcoming orders' })
+                    : t('orders.emptyState', { defaultValue: 'No past orders' })}
                 </Text>
+                <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm, textAlign: 'center', marginTop: 8, lineHeight: 20 }}>
+                  {activeTab === 'upcoming'
+                    ? t('orders.emptyDesc', { defaultValue: 'Reserve a surprise bag to save food and money!' })
+                    : t('orders.emptyPastDesc', { defaultValue: 'Your completed and cancelled orders will appear here.' })}
+                </Text>
+                <TouchableOpacity
+                  onPress={() => router.push('/(tabs)' as never)}
+                  style={{
+                    backgroundColor: theme.colors.primary,
+                    borderRadius: theme.radii.r16,
+                    paddingVertical: 14,
+                    paddingHorizontal: 32,
+                    marginTop: 24,
+                  }}
+                >
+                  <Text style={{ color: '#fff', ...theme.typography.button }}>
+                    {t('orders.findBasket', { defaultValue: 'Find a Surprise Bag' })}
+                  </Text>
+                </TouchableOpacity>
               </View>
             ) : (
               displayedOrders.map((reservation) => (

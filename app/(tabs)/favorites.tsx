@@ -82,6 +82,10 @@ export default function FavoritesScreen() {
           </ScrollView>
         </>
       ) : (
+        <>
+        <View style={[styles.header, { paddingHorizontal: theme.spacing.xl, paddingTop: theme.spacing.xs, paddingBottom: theme.spacing.sm }]}>
+          <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h1 }]}>{t('favorites.title')}</Text>
+        </View>
         <View style={styles.emptyContainer}>
           <Text style={[styles.emptyTitle, { color: theme.colors.textPrimary, ...theme.typography.h1 }]}>
             {t('favorites.emptyTitle')}
@@ -123,6 +127,7 @@ export default function FavoritesScreen() {
             </Text>
           </TouchableOpacity>
         </View>
+        </>
       )}
     </SafeAreaView>
   );

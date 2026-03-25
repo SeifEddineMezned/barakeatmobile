@@ -167,9 +167,11 @@ export default function ProfileScreen() {
   };
 
   return (
-    <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]} edges={['top']}>
+    <View style={[styles.container, { backgroundColor: theme.colors.bg }]}>
       <StatusBar style="dark" />
-      <View style={[styles.header, { paddingHorizontal: theme.spacing.xl, paddingTop: theme.spacing.md, paddingBottom: theme.spacing.md, borderBottomWidth: 0 }]}>
+
+      {/* Profile title — below the tab header bar */}
+      <View style={{ paddingHorizontal: theme.spacing.xl, paddingTop: theme.spacing.sm, paddingBottom: theme.spacing.sm }}>
         <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h1 }]}>{t('profile.title')}</Text>
       </View>
 
@@ -1016,7 +1018,7 @@ export default function ProfileScreen() {
           </View>
         </TouchableOpacity>
       </Modal>
-    </SafeAreaView>
+    </View>
   );
 }
 

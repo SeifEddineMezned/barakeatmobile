@@ -183,6 +183,7 @@
     "emptyTitle": "لا توجد طلبات بعد",
     "emptyDesc": "احجز أول سلة مفاجأة لك لتبدأ في توفير المال وإنقاذ الطعام.",
     "findBasket": "اعثر على سلة",
+    "emptyPastDesc": "ستظهر طلباتك المكتملة والملغاة هنا.",
     "yourImpact": "تأثيرك",
     "todayPickups": "استلامات اليوم",
     "startsIn": "تبدأ في",
@@ -289,6 +290,18 @@
     "submit": "إرسال البلاغ",
     "success": "تم إرسال البلاغ. شكرًا.",
     "error": "تعذر إرسال البلاغ."
+  },
+  "addressPicker": {
+    "title": "عناويني",
+    "chooseLocation": "اختر الموقع",
+    "labelPlace": "تسمية هذا المكان",
+    "addNew": "إضافة عنوان جديد",
+    "savedAddresses": "العناوين المحفوظة",
+    "editLocation": "تعديل الموقع",
+    "confirmLocation": "تأكيد الموقع",
+    "saveAddress": "حفظ العنوان",
+    "coordinates": "الإحداثيات",
+    "dragToMove": "اسحب الخريطة لتغيير موقع الدبوس"
   },
   "map": {
     "title": "القريبة",

@@ -14,6 +14,7 @@ interface AddressState {
   hydrated: boolean;
   hydrate: () => Promise<void>;
   addAddress: (addr: Omit<SavedAddress, 'id'>) => Promise<void>;
+  updateAddress: (id: string, update: Partial<Omit<SavedAddress, 'id'>>) => Promise<void>;
   removeAddress: (id: string) => Promise<void>;
   selectAddress: (id: string | null) => void;
 }
@@ -50,6 +51,12 @@ export const useAddressStore = create<AddressState>((set, get) => ({
       AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(updated)),
       AsyncStorage.setItem(SELECTED_KEY, newAddr.id),
     ]);
+  },
+
+  updateAddress: async (id, update) => {
+    const updated = get().addresses.map((a) => (a.id === id ? { ...a, ...update } : a));
+    set({ addresses: updated });
+    await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
   },
 
   removeAddress: async (id) => {

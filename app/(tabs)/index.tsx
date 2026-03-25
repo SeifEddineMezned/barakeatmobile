@@ -13,8 +13,9 @@ import { useFavoritesStore } from '@/src/stores/favoritesStore';
 import { useAuthStore } from '@/src/stores/authStore';
 import { MapFallback } from '@/src/components/MapFallback';
 import { fetchRestaurants } from '@/src/services/restaurants';
+import { fetchBaskets } from '@/src/services/baskets';
 import { fetchReviewsByRestaurant } from '@/src/services/reviews';
-import { normalizeRestaurantToBasket } from '@/src/utils/normalizeRestaurant';
+import { normalizeRestaurantToBasket, normalizeRawBasketToBasket } from '@/src/utils/normalizeRestaurant';
 import { useHeroStore } from '@/src/stores/heroStore';
 import { useAddressStore } from '@/src/stores/addressStore';
 // LocationPickerModal replaced by full-page /address-picker route
@@ -141,6 +142,14 @@ export default function HomeScreen() {
     retry: 2,
   });
 
+  // Fetch actual baskets from baskets table — these have correct quantity, prices, etc.
+  const basketsQuery = useQuery({
+    queryKey: ['all-baskets'],
+    queryFn: fetchBaskets,
+    staleTime: 60_000,
+    retry: 2,
+  });
+
   // Fetch reviews per-restaurant in parallel — GET /api/reviews returns 404 so we use per-id endpoint
   const restaurantIds = restaurantsQuery.data?.map((r) => r.id) ?? [];
   const reviewsQuery = useQuery({
@@ -180,10 +189,49 @@ export default function HomeScreen() {
     retry: 0,
   });
 
+  // Build card data: prefer actual basket rows from baskets table, fall back to restaurant-level data
   const baskets = useMemo(() => {
-    if (!restaurantsQuery.data) return [];
+    const restaurants = restaurantsQuery.data ?? [];
+    const rawBaskets = basketsQuery.data ?? [];
     const rmap = reviewsQuery.data ?? {};
-    return restaurantsQuery.data.map((r) => {
+
+    // Index restaurants by id for quick lookup
+    const restaurantMap = new Map(restaurants.map((r) => [String(r.id), r]));
+
+    // If we have real baskets from the baskets table, use them (they have correct prices/quantities)
+    if (rawBaskets.length > 0) {
+      return rawBaskets.map((b: any) => {
+        const restaurantId = String(b.restaurant_id ?? b.location_id ?? '');
+        const restaurant = restaurantMap.get(restaurantId);
+        const basket = normalizeRawBasketToBasket(b, restaurant?.name);
+
+        // Merge restaurant-level data the basket row doesn't carry
+        if (restaurant) {
+          basket.merchantLogo = basket.merchantLogo ?? restaurant.image_url ?? undefined;
+          basket.address = basket.address || restaurant.address || '';
+          const hasCoords =
+            restaurant.latitude != null && restaurant.longitude != null &&
+            isFinite(Number(restaurant.latitude)) && isFinite(Number(restaurant.longitude));
+          if (!basket.hasCoords && hasCoords) {
+            basket.latitude = Number(restaurant.latitude);
+            basket.longitude = Number(restaurant.longitude);
+            (basket as any).hasCoords = true;
+          }
+        }
+
+        // Merge review data
+        const summary = rmap[restaurantId];
+        if (summary) {
+          basket.merchantRating = summary.avg;
+          basket.reviewCount = summary.count;
+        }
+
+        return basket;
+      });
+    }
+
+    // Fallback: use restaurant-level data (legacy path)
+    return restaurants.map((r) => {
       const basket = normalizeRestaurantToBasket(r);
       const summary = rmap[String(r.id)];
       if (summary) {
@@ -192,7 +240,7 @@ export default function HomeScreen() {
       }
       return basket;
     });
-  }, [restaurantsQuery.data, reviewsQuery.data]);
+  }, [restaurantsQuery.data, basketsQuery.data, reviewsQuery.data]);
 
   const availableCategories = useMemo(() => {
     const cats = new Set<string>();
@@ -262,9 +310,9 @@ export default function HomeScreen() {
 
       {/* Fixed top bar — always visible, colors shift as hero collapses */}
       <View style={{
-        paddingTop: insets.top + 4,
+        paddingTop: insets.top,
         paddingHorizontal: 16,
-        paddingBottom: 8,
+        paddingBottom: 4,
         flexDirection: 'row',
         justifyContent: 'space-between',
         alignItems: 'center',
@@ -316,7 +364,7 @@ export default function HomeScreen() {
       </View>
 
       {/* Hero body — text, image, dots — slides away on scroll up */}
-      <Animated.View style={{ height: animatedHeroHeight, opacity: animatedHeroOpacity, overflow: 'hidden', paddingBottom: 24, paddingHorizontal: 20 }}>
+      <Animated.View style={{ height: animatedHeroHeight, opacity: animatedHeroOpacity, overflow: 'hidden', paddingHorizontal: 20 }}>
         <ScrollView
           ref={carouselRef}
           horizontal
@@ -384,7 +432,7 @@ export default function HomeScreen() {
         </ScrollView>
 
         {/* Dot indicators */}
-        <View style={{ flexDirection: 'row', justifyContent: 'center', marginTop: 6 }}>
+        <View style={{ flexDirection: 'row', justifyContent: 'center', marginTop: 6, marginBottom: 24 }}>
           {[0, 1].map((i) => (
             <View
               key={i}
@@ -413,7 +461,7 @@ export default function HomeScreen() {
         }}
       >
         {/* Drag handle (visual indicator) */}
-        <View style={{ alignItems: 'center', paddingTop: 12, paddingBottom: 12 }}>
+        <View style={{ alignItems: 'center', paddingTop: 6, paddingBottom: 6 }}>
           <View style={{
             width: 44,
             height: 5,
@@ -463,24 +511,6 @@ export default function HomeScreen() {
           scrollEventThrottle={16}
           onScroll={(e) => { scrollOffsetRef.current = e.nativeEvent.contentOffset.y; }}
         >
-          {/* Small map trigger — tinted pin pill, opens map ABOVE tabs via root stack */}
-          <TouchableOpacity
-            onPress={() => router.push('/map-view' as never)}
-            activeOpacity={0.75}
-            style={{
-              flexDirection: 'row',
-              alignItems: 'center',
-              alignSelf: 'flex-start',
-              backgroundColor: theme.colors.primary + '14',
-              borderRadius: theme.radii.pill,
-              paddingHorizontal: 12,
-              paddingVertical: 6,
-              marginBottom: theme.spacing.md,
-            }}
-          >
-            <MapPin size={13} color={theme.colors.primary} />
-          </TouchableOpacity>
-
           {/* Fix 2: categories section — explicit height + paddingVertical to prevent Android bottom cut */}
           <View style={[styles.categoriesSection, { marginBottom: theme.spacing.lg }]}>
             <ScrollView
@@ -523,7 +553,7 @@ export default function HomeScreen() {
               })}
             </ScrollView>
           </View>
-          {restaurantsQuery.isLoading ? (
+          {(restaurantsQuery.isLoading || basketsQuery.isLoading) ? (
             <>
               {[0, 1, 2, 3].map((i) => (
                 <View key={i} style={{ marginBottom: 16, backgroundColor: theme.colors.surface, borderRadius: 16, overflow: 'hidden', padding: 12 }}>
@@ -533,13 +563,13 @@ export default function HomeScreen() {
                 </View>
               ))}
             </>
-          ) : restaurantsQuery.isError ? (
+          ) : (restaurantsQuery.isError && basketsQuery.isError) ? (
             <View style={styles.centerState}>
               <Text style={[{ color: theme.colors.error, ...theme.typography.body, textAlign: 'center' as const, marginBottom: 16 }]}>
                 {t('common.errorOccurred')}
               </Text>
               <TouchableOpacity
-                onPress={() => restaurantsQuery.refetch()}
+                onPress={() => { restaurantsQuery.refetch(); basketsQuery.refetch(); }}
                 style={[styles.retryButton, { backgroundColor: theme.colors.primary, borderRadius: theme.radii.r12 }]}
               >
                 <RefreshCw size={16} color="#fff" />

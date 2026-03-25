@@ -9,7 +9,7 @@ export const tokens = {
     accentWarm: '#e8a838',
     accentFresh: '#2d8a6e',
 
-    bg: '#f9f9f6',
+    bg: '#fcfcfa',
     surface: '#FFFFFF',
     surfaceElevated: '#FFFFFF',
 
