@@ -3,7 +3,7 @@ import { View, Text, StyleSheet, TouchableOpacity, TextInput, FlatList, Alert, A
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
-import { X, Trash2, Plus, Camera, SquareCheck, Square } from 'lucide-react-native';
+import { X, Trash2, Plus, Camera, ImageIcon, SquareCheck, Square } from 'lucide-react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -78,23 +78,10 @@ export default function MenuItemsScreen() {
     );
   };
 
-  const handleScanMenu = async () => {
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert(t('common.error'), t('business.menuItems.photoPermRequired'));
-      return;
-    }
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
-      quality: 0.8,
-      allowsEditing: false,
-    });
-    if (result.canceled || !result.assets[0]) return;
-
+  // Shared scan upload logic for both gallery and camera
+  const processImageForScan = async (uri: string) => {
     setScanLoading(true);
     try {
-      const asset = result.assets[0];
-      const uri = asset.uri;
       const filename = uri.split('/').pop() ?? 'menu.jpg';
       const ext = filename.split('.').pop()?.toLowerCase() ?? 'jpg';
       const mimeType = ext === 'png' ? 'image/png' : ext === 'webp' ? 'image/webp' : 'image/jpeg';
@@ -102,7 +89,7 @@ export default function MenuItemsScreen() {
       const formData = new FormData();
       formData.append('image', { uri, name: filename, type: mimeType } as any);
 
-      const response = await apiClient.post('/api/restaurants/my/menu-items/scan', formData, {
+      const response = await apiClient.post('/api/locations/my/menu-items/scan', formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
         timeout: 30000,
       });
@@ -119,6 +106,36 @@ export default function MenuItemsScreen() {
     } finally {
       setScanLoading(false);
     }
+  };
+
+  const handleScanMenu = async () => {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert(t('common.error'), t('business.menuItems.photoPermRequired'));
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      quality: 0.8,
+      allowsEditing: false,
+    });
+    if (result.canceled || !result.assets[0]) return;
+    await processImageForScan(result.assets[0].uri);
+  };
+
+  const handleCameraScan = async () => {
+    const { status } = await ImagePicker.requestCameraPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert(t('common.error'), t('business.menuItems.cameraPermRequired', { defaultValue: 'Camera permission is required to take photos.' }));
+      return;
+    }
+    const result = await ImagePicker.launchCameraAsync({
+      mediaTypes: ['images'],
+      quality: 0.8,
+      allowsEditing: false,
+    });
+    if (result.canceled || !result.assets[0]) return;
+    await processImageForScan(result.assets[0].uri);
   };
 
   const handleAddScannedItems = async () => {
@@ -183,30 +200,50 @@ export default function MenuItemsScreen() {
           {t('business.menuItems.title')}
         </Text>
         {FeatureFlags.ENABLE_AI_MENU_SCANNER ? (
-          <TouchableOpacity
-            onPress={handleScanMenu}
-            disabled={scanLoading}
-            style={{
-              flexDirection: 'row',
-              alignItems: 'center',
-              borderWidth: 1.5,
-              borderColor: theme.colors.primary,
-              borderRadius: theme.radii.r12,
-              paddingHorizontal: theme.spacing.sm,
-              paddingVertical: 5,
-            }}
-          >
+          <View style={{ flexDirection: 'row', gap: 6 }}>
             {scanLoading ? (
               <ActivityIndicator size="small" color={theme.colors.primary} />
             ) : (
               <>
-                <Camera size={16} color={theme.colors.primary} />
-                <Text style={{ color: theme.colors.primary, ...theme.typography.caption, fontWeight: '600' as const, marginLeft: 4 }}>
-                  {t('business.menuItems.scan')}
-                </Text>
+                <TouchableOpacity
+                  onPress={handleCameraScan}
+                  disabled={scanLoading}
+                  style={{
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    borderWidth: 1.5,
+                    borderColor: theme.colors.primary,
+                    borderRadius: theme.radii.r12,
+                    paddingHorizontal: theme.spacing.sm,
+                    paddingVertical: 5,
+                  }}
+                >
+                  <Camera size={16} color={theme.colors.primary} />
+                  <Text style={{ color: theme.colors.primary, ...theme.typography.caption, fontWeight: '600' as const, marginLeft: 4 }}>
+                    {t('business.menuItems.takePhoto', { defaultValue: 'Photo' })}
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={handleScanMenu}
+                  disabled={scanLoading}
+                  style={{
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    borderWidth: 1.5,
+                    borderColor: theme.colors.primary,
+                    borderRadius: theme.radii.r12,
+                    paddingHorizontal: theme.spacing.sm,
+                    paddingVertical: 5,
+                  }}
+                >
+                  <ImageIcon size={16} color={theme.colors.primary} />
+                  <Text style={{ color: theme.colors.primary, ...theme.typography.caption, fontWeight: '600' as const, marginLeft: 4 }}>
+                    {t('business.menuItems.scan')}
+                  </Text>
+                </TouchableOpacity>
               </>
             )}
-          </TouchableOpacity>
+          </View>
         ) : (
           <View style={{ width: 24 }} />
         )}

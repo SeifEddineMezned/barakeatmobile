@@ -23,11 +23,12 @@ export default function BusinessProfileScreen() {
   const { user } = useAuthStore();
   const store = useBusinessStore();
   const { team, addTeamMember, removeTeamMember, updateTeamMemberRole } = store;
+  const selectedLocationId = useBusinessStore((s) => s.selectedLocationId);
   const queryClient = useQueryClient();
 
   const profileQuery = useQuery({
-    queryKey: ['my-profile'],
-    queryFn: fetchMyProfile,
+    queryKey: ['my-profile', selectedLocationId],
+    queryFn: () => fetchMyProfile(selectedLocationId),
     staleTime: 60_000,
     retry: 1,
   });
@@ -157,7 +158,7 @@ export default function BusinessProfileScreen() {
         const formData = new FormData();
         const uri = result.assets[0].uri;
         const filename = uri.split('/').pop() ?? 'cover.jpg';
-        formData.append('image', { uri, name: filename, type: 'image/jpeg' } as any);
+        formData.append('cover_image', { uri, name: filename, type: 'image/jpeg' } as any);
         try {
           const { updateMyProfile } = await import('@/src/services/business');
           const userId = (user as any)?.id as number | undefined;

@@ -1,10 +1,10 @@
 import React, { useState, useMemo, useCallback, useEffect } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator, Alert } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator, Alert, Modal } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import { useRouter } from 'expo-router';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { RefreshCw, ShoppingBag } from 'lucide-react-native';
+import { RefreshCw, ShoppingBag, Star, Flag } from 'lucide-react-native';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { useAuthStore } from '@/src/stores/authStore';
 import { fetchMyReservations, cancelReservation, hideReservation } from '@/src/services/reservations';
@@ -67,6 +67,8 @@ export default function OrdersScreen() {
   const queryClient = useQueryClient();
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
   const [activeTab, setActiveTab] = useState<'upcoming' | 'past'>('upcoming');
+  const [reviewPrompt, setReviewPrompt] = useState<{ reservationId: string; locationName: string; locationId: string } | null>(null);
+  const [reviewDismissed, setReviewDismissed] = useState<Set<string>>(new Set());
 
   const reservationsQuery = useQuery({
     queryKey: ['reservations'],
@@ -127,6 +129,25 @@ export default function OrdersScreen() {
 
   const co2Saved = completedReservations.length * 2.5;
   const totalOrders = reservations.length;
+
+  // Auto-show review popup for recently picked-up orders without a review
+  useEffect(() => {
+    if (!reservations.length) return;
+    const needsReview = reservations.find((r) => {
+      const status = (r.status ?? '').toLowerCase();
+      const hasReview = (r as any).has_review === true;
+      const id = String(r.id ?? '');
+      return (status === 'picked_up' || status === 'collected') && !hasReview && !reviewDismissed.has(id);
+    });
+    if (needsReview && !reviewPrompt) {
+      const rr = needsReview as any;
+      setReviewPrompt({
+        reservationId: String(needsReview.id),
+        locationName: rr.restaurant_name ?? rr.basket?.merchantName ?? 'this location',
+        locationId: String(rr.location_id ?? rr.restaurant_id ?? ''),
+      });
+    }
+  }, [reservations, reviewDismissed, reviewPrompt]);
 
   const isToday = (dateStr: string) => {
     const d = new Date(dateStr);
@@ -426,6 +447,59 @@ export default function OrdersScreen() {
           </>
         )}
       </ScrollView>
+
+      {/* Review/Report popup after pickup */}
+      <Modal visible={!!reviewPrompt} transparent animationType="fade" onRequestClose={() => { setReviewDismissed(prev => new Set(prev).add(reviewPrompt?.reservationId ?? '')); setReviewPrompt(null); }}>
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 24 }}>
+          <View style={{ backgroundColor: theme.colors.surface, borderRadius: 24, padding: 24, width: '100%', maxWidth: 340, alignItems: 'center', ...theme.shadows.shadowLg }}>
+            <View style={{ width: 64, height: 64, borderRadius: 32, backgroundColor: theme.colors.primary + '14', justifyContent: 'center', alignItems: 'center', marginBottom: 16 }}>
+              <Star size={32} color={theme.colors.primary} />
+            </View>
+            <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3, textAlign: 'center', marginBottom: 8 }}>
+              {t('orders.reviewPromptTitle', { defaultValue: 'How was your experience?' })}
+            </Text>
+            <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm, textAlign: 'center', lineHeight: 20, marginBottom: 24 }}>
+              {t('orders.reviewPromptDesc', { defaultValue: `Your pickup at ${reviewPrompt?.locationName} is complete! Would you like to leave a review or report an issue?` })}
+            </Text>
+            <View style={{ flexDirection: 'row', gap: 10, width: '100%' }}>
+              <TouchableOpacity
+                onPress={() => {
+                  const rid = reviewPrompt?.reservationId;
+                  const lid = reviewPrompt?.locationId;
+                  setReviewDismissed(prev => new Set(prev).add(rid ?? ''));
+                  setReviewPrompt(null);
+                  router.push({ pathname: '/review', params: { reservationId: rid, locationId: lid } } as never);
+                }}
+                style={{ flex: 1, backgroundColor: theme.colors.primary, borderRadius: 14, paddingVertical: 14, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 6 }}
+              >
+                <Star size={16} color="#fff" />
+                <Text style={{ color: '#fff', ...theme.typography.body, fontWeight: '600' }}>
+                  {t('orders.leaveReview')}
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => {
+                  const lid = reviewPrompt?.locationId;
+                  setReviewDismissed(prev => new Set(prev).add(reviewPrompt?.reservationId ?? ''));
+                  setReviewPrompt(null);
+                  router.push({ pathname: '/review', params: { locationId: lid, report: 'true' } } as never);
+                }}
+                style={{ paddingVertical: 14, paddingHorizontal: 14, borderRadius: 14, borderWidth: 1, borderColor: theme.colors.divider, alignItems: 'center', justifyContent: 'center' }}
+              >
+                <Flag size={16} color={theme.colors.textSecondary} />
+              </TouchableOpacity>
+            </View>
+            <TouchableOpacity
+              onPress={() => { setReviewDismissed(prev => new Set(prev).add(reviewPrompt?.reservationId ?? '')); setReviewPrompt(null); }}
+              style={{ marginTop: 12 }}
+            >
+              <Text style={{ color: theme.colors.muted, ...theme.typography.bodySm }}>
+                {t('orders.maybeLater', { defaultValue: 'Maybe later' })}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }

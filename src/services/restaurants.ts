@@ -34,6 +34,61 @@ export interface RestaurantFromAPI {
   display_name?: string | null;
 }
 
+// Location data from GET /api/locations (new model, replaces restaurants for search)
+export interface LocationFromAPI {
+  id: number;
+  name: string;
+  display_name?: string;
+  description?: string | null;
+  phone?: string | null;
+  address?: string | null;
+  image_url?: string | null;
+  cover_image_url?: string | null;
+  price_tier?: string | null;
+  original_price?: string | null;
+  category?: string | null;
+  pickup_start_time?: string | null;
+  pickup_end_time?: string | null;
+  available_quantity?: number;
+  default_daily_quantity?: number;
+  availability_status?: string | null;
+  is_paused?: boolean;
+  bag_description?: string | null;
+  pickup_instructions?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
+  organization_id?: number | null;
+  reserved_today?: number;
+  available_left?: number;
+  pickup_expired?: boolean;
+  basket_count?: number;
+  total_basket_quantity?: number;
+  min_basket_price?: number | null;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export async function fetchLocations(): Promise<LocationFromAPI[]> {
+  console.log('[Locations] Fetching all locations');
+  try {
+    const res = await apiClient.get<LocationFromAPI[]>('/api/locations');
+    const data = res.data;
+    const locations = Array.isArray(data) ? data : [];
+    console.log('[Locations] Fetched', locations.length, 'locations');
+    return locations;
+  } catch (err: unknown) {
+    const errObj = err as any;
+    console.log('[Locations] Fetch failed:', errObj?.status, errObj?.message);
+    throw err;
+  }
+}
+
+export async function fetchLocationById(id: string | number): Promise<LocationFromAPI> {
+  console.log('[Locations] Fetching location:', id);
+  const res = await apiClient.get<LocationFromAPI>(`/api/locations/${id}`);
+  return res.data as LocationFromAPI;
+}
+
 export async function fetchRestaurants(): Promise<RestaurantFromAPI[]> {
   console.log('[Restaurants] Fetching all restaurants');
   try {

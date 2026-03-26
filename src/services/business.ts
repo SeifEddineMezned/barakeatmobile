@@ -36,9 +36,10 @@ export interface BusinessProfileFromAPI {
   team_context?: { role?: string; permissions?: Record<string, unknown> | null; organization_id?: number } | null;
 }
 
-export async function fetchMyProfile(): Promise<BusinessProfileFromAPI> {
-  console.log('[Business] Fetching my profile');
-  const res = await apiClient.get<BusinessProfileFromAPI | { restaurant: BusinessProfileFromAPI } | { data: BusinessProfileFromAPI }>('/api/restaurants/my/profile');
+export async function fetchMyProfile(locationId?: number | string | null): Promise<BusinessProfileFromAPI> {
+  const params = locationId ? `?location_id=${locationId}` : '';
+  console.log('[Business] Fetching my profile', params);
+  const res = await apiClient.get<BusinessProfileFromAPI | { restaurant: BusinessProfileFromAPI } | { data: BusinessProfileFromAPI }>(`/api/locations/my/profile${params}`);
   const data = res.data;
   if (data && typeof data === 'object' && 'restaurant' in data) return (data as any).restaurant;
   if (data && typeof data === 'object' && 'data' in data && !('id' in data)) return (data as any).data;
@@ -52,7 +53,7 @@ export async function updateMyProfile(formData: FormData, userId?: number): Prom
     headers['x-admin-token'] = getAdminToken(userId);
     console.log('[Business] Attaching x-admin-token for profile update');
   }
-  const res = await apiClient.put<BusinessProfileFromAPI | { restaurant: BusinessProfileFromAPI }>('/api/restaurants/my/profile', formData, { headers });
+  const res = await apiClient.put<BusinessProfileFromAPI | { restaurant: BusinessProfileFromAPI }>('/api/locations/my/profile', formData, { headers });
   const data = res.data;
   if (data && typeof data === 'object' && 'restaurant' in data) return (data as any).restaurant;
   return data as BusinessProfileFromAPI;
@@ -76,13 +77,16 @@ export interface BusinessBasketFromAPI {
   pickup_end_time?: string | null;
   image_url?: string | null;
   status?: string | null;
+  menu_item_ids?: number[] | null;
   created_at?: string;
   updated_at?: string;
 }
 
-export async function fetchMyBaskets(): Promise<BusinessBasketFromAPI[]> {
-  console.log('[Business] Fetching my baskets');
-  const res = await apiClient.get<BusinessBasketFromAPI[] | { baskets: BusinessBasketFromAPI[] } | { data: BusinessBasketFromAPI[] }>('/api/baskets/my/baskets');
+export async function fetchMyBaskets(locationId?: number | string | null): Promise<BusinessBasketFromAPI[]> {
+  const locId = (locationId && typeof locationId === 'object') ? null : locationId;
+  const params = locId ? `?location_id=${locId}` : '';
+  console.log('[Business] Fetching my baskets', params);
+  const res = await apiClient.get<BusinessBasketFromAPI[] | { baskets: BusinessBasketFromAPI[] } | { data: BusinessBasketFromAPI[] }>(`/api/baskets/my/baskets${params}`);
   const data = res.data;
   let baskets: BusinessBasketFromAPI[] = [];
   if (Array.isArray(data)) baskets = data;
@@ -111,6 +115,7 @@ export async function createBasketJSON(payload: {
   quantity: number;
   pickup_start_time: string;
   pickup_end_time: string;
+  menu_item_ids?: number[];
 }): Promise<BusinessBasketFromAPI> {
   console.log('[Business] Creating basket (JSON):', JSON.stringify(payload));
   const res = await apiClient.post<BusinessBasketFromAPI | { basket: BusinessBasketFromAPI }>('/api/baskets', payload);
@@ -146,7 +151,7 @@ export async function deleteBasket(id: number | string): Promise<void> {
 
 export async function updateQuantity(availableQuantity: number): Promise<void> {
   console.log('[Business] Updating quantity to:', availableQuantity);
-  await apiClient.put('/api/restaurants/my/quantity', { available_quantity: availableQuantity });
+  await apiClient.put('/api/locations/my/quantity', { available_quantity: availableQuantity });
 }
 
 export async function updateAvailability(data: {
@@ -163,7 +168,7 @@ export async function updateAvailability(data: {
     headers['x-admin-token'] = getAdminToken(userId);
     console.log('[Business] Attaching x-admin-token for availability update');
   }
-  await apiClient.put('/api/restaurants/my/availability', data, { headers });
+  await apiClient.put('/api/locations/my/availability', data, { headers });
 }
 
 // ─── Today's Orders ─────────────────────────────────────────────────────────
@@ -186,9 +191,10 @@ export interface TodayReservationFromAPI {
   [key: string]: unknown;
 }
 
-export async function fetchTodayOrders(): Promise<TodayReservationFromAPI[]> {
-  console.log('[Business] Fetching today orders');
-  const res = await apiClient.get<TodayReservationFromAPI[] | { reservations: TodayReservationFromAPI[] } | { data: TodayReservationFromAPI[] }>('/api/reservations/restaurant/today');
+export async function fetchTodayOrders(locationId?: number | string | null): Promise<TodayReservationFromAPI[]> {
+  const params = locationId ? `?location_id=${locationId}` : '';
+  console.log('[Business] Fetching today orders', params);
+  const res = await apiClient.get<TodayReservationFromAPI[] | { reservations: TodayReservationFromAPI[] } | { data: TodayReservationFromAPI[] }>(`/api/reservations/location/today${params}`);
   const data = res.data;
   if (Array.isArray(data)) return data;
   if (data && typeof data === 'object' && 'reservations' in data) return (data as any).reservations;
@@ -252,17 +258,19 @@ export interface BusinessAnalyticsFromAPI {
   [key: string]: unknown;
 }
 
-export async function fetchStats(): Promise<BusinessStatsFromAPI> {
-  console.log('[Business] Fetching stats');
-  const res = await apiClient.get<BusinessStatsFromAPI | { data: BusinessStatsFromAPI }>('/api/reservations/restaurant/stats');
+export async function fetchStats(locationId?: number | string | null): Promise<BusinessStatsFromAPI> {
+  const params = locationId ? `?location_id=${locationId}` : '';
+  console.log('[Business] Fetching stats', params);
+  const res = await apiClient.get<BusinessStatsFromAPI | { data: BusinessStatsFromAPI }>(`/api/reservations/location/stats${params}`);
   const data = res.data;
   if (data && typeof data === 'object' && 'data' in data && !('total_reservations' in data)) return (data as any).data;
   return data as BusinessStatsFromAPI;
 }
 
-export async function fetchAnalytics(): Promise<BusinessAnalyticsFromAPI> {
-  console.log('[Business] Fetching analytics');
-  const res = await apiClient.get<BusinessAnalyticsFromAPI | { data: BusinessAnalyticsFromAPI }>('/api/reservations/restaurant/analytics');
+export async function fetchAnalytics(locationId?: number | string | null): Promise<BusinessAnalyticsFromAPI> {
+  const params = locationId ? `?location_id=${locationId}` : '';
+  console.log('[Business] Fetching analytics', params);
+  const res = await apiClient.get<BusinessAnalyticsFromAPI | { data: BusinessAnalyticsFromAPI }>(`/api/reservations/location/analytics${params}`);
   const data = res.data;
   if (data && typeof data === 'object' && 'data' in data && !('daily_sales' in data)) return (data as any).data;
   return data as BusinessAnalyticsFromAPI;
@@ -282,7 +290,7 @@ export interface MenuItemFromAPI {
 
 export async function fetchMyMenuItems(): Promise<MenuItemFromAPI[]> {
   console.log('[Business] Fetching my menu items');
-  const res = await apiClient.get<MenuItemFromAPI[] | { items: MenuItemFromAPI[] }>('/api/restaurants/my/menu-items');
+  const res = await apiClient.get<MenuItemFromAPI[] | { items: MenuItemFromAPI[] }>('/api/locations/my/menu-items');
   const data = res.data;
   if (Array.isArray(data)) return data;
   if (data && typeof data === 'object' && 'items' in data) return (data as any).items;
@@ -291,7 +299,7 @@ export async function fetchMyMenuItems(): Promise<MenuItemFromAPI[]> {
 
 export async function addMenuItem(formData: FormData): Promise<MenuItemFromAPI> {
   console.log('[Business] Adding menu item');
-  const res = await apiClient.post<MenuItemFromAPI | { item: MenuItemFromAPI }>('/api/restaurants/my/menu-items', formData, {
+  const res = await apiClient.post<MenuItemFromAPI | { item: MenuItemFromAPI }>('/api/locations/my/menu-items', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
   });
   const data = res.data;
@@ -301,14 +309,23 @@ export async function addMenuItem(formData: FormData): Promise<MenuItemFromAPI> 
 
 export async function deleteMenuItem(itemId: number | string): Promise<void> {
   console.log('[Business] Deleting menu item:', itemId);
-  await apiClient.delete(`/api/restaurants/my/menu-items/${itemId}`);
+  await apiClient.delete(`/api/locations/my/menu-items/${itemId}`);
+}
+
+export async function fetchBasketMenuItems(basketId: number | string): Promise<MenuItemFromAPI[]> {
+  console.log('[Business] Fetching menu items for basket:', basketId);
+  const res = await apiClient.get<MenuItemFromAPI[] | { items: MenuItemFromAPI[] }>(`/api/baskets/${basketId}/menu-items`);
+  const data = res.data;
+  if (Array.isArray(data)) return data;
+  if (data && typeof data === 'object' && 'items' in data) return (data as any).items;
+  return [];
 }
 
 // ─── Notifications ──────────────────────────────────────────────────────────
 
 export async function fetchRestaurantNotifications(): Promise<unknown[]> {
   console.log('[Business] Fetching notifications');
-  const res = await apiClient.get<unknown[] | { notifications: unknown[] }>('/api/reservations/restaurant/notifications');
+  const res = await apiClient.get<unknown[] | { notifications: unknown[] }>('/api/reservations/location/notifications');
   const data = res.data;
   if (Array.isArray(data)) return data;
   if (data && typeof data === 'object' && 'notifications' in data) return (data as any).notifications;

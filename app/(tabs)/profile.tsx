@@ -70,7 +70,7 @@ export default function ProfileScreen() {
   const [editName, setEditName] = useState(user?.name ?? '');
   const [editPhone, setEditPhone] = useState(user?.phone ?? '');
   const [saveLoading, setSaveLoading] = useState(false);
-  const [showAllLeaderboard, setShowAllLeaderboard] = useState(false);
+
 
   const reservationsQuery = useQuery({
     queryKey: ['reservations'],
@@ -127,8 +127,8 @@ export default function ProfileScreen() {
 
   const leaderboardData = useMemo(() => {
     const entries = leaderboardQuery.data ?? [];
-    return showAllLeaderboard ? entries : entries.slice(0, 10);
-  }, [leaderboardQuery.data, showAllLeaderboard]);
+    return entries.slice(0, 10);
+  }, [leaderboardQuery.data]);
 
   const FOOD_PREFS = ['Vegetarian', 'Vegan', 'Halal', 'Gluten-Free', 'Nut Allergy', 'Lactose-Free', 'Shellfish Allergy', 'No Pork'];
   const FOOD_PREF_KEY_MAP: Record<string, string> = {
@@ -386,9 +386,15 @@ export default function ProfileScreen() {
 
         {/* Leaderboard Section */}
         <View style={{ marginBottom: theme.spacing.lg }}>
-          <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, marginBottom: theme.spacing.md }]}>
-            {t('impact.leaderboard')}
-          </Text>
+          <TouchableOpacity
+            onPress={() => router.push('/leaderboard' as any)}
+            style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: theme.spacing.md }}
+          >
+            <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3 }]}>
+              {t('impact.leaderboard')}
+            </Text>
+            <ChevronRight size={20} color={theme.colors.muted} />
+          </TouchableOpacity>
 
           {leaderboardQuery.isLoading ? (
             <ActivityIndicator size="small" color={theme.colors.primary} />
@@ -494,7 +500,7 @@ export default function ProfileScreen() {
                 </View>
               ))}
 
-              {(leaderboardQuery.data?.length ?? 0) > 10 && !showAllLeaderboard && (
+              {(leaderboardQuery.data?.length ?? 0) > 10 && (
                 <TouchableOpacity
                   style={[
                     {
@@ -504,7 +510,7 @@ export default function ProfileScreen() {
                       alignItems: 'center' as const,
                     },
                   ]}
-                  onPress={() => setShowAllLeaderboard(true)}
+                  onPress={() => router.push('/leaderboard' as any)}
                 >
                   <Text style={[{ color: theme.colors.primary, ...theme.typography.button }]}>
                     {t('impact.showMore')}

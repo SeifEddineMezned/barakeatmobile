@@ -1,5 +1,5 @@
 import type { Basket } from '@/src/types';
-import type { RestaurantFromAPI } from '@/src/services/restaurants';
+import type { RestaurantFromAPI, LocationFromAPI } from '@/src/services/restaurants';
 
 // Raw shape returned by GET /api/baskets/:id and GET /api/baskets/location/:id
 export interface RawBasketFromAPI {
@@ -131,6 +131,71 @@ export function normalizeRestaurantToBasket(r: RestaurantFromAPI): Basket {
     isActive,
     isSupermarket: r.category === 'supermarket',
     maxPerCustomer: (r as any).max_per_customer ?? undefined,
+  };
+}
+
+/**
+ * Normalize a location from GET /api/locations into a Basket card for the search tab.
+ * Locations join with organizations so brand data (name, image, cover) comes from org.
+ */
+export function normalizeLocationToBasket(loc: LocationFromAPI): Basket {
+  // Prices come from baskets table (min values), via the API
+  const minPrice = loc.min_basket_price != null ? Number(loc.min_basket_price) : Number(loc.price_tier ?? 0);
+  const originalPrice = Number(loc.original_price ?? 0);
+  const discountedPrice = minPrice;
+  const discountPercentage = originalPrice > 0
+    ? Math.round(((originalPrice - discountedPrice) / originalPrice) * 100)
+    : 0;
+
+  // Quantity = total basket quantity from baskets table (not adjusted for reservations/expiry)
+  const totalBasketQty = Number(loc.total_basket_quantity ?? loc.available_quantity ?? 0);
+  // For the card display, always use the raw basket quantity — don't zero out for pickup expiry
+  const availableLeft = totalBasketQty;
+
+  const isActive = !loc.is_paused
+    && loc.availability_status !== 'paused'
+    && totalBasketQty > 0;
+
+  const bagDesc = loc.bag_description?.trim();
+  const description = loc.description?.trim();
+
+  const hasCoords =
+    loc.latitude != null && loc.longitude != null &&
+    isFinite(Number(loc.latitude)) && isFinite(Number(loc.longitude));
+
+  const basketCount = loc.basket_count ?? 0;
+
+  return {
+    id: String(loc.id),
+    merchantId: String(loc.id),
+    merchantName: loc.display_name ?? loc.name ?? 'Unknown',
+    merchantLogo: loc.image_url ?? undefined,
+    merchantRating: undefined,
+    reviewCount: undefined,
+    reviews: undefined,
+    description: bagDesc || description || undefined,
+    name: loc.display_name ?? loc.name ?? 'Surprise Bag',
+    category: mapCategory(loc.category),
+    originalPrice,
+    discountedPrice,
+    discountPercentage,
+    pickupWindow: {
+      start: formatTime(loc.pickup_start_time) || '18:00',
+      end: formatTime(loc.pickup_end_time) || '19:00',
+    },
+    quantityLeft: availableLeft,
+    quantityTotal: totalBasketQty,
+    distance: 0,
+    address: loc.address ?? '',
+    latitude: hasCoords ? Number(loc.latitude) : null as unknown as number,
+    longitude: hasCoords ? Number(loc.longitude) : null as unknown as number,
+    hasCoords,
+    exampleItems: bagDesc ? parseBagDescription(bagDesc) : [],
+    coverImageUrl: loc.cover_image_url ?? loc.image_url ?? undefined,
+    imageUrl: loc.cover_image_url ?? loc.image_url ?? undefined,
+    isActive,
+    isSupermarket: loc.category === 'supermarket',
+    basketTypeCount: basketCount > 1 ? basketCount : undefined,
   };
 }
 

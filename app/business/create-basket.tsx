@@ -6,14 +6,15 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
-import { X, AlertCircle, Clock, Minus, Plus, Sparkles } from 'lucide-react-native';
+import { X, AlertCircle, Clock, Minus, Plus, Sparkles, SquareCheck, Square } from 'lucide-react-native';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { useBusinessStore } from '@/src/stores/businessStore';
 import { PrimaryCTAButton } from '@/src/components/PrimaryCTAButton';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   createBasketJSON, updateBasket as updateBasketAPI,
-  fetchMyBaskets, fetchMyProfile,
+  fetchMyBaskets, fetchMyProfile, fetchMyMenuItems,
+  type MenuItemFromAPI,
 } from '@/src/services/business';
 import { getErrorMessage, apiClient } from '@/src/lib/api';
 import { FeatureFlags } from '@/src/lib/featureFlags';
@@ -73,6 +74,44 @@ export default function CreateBasketScreen() {
   const [maxPerCustomer, setMaxPerCustomer] = useState<number>(
     (apiBasket as any)?.max_per_customer ?? (storeBasket as any)?.maxPerCustomer ?? 5
   );
+
+  // ── Menu items for selection
+  const menuItemsQuery = useQuery({
+    queryKey: ['my-menu-items'],
+    queryFn: fetchMyMenuItems,
+    staleTime: 30_000,
+  });
+
+  // Parse existing menu_item_ids from the basket being edited
+  const existingMenuItemIds: number[] = (() => {
+    const raw = (apiBasket as any)?.menu_item_ids;
+    if (!raw) return [];
+    if (Array.isArray(raw)) return raw.map(Number);
+    if (typeof raw === 'string') {
+      try { const parsed = JSON.parse(raw); return Array.isArray(parsed) ? parsed.map(Number) : []; } catch { return []; }
+    }
+    return [];
+  })();
+
+  const [selectedMenuItemIds, setSelectedMenuItemIds] = useState<number[]>(existingMenuItemIds);
+
+  // Sync selected menu items when editing basket loads
+  React.useEffect(() => {
+    if (isEditing && apiBasket) {
+      const raw = (apiBasket as any)?.menu_item_ids;
+      if (raw) {
+        const ids = Array.isArray(raw) ? raw.map(Number) : (() => { try { return JSON.parse(raw).map(Number); } catch { return []; } })();
+        setSelectedMenuItemIds(ids);
+      }
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [apiBasket?.id]);
+
+  const toggleMenuItem = (itemId: number) => {
+    setSelectedMenuItemIds((prev) =>
+      prev.includes(itemId) ? prev.filter((id) => id !== itemId) : [...prev, itemId]
+    );
+  };
 
   // Pickup times: use basket-specific times if editing, else profile-level defaults
   const defaultStart =
@@ -160,6 +199,7 @@ export default function CreateBasketScreen() {
         quantity,
         pickup_start_time: toTimeField(pickupStart),
         pickup_end_time: toTimeField(pickupEnd),
+        menu_item_ids: selectedMenuItemIds.length > 0 ? selectedMenuItemIds : undefined,
       }),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['my-baskets'] });
@@ -181,6 +221,7 @@ export default function CreateBasketScreen() {
         max_per_customer: maxPerCustomer,
         pickup_start_time: toTimeField(pickupStart),
         pickup_end_time: toTimeField(pickupEnd),
+        menu_item_ids: selectedMenuItemIds,
       }),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['my-baskets'] });
@@ -469,6 +510,91 @@ export default function CreateBasketScreen() {
             </View>
           </View>
           )}
+
+          {/* Menu Items Selection */}
+          <View style={[styles.field, { marginBottom: theme.spacing.xl }]}>
+            <Text style={[styles.label, { color: theme.colors.textPrimary, ...theme.typography.bodySm, marginBottom: theme.spacing.sm }]}>
+              {t('business.createBasket.menuItems', { defaultValue: 'Menu Items' })}
+            </Text>
+            <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, marginBottom: theme.spacing.md }}>
+              {t('business.createBasket.menuItemsDesc', { defaultValue: 'Select which menu items are in this basket (optional)' })}
+            </Text>
+            {menuItemsQuery.isLoading ? (
+              <ActivityIndicator size="small" color={theme.colors.primary} />
+            ) : (menuItemsQuery.data ?? []).length === 0 ? (
+              <View style={{ alignItems: 'center' as const, paddingVertical: theme.spacing.lg }}>
+                <Text style={{ color: theme.colors.muted, ...theme.typography.bodySm, textAlign: 'center' as const, marginBottom: theme.spacing.md }}>
+                  {t('business.createBasket.noMenuItems', { defaultValue: 'No menu items yet \u2014 add some in Menu Items' })}
+                </Text>
+                <TouchableOpacity
+                  onPress={() => router.push('/business/menu-items' as never)}
+                  style={{
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    backgroundColor: theme.colors.primary + '12',
+                    borderRadius: theme.radii.r12,
+                    paddingHorizontal: theme.spacing.lg,
+                    paddingVertical: theme.spacing.md,
+                    borderWidth: 1,
+                    borderColor: theme.colors.primary + '30',
+                  }}
+                >
+                  <Plus size={16} color={theme.colors.primary} />
+                  <Text style={{ color: theme.colors.primary, ...theme.typography.bodySm, fontWeight: '600' as const, marginLeft: 6 }}>
+                    {t('business.createBasket.goToMenuItems', { defaultValue: 'Go to Menu Items' })}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            ) : (
+              <View>
+                {(menuItemsQuery.data ?? []).map((item: MenuItemFromAPI) => {
+                  const isSelected = selectedMenuItemIds.includes(item.id);
+                  return (
+                    <TouchableOpacity
+                      key={item.id}
+                      onPress={() => toggleMenuItem(item.id)}
+                      style={{
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        backgroundColor: isSelected ? theme.colors.primary + '10' : theme.colors.surface,
+                        borderRadius: theme.radii.r12,
+                        padding: theme.spacing.md,
+                        marginBottom: theme.spacing.sm,
+                        borderWidth: isSelected ? 1.5 : 1,
+                        borderColor: isSelected ? theme.colors.primary : theme.colors.divider,
+                        ...theme.shadows.shadowSm,
+                      }}
+                    >
+                      {isSelected ? (
+                        <SquareCheck size={20} color={theme.colors.primary} />
+                      ) : (
+                        <Square size={20} color={theme.colors.muted} />
+                      )}
+                      <Text
+                        style={{
+                          color: theme.colors.textPrimary,
+                          ...theme.typography.body,
+                          flex: 1,
+                          marginLeft: theme.spacing.md,
+                        }}
+                        numberOfLines={2}
+                      >
+                        {item.name}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+                {selectedMenuItemIds.length > 0 && (
+                  <Text style={{ color: theme.colors.primary, ...theme.typography.caption, marginTop: theme.spacing.xs }}>
+                    {t('business.createBasket.menuItemsSelected', {
+                      count: selectedMenuItemIds.length,
+                      defaultValue: `${selectedMenuItemIds.length} item(s) selected`,
+                    })}
+                  </Text>
+                )}
+              </View>
+            )}
+          </View>
         </ScrollView>
 
         <View style={[styles.footer, { backgroundColor: theme.colors.surface, paddingHorizontal: theme.spacing.xl, paddingVertical: theme.spacing.lg, borderTopWidth: 1, borderTopColor: theme.colors.divider, ...theme.shadows.shadowLg }]}>

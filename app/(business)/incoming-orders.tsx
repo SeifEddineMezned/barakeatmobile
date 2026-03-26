@@ -18,10 +18,11 @@ export default function IncomingOrdersScreen() {
   const [activeTab, setActiveTab] = useState<'incoming' | 'completed'>('incoming');
   const queryClient = useQueryClient();
   const store = useBusinessStore();
+  const selectedLocationId = useBusinessStore((s) => s.selectedLocationId);
 
   const todayQuery = useQuery({
-    queryKey: ['today-orders'],
-    queryFn: fetchTodayOrders,
+    queryKey: ['today-orders', selectedLocationId],
+    queryFn: () => fetchTodayOrders(selectedLocationId),
     staleTime: 30_000,
     refetchInterval: 30_000,
     retry: 1,
@@ -79,22 +80,25 @@ export default function IncomingOrdersScreen() {
   const displayedOrders = activeTab === 'incoming' ? incomingOrders : completedOrders;
 
   const [verifyModalOrderId, setVerifyModalOrderId] = useState<string | null>(null);
+  const [verifyModalAction, setVerifyModalAction] = useState<'ready' | 'collected'>('collected');
   const [typedCode, setTypedCode] = useState('');
   const [verifyError, setVerifyError] = useState('');
+  const [verifySuccess, setVerifySuccess] = useState(false);
 
   const handleMarkReady = useCallback((orderId: string) => {
-    updateOrderStatus(orderId, 'ready');
-  }, [updateOrderStatus]);
+    setTypedCode('');
+    setVerifyError('');
+    setVerifyModalAction('ready');
+    setVerifyModalOrderId(orderId);
+  }, []);
 
   const collectMutation = useMutation({
-    mutationFn: async ({ orderId, code }: { orderId: string; code: string }) => {
-      await confirmPickup(orderId, code);
+    mutationFn: async ({ orderId, code, buyerId }: { orderId: string; code: string; buyerId?: string }) => {
+      await confirmPickup(orderId, code, buyerId);
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['today-orders'] });
-    },
-    onError: (err) => {
-      Alert.alert(t('common.error'), getErrorMessage(err));
+      void queryClient.invalidateQueries({ queryKey: ['today-orders-count'] });
     },
   });
 
@@ -102,28 +106,54 @@ export default function IncomingOrdersScreen() {
     // Open verify modal — do NOT auto-pass the code
     setTypedCode('');
     setVerifyError('');
+    setVerifyModalAction('collected');
     setVerifyModalOrderId(orderId);
   }, []);
 
-  const handleVerifyCode = useCallback(() => {
+  const handleVerifyCode = useCallback(async () => {
     if (!verifyModalOrderId) return;
     const order = orders.find((o) => o.id === verifyModalOrderId);
     if (!order) return;
     const expected = (order.pickupCode ?? '').trim().toUpperCase();
     const entered = typedCode.trim().toUpperCase();
     if (!entered) {
-      setVerifyError(t('business.orders.enterPickupCode'));
+      setVerifyError(t('business.orders.enterPickupCode', { defaultValue: 'Please enter the pickup code' }));
       return;
     }
     if (entered !== expected) {
-      setVerifyError(t('business.orders.incorrectCode'));
+      setVerifyError(t('business.orders.incorrectCode', { defaultValue: 'Incorrect code. Please try again.' }));
       return;
     }
-    // Code matches — confirm via backend
-    collectMutation.mutate({ orderId: verifyModalOrderId, code: order.pickupCode });
-    updateOrderStatus(verifyModalOrderId, 'collected');
-    setVerifyModalOrderId(null);
-  }, [verifyModalOrderId, typedCode, orders, collectMutation, updateOrderStatus]);
+    // Show success state
+    setVerifySuccess(true);
+
+    if (verifyModalAction === 'collected') {
+      // Code matches — confirm via backend (marks as picked_up in DB)
+      try {
+        await confirmPickup(verifyModalOrderId, order.pickupCode, String((order as any).buyerId ?? (order as any).buyer_id ?? ''));
+        // Force refetch after a small delay to ensure DB has updated
+        setTimeout(async () => {
+          await queryClient.invalidateQueries({ queryKey: ['today-orders'] });
+          await queryClient.invalidateQueries({ queryKey: ['today-orders-count'] });
+          await queryClient.refetchQueries({ queryKey: ['today-orders', selectedLocationId] });
+        }, 500);
+        setTimeout(() => {
+          setVerifySuccess(false);
+          setVerifyModalOrderId(null);
+        }, 2000);
+      } catch (err) {
+        setVerifySuccess(false);
+        setVerifyError(getErrorMessage(err));
+      }
+    } else {
+      // Mark ready — local optimistic update
+      updateOrderStatus(verifyModalOrderId, 'ready');
+      setTimeout(() => {
+        setVerifySuccess(false);
+        setVerifyModalOrderId(null);
+      }, 1500);
+    }
+  }, [verifyModalOrderId, verifyModalAction, typedCode, orders, updateOrderStatus, selectedLocationId, queryClient, t]);
 
   const handleCancel = useCallback((orderId: string) => {
     Alert.alert(
@@ -388,7 +418,7 @@ export default function IncomingOrdersScreen() {
       <Modal
         visible={verifyModalOrderId !== null}
         transparent
-        animationType="slide"
+        animationType="fade"
         onRequestClose={() => setVerifyModalOrderId(null)}
       >
         <KeyboardAvoidingView
@@ -411,16 +441,39 @@ export default function IncomingOrdersScreen() {
               }}
               onStartShouldSetResponder={() => true}
             >
+              {/* Success state */}
+              {verifySuccess ? (
+                <View style={{ alignItems: 'center', paddingVertical: 32 }}>
+                  <View style={{ width: 64, height: 64, borderRadius: 32, backgroundColor: theme.colors.primary + '18', justifyContent: 'center', alignItems: 'center', marginBottom: 16 }}>
+                    <Text style={{ fontSize: 32 }}>✓</Text>
+                  </View>
+                  <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h2, marginBottom: 4 }}>
+                    {verifyModalAction === 'collected'
+                      ? t('business.orders.pickupComplete', { defaultValue: 'Pickup Complete!' })
+                      : t('business.orders.markedReady', { defaultValue: 'Marked as Ready!' })}
+                  </Text>
+                  <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm }}>
+                    {verifyModalAction === 'collected'
+                      ? t('business.orders.movedToCompleted', { defaultValue: 'Order moved to completed.' })
+                      : t('business.orders.customerNotified', { defaultValue: 'Customer will be notified.' })}
+                  </Text>
+                </View>
+              ) : (
+              <>
               {/* Handle */}
               <View style={{ alignItems: 'center', marginBottom: 16 }}>
                 <View style={{ width: 36, height: 4, borderRadius: 2, backgroundColor: theme.colors.divider }} />
               </View>
 
               <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h2, marginBottom: 8 }}>
-                {t('business.orders.verifyPickup', { defaultValue: 'Verify Pickup' })}
+                {verifyModalAction === 'ready'
+                  ? t('business.orders.markReadyTitle', { defaultValue: 'Mark as Ready' })
+                  : t('business.orders.verifyPickup', { defaultValue: 'Verify Pickup' })}
               </Text>
               <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm, marginBottom: 20, lineHeight: 20 }}>
-                {t('business.orders.verifyDesc', { defaultValue: 'Ask the customer for their pickup code and enter it below, or use the QR scanner.' })}
+                {verifyModalAction === 'ready'
+                  ? t('business.orders.markReadyDesc', { defaultValue: 'Confirm the pickup code or scan the QR code to mark this order as ready for collection.' })
+                  : t('business.orders.verifyDesc', { defaultValue: 'Ask the customer for their pickup code and enter it below, or use the QR scanner.' })}
               </Text>
 
               <TextInput
@@ -457,13 +510,22 @@ export default function IncomingOrdersScreen() {
                   borderRadius: theme.radii.r12,
                   paddingVertical: 16,
                   alignItems: 'center',
-                  marginBottom: 12,
+                  marginBottom: 16,
                 }}
               >
                 <Text style={{ color: '#fff', ...theme.typography.button }}>
                   {t('business.orders.confirmCode', { defaultValue: 'Confirm Code' })}
                 </Text>
               </TouchableOpacity>
+
+              {/* OR divider */}
+              <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 16 }}>
+                <View style={{ flex: 1, height: 1, backgroundColor: theme.colors.divider }} />
+                <Text style={{ color: theme.colors.muted, ...theme.typography.caption, marginHorizontal: 12, fontWeight: '600' as const }}>
+                  {t('common.or', { defaultValue: 'OR' })}
+                </Text>
+                <View style={{ flex: 1, height: 1, backgroundColor: theme.colors.divider }} />
+              </View>
 
               <TouchableOpacity
                 onPress={() => { setVerifyModalOrderId(null); router.push('/business/scan-qr' as never); }}
@@ -473,12 +535,17 @@ export default function IncomingOrdersScreen() {
                   alignItems: 'center',
                   borderWidth: 1,
                   borderColor: theme.colors.primary,
+                  flexDirection: 'row',
+                  justifyContent: 'center',
                 }}
               >
+                <QrCode size={18} color={theme.colors.primary} style={{ marginRight: 8 }} />
                 <Text style={{ color: theme.colors.primary, ...theme.typography.button }}>
-                  {t('business.orders.scanQR', { defaultValue: 'Scan QR Code Instead' })}
+                  {t('business.orders.scanQR', { defaultValue: 'Scan QR Code' })}
                 </Text>
               </TouchableOpacity>
+              </>
+              )}
             </View>
           </TouchableOpacity>
         </KeyboardAvoidingView>

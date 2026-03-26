@@ -157,6 +157,96 @@ export default function SignInScreen() {
               </TouchableOpacity>
             </View>
 
+            {role === 'customer' && (
+              <>
+                <TouchableOpacity
+                  onPress={() =>
+                    Alert.alert('Google Sign-In', 'Google Sign-In coming soon')
+                  }
+                  activeOpacity={0.8}
+                  style={{
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    height: 56,
+                    backgroundColor: '#ffffff',
+                    borderRadius: theme.radii.pill,
+                    paddingHorizontal: 24,
+                    shadowColor: '#000',
+                    shadowOffset: { width: 0, height: 2 },
+                    shadowOpacity: 0.12,
+                    shadowRadius: 6,
+                    elevation: 3,
+                  }}
+                >
+                  <View
+                    style={{
+                      width: 28,
+                      height: 28,
+                      borderRadius: 14,
+                      backgroundColor: '#fff',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      marginRight: 12,
+                      borderWidth: 1,
+                      borderColor: '#e0e0e0',
+                    }}
+                  >
+                    <Text
+                      style={{
+                        fontSize: 16,
+                        fontWeight: '700' as const,
+                        color: '#4285F4',
+                      }}
+                    >
+                      G
+                    </Text>
+                  </View>
+                  <Text
+                    style={{
+                      color: '#3c4043',
+                      ...theme.typography.button,
+                      fontWeight: '600' as const,
+                    }}
+                  >
+                    {t('auth.continueWithGoogle')}
+                  </Text>
+                </TouchableOpacity>
+
+                <View
+                  style={{
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    marginVertical: theme.spacing.xl,
+                  }}
+                >
+                  <View
+                    style={{
+                      flex: 1,
+                      height: 1,
+                      backgroundColor: 'rgba(255,255,255,0.25)',
+                    }}
+                  />
+                  <Text
+                    style={{
+                      color: 'rgba(255,255,255,0.5)',
+                      ...theme.typography.bodySm,
+                      marginHorizontal: theme.spacing.lg,
+                    }}
+                  >
+                    {t('auth.or')}
+                  </Text>
+                  <View
+                    style={{
+                      flex: 1,
+                      height: 1,
+                      backgroundColor: 'rgba(255,255,255,0.25)',
+                    }}
+                  />
+                </View>
+              </>
+            )}
+
             <View style={styles.form}>
               <View style={[styles.inputContainer, { marginBottom: theme.spacing.xl }]}>
                 <Text style={[styles.label, { color: '#fff', ...theme.typography.bodySm }]}>

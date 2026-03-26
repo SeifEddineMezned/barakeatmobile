@@ -55,9 +55,13 @@ export interface Basket {
   hasCoords?: boolean;
   exampleItems: string[];
   imageUrl?: string;
+  /** Cover photo for the food spot card */
+  coverImageUrl?: string;
   isActive: boolean;
   isSupermarket?: boolean;
   maxPerCustomer?: number;
+  /** Number of basket types this merchant offers (for search card display) */
+  basketTypeCount?: number;
 }
 
 export interface Merchant {

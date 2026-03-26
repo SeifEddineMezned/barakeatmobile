@@ -28,8 +28,8 @@ import * as Location from 'expo-location';
 import { StatusBar } from 'expo-status-bar';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { MapFallback } from '@/src/components/MapFallback';
-import { fetchRestaurants } from '@/src/services/restaurants';
-import { normalizeRestaurantToBasket } from '@/src/utils/normalizeRestaurant';
+import { fetchLocations } from '@/src/services/restaurants';
+import { normalizeLocationToBasket } from '@/src/utils/normalizeRestaurant';
 import type { Basket } from '@/src/types';
 import { FeatureFlags } from '@/src/lib/featureFlags';
 
@@ -314,12 +314,12 @@ export default function MapViewScreen() {
     }),
   ).current;
 
-  const restaurantsQuery = useQuery({ queryKey: ['restaurants'], queryFn: fetchRestaurants, staleTime: 60_000 });
+  const locationsQuery = useQuery({ queryKey: ['locations'], queryFn: fetchLocations, staleTime: 60_000 });
 
   const baskets = useMemo(() => {
-    if (!restaurantsQuery.data) return [];
-    return restaurantsQuery.data.map(normalizeRestaurantToBasket);
-  }, [restaurantsQuery.data]);
+    if (!locationsQuery.data) return [];
+    return locationsQuery.data.map(normalizeLocationToBasket);
+  }, [locationsQuery.data]);
 
   const filteredBaskets = useMemo(() => {
     if (!searchQuery.trim()) return baskets;

@@ -18,18 +18,19 @@ export default function MyBasketsScreen() {
   const theme = useTheme();
   const router = useRouter();
   const store = useBusinessStore();
+  const selectedLocationId = useBusinessStore((s) => s.selectedLocationId);
   const queryClient = useQueryClient();
 
   const basketsQuery = useQuery({
-    queryKey: ['my-baskets'],
-    queryFn: fetchMyBaskets,
+    queryKey: ['my-baskets', selectedLocationId],
+    queryFn: () => fetchMyBaskets(selectedLocationId),
     staleTime: 60_000,
     retry: 1,
   });
 
   const profileQuery = useQuery({
-    queryKey: ['my-profile'],
-    queryFn: fetchMyProfile,
+    queryKey: ['my-profile', selectedLocationId],
+    queryFn: () => fetchMyProfile(selectedLocationId),
     staleTime: 30_000,
   });
 
@@ -72,36 +73,34 @@ export default function MyBasketsScreen() {
     },
   });
 
-  // Normalize API baskets to match existing Basket type, fall back to store
-  const baskets = (basketsQuery.data ?? []).length > 0
-    ? (basketsQuery.data ?? []).map((b: BusinessBasketFromAPI) => ({
-        id: String(b.id),
-        merchantId: String(b.restaurant_id ?? ''),
-        merchantName: '',
-        name: b.name,
-        category: b.category ?? '',
-        originalPrice: Number(b.original_price ?? 0),
-        discountedPrice: Number(b.selling_price ?? 0),
-        discountPercentage: Number(b.original_price ?? 0) > 0
-          ? Math.round(((Number(b.original_price ?? 0) - Number(b.selling_price ?? 0)) / Number(b.original_price ?? 0)) * 100)
-          : 50,
-        pickupWindow: {
-          start: b.pickup_start_time?.substring(0, 5) ?? '18:00',
-          end: b.pickup_end_time?.substring(0, 5) ?? '19:00',
-        },
-        quantityLeft: Number(b.quantity) || 0,
-        quantityTotal: Number(b.daily_reinitialization_quantity) || 0,
-        distance: 0,
-        address: '',
-        latitude: 0,
-        longitude: 0,
-        exampleItems: [],
-        imageUrl: b.image_url ?? undefined,
-        isActive: b.status !== 'deleted' && Number(b.quantity) > 0,
-        description: b.description ?? undefined,
-        maxPerCustomer: (b as any).max_per_customer ?? 5,
-      }))
-    : store.baskets;
+  // Normalize API baskets to match existing Basket type — no fallback to demo data
+  const baskets = (basketsQuery.data ?? []).map((b: BusinessBasketFromAPI) => ({
+      id: String(b.id),
+      merchantId: String(b.location_id ?? ''),
+      merchantName: '',
+      name: b.name,
+      category: b.category ?? '',
+      originalPrice: Number(b.original_price ?? 0),
+      discountedPrice: Number(b.selling_price ?? 0),
+      discountPercentage: Number(b.original_price ?? 0) > 0
+        ? Math.round(((Number(b.original_price ?? 0) - Number(b.selling_price ?? 0)) / Number(b.original_price ?? 0)) * 100)
+        : 0,
+      pickupWindow: {
+        start: b.pickup_start_time?.substring(0, 5) ?? '18:00',
+        end: b.pickup_end_time?.substring(0, 5) ?? '19:00',
+      },
+      quantityLeft: Number(b.quantity) || 0,
+      quantityTotal: Number(b.daily_reinitialization_quantity) || 0,
+      distance: 0,
+      address: '',
+      latitude: 0,
+      longitude: 0,
+      exampleItems: [],
+      imageUrl: b.image_url ?? undefined,
+      isActive: b.status !== 'deleted' && Number(b.quantity) > 0,
+      description: b.description ?? undefined,
+      maxPerCustomer: (b as any).max_per_customer ?? 5,
+    }));
 
   const { toggleBasketActive, updateBasket, profile } = store;
 
@@ -120,6 +119,10 @@ export default function MyBasketsScreen() {
   const [detailBasket, setDetailBasket] = useState<typeof baskets[0] | null>(null);
   const [detailTodayQty, setDetailTodayQty] = useState(0);
   const [detailDailyQty, setDetailDailyQty] = useState(0);
+  const [sameAllDays, setSameAllDays] = useState(true);
+  const DAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'] as const;
+  const DAY_LABELS: Record<string, string> = { mon: 'M', tue: 'T', wed: 'W', thu: 'T', fri: 'F', sat: 'S', sun: 'S' };
+  const [daySchedule, setDaySchedule] = useState<Record<string, number>>({ mon: 0, tue: 0, wed: 0, thu: 0, fri: 0, sat: 0, sun: 0 });
   const [showFullDesc, setShowFullDesc] = useState(false);
   const [showPickupEditor, setShowPickupEditor] = useState(false);
   const [pickupStartTime, setPickupStartTime] = useState('');
@@ -278,7 +281,29 @@ export default function MyBasketsScreen() {
               >
                 <TouchableOpacity
                   activeOpacity={0.7}
-                  onPress={() => { setMenuOpenId(null); setDetailBasket(basket); setDetailTodayQty(basket.quantityLeft); setDetailDailyQty(basket.quantityTotal); setShowFullDesc(false); setPickupStartTime(basket.pickupWindow.start); setPickupEndTime(basket.pickupWindow.end); setShowPickupEditor(false); setUseBusinessHours(false); setDetailMaxPerCustomer((basket as any).maxPerCustomer ?? 5); }}
+                  onPress={() => {
+                    setMenuOpenId(null);
+                    setDetailBasket(basket);
+                    setDetailTodayQty(basket.quantityLeft);
+                    setDetailDailyQty(basket.quantityTotal);
+                    setShowFullDesc(false);
+                    setPickupStartTime(basket.pickupWindow.start);
+                    setPickupEndTime(basket.pickupWindow.end);
+                    setShowPickupEditor(false);
+                    setUseBusinessHours(false);
+                    setDetailMaxPerCustomer((basket as any).maxPerCustomer ?? 5);
+                    // Init schedule from basket data or default to same for all days
+                    const rawBasket = basketsQuery.data?.find((b: any) => String(b.id) === basket.id);
+                    const schedule = (rawBasket as any)?.daily_reinit_schedule;
+                    if (schedule && typeof schedule === 'object' && !Array.isArray(schedule)) {
+                      setSameAllDays(false);
+                      setDaySchedule({ mon: schedule.mon ?? 0, tue: schedule.tue ?? 0, wed: schedule.wed ?? 0, thu: schedule.thu ?? 0, fri: schedule.fri ?? 0, sat: schedule.sat ?? 0, sun: schedule.sun ?? 0 });
+                    } else {
+                      setSameAllDays(true);
+                      const qty = basket.quantityTotal;
+                      setDaySchedule({ mon: qty, tue: qty, wed: qty, thu: qty, fri: qty, sat: qty, sun: qty });
+                    }
+                  }}
                 >
                   <View style={styles.cardRow}>
                     {basket.imageUrl ? (
@@ -515,6 +540,103 @@ export default function MyBasketsScreen() {
                   </View>
                 </View>
 
+                {/* Daily Reinitialization Quantity */}
+                <View style={{ marginBottom: 16 }}>
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                    <Text style={{ color: theme.colors.textPrimary, ...theme.typography.body }}>
+                      {t('business.baskets.defaultQty')}
+                    </Text>
+                    {sameAllDays && (
+                      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                        <TouchableOpacity
+                          onPress={() => setDetailDailyQty(Math.max(0, detailDailyQty - 1))}
+                          style={{ backgroundColor: theme.colors.bg, borderRadius: 8, width: 36, height: 36, justifyContent: 'center', alignItems: 'center' }}
+                        >
+                          <Minus size={16} color={theme.colors.textPrimary} />
+                        </TouchableOpacity>
+                        <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3, marginHorizontal: 16, minWidth: 24, textAlign: 'center' }}>
+                          {detailDailyQty}
+                        </Text>
+                        <TouchableOpacity
+                          onPress={() => setDetailDailyQty(detailDailyQty + 1)}
+                          style={{ backgroundColor: theme.colors.bg, borderRadius: 8, width: 36, height: 36, justifyContent: 'center', alignItems: 'center' }}
+                        >
+                          <Plus size={16} color={theme.colors.textPrimary} />
+                        </TouchableOpacity>
+                      </View>
+                    )}
+                  </View>
+
+                  {/* Same for all days checkbox */}
+                  <TouchableOpacity
+                    onPress={() => {
+                      const next = !sameAllDays;
+                      setSameAllDays(next);
+                      if (next) {
+                        // Reset all days to current detailDailyQty
+                        const reset: Record<string, number> = {};
+                        DAYS.forEach(d => { reset[d] = detailDailyQty; });
+                        setDaySchedule(reset);
+                      }
+                    }}
+                    style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 10 }}
+                  >
+                    <View style={{
+                      width: 22, height: 22, borderRadius: 6, borderWidth: 2,
+                      borderColor: sameAllDays ? theme.colors.primary : theme.colors.muted,
+                      backgroundColor: sameAllDays ? theme.colors.primary : 'transparent',
+                      justifyContent: 'center', alignItems: 'center',
+                    }}>
+                      {sameAllDays && <Text style={{ color: '#fff', fontSize: 12, fontWeight: '700' }}>✓</Text>}
+                    </View>
+                    <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm }}>
+                      {t('business.baskets.sameAllDays', { defaultValue: 'Same for all days' })}
+                    </Text>
+                  </TouchableOpacity>
+
+                  {/* Per-day schedule */}
+                  {!sameAllDays && (
+                    <View style={{ backgroundColor: theme.colors.bg, borderRadius: theme.radii.r12, padding: 12, gap: 8 }}>
+                      {DAYS.map((day) => (
+                        <View key={day} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                          <View style={{
+                            width: 36, height: 36, borderRadius: 18,
+                            backgroundColor: daySchedule[day] > 0 ? theme.colors.primary + '18' : theme.colors.divider,
+                            justifyContent: 'center', alignItems: 'center',
+                          }}>
+                            <Text style={{
+                              color: daySchedule[day] > 0 ? theme.colors.primary : theme.colors.muted,
+                              ...theme.typography.bodySm, fontWeight: '700',
+                            }}>
+                              {DAY_LABELS[day]}
+                            </Text>
+                          </View>
+                          <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm, flex: 1, marginLeft: 10 }}>
+                            {t(`business.baskets.days.${day}`, { defaultValue: day.charAt(0).toUpperCase() + day.slice(1) })}
+                          </Text>
+                          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                            <TouchableOpacity
+                              onPress={() => setDaySchedule(prev => ({ ...prev, [day]: Math.max(0, prev[day] - 1) }))}
+                              style={{ backgroundColor: theme.colors.surface, borderRadius: 6, width: 28, height: 28, justifyContent: 'center', alignItems: 'center' }}
+                            >
+                              <Minus size={12} color={theme.colors.textPrimary} />
+                            </TouchableOpacity>
+                            <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '600', marginHorizontal: 10, minWidth: 18, textAlign: 'center' }}>
+                              {daySchedule[day]}
+                            </Text>
+                            <TouchableOpacity
+                              onPress={() => setDaySchedule(prev => ({ ...prev, [day]: prev[day] + 1 }))}
+                              style={{ backgroundColor: theme.colors.surface, borderRadius: 6, width: 28, height: 28, justifyContent: 'center', alignItems: 'center' }}
+                            >
+                              <Plus size={12} color={theme.colors.textPrimary} />
+                            </TouchableOpacity>
+                          </View>
+                        </View>
+                      ))}
+                    </View>
+                  )}
+                </View>
+
                 {/* Pickup Time */}
                 <TouchableOpacity
                   onPress={() => setShowPickupEditor(!showPickupEditor)}
@@ -655,10 +777,11 @@ export default function MyBasketsScreen() {
                           name: detailBasket.name,
                           original_price: detailBasket.originalPrice,
                           selling_price: detailBasket.discountedPrice,
-                          daily_reinitialization_quantity: detailDailyQty,
+                          daily_reinitialization_quantity: sameAllDays ? detailDailyQty : detailDailyQty,
                           quantity: detailTodayQty,
                           pickup_start_time: `${pickupStartTime}:00`,
                           pickup_end_time: `${pickupEndTime}:00`,
+                          ...(sameAllDays ? {} : { daily_reinit_schedule: JSON.stringify(daySchedule) }),
                         },
                       },
                       {

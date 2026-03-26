@@ -15,4 +15,4 @@ npx eas init
 npx expo export --platform all
 npx eas update --branch preview --message "update n"
 ```
-n = number of the update we currently at 5 
+n = number of the update we currently at 5

@@ -83,7 +83,9 @@
     "customerRoleDesc": "Trouvez et réservez des paniers surprises près de chez vous",
     "businessRoleDesc": "Vendez vos surplus alimentaires et réduisez le gaspillage",
     "passwordRequirements": "Min 8 caractères avec majuscule, minuscule, chiffre et caractère spécial (!@#$%...)",
-    "tosRequired": "Veuillez accepter les Conditions d'utilisation pour continuer."
+    "tosRequired": "Veuillez accepter les Conditions d'utilisation pour continuer.",
+    "continueWithGoogle": "Continuer avec Google",
+    "or": "ou"
   },
   "home": {
     "search": "Rechercher",
@@ -318,7 +320,9 @@
     "notif_title_review_received": "Nouvel avis",
     "notif_message_new_reservation": "{{count}} panier(s) réservé(s) dans votre restaurant",
     "notif_message_reservation_cancelled": "{{count}} réservation(s) ont été annulées",
-    "notif_message_pickup_confirmed": "Votre retrait chez {{restaurant}} a été confirmé !",
+    "notif_title_order_confirmed": "Commande confirmée",
+    "notif_message_order_confirmed": "Votre commande chez {{location}} est confirmée ! Retrait : {{time}}. Code : {{code}}",
+    "notif_message_pickup_confirmed": "Votre retrait chez {{restaurant}} a été confirmé ! Évaluez votre expérience ?",
     "notif_message_review_received": "Un client vous a laissé un avis"
   },
   "business": {
@@ -588,7 +592,24 @@
     "title": "Param\u00e8tres",
     "notifications": "Notifications",
     "pushNotifications": "Notifications push",
-    "support": "Support"
+    "support": "Support",
+    "notificationPreferences": "Pr\u00e9f\u00e9rences de notification",
+    "orderConfirmed": "Commande confirm\u00e9e",
+    "orderConfirmedDesc": "Notifier quand la r\u00e9servation est confirm\u00e9e",
+    "pickupReminder": "Rappel de retrait",
+    "pickupReminderDesc": "Notifier quand la fen\u00eatre de retrait s'ouvre/ferme",
+    "favoritesUpdates": "Mises \u00e0 jour des favoris",
+    "favoritesUpdatesDesc": "Notifier quand les lieux favoris ont des paniers",
+    "suggestions": "Suggestions",
+    "suggestionsDesc": "Notifier des nouveaux lieux ou recommandations",
+    "promotions": "Promotions",
+    "promotionsDesc": "Notifier des offres sp\u00e9ciales",
+    "permissions": "Autorisations",
+    "camera": "Cam\u00e9ra",
+    "location": "Localisation",
+    "photoLibrary": "Phototh\u00e8que",
+    "granted": "Accord\u00e9",
+    "notSet": "Non d\u00e9fini"
   },
   "impact": {
     "title": "Mon Impact",

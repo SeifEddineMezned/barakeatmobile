@@ -12,13 +12,12 @@ import { SkeletonLoader } from '@/src/components/SkeletonLoader';
 import { useFavoritesStore } from '@/src/stores/favoritesStore';
 import { useAuthStore } from '@/src/stores/authStore';
 import { MapFallback } from '@/src/components/MapFallback';
-import { fetchRestaurants } from '@/src/services/restaurants';
-import { fetchBaskets } from '@/src/services/baskets';
+import { fetchLocations } from '@/src/services/restaurants';
 import { fetchReviewsByRestaurant } from '@/src/services/reviews';
-import { normalizeRestaurantToBasket, normalizeRawBasketToBasket } from '@/src/utils/normalizeRestaurant';
+import { normalizeLocationToBasket } from '@/src/utils/normalizeRestaurant';
 import { useHeroStore } from '@/src/stores/heroStore';
 import { useAddressStore } from '@/src/stores/addressStore';
-// LocationPickerModal replaced by full-page /address-picker route
+import { useNotificationStore } from '@/src/stores/notificationStore';
 import { StatusBar } from 'expo-status-bar';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
@@ -44,6 +43,7 @@ export default function HomeScreen() {
   const [activeCategory, setActiveCategory] = useState('Tous');
   const { toggleBasketFavorite, isBasketFavorite } = useFavoritesStore();
   const { user } = useAuthStore();
+  const [refreshing, setRefreshing] = useState(false);
   const [showRadiusModal, setShowRadiusModal] = useState(false);
   const [radius, setRadius] = useState(5);
   const [carouselPage, setCarouselPage] = useState(0);
@@ -51,6 +51,7 @@ export default function HomeScreen() {
   // Address picker is now a full-page route
   const { addresses, selectedId, hydrate: hydrateAddresses } = useAddressStore();
   const selectedAddress = addresses.find((a) => a.id === selectedId) ?? null;
+  const unreadCount = useNotificationStore((s) => s.unreadCount);
 
   useEffect(() => {
     void hydrateAddresses();
@@ -84,6 +85,13 @@ export default function HomeScreen() {
     setHeroVisibleGlobal(visible);
   }, [heroHeight, setHeroVisibleGlobal]);
 
+  // Pull-to-refresh animation state
+  const refreshTriggeredRef = useRef(false);
+  const handleRefreshRef = useRef<() => void>(() => {});
+  const pullDistance = useRef(new Animated.Value(0)).current;
+  const refreshSpin = useRef(new Animated.Value(0)).current;
+  const [pulling, setPulling] = useState(false);
+
   // PanResponder on the entire content section (search + cards area)
   // Uses capture phase to intercept before ScrollView claims the gesture
   const contentPanResponder = useMemo(() =>
@@ -97,16 +105,58 @@ export default function HomeScreen() {
         if (heroRawRef.current > 0.1 && g.dy < -12) return true;
         // Swipe down while hero is hidden AND scroll is at top → capture to show hero
         if (heroRawRef.current < 0.1 && g.dy > 12 && scrollOffsetRef.current <= 2) return true;
+        // Swipe down while hero is FULLY visible AND scroll at top → capture for pull-to-refresh
+        if (heroRawRef.current > 0.9 && g.dy > 12 && scrollOffsetRef.current <= 2) return true;
         return false;
       },
       onPanResponderGrant: () => {
         dragStartRef.current = heroRawRef.current;
+        refreshTriggeredRef.current = false;
       },
       onPanResponderMove: (_, g) => {
+        // If hero is fully visible and pulling down → pull-to-refresh gesture
+        if (dragStartRef.current > 0.9 && g.dy > 0) {
+          setPulling(true);
+          // Animate pull distance — follows finger with diminishing return
+          pullDistance.setValue(Math.min(g.dy * 0.6, 150));
+          return;
+        }
         const newVal = dragStartRef.current + (g.dy / HERO_HEIGHT);
         heroHeight.setValue(Math.max(0, Math.min(1, newVal)));
       },
       onPanResponderRelease: (_, g) => {
+        // Pull-to-refresh: if hero was fully visible and user pulled down enough
+        if (dragStartRef.current > 0.9 && g.dy > 40) {
+          // Keep icon at fixed position, spin it, wait 1s, then refresh
+          setPulling(false);
+          setRefreshing(true);
+          // Loop spin while refreshing
+          const spinLoop = Animated.loop(
+            Animated.timing(refreshSpin, {
+              toValue: 1,
+              duration: 700,
+              useNativeDriver: true,
+            })
+          );
+          spinLoop.start();
+          // 1 second delay, then actually refresh
+          setTimeout(async () => {
+            await Promise.allSettled([
+              locationsQuery.refetch(),
+              reviewsQuery.refetch(),
+            ]);
+            spinLoop.stop();
+            refreshSpin.setValue(0);
+            pullDistance.setValue(0);
+            setRefreshing(false);
+          }, 1000);
+          return;
+        }
+        // Cancelled pull — snap back
+        if (dragStartRef.current > 0.9 && g.dy > 0) {
+          Animated.timing(pullDistance, { toValue: 0, duration: 200, useNativeDriver: false }).start(() => setPulling(false));
+          return;
+        }
         const currentVal = heroRawRef.current;
         if (g.vy < -0.5 || currentVal < 0.4) {
           snapHero(false);
@@ -135,35 +185,27 @@ export default function HomeScreen() {
     outputRange: [theme.colors.bg, '#114b3c'],
   });
 
-  const restaurantsQuery = useQuery({
-    queryKey: ['restaurants'],
-    queryFn: fetchRestaurants,
+  // Fetch locations (the only source of truth for food spots)
+  const locationsQuery = useQuery({
+    queryKey: ['locations'],
+    queryFn: fetchLocations,
     staleTime: 60_000,
     retry: 2,
   });
 
-  // Fetch actual baskets from baskets table — these have correct quantity, prices, etc.
-  const basketsQuery = useQuery({
-    queryKey: ['all-baskets'],
-    queryFn: fetchBaskets,
-    staleTime: 60_000,
-    retry: 2,
-  });
-
-  // Fetch reviews per-restaurant in parallel — GET /api/reviews returns 404 so we use per-id endpoint
-  const restaurantIds = restaurantsQuery.data?.map((r) => r.id) ?? [];
+  // Fetch reviews per location
+  const locationIds = locationsQuery.data?.map((l) => l.id) ?? [];
   const reviewsQuery = useQuery({
-    queryKey: ['review-map', restaurantIds],
+    queryKey: ['review-map', locationIds],
     queryFn: async () => {
-      if (!restaurantIds.length) return {} as Record<string, { avg: number; count: number }>;
+      if (!locationIds.length) return {} as Record<string, { avg: number; count: number }>;
       const results = await Promise.allSettled(
-        restaurantIds.map((id) => fetchReviewsByRestaurant(id))
+        locationIds.map((id) => fetchReviewsByRestaurant(id))
       );
       const map: Record<string, { avg: number; count: number }> = {};
-      restaurantIds.forEach((id, i) => {
+      locationIds.forEach((id, i) => {
         const r = results[i];
         if (r.status === 'fulfilled' && r.value.length > 0) {
-          // Derive avg from 4-category fields; fall back to generic rating if all categories are 0/null
           const catAvgs = r.value.map((rev) => {
             const cats = [
               Number(rev.rating_service) || 0,
@@ -184,63 +226,25 @@ export default function HomeScreen() {
       });
       return map;
     },
-    enabled: restaurantIds.length > 0,
+    enabled: locationIds.length > 0,
     staleTime: 120_000,
     retry: 0,
   });
 
-  // Build card data: prefer actual basket rows from baskets table, fall back to restaurant-level data
+  // Build card data: one card per location
   const baskets = useMemo(() => {
-    const restaurants = restaurantsQuery.data ?? [];
-    const rawBaskets = basketsQuery.data ?? [];
+    const locations = locationsQuery.data ?? [];
     const rmap = reviewsQuery.data ?? {};
-
-    // Index restaurants by id for quick lookup
-    const restaurantMap = new Map(restaurants.map((r) => [String(r.id), r]));
-
-    // If we have real baskets from the baskets table, use them (they have correct prices/quantities)
-    if (rawBaskets.length > 0) {
-      return rawBaskets.map((b: any) => {
-        const restaurantId = String(b.restaurant_id ?? b.location_id ?? '');
-        const restaurant = restaurantMap.get(restaurantId);
-        const basket = normalizeRawBasketToBasket(b, restaurant?.name);
-
-        // Merge restaurant-level data the basket row doesn't carry
-        if (restaurant) {
-          basket.merchantLogo = basket.merchantLogo ?? restaurant.image_url ?? undefined;
-          basket.address = basket.address || restaurant.address || '';
-          const hasCoords =
-            restaurant.latitude != null && restaurant.longitude != null &&
-            isFinite(Number(restaurant.latitude)) && isFinite(Number(restaurant.longitude));
-          if (!basket.hasCoords && hasCoords) {
-            basket.latitude = Number(restaurant.latitude);
-            basket.longitude = Number(restaurant.longitude);
-            (basket as any).hasCoords = true;
-          }
-        }
-
-        // Merge review data
-        const summary = rmap[restaurantId];
-        if (summary) {
-          basket.merchantRating = summary.avg;
-          basket.reviewCount = summary.count;
-        }
-
-        return basket;
-      });
-    }
-
-    // Fallback: use restaurant-level data (legacy path)
-    return restaurants.map((r) => {
-      const basket = normalizeRestaurantToBasket(r);
-      const summary = rmap[String(r.id)];
+    return locations.map((loc) => {
+      const basket = normalizeLocationToBasket(loc);
+      const summary = rmap[String(loc.id)];
       if (summary) {
         basket.merchantRating = summary.avg;
         basket.reviewCount = summary.count;
       }
       return basket;
     });
-  }, [restaurantsQuery.data, basketsQuery.data, reviewsQuery.data]);
+  }, [locationsQuery.data, reviewsQuery.data]);
 
   const availableCategories = useMemo(() => {
     const cats = new Set<string>();
@@ -276,6 +280,20 @@ export default function HomeScreen() {
   const handleCategoryPress = useCallback((cat: string) => {
     setActiveCategory(cat);
   }, []);
+
+  const handleRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await Promise.allSettled([
+      locationsQuery.refetch(),
+      reviewsQuery.refetch(),
+    ]);
+    setRefreshing(false);
+  }, [locationsQuery, reviewsQuery]);
+
+  // Keep ref in sync so PanResponder can call it
+  useEffect(() => {
+    handleRefreshRef.current = handleRefresh;
+  }, [handleRefresh]);
 
   const firstName = user?.firstName ?? user?.name?.split(' ')[0] ?? '';
 
@@ -359,6 +377,24 @@ export default function HomeScreen() {
           </TouchableOpacity>
           <TouchableOpacity onPress={() => router.push('/notifications' as never)}>
             <Bell size={20} color={heroVisible ? '#e3ff5c' : theme.colors.textPrimary} />
+            {unreadCount > 0 && (
+              <View style={{
+                position: 'absolute',
+                top: -4,
+                right: -6,
+                backgroundColor: theme.colors.error,
+                borderRadius: 8,
+                minWidth: 16,
+                height: 16,
+                justifyContent: 'center',
+                alignItems: 'center',
+                paddingHorizontal: 4,
+              }}>
+                <Text style={{ color: '#fff', fontSize: 10, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
+                  {unreadCount > 99 ? '99+' : unreadCount}
+                </Text>
+              </View>
+            )}
           </TouchableOpacity>
         </View>
       </View>
@@ -503,6 +539,33 @@ export default function HomeScreen() {
           </View>
         </View>
 
+        {/* Pull-to-refresh icon — appears below search bar, follows finger down, spins on release */}
+        {(pulling || refreshing) && (
+          <Animated.View style={{
+            alignItems: 'center',
+            height: pulling
+              ? pullDistance.interpolate({ inputRange: [0, 150], outputRange: [0, 100], extrapolate: 'clamp' })
+              : 40,
+            justifyContent: 'flex-start',
+            paddingTop: pulling
+              ? pullDistance.interpolate({ inputRange: [0, 150], outputRange: [0, 60], extrapolate: 'clamp' })
+              : 10,
+          }}>
+            <Animated.View style={{
+              opacity: pulling
+                ? pullDistance.interpolate({ inputRange: [0, 20], outputRange: [0, 1], extrapolate: 'clamp' })
+                : 1,
+              transform: [{
+                rotate: refreshing
+                  ? refreshSpin.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] })
+                  : pullDistance.interpolate({ inputRange: [0, 150], outputRange: ['0deg', '270deg'], extrapolate: 'clamp' }),
+              }],
+            }}>
+              <RefreshCw size={20} color={theme.colors.primary} />
+            </Animated.View>
+          </Animated.View>
+        )}
+
         {/* Scrollable content — Fix 2: paddingBottom accounts for floating tab bar + safe area */}
         <ScrollView
           style={styles.scrollView}
@@ -553,7 +616,7 @@ export default function HomeScreen() {
               })}
             </ScrollView>
           </View>
-          {(restaurantsQuery.isLoading || basketsQuery.isLoading) ? (
+          {locationsQuery.isLoading ? (
             <>
               {[0, 1, 2, 3].map((i) => (
                 <View key={i} style={{ marginBottom: 16, backgroundColor: theme.colors.surface, borderRadius: 16, overflow: 'hidden', padding: 12 }}>
@@ -563,13 +626,13 @@ export default function HomeScreen() {
                 </View>
               ))}
             </>
-          ) : (restaurantsQuery.isError && basketsQuery.isError) ? (
+          ) : locationsQuery.isError ? (
             <View style={styles.centerState}>
               <Text style={[{ color: theme.colors.error, ...theme.typography.body, textAlign: 'center' as const, marginBottom: 16 }]}>
                 {t('common.errorOccurred')}
               </Text>
               <TouchableOpacity
-                onPress={() => { restaurantsQuery.refetch(); basketsQuery.refetch(); }}
+                onPress={() => { locationsQuery.refetch(); }}
                 style={[styles.retryButton, { backgroundColor: theme.colors.primary, borderRadius: theme.radii.r12 }]}
               >
                 <RefreshCw size={16} color="#fff" />
@@ -586,7 +649,7 @@ export default function HomeScreen() {
             </View>
           ) : (
             filteredBaskets.map((basket) => {
-              const isAvailable = basket.isActive && basket.quantityLeft > 0;
+              const isAvailable = basket.quantityLeft > 0;
               return (
                 <View
                   key={basket.id}

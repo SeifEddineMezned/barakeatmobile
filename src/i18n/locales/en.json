@@ -83,7 +83,9 @@
     "customerRoleDesc": "Find and reserve surprise baskets near you",
     "businessRoleDesc": "Sell surplus food and reduce waste",
     "passwordRequirements": "Min 8 characters with uppercase, lowercase, a number and a special character (!@#$%...)",
-    "tosRequired": "Please accept the Terms of Service to continue."
+    "tosRequired": "Please accept the Terms of Service to continue.",
+    "continueWithGoogle": "Continue with Google",
+    "or": "or"
   },
   "home": {
     "search": "Search",
@@ -329,7 +331,9 @@
     "notif_title_review_received": "New Review",
     "notif_message_new_reservation": "{{count}} basket(s) reserved at your restaurant",
     "notif_message_reservation_cancelled": "{{count}} reservation(s) were cancelled",
-    "notif_message_pickup_confirmed": "Your pickup at {{restaurant}} was confirmed!",
+    "notif_title_order_confirmed": "Order Confirmed",
+    "notif_message_order_confirmed": "Your order at {{location}} is confirmed! Pickup: {{time}}. Code: {{code}}",
+    "notif_message_pickup_confirmed": "Your pickup at {{restaurant}} was confirmed! Rate your experience?",
     "notif_message_review_received": "A customer left you a review"
   },
   "business": {
@@ -599,7 +603,24 @@
     "title": "Settings",
     "notifications": "Notifications",
     "pushNotifications": "Push Notifications",
-    "support": "Support"
+    "support": "Support",
+    "notificationPreferences": "Notification Preferences",
+    "orderConfirmed": "Order confirmed",
+    "orderConfirmedDesc": "Notify when reservation is confirmed",
+    "pickupReminder": "Pickup time reminder",
+    "pickupReminderDesc": "Notify when pickup window opens/closes",
+    "favoritesUpdates": "Favorites updates",
+    "favoritesUpdatesDesc": "Notify when favorited locations have baskets",
+    "suggestions": "Suggestions",
+    "suggestionsDesc": "Notify about new locations or recommendations",
+    "promotions": "Promotions",
+    "promotionsDesc": "Notify about special offers",
+    "permissions": "Permissions",
+    "camera": "Camera",
+    "location": "Location",
+    "photoLibrary": "Photo Library",
+    "granted": "Granted",
+    "notSet": "Not Set"
   },
   "impact": {
     "title": "My Impact",

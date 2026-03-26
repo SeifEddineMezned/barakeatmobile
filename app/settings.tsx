@@ -1,12 +1,12 @@
-import React, { useCallback, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Switch, Alert, Modal, TextInput } from 'react-native';
+import React, { useCallback, useEffect, useState } from 'react';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Switch, Alert, Modal, TextInput, Linking } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import { useRouter } from 'expo-router';
 import {
   ArrowLeft, Globe, Bell as BellIcon, Shield, HelpCircle, Info, LogOut,
-  ChevronRight, Lock, FileText, Headphones, X, Trash2,
+  ChevronRight, Lock, FileText, Headphones, X, Trash2, Camera, MapPin, Image,
 } from 'lucide-react-native';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { StatusBar } from 'expo-status-bar';
@@ -15,12 +15,33 @@ import { useSplashStore } from '@/src/stores/splashStore';
 import { logout } from '@/src/services/auth';
 import { updatePassword } from '@/src/services/profile';
 import i18n from '@/src/i18n';
+import { Camera as ExpoCamera } from 'expo-camera';
+import * as Location from 'expo-location';
+import * as ImagePicker from 'expo-image-picker';
 
 const LANGUAGES = [
   { code: 'fr', label: 'Français' },
   { code: 'en', label: 'English' },
   { code: 'ar', label: 'العربية' },
 ];
+
+const NOTIF_PREFS_KEY = '@barakeat_notif_prefs';
+
+interface NotifPrefs {
+  orderConfirmed: boolean;
+  pickupReminder: boolean;
+  favoritesUpdates: boolean;
+  suggestions: boolean;
+  promotions: boolean;
+}
+
+const DEFAULT_NOTIF_PREFS: NotifPrefs = {
+  orderConfirmed: true,
+  pickupReminder: true,
+  favoritesUpdates: true,
+  suggestions: false,
+  promotions: false,
+};
 
 export default function SettingsScreen() {
   const { t } = useTranslation();
@@ -41,6 +62,65 @@ export default function SettingsScreen() {
   const [newPw, setNewPw] = useState('');
   const [confirmPw, setConfirmPw] = useState('');
   const [pwLoading, setPwLoading] = useState(false);
+
+  // Notification preferences
+  const [notifPrefs, setNotifPrefs] = useState<NotifPrefs>(DEFAULT_NOTIF_PREFS);
+
+  // Permission statuses
+  const [cameraStatus, setCameraStatus] = useState<string>('Not Set');
+  const [locationStatus, setLocationStatus] = useState<string>('Not Set');
+  const [photoLibraryStatus, setPhotoLibraryStatus] = useState<string>('Not Set');
+
+  // Load notification preferences from AsyncStorage
+  useEffect(() => {
+    const loadNotifPrefs = async () => {
+      try {
+        const stored = await AsyncStorage.getItem(NOTIF_PREFS_KEY);
+        if (stored) {
+          setNotifPrefs({ ...DEFAULT_NOTIF_PREFS, ...JSON.parse(stored) });
+        }
+      } catch (err) {
+        console.log('[Settings] Error loading notif prefs:', err);
+      }
+    };
+    loadNotifPrefs();
+  }, []);
+
+  // Load permission statuses
+  useEffect(() => {
+    const checkPermissions = async () => {
+      try {
+        const cam = await ExpoCamera.getCameraPermissionsAsync();
+        setCameraStatus(cam.granted ? 'Granted' : 'Not Set');
+      } catch {
+        setCameraStatus('Not Set');
+      }
+      try {
+        const loc = await Location.getForegroundPermissionsAsync();
+        setLocationStatus(loc.granted ? 'Granted' : 'Not Set');
+      } catch {
+        setLocationStatus('Not Set');
+      }
+      try {
+        const photo = await ImagePicker.getMediaLibraryPermissionsAsync();
+        setPhotoLibraryStatus(photo.granted ? 'Granted' : 'Not Set');
+      } catch {
+        setPhotoLibraryStatus('Not Set');
+      }
+    };
+    checkPermissions();
+  }, []);
+
+  // Save notification preferences
+  const updateNotifPref = useCallback(async (key: keyof NotifPrefs, value: boolean) => {
+    const updated = { ...notifPrefs, [key]: value };
+    setNotifPrefs(updated);
+    try {
+      await AsyncStorage.setItem(NOTIF_PREFS_KEY, JSON.stringify(updated));
+    } catch (err) {
+      console.log('[Settings] Error saving notif prefs:', err);
+    }
+  }, [notifPrefs]);
 
   const currentLangObj = LANGUAGES.find((l) => l.code === currentLang) ?? LANGUAGES[0];
 
@@ -135,6 +215,24 @@ export default function SettingsScreen() {
     router.replace('/auth/sign-in' as never);
   }, [signOut, router, triggerSplash]);
 
+  const handleOpenSettings = useCallback(() => {
+    Linking.openSettings();
+  }, []);
+
+  const NOTIF_ITEMS: { key: keyof NotifPrefs; labelKey: string; descKey: string }[] = [
+    { key: 'orderConfirmed', labelKey: 'settings.orderConfirmed', descKey: 'settings.orderConfirmedDesc' },
+    { key: 'pickupReminder', labelKey: 'settings.pickupReminder', descKey: 'settings.pickupReminderDesc' },
+    { key: 'favoritesUpdates', labelKey: 'settings.favoritesUpdates', descKey: 'settings.favoritesUpdatesDesc' },
+    { key: 'suggestions', labelKey: 'settings.suggestions', descKey: 'settings.suggestionsDesc' },
+    { key: 'promotions', labelKey: 'settings.promotions', descKey: 'settings.promotionsDesc' },
+  ];
+
+  const PERMISSION_ITEMS = [
+    { labelKey: 'settings.camera', status: cameraStatus, icon: Camera },
+    { labelKey: 'settings.location', status: locationStatus, icon: MapPin },
+    { labelKey: 'settings.photoLibrary', status: photoLibraryStatus, icon: Image },
+  ];
+
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]} edges={['top']}>
       <StatusBar style="dark" />
@@ -179,6 +277,91 @@ export default function SettingsScreen() {
           <BellIcon size={20} color={theme.colors.textSecondary} />
           <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.body, flex: 1, marginLeft: 12 }]}>{t('settings.pushNotifications')}</Text>
           <Switch value={notifications} onValueChange={setNotifications} trackColor={{ false: theme.colors.divider, true: theme.colors.primary + '50' }} thumbColor={notifications ? theme.colors.primary : theme.colors.muted} />
+        </View>
+
+        {/* Notification Preferences — only shown when push notifications are ON */}
+        {notifications && (
+          <>
+            <Text style={[styles.sectionHeader, { color: theme.colors.textSecondary, ...theme.typography.caption, marginBottom: theme.spacing.sm }]}>
+              {t('settings.notificationPreferences')}
+            </Text>
+            <View style={[{ backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, ...theme.shadows.shadowSm, marginBottom: theme.spacing.xl }]}>
+              {NOTIF_ITEMS.map((item, i) => (
+                <View
+                  key={item.key}
+                  style={[{
+                    padding: theme.spacing.lg,
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    borderTopWidth: i > 0 ? 1 : 0,
+                    borderTopColor: theme.colors.divider,
+                  }]}
+                >
+                  <View style={{ flex: 1, marginRight: 12 }}>
+                    <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.body }]}>
+                      {t(item.labelKey)}
+                    </Text>
+                    <Text style={[{ color: theme.colors.muted, ...theme.typography.caption, marginTop: 2 }]}>
+                      {t(item.descKey)}
+                    </Text>
+                  </View>
+                  <Switch
+                    value={notifPrefs[item.key]}
+                    onValueChange={(val) => updateNotifPref(item.key, val)}
+                    trackColor={{ false: theme.colors.divider, true: theme.colors.primary + '50' }}
+                    thumbColor={notifPrefs[item.key] ? theme.colors.primary : theme.colors.muted}
+                  />
+                </View>
+              ))}
+            </View>
+          </>
+        )}
+
+        {/* Permissions */}
+        <Text style={[styles.sectionHeader, { color: theme.colors.textSecondary, ...theme.typography.caption, marginBottom: theme.spacing.sm }]}>
+          {t('settings.permissions')}
+        </Text>
+        <View style={[{ backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, ...theme.shadows.shadowSm, marginBottom: theme.spacing.xl }]}>
+          {PERMISSION_ITEMS.map((item, i) => {
+            const IconComponent = item.icon;
+            const isGranted = item.status === 'Granted';
+            return (
+              <TouchableOpacity
+                key={item.labelKey}
+                style={[styles.menuItem, {
+                  padding: theme.spacing.lg,
+                  borderTopWidth: i > 0 ? 1 : 0,
+                  borderTopColor: theme.colors.divider,
+                }]}
+                onPress={handleOpenSettings}
+              >
+                <View style={styles.menuItemLeft}>
+                  <IconComponent size={20} color={theme.colors.textSecondary} />
+                  <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.body, marginLeft: 12 }]}>
+                    {t(item.labelKey)}
+                  </Text>
+                </View>
+                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                  <View style={[{
+                    backgroundColor: isGranted ? theme.colors.primary + '18' : theme.colors.muted + '18',
+                    borderRadius: theme.radii.pill,
+                    paddingHorizontal: 10,
+                    paddingVertical: 4,
+                    marginRight: 6,
+                  }]}>
+                    <Text style={[{
+                      color: isGranted ? theme.colors.primary : theme.colors.muted,
+                      ...theme.typography.caption,
+                      fontWeight: '600' as const,
+                    }]}>
+                      {isGranted ? t('settings.granted') : t('settings.notSet')}
+                    </Text>
+                  </View>
+                  <ChevronRight size={18} color={theme.colors.muted} />
+                </View>
+              </TouchableOpacity>
+            );
+          })}
         </View>
 
         {/* Account */}

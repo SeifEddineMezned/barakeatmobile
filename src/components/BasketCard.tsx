@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Animated, Image } from 'react-native';
 import { useRouter } from 'expo-router';
-import { Heart, Clock, MapPin, Star, ShoppingBag, Tag } from 'lucide-react-native';
+import { Heart, Clock, MapPin, Star, ShoppingBag, Tag, Layers } from 'lucide-react-native';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { Basket } from '@/src/types';
 
@@ -88,10 +88,10 @@ export function BasketCard({ basket, onFavoritePress, isFavorite = false }: Bask
           },
         ]}
       >
-        {/* Image area */}
+        {/* Image area — cover photo of the business */}
         <View style={styles.imageContainer}>
-          {basket.imageUrl ? (
-            <Image source={{ uri: basket.imageUrl }} style={[styles.image, { borderTopLeftRadius: theme.radii.r16, borderTopRightRadius: theme.radii.r16 }]} />
+          {(basket.coverImageUrl || basket.imageUrl) ? (
+            <Image source={{ uri: basket.coverImageUrl ?? basket.imageUrl }} style={[styles.image, { borderTopLeftRadius: theme.radii.r16, borderTopRightRadius: theme.radii.r16 }]} />
           ) : (
             <View
               style={[
@@ -101,12 +101,31 @@ export function BasketCard({ basket, onFavoritePress, isFavorite = false }: Bask
             />
           )}
 
-          {/* Bags left badge — top left */}
-          <View style={[styles.bagsLeftBadge, { backgroundColor: bagsBgColor, borderRadius: theme.radii.r12 }]}>
-            <ShoppingBag size={16} color={bagsCountColor} />
-            <Text style={[styles.bagsLeftText, { color: bagsCountColor, ...theme.typography.bodySm, fontWeight: '700' as const, marginLeft: 5 }]}>
-              {basket.quantityLeft}
-            </Text>
+          {/* Badges row — top left */}
+          <View style={{ position: 'absolute', top: 10, left: 10, flexDirection: 'row', gap: 6 }}>
+            {/* Basket quantity badge */}
+            <View style={[styles.bagsLeftBadge, { backgroundColor: bagsBgColor, borderRadius: theme.radii.r12, position: 'relative', top: 0, left: 0 }]}>
+              <ShoppingBag size={16} color={bagsCountColor} />
+              <Text style={[styles.bagsLeftText, { color: bagsCountColor, ...theme.typography.bodySm, fontWeight: '700' as const, marginLeft: 5 }]}>
+                {basket.quantityLeft}
+              </Text>
+            </View>
+            {/* Basket types badge — only shown if > 1 type */}
+            {basket.basketTypeCount != null && basket.basketTypeCount > 1 && (
+              <View style={{
+                flexDirection: 'row',
+                alignItems: 'center',
+                backgroundColor: '#e3ff5c',
+                borderRadius: theme.radii.r12,
+                paddingHorizontal: 10,
+                paddingVertical: 5,
+              }}>
+                <Layers size={14} color="#1a1a1a" />
+                <Text style={{ color: '#1a1a1a', ...theme.typography.bodySm, fontWeight: '700' as const, marginLeft: 5 }}>
+                  {basket.basketTypeCount}
+                </Text>
+              </View>
+            )}
           </View>
 
           {/* Heart button — top right */}
@@ -190,9 +209,16 @@ export function BasketCard({ basket, onFavoritePress, isFavorite = false }: Bask
               <Text style={[{ color: theme.colors.muted, ...theme.typography.caption, textDecorationLine: 'line-through' }]}>
                 {basket.originalPrice} TND
               </Text>
-              <Text style={[{ color: theme.colors.primary, ...theme.typography.h2, fontWeight: '700' as const }]}>
-                {basket.discountedPrice} TND
-              </Text>
+              <View style={{ flexDirection: 'row', alignItems: 'baseline' }}>
+                {basket.basketTypeCount != null && basket.basketTypeCount > 1 && (
+                  <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, marginRight: 3 }]}>
+                    from
+                  </Text>
+                )}
+                <Text style={[{ color: theme.colors.primary, ...theme.typography.h2, fontWeight: '700' as const }]}>
+                  {basket.discountedPrice} TND
+                </Text>
+              </View>
             </View>
           </View>
         </View>

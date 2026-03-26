@@ -8,7 +8,9 @@ import { useRouter } from 'expo-router';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { StatusBar } from 'expo-status-bar';
 import { useAuthStore } from '@/src/stores/authStore';
-import { fetchStats, fetchTodayOrders, fetchAnalytics } from '@/src/services/business';
+import { useBusinessStore } from '@/src/stores/businessStore';
+import { useNotificationStore } from '@/src/stores/notificationStore';
+import { fetchStats, fetchTodayOrders, fetchAnalytics, fetchMyProfile } from '@/src/services/business';
 import { fetchMyContext, fetchOrganizationDetails } from '@/src/services/teams';
 import { apiClient } from '@/src/lib/api';
 import { LineChart } from '@/src/components/LineChart';
@@ -138,9 +140,11 @@ export default function BusinessDashboard() {
   const theme = useTheme();
   const router = useRouter();
   const { user } = useAuthStore();
+  const unreadCount = useNotificationStore((s) => s.unreadCount);
   const insets = useSafeAreaInsets();
 
-  const [selectedLocationId, setSelectedLocationId] = useState<number | null>(null);
+  const selectedLocationId = useBusinessStore((s) => s.selectedLocationId);
+  const setSelectedLocationId = useBusinessStore((s) => s.setSelectedLocationId);
   const [showLocationModal, setShowLocationModal] = useState(false);
   const [isSwitchingLocation, setIsSwitchingLocation] = useState(false);
   const switchSpinAnim = React.useRef(new RNAnimated.Value(0)).current;
@@ -166,21 +170,21 @@ export default function BusinessDashboard() {
 
   const statsQuery = useQuery({
     queryKey: ['business-stats', selectedLocationId],
-    queryFn: fetchStats,
+    queryFn: () => fetchStats(selectedLocationId),
     staleTime: 60_000,
     retry: 1,
   });
 
   const analyticsQuery = useQuery({
     queryKey: ['business-analytics', selectedLocationId],
-    queryFn: fetchAnalytics,
+    queryFn: () => fetchAnalytics(selectedLocationId),
     staleTime: 60_000,
     retry: 1,
   });
 
   const todayQuery = useQuery({
     queryKey: ['today-orders', selectedLocationId],
-    queryFn: fetchTodayOrders,
+    queryFn: () => fetchTodayOrders(selectedLocationId),
     staleTime: 30_000,
     refetchInterval: 30_000,
     retry: 1,
@@ -188,10 +192,7 @@ export default function BusinessDashboard() {
 
   const profileQuery = useQuery({
     queryKey: ['my-profile', selectedLocationId],
-    queryFn: async () => {
-      const res = await apiClient.get('/api/restaurants/my/profile');
-      return res.data as any;
-    },
+    queryFn: () => fetchMyProfile(selectedLocationId),
     staleTime: 60_000,
     retry: 1,
   });
@@ -352,6 +353,24 @@ export default function BusinessDashboard() {
             </TouchableOpacity>
             <TouchableOpacity onPress={() => router.push('/notifications' as never)}>
               <Bell size={18} color={theme.colors.textPrimary} />
+              {unreadCount > 0 && (
+                <View style={{
+                  position: 'absolute',
+                  top: -4,
+                  right: -6,
+                  backgroundColor: theme.colors.error,
+                  borderRadius: 8,
+                  minWidth: 16,
+                  height: 16,
+                  justifyContent: 'center',
+                  alignItems: 'center',
+                  paddingHorizontal: 4,
+                }}>
+                  <Text style={{ color: '#fff', fontSize: 10, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
+                    {unreadCount > 99 ? '99+' : unreadCount}
+                  </Text>
+                </View>
+              )}
             </TouchableOpacity>
           </View>
         </View>
@@ -606,10 +625,13 @@ export default function BusinessDashboard() {
       </Modal>
 
       {/* Location / team switcher modal */}
-      <Modal visible={showLocationModal} transparent animationType="slide" onRequestClose={() => setShowLocationModal(false)}>
+      <Modal visible={showLocationModal} transparent animationType="fade" onRequestClose={() => setShowLocationModal(false)}>
         <View style={styles.modalOverlay}>
+          <TouchableOpacity style={StyleSheet.absoluteFillObject} activeOpacity={1} onPress={() => setShowLocationModal(false)} />
           <View style={[styles.modalContent, { backgroundColor: theme.colors.surface, borderTopLeftRadius: 28, borderTopRightRadius: 28, padding: theme.spacing.xl, ...theme.shadows.shadowLg }]}>
-            <View style={[styles.modalHandle, { backgroundColor: theme.colors.divider, alignSelf: 'center', marginBottom: theme.spacing.lg }]} />
+            <TouchableOpacity activeOpacity={0.6} onPress={() => setShowLocationModal(false)}>
+              <View style={[styles.modalHandle, { backgroundColor: theme.colors.divider, alignSelf: 'center', marginBottom: theme.spacing.lg }]} />
+            </TouchableOpacity>
             <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: theme.spacing.lg }}>
               <Building2 size={18} color={theme.colors.primary} />
               <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h2, marginLeft: 10, flex: 1 }]}>

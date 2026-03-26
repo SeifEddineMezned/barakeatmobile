@@ -1,15 +1,17 @@
 import { Tabs } from "expo-router";
-import { LayoutDashboard, ShoppingBag, ClipboardList, User, Bell, Settings } from "lucide-react-native";
+import { LayoutDashboard, ShoppingBag, ClipboardList, User, Bell, Settings, ChevronDown, MapPin, Check } from "lucide-react-native";
 import React from "react";
 import { useTranslation } from "react-i18next";
-import { View, Text, TouchableOpacity, Animated, Dimensions, PanResponder } from "react-native";
+import { View, Text, TouchableOpacity, Animated, Dimensions, PanResponder, Modal } from "react-native";
 import { useRouter } from "expo-router";
 import { useQuery } from "@tanstack/react-query";
 import { useTheme } from "@/src/theme/ThemeProvider";
 import { getUnreadCount } from "@/src/services/notifications";
 import { fetchTodayOrders } from "@/src/services/business";
+import { fetchMyContext, fetchOrganizationDetails } from "@/src/services/teams";
 import { useNotificationStore } from "@/src/stores/notificationStore";
 import { useAuthStore } from "@/src/stores/authStore";
+import { useBusinessStore } from "@/src/stores/businessStore";
 
 export default function BusinessTabLayout() {
   const { t } = useTranslation();
@@ -98,9 +100,52 @@ export default function BusinessTabLayout() {
     }
   }, [unreadQuery.data, setUnreadCount]);
 
+  const selectedLocationId = useBusinessStore((s) => s.selectedLocationId);
+  const setSelectedLocationId = useBusinessStore((s) => s.setSelectedLocationId);
+
+  // Fetch org context & locations for the location dropdown
+  const [locationModalVisible, setLocationModalVisible] = React.useState(false);
+
+  const myContextQuery = useQuery({
+    queryKey: ['my-context'],
+    queryFn: fetchMyContext,
+    enabled: isAuthenticated && user?.role === 'business',
+    staleTime: 5 * 60_000,
+  });
+
+  const orgId = myContextQuery.data?.organization_id;
+  const myRole = myContextQuery.data?.role;
+
+  const orgDetailsQuery = useQuery({
+    queryKey: ['org-details', orgId],
+    queryFn: () => fetchOrganizationDetails(orgId!),
+    enabled: !!orgId,
+    staleTime: 5 * 60_000,
+  });
+
+  const orgLocations = orgDetailsQuery.data?.locations ?? [];
+  const isAdminOrOwner = myRole === 'admin' || myRole === 'owner';
+
+  // Derive the current location name for display
+  const selectedLocationName = React.useMemo(() => {
+    if (!selectedLocationId) return isAdminOrOwner ? t('business.allLocations', { defaultValue: 'All locations' }) : (orgLocations[0]?.name ?? t('business.location', { defaultValue: 'Location' }));
+    const loc = orgLocations.find((l) => l.id === Number(selectedLocationId));
+    return loc?.name ?? t('business.location', { defaultValue: 'Location' });
+  }, [selectedLocationId, orgLocations, isAdminOrOwner, t]);
+
+  // PanResponder for swipe-to-dismiss on the location modal
+  const modalPanResponder = React.useMemo(() => PanResponder.create({
+    onMoveShouldSetPanResponder: (_, g) => g.dy > 10,
+    onPanResponderRelease: (_, g) => {
+      if (g.dy > 60) {
+        setLocationModalVisible(false);
+      }
+    },
+  }), []);
+
   const todayOrdersQuery = useQuery({
-    queryKey: ['today-orders-count'],
-    queryFn: fetchTodayOrders,
+    queryKey: ['today-orders-count', selectedLocationId],
+    queryFn: () => fetchTodayOrders(selectedLocationId),
     enabled: isAuthenticated && user?.role === 'business',
     refetchInterval: 30_000,
     staleTime: 15_000,
@@ -123,29 +168,33 @@ export default function BusinessTabLayout() {
     <Animated.View style={{
       marginLeft: 16,
       flexDirection: 'row',
-      alignItems: 'baseline',
+      alignItems: 'center',
       opacity: brandAnim,
       transform: [
         { translateX: brandAnim.interpolate({ inputRange: [0, 1], outputRange: [-40, 0] }) },
         { scale: brandAnim.interpolate({ inputRange: [0, 0.5, 1], outputRange: [0.8, 1.05, 1] }) },
       ],
     }}>
-      <Text style={{
-        color: theme.colors.primary,
-        fontSize: 20,
-        fontWeight: '700',
-        fontFamily: 'Poppins_700Bold',
-      }}>
-        Barakeat
-      </Text>
-      <Text style={{
-        color: '#e3ff5c',
-        fontSize: 20,
-        fontWeight: '700',
-        fontFamily: 'Poppins_700Bold',
-      }}>
-        .
-      </Text>
+      <TouchableOpacity
+        onPress={() => setLocationModalVisible(true)}
+        style={{ flexDirection: 'row', alignItems: 'center' }}
+        activeOpacity={0.7}
+      >
+        <MapPin size={18} color={theme.colors.primary} style={{ marginRight: 6 }} />
+        <Text
+          numberOfLines={1}
+          style={{
+            color: theme.colors.textPrimary,
+            fontSize: 16,
+            fontWeight: '600',
+            fontFamily: 'Poppins_700Bold',
+            maxWidth: 180,
+          }}
+        >
+          {selectedLocationName}
+        </Text>
+        <ChevronDown size={18} color={theme.colors.textSecondary} style={{ marginLeft: 4 }} />
+      </TouchableOpacity>
     </Animated.View>
   );
 
@@ -187,6 +236,7 @@ export default function BusinessTabLayout() {
   );
 
   return (
+    <>
     <Tabs
       screenOptions={{
         tabBarActiveTintColor: theme.colors.primary,
@@ -369,5 +419,110 @@ export default function BusinessTabLayout() {
         }}
       />
     </Tabs>
+
+    {/* Location selector modal */}
+    <Modal
+      visible={locationModalVisible}
+      transparent
+      animationType="fade"
+      onRequestClose={() => setLocationModalVisible(false)}
+    >
+      <TouchableOpacity
+        style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' }}
+        activeOpacity={1}
+        onPress={() => setLocationModalVisible(false)}
+      >
+        <View
+          {...modalPanResponder.panHandlers}
+          style={{
+            backgroundColor: theme.colors.surface,
+            borderTopLeftRadius: 24,
+            borderTopRightRadius: 24,
+            paddingTop: 12,
+            paddingBottom: 40,
+            paddingHorizontal: 20,
+            maxHeight: '60%',
+          }}
+          onStartShouldSetResponder={() => true}
+        >
+          {/* Drag handle */}
+          <View style={{ alignSelf: 'center', width: 40, height: 4, borderRadius: 2, backgroundColor: theme.colors.divider, marginBottom: 16 }} />
+
+          <Text style={{ color: theme.colors.textPrimary, fontSize: 18, fontWeight: '700', fontFamily: 'Poppins_700Bold', marginBottom: 16 }}>
+            {t('business.selectLocation', { defaultValue: 'Select location' })}
+          </Text>
+
+          {/* "All locations" option for admin/owner */}
+          {isAdminOrOwner && (
+            <TouchableOpacity
+              onPress={() => { setSelectedLocationId(null); setLocationModalVisible(false); }}
+              style={{
+                flexDirection: 'row',
+                alignItems: 'center',
+                paddingVertical: 14,
+                paddingHorizontal: 12,
+                borderRadius: 12,
+                backgroundColor: !selectedLocationId ? theme.colors.primary + '12' : 'transparent',
+                marginBottom: 4,
+              }}
+              activeOpacity={0.7}
+            >
+              <MapPin size={20} color={!selectedLocationId ? theme.colors.primary : theme.colors.textSecondary} />
+              <Text style={{
+                flex: 1,
+                marginLeft: 12,
+                color: !selectedLocationId ? theme.colors.primary : theme.colors.textPrimary,
+                fontSize: 15,
+                fontWeight: !selectedLocationId ? '700' : '500',
+                fontFamily: !selectedLocationId ? 'Poppins_700Bold' : 'Poppins_500Medium',
+              }}>
+                {t('business.allLocations', { defaultValue: 'All locations' })}
+              </Text>
+              {!selectedLocationId && <Check size={20} color={theme.colors.primary} />}
+            </TouchableOpacity>
+          )}
+
+          {/* Individual locations */}
+          {orgLocations.map((loc) => {
+            const isSelected = Number(selectedLocationId) === loc.id;
+            return (
+              <TouchableOpacity
+                key={loc.id}
+                onPress={() => { setSelectedLocationId(loc.id); setLocationModalVisible(false); }}
+                style={{
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  paddingVertical: 14,
+                  paddingHorizontal: 12,
+                  borderRadius: 12,
+                  backgroundColor: isSelected ? theme.colors.primary + '12' : 'transparent',
+                  marginBottom: 4,
+                }}
+                activeOpacity={0.7}
+              >
+                <MapPin size={20} color={isSelected ? theme.colors.primary : theme.colors.textSecondary} />
+                <View style={{ flex: 1, marginLeft: 12 }}>
+                  <Text style={{
+                    color: isSelected ? theme.colors.primary : theme.colors.textPrimary,
+                    fontSize: 15,
+                    fontWeight: isSelected ? '700' : '500',
+                    fontFamily: isSelected ? 'Poppins_700Bold' : 'Poppins_500Medium',
+                  }}>
+                    {loc.name ?? t('business.unnamedLocation', { defaultValue: 'Unnamed location' })}
+                  </Text>
+                  {loc.address ? (
+                    <Text style={{ color: theme.colors.textSecondary, fontSize: 12, fontFamily: 'Poppins_400Regular', marginTop: 2 }} numberOfLines={1}>
+                      {loc.address}
+                    </Text>
+                  ) : null}
+                </View>
+                {isSelected && <Check size={20} color={theme.colors.primary} />}
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+      </TouchableOpacity>
+    </Modal>
+    </>
   );
 }

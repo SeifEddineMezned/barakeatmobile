@@ -8,8 +8,8 @@ import { Heart } from 'lucide-react-native';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { BasketCard } from '@/src/components/BasketCard';
 import { useFavoritesStore } from '@/src/stores/favoritesStore';
-import { fetchRestaurants } from '@/src/services/restaurants';
-import { normalizeRestaurantToBasket } from '@/src/utils/normalizeRestaurant';
+import { fetchLocations } from '@/src/services/restaurants';
+import { normalizeLocationToBasket } from '@/src/utils/normalizeRestaurant';
 
 function PulsingHeart({ color }: { color: string }) {
   const pulseAnim = React.useRef(new Animated.Value(1)).current;
@@ -40,16 +40,16 @@ export default function FavoritesScreen() {
   const router = useRouter();
   const { favoriteBasketIds, toggleBasketFavorite, isBasketFavorite } = useFavoritesStore();
 
-  const restaurantsQuery = useQuery({
-    queryKey: ['restaurants'],
-    queryFn: fetchRestaurants,
+  const locationsQuery = useQuery({
+    queryKey: ['locations'],
+    queryFn: fetchLocations,
     staleTime: 60_000,
   });
 
   const allBaskets = useMemo(() => {
-    if (!restaurantsQuery.data) return [];
-    return restaurantsQuery.data.map(normalizeRestaurantToBasket);
-  }, [restaurantsQuery.data]);
+    if (!locationsQuery.data) return [];
+    return locationsQuery.data.map(normalizeLocationToBasket);
+  }, [locationsQuery.data]);
 
   const favoriteBaskets = useMemo(
     () => allBaskets.filter((basket) => favoriteBasketIds.includes(basket.id)),

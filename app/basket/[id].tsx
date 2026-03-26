@@ -3,13 +3,14 @@ import { View, Text, StyleSheet, ScrollView, Image, TouchableOpacity, Linking, A
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import { useQuery } from '@tanstack/react-query';
-import { MapPin, Clock, Phone, Navigation, ChevronLeft, Star, ShoppingBag, RefreshCw, Flag } from 'lucide-react-native';
+import { MapPin, Clock, Phone, Navigation, ChevronLeft, Star, ShoppingBag, RefreshCw, Flag, X } from 'lucide-react-native';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { StatusBar } from 'expo-status-bar';
 import { PrimaryCTAButton } from '@/src/components/PrimaryCTAButton';
 import { fetchBasketById } from '@/src/services/baskets';
 import { normalizeRawBasketToBasket } from '@/src/utils/normalizeRestaurant';
 import { submitReport } from '@/src/services/reports';
+import { apiClient } from '@/src/lib/api';
 
 
 
@@ -71,6 +72,44 @@ export default function BasketDetailsScreen() {
   });
 
   const basket = restaurantQuery.data ? normalizeRawBasketToBasket(restaurantQuery.data as any) : null;
+
+  // Fetch menu items — prefer basket-specific items, fall back to all location items
+  const locationId = basket?.merchantId;
+  const basketId = String(id);
+  const basketMenuItemsQuery = useQuery({
+    queryKey: ['basket-menu-items', basketId],
+    queryFn: async () => {
+      const res = await apiClient.get<any>(`/api/baskets/${basketId}/menu-items`);
+      const data = res.data;
+      if (Array.isArray(data)) return data;
+      if (data && typeof data === 'object' && 'items' in data) return data.items;
+      return [];
+    },
+    enabled: !!basketId,
+    retry: 1,
+  });
+
+  const locationMenuItemsQuery = useQuery({
+    queryKey: ['menu-items', locationId],
+    queryFn: async () => {
+      const res = await apiClient.get<any>(`/api/locations/${locationId}/menu-items`);
+      const data = res.data;
+      if (Array.isArray(data)) return data;
+      if (data && typeof data === 'object' && 'items' in data) return data.items;
+      return [];
+    },
+    enabled: !!locationId && (basketMenuItemsQuery.isError || (basketMenuItemsQuery.isSuccess && (basketMenuItemsQuery.data ?? []).length === 0)),
+    retry: 1,
+  });
+
+  // Use basket-specific items if available, else fall back to location items
+  const menuItemsQuery = {
+    data: (basketMenuItemsQuery.data ?? []).length > 0 ? basketMenuItemsQuery.data : locationMenuItemsQuery.data,
+    isLoading: basketMenuItemsQuery.isLoading || locationMenuItemsQuery.isLoading,
+  };
+
+  const menuItems: { id: number; name: string; description?: string | null; image_url?: string | null }[] = menuItemsQuery.data ?? [];
+  const [selectedMenuItem, setSelectedMenuItem] = useState<{ name: string; description?: string | null } | null>(null);
 
   const overallRating = basket?.reviews
     ? ((basket.reviews.service + basket.reviews.quantite + basket.reviews.qualite + basket.reviews.variete) / 4).toFixed(1)
@@ -193,10 +232,10 @@ export default function BasketDetailsScreen() {
             )}
             <View style={{ flex: 1 }}>
               <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h2 }]}>
-                {basket.merchantName}
+                {basket.name}
               </Text>
               <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.bodySm, marginTop: 2 }]}>
-                {basket.name}
+                {basket.merchantName}
               </Text>
             </View>
           </View>
@@ -296,53 +335,88 @@ export default function BasketDetailsScreen() {
             </View>
           )}
 
-          <View style={[styles.section, { marginTop: theme.spacing.lg }]}>
-            <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, marginBottom: theme.spacing.sm }]}>
-              {t('basket.merchantInfo')}
-            </Text>
-            <View
-              style={[
-                styles.merchantInfoCard,
-                {
-                  backgroundColor: theme.colors.surface,
-                  borderRadius: theme.radii.r16,
-                  padding: theme.spacing.lg,
-                  ...theme.shadows.shadowSm,
-                },
-              ]}
+          {/* Quick action buttons — Call & Directions */}
+          <View style={{ flexDirection: 'row', gap: 10, marginTop: theme.spacing.md }}>
+            <TouchableOpacity
+              style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.surface, borderRadius: theme.radii.r12, paddingVertical: 12, gap: 6, ...theme.shadows.shadowSm }}
+              onPress={handleCall}
             >
-              <View style={[styles.infoRow, { marginBottom: theme.spacing.md }]}>
-                <MapPin size={18} color={theme.colors.primary} />
-                <View style={styles.infoText}>
-                  <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption }]}>
-                    {t('basket.address')}
-                  </Text>
-                  <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.bodySm, marginTop: 2 }]}>
-                    {basket.address}
-                  </Text>
-                </View>
-              </View>
-              <View style={styles.actionsRow}>
-                <TouchableOpacity
-                  style={[styles.actionButton, { backgroundColor: theme.colors.bg, borderRadius: theme.radii.r12, padding: theme.spacing.md, flex: 1 }]}
-                  onPress={handleCall}
-                >
-                  <Phone size={18} color={theme.colors.primary} />
-                  <Text style={[{ color: theme.colors.primary, ...theme.typography.caption, fontWeight: '600' as const, marginTop: 4 }]}>
-                    {t('basket.call')}
-                  </Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.actionButton, { backgroundColor: theme.colors.bg, borderRadius: theme.radii.r12, padding: theme.spacing.md, flex: 1 }]}
-                  onPress={handleDirections}
-                >
-                  <Navigation size={18} color={theme.colors.primary} />
-                  <Text style={[{ color: theme.colors.primary, ...theme.typography.caption, fontWeight: '600' as const, marginTop: 4 }]}>
-                    {t('basket.directions')}
-                  </Text>
-                </TouchableOpacity>
-              </View>
-            </View>
+              <Phone size={16} color={theme.colors.primary} />
+              <Text style={{ color: theme.colors.primary, ...theme.typography.bodySm, fontWeight: '600' }}>{t('basket.call')}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.surface, borderRadius: theme.radii.r12, paddingVertical: 12, gap: 6, ...theme.shadows.shadowSm }}
+              onPress={handleDirections}
+            >
+              <Navigation size={16} color={theme.colors.primary} />
+              <Text style={{ color: theme.colors.primary, ...theme.typography.bodySm, fontWeight: '600' }}>{t('basket.directions')}</Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* Articles du menu — always shown */}
+          <View style={[styles.section, { marginTop: theme.spacing.xl }]}>
+            <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, marginBottom: theme.spacing.sm }]}>
+              {t('basket.menuItems', { defaultValue: 'Articles du menu' })}
+            </Text>
+            {menuItems.length > 0 ? (
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginHorizontal: -4 }}>
+                {menuItems.map((item) => (
+                  <TouchableOpacity
+                    key={item.id}
+                    onPress={() => item.description ? setSelectedMenuItem({ name: item.name, description: item.description }) : undefined}
+                    activeOpacity={item.description ? 0.7 : 1}
+                    style={{
+                      width: 130,
+                      marginHorizontal: 4,
+                      backgroundColor: theme.colors.surface,
+                      borderRadius: theme.radii.r12,
+                      overflow: 'hidden',
+                      ...theme.shadows.shadowSm,
+                    }}
+                  >
+                    {item.image_url ? (
+                      <Image source={{ uri: item.image_url }} style={{ width: 130, height: 90 }} />
+                    ) : (
+                      <View style={{ width: 130, height: 90, backgroundColor: theme.colors.divider, justifyContent: 'center', alignItems: 'center' }}>
+                        <ShoppingBag size={24} color={theme.colors.muted} />
+                      </View>
+                    )}
+                    <Text
+                      numberOfLines={2}
+                      style={{ color: theme.colors.textPrimary, ...theme.typography.caption, fontWeight: '600' as const, padding: 8, textAlign: 'center' }}
+                    >
+                      {item.name}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            ) : (
+              <ScrollView horizontal scrollEnabled={false} style={{ marginHorizontal: -4 }}>
+                {[0, 1, 2].map((i) => (
+                  <View
+                    key={i}
+                    style={{
+                      width: 130,
+                      marginHorizontal: 4,
+                      backgroundColor: theme.colors.surface,
+                      borderRadius: theme.radii.r12,
+                      overflow: 'hidden',
+                      opacity: 0.5,
+                    }}
+                  >
+                    <View style={{ width: 130, height: 90, backgroundColor: theme.colors.divider }} />
+                    <View style={{ padding: 8, alignItems: 'center' }}>
+                      <View style={{ width: 60, height: 8, borderRadius: 4, backgroundColor: theme.colors.divider }} />
+                    </View>
+                  </View>
+                ))}
+              </ScrollView>
+            )}
+            {menuItems.length === 0 && (
+              <Text style={{ color: theme.colors.muted, ...theme.typography.caption, textAlign: 'center', marginTop: 8 }}>
+                {t('basket.noMenuItems', { defaultValue: 'No items to show yet' })}
+              </Text>
+            )}
           </View>
 
           {basket.reviews && (
@@ -398,6 +472,23 @@ export default function BasketDetailsScreen() {
           disabled={basket.quantityLeft === 0}
         />
       </View>
+
+      {/* Menu item description popup */}
+      <Modal visible={!!selectedMenuItem} transparent animationType="fade" onRequestClose={() => setSelectedMenuItem(null)}>
+        <TouchableOpacity style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 24 }} activeOpacity={1} onPress={() => setSelectedMenuItem(null)}>
+          <View style={{ width: '100%', maxWidth: 340, backgroundColor: theme.colors.surface, borderRadius: theme.radii.r24, padding: theme.spacing.xl, ...theme.shadows.shadowLg }} onStartShouldSetResponder={() => true}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: theme.spacing.md }}>
+              <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3, flex: 1 }}>{selectedMenuItem?.name}</Text>
+              <TouchableOpacity onPress={() => setSelectedMenuItem(null)} style={{ marginLeft: 8 }}>
+                <X size={20} color={theme.colors.textSecondary} />
+              </TouchableOpacity>
+            </View>
+            <Text style={{ color: theme.colors.textSecondary, ...theme.typography.body, lineHeight: 22 }}>
+              {selectedMenuItem?.description}
+            </Text>
+          </View>
+        </TouchableOpacity>
+      </Modal>
 
       <Modal visible={showReportModal} transparent animationType="fade" onRequestClose={() => setShowReportModal(false)}>
         <TouchableOpacity style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 24 }} activeOpacity={1} onPress={() => setShowReportModal(false)}>

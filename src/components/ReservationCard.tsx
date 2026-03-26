@@ -24,13 +24,14 @@ export function ReservationCard({ reservation, onCancel, onHide: _onHide }: Rese
   const [isExpanded, setIsExpanded] = useState(false);
 
   const basket = reservation.basket;
-  const merchantName = basket?.merchantName ?? (basket as any)?.merchant_name ?? (basket as any)?.businessName ?? 'Unknown';
-  const basketName = basket?.name ?? (basket as any)?.title ?? '';
-  const address = basket?.address ?? (basket as any)?.location?.address ?? '';
-  const pickupWindow = reservation.pickupWindow ?? basket?.pickupWindow ?? (basket as any)?.pickup_window;
+  const r = reservation as any;
+  const merchantName = r.restaurant_name ?? basket?.merchantName ?? (basket as any)?.merchant_name ?? 'Unknown';
+  const basketName = basket?.name ?? r.basket_name ?? r.name ?? 'Panier Surprise';
+  const address = r.restaurant_address ?? basket?.address ?? '';
+  const pickupWindow = reservation.pickupWindow ?? basket?.pickupWindow ?? (r.pickup_start_time && r.pickup_end_time ? { start: r.pickup_start_time.substring(0, 5), end: r.pickup_end_time.substring(0, 5) } : null);
   const pickupCode = reservation.pickupCode ?? (reservation as any)?.pickup_code ?? reservation.id?.substring(0, 6)?.toUpperCase() ?? '';
   const quantity = reservation.quantity ?? 1;
-  const total = reservation.total ?? 0;
+  const total = reservation.total ?? (r.price_tier ? Number(r.price_tier) * (reservation.quantity ?? 1) : 0);
   const status = (reservation.status ?? 'reserved').toLowerCase();
   const latitude = basket?.latitude ?? (basket as any)?.lat ?? 0;
   const longitude = basket?.longitude ?? (basket as any)?.lng ?? 0;

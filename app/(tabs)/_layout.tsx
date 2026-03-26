@@ -281,8 +281,8 @@ export default function TabLayout() {
               // so it's always correct regardless of how 'nearby' shifts raw indexes.
               const isFocused = route.name === focusedRouteName;
               const color = isFocused ? theme.colors.primary : theme.colors.textSecondary;
-              const iconStroke = isFocused ? '#FFFFFF' : theme.colors.textSecondary;
-              const iconFill = isFocused ? theme.colors.primary : 'transparent';
+              const iconStroke = isFocused ? '#e3ff5c' : theme.colors.textSecondary;
+              const iconFill = isFocused ? '#114b3c' : 'transparent';
 
               const onPress = () => {
                 const event = navigation.emit({
@@ -298,10 +298,10 @@ export default function TabLayout() {
               let icon = null;
               const iconSize = 22;
               switch (route.name) {
-                case 'index': icon = <TabIcon icon={Search} color={color} size={iconSize} focused={isFocused} fill={iconFill} />; break;
-                case 'orders': icon = <TabIcon icon={ShoppingBag} color={color} size={iconSize} focused={isFocused} fill={iconFill} />; break;
-                case 'favorites': icon = <TabIcon icon={Heart} color={color} size={iconSize} focused={isFocused} fill={iconFill} />; break;
-                case 'profile': icon = <TabIcon icon={User} color={color} size={iconSize} focused={isFocused} fill={iconFill} />; break;
+                case 'index': icon = <TabIcon icon={Search} color={iconStroke} size={iconSize} focused={isFocused} fill={iconFill} />; break;
+                case 'orders': icon = <TabIcon icon={ShoppingBag} color={iconStroke} size={iconSize} focused={isFocused} fill={iconFill} />; break;
+                case 'favorites': icon = <TabIcon icon={Heart} color={iconStroke} size={iconSize} focused={isFocused} fill={iconFill} />; break;
+                case 'profile': icon = <TabIcon icon={User} color={iconStroke} size={iconSize} focused={isFocused} fill={iconFill} />; break;
               }
 
               return (

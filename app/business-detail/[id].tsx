@@ -6,9 +6,9 @@ import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { ArrowLeft, MapPin, Clock, Star, ShoppingBag } from 'lucide-react-native';
 import { useTheme } from '@/src/theme/ThemeProvider';
-import { fetchRestaurants } from '@/src/services/restaurants';
-import { normalizeRestaurantToBasket } from '@/src/utils/normalizeRestaurant';
+import { fetchLocationById } from '@/src/services/restaurants';
 import { fetchBasketsByLocation } from '@/src/services/baskets';
+import { normalizeRawBasketToBasket } from '@/src/utils/normalizeRestaurant';
 
 export default function BusinessDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -16,20 +16,33 @@ export default function BusinessDetailScreen() {
   const theme = useTheme();
   const router = useRouter();
 
-  const restaurantsQuery = useQuery({
-    queryKey: ['restaurants'],
-    queryFn: fetchRestaurants,
+  const locationQuery = useQuery({
+    queryKey: ['location', id],
+    queryFn: () => fetchLocationById(String(id)),
+    enabled: !!id,
     staleTime: 60_000,
   });
 
-  const restaurant = useMemo(() => {
-    if (!restaurantsQuery.data) return null;
-    return restaurantsQuery.data.find((r: any) => String(r.id) === id);
-  }, [restaurantsQuery.data, id]);
+  const restaurant = locationQuery.data ?? null;
 
   const normalized = useMemo(() => {
     if (!restaurant) return null;
-    return normalizeRestaurantToBasket(restaurant);
+    return {
+      id: String(restaurant.id),
+      name: restaurant.display_name ?? restaurant.name ?? '',
+      merchantName: restaurant.display_name ?? restaurant.name ?? '',
+      imageUrl: restaurant.image_url ?? undefined,
+      coverImageUrl: restaurant.cover_image_url ?? restaurant.image_url ?? undefined,
+      category: restaurant.category ?? '',
+      address: restaurant.address ?? '',
+      originalPrice: Number(restaurant.original_price ?? 0),
+      discountedPrice: Number(restaurant.min_basket_price ?? restaurant.price_tier ?? 0),
+      quantityLeft: Number(restaurant.available_left ?? restaurant.available_quantity ?? 0),
+      pickupWindow: {
+        start: restaurant.pickup_start_time?.substring(0, 5) ?? '',
+        end: restaurant.pickup_end_time?.substring(0, 5) ?? '',
+      },
+    };
   }, [restaurant]);
 
   const basketTypesQuery = useQuery({

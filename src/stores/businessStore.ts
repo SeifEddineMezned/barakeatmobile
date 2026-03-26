@@ -174,8 +174,10 @@ export const useBusinessStore = create(
       orders: defaultOrders as Order[],
       stats: initialStats as BusinessStats,
       team: defaultTeam as TeamMember[],
+      selectedLocationId: null as number | string | null,
     },
     (set) => ({
+      setSelectedLocationId: (id: number | string | null) => set({ selectedLocationId: id }),
       setProfile: (profile: BusinessProfile) => set({ profile }),
       addBasket: (basket: Basket) =>
         set((state) => ({

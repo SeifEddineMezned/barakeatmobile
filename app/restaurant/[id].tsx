@@ -19,8 +19,8 @@ import { ChevronLeft, MapPin, ShoppingBag, Clock, Star, Tag, Flag, X, ChevronRig
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { useTranslation } from 'react-i18next';
 import { StatusBar } from 'expo-status-bar';
-import { fetchRestaurantById } from '@/src/services/restaurants';
-import { fetchBaskets } from '@/src/services/baskets';
+import { fetchLocationById } from '@/src/services/restaurants';
+import { fetchBasketsByLocation } from '@/src/services/baskets';
 import { fetchReviewsByRestaurant, ReviewFromAPI } from '@/src/services/reviews';
 import { normalizeRawBasketToBasket } from '@/src/utils/normalizeRestaurant';
 
@@ -136,25 +136,25 @@ export default function RestaurantScreen() {
     { key: 'other', label: t('report.reasons.other', { defaultValue: 'Other' }) },
   ];
 
-  const restaurantQuery = useQuery({
-    queryKey: ['restaurant', id],
-    queryFn: () => fetchRestaurantById(String(id)),
+  // Fetch location data (replaces restaurant)
+  const locationQuery = useQuery({
+    queryKey: ['location', id],
+    queryFn: () => fetchLocationById(String(id)),
     enabled: !!id,
   });
 
+  // Fetch baskets belonging to this location
   const basketsQuery = useQuery({
-    queryKey: ['all-baskets-for-restaurant', id],
-    queryFn: fetchBaskets,
+    queryKey: ['baskets-by-location', id],
+    queryFn: () => fetchBasketsByLocation(String(id)),
     enabled: !!id,
     staleTime: 60_000,
     retry: 1,
   });
 
-  const restaurant = restaurantQuery.data;
+  const restaurant = locationQuery.data;
 
-  const rawBaskets = (basketsQuery.data ?? []).filter(
-    (b) => String((b as any).restaurant_id) === String(id)
-  );
+  const rawBaskets = basketsQuery.data ?? [];
   const baskets = rawBaskets.map((b) => normalizeRawBasketToBasket(b as any, restaurant?.name));
 
   const reviewsQuery = useQuery({
@@ -177,7 +177,7 @@ export default function RestaurantScreen() {
 
   const reviewCount = reviews.length;
 
-  const isLoading = restaurantQuery.isLoading;
+  const isLoading = locationQuery.isLoading;
 
   const description =
     (restaurant as any)?.bag_description?.trim() || restaurant?.description?.trim() || null;
@@ -401,108 +401,47 @@ export default function RestaurantScreen() {
                   {
                     backgroundColor: theme.colors.surface,
                     borderRadius: theme.radii.r16,
-                    ...theme.shadows.shadowMd,
+                    ...theme.shadows.shadowSm,
+                    flexDirection: 'row',
                   },
                 ]}
                 activeOpacity={0.8}
               >
-                {basket.imageUrl ? (
-                  <Image
-                    source={{ uri: basket.imageUrl }}
-                    style={[
-                      styles.basketImage,
-                      { borderTopLeftRadius: theme.radii.r16, borderTopRightRadius: theme.radii.r16 },
-                    ]}
-                  />
-                ) : null}
-                <View style={[styles.basketContent, { padding: theme.spacing.md }]}>
-                  <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.body, fontWeight: '600' as const }]}>
+                <View style={{ flex: 1, padding: 14, justifyContent: 'center' }}>
+                  <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.body, fontWeight: '600' as const }]} numberOfLines={1}>
                     {basket.name}
                   </Text>
-                  {basket.category && basket.category !== 'Tous' ? (
-                    <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 3 }}>
-                      <Tag size={10} color={theme.colors.textSecondary} />
-                      <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, marginLeft: 3 }]}>
-                        {basket.category}
-                      </Text>
-                    </View>
-                  ) : null}
-                  {basket.description ? (
-                    <Text
-                      style={[
-                        {
-                          color: theme.colors.textSecondary,
-                          ...theme.typography.bodySm,
-                          marginTop: 4,
-                          lineHeight: 19,
-                        },
-                      ]}
-                      numberOfLines={2}
-                    >
-                      {basket.description}
+                  <View style={{ flexDirection: 'row', alignItems: 'baseline', marginTop: 4 }}>
+                    <Text style={[{ color: theme.colors.primary, ...theme.typography.body, fontWeight: '700' as const }]}>
+                      {basket.discountedPrice} TND
                     </Text>
-                  ) : null}
-                  <View style={styles.basketFooter}>
-                    <View style={styles.chipsRow}>
-                      <View
-                        style={[
-                          styles.basketChip,
-                          { backgroundColor: theme.colors.bg, borderRadius: theme.radii.pill },
-                        ]}
-                      >
-                        <Clock size={11} color={theme.colors.textSecondary} />
-                        <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, marginLeft: 3 }]}>
+                    {basket.originalPrice > 0 && (
+                      <Text style={[{ color: theme.colors.muted, ...theme.typography.caption, textDecorationLine: 'line-through', marginLeft: 6 }]}>
+                        {basket.originalPrice} TND
+                      </Text>
+                    )}
+                  </View>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 6, gap: 8 }}>
+                    {basket.pickupWindow.start ? (
+                      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                        <Clock size={11} color={theme.colors.muted} />
+                        <Text style={{ color: theme.colors.muted, fontSize: 11, fontFamily: 'Poppins_400Regular', marginLeft: 3 }}>
                           {basket.pickupWindow.start}-{basket.pickupWindow.end}
                         </Text>
                       </View>
-                      <View
-                        style={[
-                          styles.basketChip,
-                          {
-                            backgroundColor:
-                              basket.quantityLeft > 0 ? theme.colors.primary : theme.colors.divider,
-                            borderRadius: theme.radii.pill,
-                          },
-                        ]}
-                      >
-                        <ShoppingBag
-                          size={11}
-                          color={basket.quantityLeft > 0 ? '#fff' : theme.colors.muted}
-                        />
-                        <Text
-                          style={[
-                            {
-                              color: basket.quantityLeft > 0 ? '#fff' : theme.colors.muted,
-                              ...theme.typography.caption,
-                              marginLeft: 3,
-                              fontWeight: '600' as const,
-                            },
-                          ]}
-                        >
-                          {basket.quantityLeft}
-                        </Text>
-                      </View>
-                    </View>
-                    <View style={{ alignItems: 'flex-end' }}>
-                      {basket.originalPrice > 0 ? (
-                        <Text
-                          style={[
-                            {
-                              color: theme.colors.muted,
-                              ...theme.typography.caption,
-                              textDecorationLine: 'line-through',
-                            },
-                          ]}
-                        >
-                          {basket.originalPrice} TND
-                        </Text>
-                      ) : null}
-                      <Text style={[{ color: theme.colors.primary, ...theme.typography.h3, fontWeight: '700' as const }]}>
-                        {basket.discountedPrice} TND
-                      </Text>
-                    </View>
+                    ) : null}
+                    <Text style={{ color: basket.quantityLeft > 0 ? theme.colors.primary : theme.colors.error, fontSize: 11, fontFamily: 'Poppins_600SemiBold' }}>
+                      {basket.quantityLeft > 0 ? `${basket.quantityLeft} left` : 'Sold out'}
+                    </Text>
                   </View>
                 </View>
+                {basket.imageUrl ? (
+                  <Image source={{ uri: basket.imageUrl }} style={{ width: 90, height: '100%', borderTopRightRadius: theme.radii.r16, borderBottomRightRadius: theme.radii.r16 }} resizeMode="cover" />
+                ) : (
+                  <View style={{ width: 90, backgroundColor: theme.colors.primary + '08', justifyContent: 'center', alignItems: 'center', borderTopRightRadius: theme.radii.r16, borderBottomRightRadius: theme.radii.r16 }}>
+                    <ShoppingBag size={28} color={theme.colors.muted} />
+                  </View>
+                )}
               </TouchableOpacity>
             ))
           )}
