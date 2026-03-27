@@ -85,7 +85,10 @@ const starStyles = StyleSheet.create({
 });
 
 export default function ReviewScreen() {
-  const { restaurantId, reservationId } = useLocalSearchParams();
+  // orders.tsx sends { locationId, reservationId } — read the exact same param names.
+  // 'restaurantId' was the old name; 'locationId' is what the current orders screen sends
+  // and what the backend expects as 'location_id' in the review payload.
+  const { locationId, reservationId } = useLocalSearchParams();
   const { t } = useTranslation();
   const theme = useTheme();
   const router = useRouter();
@@ -101,16 +104,22 @@ export default function ReviewScreen() {
   );
 
   const mutation = useMutation({
-    mutationFn: () =>
-      submitReview({
-        restaurant_id: Number(restaurantId),
+    mutationFn: () => {
+      const numericLocationId = Number(locationId);
+      // Hard guard — never allow submitting with an invalid id
+      if (!Number.isFinite(numericLocationId) || numericLocationId <= 0) {
+        return Promise.reject(new Error('Invalid location ID — cannot submit review.'));
+      }
+      return submitReview({
+        location_id: numericLocationId,
         reservation_id: reservationId ? Number(reservationId) : undefined,
         rating: overallRating,
         rating_service: ratingService,
         rating_quantity: ratingQuantity,
         rating_quality: ratingQuality,
         rating_variety: ratingVariety,
-      }),
+      });
+    },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['reservations'] });
       Alert.alert(t('common.success'), t('review.success'), [

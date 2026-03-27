@@ -8,7 +8,7 @@ import { useTheme } from '@/src/theme/ThemeProvider';
 import { StatusBar } from 'expo-status-bar';
 import { PrimaryCTAButton } from '@/src/components/PrimaryCTAButton';
 import { fetchLocationById } from '@/src/services/restaurants';
-import { fetchBasketsByLocation } from '@/src/services/baskets';
+import { fetchBasketById, fetchBasketsByLocation } from '@/src/services/baskets';
 import { createReservation, fetchReservationQRCode } from '@/src/services/reservations';
 import { getErrorMessage } from '@/src/lib/api';
 import { FeatureFlags } from '@/src/lib/featureFlags';
@@ -50,40 +50,67 @@ export default function ReserveScreen() {
     Animated.parallel(animations).start();
   };
 
-  // Fetch location info
-  const locationQuery = useQuery({
-    queryKey: ['location', basketId],
-    queryFn: () => fetchLocationById(String(basketId)),
+  // ── Step 1: Fetch the selected basket so we can derive its parent location id ──
+  const basketQuery = useQuery({
+    queryKey: ['basket', basketId],
+    queryFn: () => fetchBasketById(String(basketId)),
     enabled: !!basketId,
+    staleTime: 60_000,
   });
 
-  // Fetch actual baskets for this location to get correct quantity
+  // ── Step 2: Derive the real location/restaurant id from the basket payload ──
+  // The basket API returns both location_id and restaurant_id; prefer location_id.
+  const rawBasketData = basketQuery.data as any;
+  const resolvedLocationId: string | null =
+    rawBasketData?.location_id != null ? String(rawBasketData.location_id)
+    : rawBasketData?.restaurant_id != null ? String(rawBasketData.restaurant_id)
+    : null;
+
+  console.log('[Reserve] basketId:', basketId, '→ resolvedLocationId:', resolvedLocationId);
+
+  // ── Step 3: Fetch location — only when we have the real location id ──
+  const locationQuery = useQuery({
+    queryKey: ['location', resolvedLocationId],
+    queryFn: () => fetchLocationById(String(resolvedLocationId)),
+    enabled: !!resolvedLocationId,
+  });
+
+  // ── Step 4: Fetch sibling baskets for quantity/price — same guard ──
   const basketsQuery = useQuery({
-    queryKey: ['baskets-by-location', basketId],
-    queryFn: () => fetchBasketsByLocation(String(basketId)),
-    enabled: !!basketId,
+    queryKey: ['baskets-by-location', resolvedLocationId],
+    queryFn: () => fetchBasketsByLocation(String(resolvedLocationId)),
+    enabled: !!resolvedLocationId,
   });
 
   const location = locationQuery.data;
-  const locationName = location?.display_name ?? location?.name ?? '';
-  const address = location?.address ?? '';
-  const pickupStart = location?.pickup_start_time?.substring(0, 5) ?? '';
-  const pickupEnd = location?.pickup_end_time?.substring(0, 5) ?? '';
+  const locationName = location?.display_name ?? location?.name ?? rawBasketData?.restaurant_name ?? '';
+  const address = location?.address ?? rawBasketData?.restaurant_address ?? rawBasketData?.location_address ?? '';
 
-  // Compute quantity and price from actual baskets
+  // Prefer basket-level pickup window, fall back to location
+  const pickupStart =
+    rawBasketData?.pickup_start_time?.substring(0, 5) ??
+    location?.pickup_start_time?.substring(0, 5) ?? '';
+  const pickupEnd =
+    rawBasketData?.pickup_end_time?.substring(0, 5) ??
+    location?.pickup_end_time?.substring(0, 5) ?? '';
+
+  // Compute quantity and price from sibling baskets; fall back to selected basket
   const rawBaskets = basketsQuery.data ?? [];
-  const totalAvailable = rawBaskets.reduce((sum, b: any) => sum + (Number(b.quantity) || 0), 0);
+  const totalAvailable = rawBaskets.length > 0
+    ? rawBaskets.reduce((sum, b: any) => sum + (Number(b.quantity) || 0), 0)
+    : Number(rawBasketData?.quantity ?? 0);
   const minPrice = rawBaskets.length > 0
     ? Math.min(...rawBaskets.map((b: any) => Number(b.selling_price || 0)).filter(p => p > 0))
-    : Number(location?.price_tier ?? location?.min_basket_price ?? 0);
+    : Number(rawBasketData?.selling_price ?? location?.price_tier ?? location?.min_basket_price ?? 0);
   const minOriginal = rawBaskets.length > 0
     ? Math.min(...rawBaskets.map((b: any) => Number(b.original_price || 0)).filter(p => p > 0))
-    : Number(location?.original_price ?? 0);
+    : Number(rawBasketData?.original_price ?? location?.original_price ?? 0);
   const price = isFinite(minPrice) ? minPrice : 0;
   const originalPrice = isFinite(minOriginal) ? minOriginal : 0;
 
   const reserveMutation = useMutation({
-    mutationFn: () => createReservation({ location_id: Number(basketId), quantity }),
+    // Use the real resolved id, not the basket id
+    mutationFn: () => createReservation({ location_id: Number(resolvedLocationId), quantity }),
     onSuccess: async (data) => {
       console.log('[Reserve] Reservation created:', data.id);
       const pickupCode = data.pickup_code ?? data.pickupCode ?? '';
@@ -96,8 +123,8 @@ export default function ReserveScreen() {
       // Only invalidate customer-side queries (not business-side like today-orders)
       void queryClient.invalidateQueries({ queryKey: ['reservations'] });
       void queryClient.invalidateQueries({ queryKey: ['locations'] });
-      void queryClient.invalidateQueries({ queryKey: ['location', basketId] });
-      void queryClient.invalidateQueries({ queryKey: ['baskets-by-location', basketId] });
+      void queryClient.invalidateQueries({ queryKey: ['location', resolvedLocationId] });
+      void queryClient.invalidateQueries({ queryKey: ['baskets-by-location', resolvedLocationId] });
       void queryClient.invalidateQueries({ queryKey: ['basket', basketId] });
 
       // Fetch QR code
@@ -145,7 +172,8 @@ export default function ReserveScreen() {
     reserveMutation.mutate();
   };
 
-  if (locationQuery.isLoading) {
+  // Show loading while the basket or location are loading
+  if (basketQuery.isLoading || (!!resolvedLocationId && locationQuery.isLoading)) {
     return (
       <View style={[styles.container, { backgroundColor: theme.colors.bg, justifyContent: 'center', alignItems: 'center' }]}>
         <ActivityIndicator size="large" color={theme.colors.primary} />
@@ -153,7 +181,8 @@ export default function ReserveScreen() {
     );
   }
 
-  if (!location) {
+  // If basket fetch failed or returned no location id we cannot proceed
+  if (basketQuery.isError || !resolvedLocationId || !location) {
     return (
       <View style={[styles.container, { backgroundColor: theme.colors.bg, justifyContent: 'center', alignItems: 'center' }]}>
         <Text style={[{ color: theme.colors.error, ...theme.typography.body }]}>{t('common.errorOccurred')}</Text>

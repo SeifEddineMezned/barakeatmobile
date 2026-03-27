@@ -1,7 +1,7 @@
 import { apiClient } from '@/src/lib/api';
 
 export interface SubmitReviewRequest {
-  restaurant_id: number;
+  location_id: number;        // backend expects location_id (not restaurant_id)
   reservation_id?: number;
   rating: number;
   rating_service: number;
@@ -13,7 +13,8 @@ export interface SubmitReviewRequest {
 
 export interface ReviewFromAPI {
   id: number;
-  restaurant_id: number;
+  location_id?: number;       // canonical field returned by backend
+  restaurant_id?: number;     // legacy alias, may also appear in response
   buyer_id: number;
   reservation_id?: number;
   rating: number;
@@ -27,7 +28,7 @@ export interface ReviewFromAPI {
 }
 
 export async function submitReview(data: SubmitReviewRequest): Promise<ReviewFromAPI> {
-  console.log('[Reviews] Submitting review for restaurant:', data.restaurant_id);
+  console.log('[Reviews] Submitting review for location:', data.location_id);
   const res = await apiClient.post<ReviewFromAPI | { review: ReviewFromAPI }>('/api/reviews', data);
   const resData = res.data;
   if (resData && typeof resData === 'object' && 'review' in resData) return (resData as any).review;
