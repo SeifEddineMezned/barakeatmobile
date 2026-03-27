@@ -789,7 +789,7 @@ export default function TeamScreen() {
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]}>
       {/* Header */}
-      {renderHeader(org?.organization?.name ?? t('business.profile.teamManagement'))}
+      {renderHeader(org?.name ?? t('business.profile.teamManagement'))}
 
       {/* Org chart view (alternative to list) */}
       {viewMode === 'chart' && FeatureFlags.ENABLE_TEAM_ORG_CHART ? (
@@ -890,11 +890,11 @@ export default function TeamScreen() {
               </View>
               <View style={{ flex: 1, marginLeft: 14 }}>
                 <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h2 }]}>
-                  {org?.organization?.name ?? '--'}
+                  {org?.name ?? '--'}
                 </Text>
-                {org?.organization?.category ? (
+                {org?.category ? (
                   <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, marginTop: 2 }]}>
-                    {org.organization?.category}
+                    {org.category}
                   </Text>
                 ) : null}
               </View>

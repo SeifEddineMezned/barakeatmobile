@@ -9,7 +9,7 @@ import { StatusBar } from 'expo-status-bar';
 import { useBusinessStore } from '@/src/stores/businessStore';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { fetchTodayOrders, confirmPickup, type TodayReservationFromAPI } from '@/src/services/business';
-import { getErrorMessage } from '@/src/lib/api';
+import { getErrorMessage, apiClient } from '@/src/lib/api';
 
 export default function IncomingOrdersScreen() {
   const { t } = useTranslation();
@@ -164,13 +164,21 @@ export default function IncomingOrdersScreen() {
         {
           text: t('common.confirm'),
           style: 'destructive',
-          onPress: () => {
-            updateOrderStatus(orderId, 'cancelled');
+          onPress: async () => {
+            try {
+              // Call backend to cancel the reservation
+              await apiClient.delete(`/api/reservations/${orderId}`);
+              // Refetch to update the list
+              void queryClient.invalidateQueries({ queryKey: ['today-orders'] });
+              void queryClient.invalidateQueries({ queryKey: ['today-orders-count'] });
+            } catch (err) {
+              Alert.alert(t('common.error'), getErrorMessage(err));
+            }
           },
         },
       ]
     );
-  }, [updateOrderStatus, t]);
+  }, [queryClient, t]);
 
   const handleCall = useCallback((phone?: string) => {
     if (phone) {
