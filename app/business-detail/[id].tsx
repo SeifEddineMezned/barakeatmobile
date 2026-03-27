@@ -9,6 +9,7 @@ import { useTheme } from '@/src/theme/ThemeProvider';
 import { fetchLocationById } from '@/src/services/restaurants';
 import { fetchBasketsByLocation } from '@/src/services/baskets';
 import { normalizeRawBasketToBasket } from '@/src/utils/normalizeRestaurant';
+import { DelayedLoader } from '@/src/components/DelayedLoader';
 
 export default function BusinessDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -82,9 +83,8 @@ export default function BusinessDetailScreen() {
 
   if (!restaurant || !normalized) {
     return (
-      <SafeAreaView style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: theme.colors.bg }}>
-        <ActivityIndicator size="large" color={theme.colors.primary} />
-        <Text style={{ color: theme.colors.textSecondary, marginTop: 12 }}>Loading...</Text>
+      <SafeAreaView style={{ flex: 1, backgroundColor: theme.colors.bg }}>
+        <DelayedLoader />
       </SafeAreaView>
     );
   }

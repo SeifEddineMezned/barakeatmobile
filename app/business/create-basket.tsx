@@ -75,6 +75,12 @@ export default function CreateBasketScreen() {
     (apiBasket as any)?.max_per_customer ?? (storeBasket as any)?.maxPerCustomer ?? 5
   );
 
+  // ── Daily reinit schedule (edit mode only)
+  const DAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'] as const;
+  const DAY_LABELS: Record<string, string> = { mon: 'M', tue: 'T', wed: 'W', thu: 'T', fri: 'F', sat: 'S', sun: 'S' };
+  const [sameAllDays, setSameAllDays] = useState(true);
+  const [daySchedule, setDaySchedule] = useState<Record<string, number>>({ mon: 0, tue: 0, wed: 0, thu: 0, fri: 0, sat: 0, sun: 0 });
+
   // ── Menu items for selection
   const menuItemsQuery = useQuery({
     queryKey: ['my-menu-items'],
@@ -173,6 +179,22 @@ export default function CreateBasketScreen() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [apiBasket?.id]);
 
+  // Populate daily reinit schedule from API basket when editing
+  React.useEffect(() => {
+    if (isEditing && apiBasket) {
+      const schedule = (apiBasket as any)?.daily_reinit_schedule;
+      if (schedule && typeof schedule === 'object' && !Array.isArray(schedule)) {
+        setSameAllDays(false);
+        setDaySchedule({ mon: schedule.mon ?? 0, tue: schedule.tue ?? 0, wed: schedule.wed ?? 0, thu: schedule.thu ?? 0, fri: schedule.fri ?? 0, sat: schedule.sat ?? 0, sun: schedule.sun ?? 0 });
+      } else {
+        setSameAllDays(true);
+        const qty = apiBasket.quantity ?? 5;
+        setDaySchedule({ mon: qty, tue: qty, wed: qty, thu: qty, fri: qty, sat: qty, sun: qty });
+      }
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [apiBasket?.id]);
+
   const validatePrice = (orig: string, disc: string) => {
     const o = parseFloat(orig);
     const d = parseFloat(disc);
@@ -219,6 +241,8 @@ export default function CreateBasketScreen() {
         selling_price: parseFloat(sellingPrice),
         quantity,
         max_per_customer: maxPerCustomer,
+        daily_reinitialization_quantity: quantity,
+        ...(sameAllDays ? {} : { daily_reinit_schedule: JSON.stringify(daySchedule) }),
         pickup_start_time: toTimeField(pickupStart),
         pickup_end_time: toTimeField(pickupEnd),
         menu_item_ids: selectedMenuItemIds,
@@ -460,6 +484,104 @@ export default function CreateBasketScreen() {
                 <Plus size={16} color={theme.colors.textPrimary} />
               </TouchableOpacity>
             </View>
+          </View>
+          )}
+
+          {/* Daily Reinit Schedule — only shown when editing */}
+          {isEditing && (
+          <View style={[styles.field, { marginBottom: theme.spacing.xl }]}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: theme.spacing.sm }}>
+              <Text style={[styles.label, { color: theme.colors.textPrimary, ...theme.typography.bodySm }]}>
+                {t('business.baskets.defaultQty', { defaultValue: 'Daily reinitialization quantity' })}
+              </Text>
+              {sameAllDays && (
+                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                  <TouchableOpacity
+                    onPress={() => setQuantity(Math.max(0, quantity - 1))}
+                    style={{ backgroundColor: theme.colors.surface, borderRadius: 10, width: 42, height: 42, justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: theme.colors.divider }}
+                  >
+                    <Minus size={16} color={theme.colors.textPrimary} />
+                  </TouchableOpacity>
+                  <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3, marginHorizontal: 16, minWidth: 24, textAlign: 'center' }}>
+                    {quantity}
+                  </Text>
+                  <TouchableOpacity
+                    onPress={() => setQuantity(quantity + 1)}
+                    style={{ backgroundColor: theme.colors.surface, borderRadius: 10, width: 42, height: 42, justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: theme.colors.divider }}
+                  >
+                    <Plus size={16} color={theme.colors.textPrimary} />
+                  </TouchableOpacity>
+                </View>
+              )}
+            </View>
+
+            {/* Same for all days checkbox */}
+            <TouchableOpacity
+              onPress={() => {
+                const next = !sameAllDays;
+                setSameAllDays(next);
+                if (next) {
+                  const reset: Record<string, number> = {};
+                  DAYS.forEach(d => { reset[d] = quantity; });
+                  setDaySchedule(reset);
+                }
+              }}
+              style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 10 }}
+            >
+              <View style={{
+                width: 22, height: 22, borderRadius: 6, borderWidth: 2,
+                borderColor: sameAllDays ? theme.colors.primary : theme.colors.muted,
+                backgroundColor: sameAllDays ? theme.colors.primary : 'transparent',
+                justifyContent: 'center', alignItems: 'center',
+              }}>
+                {sameAllDays && <Text style={{ color: '#fff', fontSize: 12, fontWeight: '700' }}>✓</Text>}
+              </View>
+              <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm }}>
+                {t('business.baskets.sameAllDays', { defaultValue: 'Same for all days' })}
+              </Text>
+            </TouchableOpacity>
+
+            {/* Per-day schedule */}
+            {!sameAllDays && (
+              <View style={{ backgroundColor: theme.colors.bg, borderRadius: theme.radii.r12, padding: 12, gap: 8 }}>
+                {DAYS.map((day) => (
+                  <View key={day} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <View style={{
+                      width: 36, height: 36, borderRadius: 18,
+                      backgroundColor: daySchedule[day] > 0 ? theme.colors.primary + '18' : theme.colors.divider,
+                      justifyContent: 'center', alignItems: 'center',
+                    }}>
+                      <Text style={{
+                        color: daySchedule[day] > 0 ? theme.colors.primary : theme.colors.muted,
+                        ...theme.typography.bodySm, fontWeight: '700',
+                      }}>
+                        {DAY_LABELS[day]}
+                      </Text>
+                    </View>
+                    <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm, flex: 1, marginLeft: 10 }}>
+                      {t(`business.baskets.days.${day}`, { defaultValue: day.charAt(0).toUpperCase() + day.slice(1) })}
+                    </Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                      <TouchableOpacity
+                        onPress={() => setDaySchedule(prev => ({ ...prev, [day]: Math.max(0, prev[day] - 1) }))}
+                        style={{ backgroundColor: theme.colors.surface, borderRadius: 6, width: 28, height: 28, justifyContent: 'center', alignItems: 'center' }}
+                      >
+                        <Minus size={12} color={theme.colors.textPrimary} />
+                      </TouchableOpacity>
+                      <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '600', marginHorizontal: 10, minWidth: 18, textAlign: 'center' }}>
+                        {daySchedule[day]}
+                      </Text>
+                      <TouchableOpacity
+                        onPress={() => setDaySchedule(prev => ({ ...prev, [day]: prev[day] + 1 }))}
+                        style={{ backgroundColor: theme.colors.surface, borderRadius: 6, width: 28, height: 28, justifyContent: 'center', alignItems: 'center' }}
+                      >
+                        <Plus size={12} color={theme.colors.textPrimary} />
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                ))}
+              </View>
+            )}
           </View>
           )}
 

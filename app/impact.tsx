@@ -6,6 +6,7 @@ import {
   ScrollView,
   TouchableOpacity,
   ActivityIndicator,
+  Modal,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
@@ -29,9 +30,13 @@ import {
   Coffee,
   MapPin,
   Shuffle,
+  BookOpen,
+  Moon,
+  Medal,
 } from 'lucide-react-native';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { StatusBar } from 'expo-status-bar';
+import { DelayedLoader } from '@/src/components/DelayedLoader';
 import { useAuthStore } from '@/src/stores/authStore';
 import { fetchMyReservations } from '@/src/services/reservations';
 import {
@@ -63,15 +68,19 @@ function getBadgeIcon(badgeId: string) {
     case 'streak_3': return Flame;
     case 'streak_7': return Flame;
     case 'streak_30': return Flame;
-    case 'saved_10': return Award;
-    case 'saved_25': return Award;
-    case 'saved_50': return Trophy;
+    case 'saved_10': case 'food_saver': return Award;
+    case 'saved_25': case 'food_saver_25': return Award;
+    case 'saved_50': case 'food_saver_50': return Medal;
     case 'saved_100': return Trophy;
     case 'bakery_lover': return Coffee;
     case 'local_hero': return MapPin;
     case 'variety_seeker': return Shuffle;
     case 'early_bird': return Sun;
-    default: return Zap;
+    case 'onboarding_complete': return BookOpen;
+    case 'generous': return Heart;
+    case 'big_spender': return Banknote;
+    case 'ramadan_saver': return Moon;
+    default: return Star;
   }
 }
 
@@ -81,6 +90,7 @@ export default function ImpactScreen() {
   const router = useRouter();
   const { user, isAuthenticated } = useAuthStore();
   const [showAllLeaderboard, setShowAllLeaderboard] = useState(false);
+  const [badgeModal, setBadgeModal] = useState<Badge | null>(null);
 
   const gamificationQuery = useQuery({
     queryKey: ['gamification-stats'],
@@ -104,35 +114,40 @@ export default function ImpactScreen() {
   });
 
   const stats = useMemo(() => {
-    const gStats = gamificationQuery.data;
+    const gStats = gamificationQuery.data as any;
+    const gStatsInner = gStats?.stats ?? gStats;
+    const gLevel = gStats?.level;
     const reservations = reservationsQuery.data ?? [];
     const completedReservations = reservations.filter((r) => {
       const status = (r.status ?? '').toLowerCase();
-      return status === 'collected' || status === 'completed';
+      return status === 'collected' || status === 'completed' || status === 'picked_up';
     });
 
-    const basketsBought = completedReservations.reduce((sum, r) => sum + (r.quantity ?? 1), 0);
-    const mealsSaved = gStats?.meals_saved ?? basketsBought;
+    const mealsSaved = gStatsInner?.meals_saved ?? completedReservations.length;
 
-    const moneySaved = completedReservations.reduce((sum, r) => {
-      const orig = r.basket?.originalPrice ?? (r.basket as any)?.original_price ?? 0;
-      const disc = r.basket?.discountedPrice ?? (r.basket as any)?.discounted_price ?? 0;
-      return sum + (Number(orig) - Number(disc)) * (r.quantity ?? 1);
-    }, 0);
+    const moneySaved = gStatsInner?.money_saved != null
+      ? Math.max(0, parseFloat(gStatsInner.money_saved) || 0)
+      : completedReservations.reduce((sum, r) => {
+          const rAny = r as any;
+          const orig = Number(rAny.original_price ?? r.basket?.originalPrice ?? (r.basket as any)?.original_price ?? 0);
+          const disc = Number(rAny.price_tier ?? rAny.selling_price ?? r.basket?.discountedPrice ?? (r.basket as any)?.discounted_price ?? (r.basket as any)?.price_tier ?? 0);
+          return sum + Math.max(0, (orig - disc) * (r.quantity ?? 1));
+        }, 0);
 
     const co2Saved = mealsSaved * 2.5;
 
-    const xp = gStats?.xp ?? mealsSaved * 10;
-    const level = (typeof gStats?.level === 'number' ? gStats.level : null) ?? Math.floor(xp / 100) + 1;
+    const xp = (typeof gLevel === 'object' ? gLevel?.xp : null) ?? gStatsInner?.xp ?? mealsSaved * 10;
+    const level = (typeof gLevel === 'object' ? gLevel?.level : typeof gLevel === 'number' ? gLevel : null) ?? Math.floor(xp / 100) + 1;
     const xpInLevel = xp % 100;
     const xpProgress = xpInLevel / 100;
 
-    const currentStreak = gStats?.current_streak ?? 0;
+    const currentStreak = gStatsInner?.current_streak ?? 0;
 
-    const badges: Badge[] =
+    const rawBadges: Badge[] =
       gStats?.badges && gStats.badges.length > 0
         ? gStats.badges
         : PLACEHOLDER_BADGES;
+    const badges = [...rawBadges].sort((a, b) => (a.unlocked === b.unlocked ? 0 : a.unlocked ? -1 : 1));
 
     return {
       mealsSaved,
@@ -147,10 +162,21 @@ export default function ImpactScreen() {
     };
   }, [gamificationQuery.data, reservationsQuery.data]);
 
+  const myLeaderboardIndex = useMemo(() => {
+    const entries = leaderboardQuery.data ?? [];
+    return entries.findIndex((e) => String(e.user_id) === String(user?.id));
+  }, [leaderboardQuery.data, user?.id]);
+
   const leaderboardData = useMemo(() => {
     const entries = leaderboardQuery.data ?? [];
-    return showAllLeaderboard ? entries : entries.slice(0, 10);
-  }, [leaderboardQuery.data, showAllLeaderboard]);
+    if (showAllLeaderboard) return entries;
+    if (myLeaderboardIndex >= 0) {
+      const start = Math.max(0, myLeaderboardIndex - 2);
+      const end = Math.min(entries.length, start + 5);
+      return entries.slice(start, end);
+    }
+    return entries.slice(0, 5);
+  }, [leaderboardQuery.data, showAllLeaderboard, myLeaderboardIndex]);
 
   const isLoading = gamificationQuery.isLoading || reservationsQuery.isLoading;
 
@@ -177,9 +203,7 @@ export default function ImpactScreen() {
       </View>
 
       {isLoading ? (
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color={theme.colors.primary} />
-        </View>
+        <DelayedLoader />
       ) : (
         <ScrollView
           style={styles.content}
@@ -478,10 +502,16 @@ export default function ImpactScreen() {
               contentContainerStyle={{ gap: theme.spacing.md }}
             >
               {stats.badges.map((badge) => {
-                const BadgeIcon = badge.unlocked ? getBadgeIcon(badge.badge_id) : Lock;
+                const bid = badge.badge_id ?? badge.id;
+                const BadgeIcon = badge.unlocked ? getBadgeIcon(bid) : Lock;
+                const badgeName = badge.nameKey
+                  ? t(`badges.${badge.nameKey}`, { defaultValue: badge.name ?? bid })
+                  : badge.name ?? bid;
                 return (
-                  <View
+                  <TouchableOpacity
                     key={badge.id}
+                    onPress={() => setBadgeModal(badge)}
+                    activeOpacity={0.7}
                     style={[
                       styles.badgeCard,
                       {
@@ -524,11 +554,9 @@ export default function ImpactScreen() {
                       ]}
                       numberOfLines={2}
                     >
-                      {badge.unlocked
-                        ? badge.name ?? badge.badge_id
-                        : t('impact.locked')}
+                      {badge.unlocked ? badgeName : t('impact.locked')}
                     </Text>
-                  </View>
+                  </TouchableOpacity>
                 );
               })}
             </ScrollView>
@@ -586,93 +614,83 @@ export default function ImpactScreen() {
                   },
                 ]}
               >
-                {leaderboardData.map((entry, index) => (
-                  <View
-                    key={`lb-${entry.user_id}-${index}`}
-                    style={[
-                      styles.leaderboardRow,
-                      {
-                        paddingHorizontal: theme.spacing.lg,
-                        paddingVertical: theme.spacing.md,
-                        borderTopWidth: index === 0 ? 0 : 1,
-                        borderTopColor: theme.colors.divider,
-                      },
-                    ]}
-                  >
-                    <Text
+                {leaderboardData.map((entry, index) => {
+                  const isMe = String(entry.user_id) === String(user?.id);
+                  return (
+                    <View
+                      key={`lb-${entry.user_id}-${index}`}
                       style={[
+                        styles.leaderboardRow,
                         {
-                          color:
-                            entry.rank <= 3
-                              ? theme.colors.accentWarm
-                              : theme.colors.textSecondary,
+                          paddingHorizontal: theme.spacing.lg,
+                          paddingVertical: theme.spacing.md,
+                          borderTopWidth: index === 0 ? 0 : 1,
+                          borderTopColor: theme.colors.divider,
+                          backgroundColor: isMe ? theme.colors.primary + '12' : 'transparent',
+                        },
+                      ]}
+                    >
+                      <Text
+                        style={{
+                          color: entry.rank <= 3 ? theme.colors.accentWarm : theme.colors.textSecondary,
                           ...theme.typography.h3,
                           width: 32,
-                        },
-                      ]}
-                    >
-                      {t('impact.rank', { rank: entry.rank })}
-                    </Text>
-                    <View
-                      style={[
-                        styles.leaderboardAvatar,
-                        {
-                          backgroundColor: theme.colors.primary + '15',
-                          borderRadius: 18,
-                          width: 36,
-                          height: 36,
-                          marginHorizontal: theme.spacing.md,
-                        },
-                      ]}
-                    >
-                      <User size={18} color={theme.colors.primary} />
-                    </View>
-                    <Text
-                      style={[
-                        {
-                          color: theme.colors.textPrimary,
+                          fontWeight: '700' as const,
+                        }}
+                      >
+                        #{entry.rank}
+                      </Text>
+                      <View
+                        style={[
+                          styles.leaderboardAvatar,
+                          {
+                            backgroundColor: isMe ? theme.colors.primary + '25' : theme.colors.primary + '15',
+                            borderRadius: 18,
+                            width: 36,
+                            height: 36,
+                            marginHorizontal: theme.spacing.md,
+                            borderWidth: isMe ? 2 : 0,
+                            borderColor: theme.colors.primary,
+                          },
+                        ]}
+                      >
+                        <User size={18} color={theme.colors.primary} />
+                      </View>
+                      <Text
+                        style={{
+                          color: isMe ? theme.colors.primary : theme.colors.textPrimary,
                           ...theme.typography.body,
                           flex: 1,
-                        },
-                      ]}
-                      numberOfLines={1}
-                    >
-                      {entry.name}
-                    </Text>
-                    <Text
-                      style={[
-                        {
+                          fontWeight: isMe ? '700' as const : '400' as const,
+                        }}
+                        numberOfLines={1}
+                      >
+                        {entry.name}{isMe ? ` (${t('impact.you', { defaultValue: 'You' })})` : ''}
+                      </Text>
+                      <Text
+                        style={{
                           color: theme.colors.textSecondary,
                           ...theme.typography.bodySm,
-                        },
-                      ]}
-                    >
-                      {entry.meals_saved} {t('impact.meals')}
-                    </Text>
-                  </View>
-                ))}
+                        }}
+                      >
+                        {entry.meals_saved} {t('impact.meals')}
+                      </Text>
+                    </View>
+                  );
+                })}
 
-                {(leaderboardQuery.data?.length ?? 0) > 10 && !showAllLeaderboard && (
+                {(leaderboardQuery.data?.length ?? 0) > 5 && (
                   <TouchableOpacity
-                    style={[
-                      {
-                        paddingVertical: theme.spacing.md,
-                        borderTopWidth: 1,
-                        borderTopColor: theme.colors.divider,
-                        alignItems: 'center' as const,
-                      },
-                    ]}
-                    onPress={() => setShowAllLeaderboard(true)}
+                    style={{
+                      paddingVertical: theme.spacing.md,
+                      borderTopWidth: 1,
+                      borderTopColor: theme.colors.divider,
+                      alignItems: 'center' as const,
+                    }}
+                    onPress={() => setShowAllLeaderboard(!showAllLeaderboard)}
                   >
-                    <Text
-                      style={[
-                        {
-                          color: theme.colors.primary,
-                          ...theme.typography.button,
-                        },
-                      ]}
-                    >
-                      {t('impact.showMore')}
+                    <Text style={{ color: theme.colors.primary, ...theme.typography.button }}>
+                      {showAllLeaderboard ? t('impact.showLess', { defaultValue: 'Show Less' }) : t('impact.showMore')}
                     </Text>
                   </TouchableOpacity>
                 )}
@@ -683,6 +701,51 @@ export default function ImpactScreen() {
           <View style={{ height: 30 }} />
         </ScrollView>
       )}
+
+      {/* Badge Detail Modal */}
+      <Modal visible={badgeModal !== null} transparent animationType="fade" onRequestClose={() => setBadgeModal(null)}>
+        <TouchableOpacity style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 24 }} activeOpacity={1} onPress={() => setBadgeModal(null)}>
+          <TouchableOpacity activeOpacity={1} onPress={() => {}} style={{ backgroundColor: theme.colors.surface, borderRadius: 24, padding: 24, width: '100%', maxWidth: 340, alignItems: 'center' }}>
+            {badgeModal && (() => {
+              const bid = badgeModal.badge_id ?? badgeModal.id;
+              const BadgeIcon = badgeModal.unlocked ? getBadgeIcon(bid) : Lock;
+              const badgeName = badgeModal.nameKey
+                ? t(`badges.${badgeModal.nameKey}`, { defaultValue: badgeModal.name ?? bid })
+                : badgeModal.name ?? bid;
+              const badgeDesc = badgeModal.descKey
+                ? t(`badges.${badgeModal.descKey}`, { defaultValue: badgeModal.description ?? '' })
+                : badgeModal.description ?? '';
+              return (
+                <>
+                  <View style={{ backgroundColor: badgeModal.unlocked ? theme.colors.primary + '15' : theme.colors.divider, borderRadius: 36, width: 72, height: 72, justifyContent: 'center', alignItems: 'center', marginBottom: 16 }}>
+                    <BadgeIcon size={32} color={badgeModal.unlocked ? theme.colors.primary : theme.colors.muted} />
+                  </View>
+                  <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3, textAlign: 'center', marginBottom: 8 }}>
+                    {badgeModal.unlocked ? badgeName : t('impact.locked')}
+                  </Text>
+                  {badgeModal.unlocked && badgeDesc ? (
+                    <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm, textAlign: 'center', lineHeight: 20, marginBottom: 12 }}>
+                      {badgeDesc}
+                    </Text>
+                  ) : !badgeModal.unlocked ? (
+                    <Text style={{ color: theme.colors.muted, ...theme.typography.bodySm, textAlign: 'center', lineHeight: 20, marginBottom: 12 }}>
+                      {t('badges.lockedDesc', { defaultValue: 'Keep saving food to unlock this badge!' })}
+                    </Text>
+                  ) : null}
+                  {badgeModal.unlocked && badgeModal.unlocked_at && (
+                    <Text style={{ color: theme.colors.muted, ...theme.typography.caption, marginBottom: 12 }}>
+                      {t('badges.unlockedOn', { defaultValue: 'Unlocked on' })} {new Date(badgeModal.unlocked_at).toLocaleDateString()}
+                    </Text>
+                  )}
+                </>
+              );
+            })()}
+            <TouchableOpacity onPress={() => setBadgeModal(null)} style={{ backgroundColor: theme.colors.bg, borderRadius: 12, paddingVertical: 12, alignItems: 'center', width: '100%', borderWidth: 1, borderColor: theme.colors.divider, marginTop: 4 }}>
+              <Text style={{ color: theme.colors.textPrimary, ...theme.typography.button }}>{t('common.close')}</Text>
+            </TouchableOpacity>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
     </SafeAreaView>
   );
 }

@@ -1,11 +1,11 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Stack, useRouter, useSegments } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useRef } from "react";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
-import { ThemeProvider } from "@/src/theme/ThemeProvider";
+import { ThemeProvider, useTheme } from "@/src/theme/ThemeProvider";
 import "@/src/i18n";
-import { StyleSheet, View, ActivityIndicator, Text, Modal, ScrollView, Dimensions, TouchableOpacity } from "react-native";
+import { StyleSheet, View, ActivityIndicator, Text, Modal, ScrollView, Dimensions, TouchableOpacity, Animated } from "react-native";
 import {
   useFonts,
   Poppins_400Regular,
@@ -15,13 +15,18 @@ import {
 } from '@expo-google-fonts/poppins';
 import { useAuthStore } from "@/src/stores/authStore";
 import { useTranslation } from 'react-i18next';
+import { Hand, Sparkles, Award } from "lucide-react-native";
 import { SplashAnimation } from "@/src/components/SplashAnimation";
 import { ErrorBoundary } from "@/src/components/ErrorBoundary";
 import { useFavoritesStore } from "@/src/stores/favoritesStore";
 import { useAddressStore } from "@/src/stores/addressStore";
 import { useSplashStore } from "@/src/stores/splashStore";
+import { fetchGamificationStats } from "@/src/services/gamification";
+import { apiClient } from "@/src/lib/api";
+import { Search, ShoppingBag, Trophy, LayoutDashboard, Package, BarChart3 } from "lucide-react-native";
+// import { registerForPushNotifications } from "@/src/services/pushNotifications";
 
-void SplashScreen.preventAutoHideAsync();
+SplashScreen.preventAutoHideAsync().catch(() => {});
 
 const queryClient = new QueryClient();
 
@@ -46,6 +51,7 @@ function RootLayoutNav() {
       <Stack.Screen name="business/menu-items" options={{ presentation: "modal", headerShown: false }} />
       <Stack.Screen name="business/scan-qr" options={{ presentation: "modal", headerShown: false }} />
       <Stack.Screen name="business/team" options={{ presentation: "modal", headerShown: false }} />
+      <Stack.Screen name="business/member-detail" options={{ headerShown: false }} />
       <Stack.Screen name="address-picker" options={{ headerShown: false }} />
       <Stack.Screen name="settings" options={{ headerShown: false }} />
       <Stack.Screen name="map-view" options={{ headerShown: false }} />
@@ -54,14 +60,8 @@ function RootLayoutNav() {
   );
 }
 
-export default function RootLayout() {
-  const [fontsLoaded] = useFonts({
-    Poppins_400Regular,
-    Poppins_500Medium,
-    Poppins_600SemiBold,
-    Poppins_700Bold,
-  });
-
+/** Inner component that can safely use useQuery (inside QueryClientProvider) */
+function RootLayoutInner() {
   const { t } = useTranslation();
   const WELCOME_WIDTH = Dimensions.get('window').width;
   const [initialSplash, setInitialSplash] = useState(true);
@@ -75,31 +75,38 @@ export default function RootLayout() {
   const [showWelcomeModal, setShowWelcomeModal] = useState(false);
   const [welcomeCarouselPage, setWelcomeCarouselPage] = useState(0);
 
-  const restoreSession = useAuthStore((s) => s.restoreSession);
+  // Badge popup state
+  const [badgePopup, setBadgePopup] = useState<{ icon: string; nameKey: string; descKey: string } | null>(null);
+  const badgeShownRef = useRef<Set<string>>(new Set());
+  const badgeScale = useRef(new Animated.Value(0)).current;
+
+  // Tutorial state
+  const [showTutorial, setShowTutorial] = useState(false);
+  const [tutorialPage, setTutorialPage] = useState(0);
+  const tutorialCheckedRef = useRef(false);
+
   const isRestoringSession = useAuthStore((s) => s.isRestoringSession);
   const hydrateFavorites = useFavoritesStore((s) => s.hydrate);
   const hydrateAddresses = useAddressStore((s) => s.hydrate);
 
   const router = useRouter();
   const segments = useSegments();
+  const qc = useQueryClient();
 
   useEffect(() => {
-    void restoreSession();
     void hydrateFavorites();
     void hydrateAddresses();
-  }, [restoreSession, hydrateFavorites, hydrateAddresses]);
+  }, [hydrateFavorites, hydrateAddresses]);
 
   useEffect(() => {
-    if (fontsLoaded && !isRestoringSession) {
-      void SplashScreen.hideAsync();
+    if (!isRestoringSession) {
+      SplashScreen.hideAsync().catch(() => {});
     }
-  }, [fontsLoaded, isRestoringSession]);
+  }, [isRestoringSession]);
 
   // ── Central role-based routing guard ──────────────────────────────────────
-  // Fires once fonts are loaded and session restore is complete.
-  // Avoids running while still restoring (would route before role is known).
   useEffect(() => {
-    if (!fontsLoaded || isRestoringSession) return;
+    if (isRestoringSession) return;
 
     const inBusinessFlow = segments[0] === '(business)';
     const inTabsFlow = segments[0] === '(tabs)';
@@ -107,25 +114,349 @@ export default function RootLayout() {
     const inOnboarding = segments[0] === 'onboarding';
 
     if (!isAuthenticated) {
-      // Not logged in: send to onboarding / auth — but only if currently in
-      // a protected area to avoid overriding the onboarding flow itself.
       if (inBusinessFlow || inTabsFlow) {
         router.replace('/onboarding' as never);
       }
       return;
     }
 
-    // Authenticated — route to the right flow based on role.
-    const isBusiness = user?.role === 'business';
+    const isBiz = user?.role === 'business';
 
-    if (isBusiness && !inBusinessFlow && !inAuth) {
+    if (isBiz && !inBusinessFlow && !inAuth) {
       console.log('[RootLayout] Routing business user to (business)/dashboard');
       router.replace('/(business)/dashboard' as never);
-    } else if (!isBusiness && !inTabsFlow && !inAuth && !inOnboarding) {
+    } else if (!isBiz && !inTabsFlow && !inAuth && !inOnboarding) {
       console.log('[RootLayout] Routing customer user to (tabs)');
       router.replace('/(tabs)' as never);
     }
-  }, [fontsLoaded, isRestoringSession, isAuthenticated, user?.role]);
+  }, [isRestoringSession, isAuthenticated, user?.role]);
+
+  // Check for newly unlocked badges
+  const gamQuery = useQuery({
+    queryKey: ['gamification-stats'],
+    queryFn: fetchGamificationStats,
+    enabled: isAuthenticated && !isRestoringSession,
+    staleTime: 60_000,
+  });
+
+  useEffect(() => {
+    const gData = gamQuery.data as any;
+    if (!gData?.newBadges?.length || !gData?.badges) return;
+    for (const newBadgeId of gData.newBadges) {
+      if (badgeShownRef.current.has(newBadgeId)) continue;
+      badgeShownRef.current.add(newBadgeId);
+      const badge = gData.badges.find((b: any) => b.id === newBadgeId);
+      if (badge) {
+        setBadgePopup({ icon: badge.icon, nameKey: badge.nameKey, descKey: badge.descKey });
+        badgeScale.setValue(0);
+        Animated.spring(badgeScale, { toValue: 1, friction: 5, tension: 60, useNativeDriver: true }).start();
+        setTimeout(() => setBadgePopup(null), 4000);
+        break;
+      }
+    }
+  }, [gamQuery.data]);
+
+  // Check if user needs the post-login tutorial
+  useEffect(() => {
+    if (!isAuthenticated || isRestoringSession || tutorialCheckedRef.current) return;
+    tutorialCheckedRef.current = true;
+    (async () => {
+      try {
+        const res = await apiClient.get('/api/auth/onboarding');
+        if (!res.data.onboardingCompleted) {
+          setShowTutorial(true);
+        }
+      } catch {
+        // Silently fail — don't block the app
+      }
+    })();
+  }, [isAuthenticated, isRestoringSession]);
+
+  // Register for push notifications (disabled for Expo Go compatibility)
+  // useEffect(() => {
+  //   if (!isAuthenticated || isRestoringSession) return;
+  //   void registerForPushNotifications();
+  // }, [isAuthenticated, isRestoringSession]);
+
+  const dismissTutorial = async () => {
+    setShowTutorial(false);
+    setTutorialPage(0);
+    try {
+      await apiClient.put('/api/auth/onboarding');
+      qc.invalidateQueries({ queryKey: ['gamification-stats'] });
+    } catch {
+      // Silently fail
+    }
+  };
+
+  const isBusiness = user?.role === 'business';
+
+  const customerSlides = [
+    { icon: <Search size={36} color="#e3ff5c" />, titleKey: 'tutorial.customer.discoverTitle', descKey: 'tutorial.customer.discoverDesc' },
+    { icon: <ShoppingBag size={36} color="#e3ff5c" />, titleKey: 'tutorial.customer.reserveTitle', descKey: 'tutorial.customer.reserveDesc' },
+    { icon: <Package size={36} color="#e3ff5c" />, titleKey: 'tutorial.customer.pickupTitle', descKey: 'tutorial.customer.pickupDesc' },
+    { icon: <Trophy size={36} color="#e3ff5c" />, titleKey: 'tutorial.customer.rewardsTitle', descKey: 'tutorial.customer.rewardsDesc' },
+  ];
+
+  const businessSlides = [
+    { icon: <LayoutDashboard size={36} color="#e3ff5c" />, titleKey: 'tutorial.business.dashboardTitle', descKey: 'tutorial.business.dashboardDesc' },
+    { icon: <Package size={36} color="#e3ff5c" />, titleKey: 'tutorial.business.basketsTitle', descKey: 'tutorial.business.basketsDesc' },
+    { icon: <ShoppingBag size={36} color="#e3ff5c" />, titleKey: 'tutorial.business.ordersTitle', descKey: 'tutorial.business.ordersDesc' },
+    { icon: <BarChart3 size={36} color="#e3ff5c" />, titleKey: 'tutorial.business.performanceTitle', descKey: 'tutorial.business.performanceDesc' },
+  ];
+
+  const tutorialSlides = isBusiness ? businessSlides : customerSlides;
+
+  return (
+    <GestureHandlerRootView style={styles.container}>
+      <ErrorBoundary>
+      <RootLayoutNav />
+      {showSplash && (
+        <SplashAnimation onFinish={() => {
+          const wasLogin = wasLoginSplash;
+          setInitialSplash(false);
+          dismissLoginSplash();
+          if (wasLogin) {
+            setShowWelcomeModal(true);
+            setTimeout(() => setShowWelcomeModal(false), 5000);
+          }
+        }} />
+      )}
+      {showWelcomeModal && (
+        <Modal visible transparent animationType="fade" onRequestClose={() => setShowWelcomeModal(false)}>
+          <TouchableOpacity style={{
+            flex: 1,
+            backgroundColor: 'rgba(0,0,0,0.5)',
+            justifyContent: 'center',
+            alignItems: 'center',
+            padding: 24,
+          }} activeOpacity={1} onPress={() => setShowWelcomeModal(false)}>
+            <View style={{
+              backgroundColor: '#114b3c',
+              borderRadius: 28,
+              width: WELCOME_WIDTH - 48,
+              maxHeight: 400,
+              overflow: 'hidden',
+            }} onStartShouldSetResponder={() => true}>
+              {/* Close button */}
+              <TouchableOpacity
+                onPress={() => setShowWelcomeModal(false)}
+                style={{
+                  position: 'absolute',
+                  top: 12,
+                  right: 12,
+                  zIndex: 10,
+                  backgroundColor: 'rgba(255,255,255,0.2)',
+                  borderRadius: 14,
+                  width: 28,
+                  height: 28,
+                  justifyContent: 'center',
+                  alignItems: 'center',
+                }}
+              >
+                <Text style={{ color: '#fff', fontSize: 14, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>✕</Text>
+              </TouchableOpacity>
+
+              {/* Carousel */}
+              <ScrollView
+                horizontal
+                pagingEnabled
+                showsHorizontalScrollIndicator={false}
+                onMomentumScrollEnd={(e) => {
+                  const page = Math.round(e.nativeEvent.contentOffset.x / (WELCOME_WIDTH - 48));
+                  setWelcomeCarouselPage(page);
+                }}
+              >
+                {/* Page 1: Welcome */}
+                <View style={{ width: WELCOME_WIDTH - 48, paddingVertical: 60, paddingHorizontal: 30, alignItems: 'center' }}>
+                  <Hand size={40} color="rgba(255,255,255,0.9)" />
+                  <Text style={{ color: 'rgba(255,255,255,0.7)', fontSize: 14, fontFamily: 'Poppins_400Regular', marginTop: 20 }}>
+                    {t('home.welcomePopup.back')}
+                  </Text>
+                  <Text style={{ color: '#fff', fontSize: 28, fontWeight: '700', fontFamily: 'Poppins_700Bold', marginTop: 8, textAlign: 'center' }}>
+                    {user?.name ?? 'there'}
+                  </Text>
+                </View>
+
+                {/* Page 2: Updates */}
+                <View style={{ width: WELCOME_WIDTH - 48, paddingVertical: 60, paddingHorizontal: 30, alignItems: 'center' }}>
+                  <Sparkles size={40} color="rgba(255,255,255,0.9)" />
+                  <Text style={{ color: 'rgba(255,255,255,0.7)', fontSize: 14, fontFamily: 'Poppins_400Regular', marginTop: 20 }}>
+                    {t('home.welcomePopup.whatsNew')}
+                  </Text>
+                  <Text style={{ color: '#fff', fontSize: 22, fontWeight: '700', fontFamily: 'Poppins_700Bold', marginTop: 8, textAlign: 'center' }}>
+                    {t('home.welcomePopup.newPartners')}
+                  </Text>
+                  <Text style={{ color: 'rgba(255,255,255,0.6)', fontSize: 13, fontFamily: 'Poppins_400Regular', marginTop: 12, textAlign: 'center' }}>
+                    {t('home.welcomePopup.newPartnersDesc')}
+                  </Text>
+                </View>
+              </ScrollView>
+
+              {/* Dot indicators */}
+              <View style={{ flexDirection: 'row', justifyContent: 'center', paddingBottom: 20 }}>
+                {[0, 1].map((i) => (
+                  <View
+                    key={i}
+                    style={{
+                      width: welcomeCarouselPage === i ? 20 : 6,
+                      height: 6,
+                      borderRadius: 3,
+                      backgroundColor: welcomeCarouselPage === i ? '#e3ff5c' : 'rgba(255,255,255,0.3)',
+                      marginHorizontal: 3,
+                    }}
+                  />
+                ))}
+              </View>
+            </View>
+          </TouchableOpacity>
+        </Modal>
+      )}
+      {/* Post-login tutorial */}
+      {showTutorial && (
+        <Modal visible transparent animationType="fade" onRequestClose={dismissTutorial}>
+          <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', alignItems: 'center', padding: 24 }}>
+            <View style={{
+              backgroundColor: '#114b3c',
+              borderRadius: 28,
+              width: WELCOME_WIDTH - 48,
+              overflow: 'hidden',
+            }}>
+              {/* Skip button */}
+              <TouchableOpacity
+                onPress={dismissTutorial}
+                style={{ position: 'absolute', top: 12, right: 12, zIndex: 10, paddingHorizontal: 12, paddingVertical: 6 }}
+              >
+                <Text style={{ color: 'rgba(255,255,255,0.6)', fontSize: 13, fontFamily: 'Poppins_500Medium' }}>
+                  {t('common.skip')}
+                </Text>
+              </TouchableOpacity>
+
+              {/* Step indicator */}
+              <View style={{ paddingTop: 16, paddingHorizontal: 24 }}>
+                <Text style={{ color: 'rgba(255,255,255,0.5)', fontSize: 12, fontFamily: 'Poppins_500Medium' }}>
+                  {tutorialPage + 1}/{tutorialSlides.length}
+                </Text>
+              </View>
+
+              {/* Carousel */}
+              <ScrollView
+                horizontal
+                pagingEnabled
+                showsHorizontalScrollIndicator={false}
+                scrollEventThrottle={16}
+                onMomentumScrollEnd={(e) => {
+                  const page = Math.round(e.nativeEvent.contentOffset.x / (WELCOME_WIDTH - 48));
+                  setTutorialPage(page);
+                }}
+              >
+                {tutorialSlides.map((slide, idx) => (
+                  <View key={idx} style={{ width: WELCOME_WIDTH - 48, paddingVertical: 40, paddingHorizontal: 30, alignItems: 'center' }}>
+                    <View style={{ width: 72, height: 72, borderRadius: 36, backgroundColor: 'rgba(227,255,92,0.12)', justifyContent: 'center', alignItems: 'center', marginBottom: 20 }}>
+                      {slide.icon}
+                    </View>
+                    <Text style={{ color: '#fff', fontSize: 20, fontWeight: '700', fontFamily: 'Poppins_700Bold', textAlign: 'center', marginBottom: 10 }}>
+                      {t(slide.titleKey)}
+                    </Text>
+                    <Text style={{ color: 'rgba(255,255,255,0.65)', fontSize: 14, fontFamily: 'Poppins_400Regular', textAlign: 'center', lineHeight: 20 }}>
+                      {t(slide.descKey)}
+                    </Text>
+                  </View>
+                ))}
+              </ScrollView>
+
+              {/* Dots + button */}
+              <View style={{ paddingBottom: 24, paddingHorizontal: 24 }}>
+                <View style={{ flexDirection: 'row', justifyContent: 'center', marginBottom: 16 }}>
+                  {tutorialSlides.map((_, i) => (
+                    <View
+                      key={i}
+                      style={{
+                        width: tutorialPage === i ? 20 : 6,
+                        height: 6,
+                        borderRadius: 3,
+                        backgroundColor: tutorialPage === i ? '#e3ff5c' : 'rgba(255,255,255,0.3)',
+                        marginHorizontal: 3,
+                      }}
+                    />
+                  ))}
+                </View>
+                {tutorialPage === tutorialSlides.length - 1 && (
+                  <TouchableOpacity
+                    onPress={dismissTutorial}
+                    style={{
+                      backgroundColor: '#e3ff5c',
+                      borderRadius: 14,
+                      paddingVertical: 14,
+                      alignItems: 'center',
+                    }}
+                  >
+                    <Text style={{ color: '#114b3c', fontSize: 15, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
+                      {t('tutorial.getStarted')}
+                    </Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            </View>
+          </View>
+        </Modal>
+      )}
+      {/* Badge unlocked popup */}
+      {badgePopup && (
+        <Modal visible transparent animationType="fade" onRequestClose={() => setBadgePopup(null)}>
+          <TouchableOpacity
+            style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 24 }}
+            activeOpacity={1}
+            onPress={() => setBadgePopup(null)}
+          >
+            <Animated.View
+              style={{
+                backgroundColor: '#114b3c',
+                borderRadius: 28,
+                padding: 32,
+                alignItems: 'center',
+                width: WELCOME_WIDTH - 80,
+                transform: [{ scale: badgeScale }],
+              }}
+              onStartShouldSetResponder={() => true}
+            >
+              <View style={{ width: 72, height: 72, borderRadius: 36, backgroundColor: 'rgba(227,255,92,0.15)', justifyContent: 'center', alignItems: 'center', marginBottom: 16 }}>
+                <Award size={36} color="#e3ff5c" />
+              </View>
+              <Text style={{ color: 'rgba(255,255,255,0.7)', fontSize: 13, fontFamily: 'Poppins_500Medium', marginBottom: 4 }}>
+                {t('badges.newBadge', { defaultValue: 'New Badge Unlocked!' })}
+              </Text>
+              <Text style={{ color: '#fff', fontSize: 22, fontWeight: '700', fontFamily: 'Poppins_700Bold', textAlign: 'center', marginBottom: 8 }}>
+                {t(`badges.${badgePopup.nameKey}`, { defaultValue: badgePopup.nameKey })}
+              </Text>
+              <Text style={{ color: 'rgba(255,255,255,0.6)', fontSize: 13, fontFamily: 'Poppins_400Regular', textAlign: 'center' }}>
+                {t(`badges.${badgePopup.descKey}`, { defaultValue: badgePopup.descKey })}
+              </Text>
+            </Animated.View>
+          </TouchableOpacity>
+        </Modal>
+      )}
+      </ErrorBoundary>
+    </GestureHandlerRootView>
+  );
+}
+
+export default function RootLayout() {
+  const [fontsLoaded] = useFonts({
+    Poppins_400Regular,
+    Poppins_500Medium,
+    Poppins_600SemiBold,
+    Poppins_700Bold,
+  });
+
+  const isRestoringSession = useAuthStore((s) => s.isRestoringSession);
+  const restoreSession = useAuthStore((s) => s.restoreSession);
+
+  // Must run here (not in RootLayoutInner) to avoid deadlock:
+  // RootLayoutInner only renders after isRestoringSession becomes false
+  useEffect(() => {
+    void restoreSession();
+  }, [restoreSession]);
 
   if (!fontsLoaded || isRestoringSession) {
     return (
@@ -138,112 +469,7 @@ export default function RootLayout() {
   return (
     <QueryClientProvider client={queryClient}>
       <ThemeProvider>
-        <GestureHandlerRootView style={styles.container}>
-          <ErrorBoundary>
-          <RootLayoutNav />
-          {showSplash && (
-            <SplashAnimation onFinish={() => {
-              const wasLogin = wasLoginSplash;
-              setInitialSplash(false);
-              dismissLoginSplash();
-              if (wasLogin) {
-                setShowWelcomeModal(true);
-                setTimeout(() => setShowWelcomeModal(false), 5000);
-              }
-            }} />
-          )}
-          {showWelcomeModal && (
-            <Modal visible transparent animationType="fade" onRequestClose={() => setShowWelcomeModal(false)}>
-              <View style={{
-                flex: 1,
-                backgroundColor: 'rgba(0,0,0,0.5)',
-                justifyContent: 'center',
-                alignItems: 'center',
-                padding: 24,
-              }}>
-                <View style={{
-                  backgroundColor: '#114b3c',
-                  borderRadius: 28,
-                  width: WELCOME_WIDTH - 48,
-                  maxHeight: 400,
-                  overflow: 'hidden',
-                }}>
-                  {/* Close button */}
-                  <TouchableOpacity
-                    onPress={() => setShowWelcomeModal(false)}
-                    style={{
-                      position: 'absolute',
-                      top: 12,
-                      right: 12,
-                      zIndex: 10,
-                      backgroundColor: 'rgba(255,255,255,0.2)',
-                      borderRadius: 14,
-                      width: 28,
-                      height: 28,
-                      justifyContent: 'center',
-                      alignItems: 'center',
-                    }}
-                  >
-                    <Text style={{ color: '#fff', fontSize: 14, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>✕</Text>
-                  </TouchableOpacity>
-
-                  {/* Carousel */}
-                  <ScrollView
-                    horizontal
-                    pagingEnabled
-                    showsHorizontalScrollIndicator={false}
-                    onMomentumScrollEnd={(e) => {
-                      const page = Math.round(e.nativeEvent.contentOffset.x / (WELCOME_WIDTH - 48));
-                      setWelcomeCarouselPage(page);
-                    }}
-                  >
-                    {/* Page 1: Welcome */}
-                    <View style={{ width: WELCOME_WIDTH - 48, paddingVertical: 60, paddingHorizontal: 30, alignItems: 'center' }}>
-                      <Text style={{ fontSize: 40 }}>👋</Text>
-                      <Text style={{ color: 'rgba(255,255,255,0.7)', fontSize: 14, fontFamily: 'Poppins_400Regular', marginTop: 20 }}>
-                        {t('home.welcomePopup.back')}
-                      </Text>
-                      <Text style={{ color: '#fff', fontSize: 28, fontWeight: '700', fontFamily: 'Poppins_700Bold', marginTop: 8, textAlign: 'center' }}>
-                        {user?.name ?? 'there'}
-                      </Text>
-                    </View>
-
-                    {/* Page 2: Updates */}
-                    <View style={{ width: WELCOME_WIDTH - 48, paddingVertical: 60, paddingHorizontal: 30, alignItems: 'center' }}>
-                      <Text style={{ fontSize: 40 }}>🎉</Text>
-                      <Text style={{ color: 'rgba(255,255,255,0.7)', fontSize: 14, fontFamily: 'Poppins_400Regular', marginTop: 20 }}>
-                        {t('home.welcomePopup.whatsNew')}
-                      </Text>
-                      <Text style={{ color: '#fff', fontSize: 22, fontWeight: '700', fontFamily: 'Poppins_700Bold', marginTop: 8, textAlign: 'center' }}>
-                        {t('home.welcomePopup.newPartners')}
-                      </Text>
-                      <Text style={{ color: 'rgba(255,255,255,0.6)', fontSize: 13, fontFamily: 'Poppins_400Regular', marginTop: 12, textAlign: 'center' }}>
-                        {t('home.welcomePopup.newPartnersDesc')}
-                      </Text>
-                    </View>
-                  </ScrollView>
-
-                  {/* Dot indicators */}
-                  <View style={{ flexDirection: 'row', justifyContent: 'center', paddingBottom: 20 }}>
-                    {[0, 1].map((i) => (
-                      <View
-                        key={i}
-                        style={{
-                          width: welcomeCarouselPage === i ? 20 : 6,
-                          height: 6,
-                          borderRadius: 3,
-                          backgroundColor: welcomeCarouselPage === i ? '#e3ff5c' : 'rgba(255,255,255,0.3)',
-                          marginHorizontal: 3,
-                        }}
-                      />
-                    ))}
-                  </View>
-                </View>
-              </View>
-            </Modal>
-          )}
-          </ErrorBoundary>
-        </GestureHandlerRootView>
+        <RootLayoutInner />
       </ThemeProvider>
     </QueryClientProvider>
   );

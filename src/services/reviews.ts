@@ -9,6 +9,7 @@ export interface SubmitReviewRequest {
   rating_quality: number;
   rating_variety: number;
   comment?: string;
+  image_url?: string;
 }
 
 export interface ReviewFromAPI {

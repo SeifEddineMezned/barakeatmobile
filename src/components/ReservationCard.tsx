@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Animated, Image, ActivityIndicator, Linking } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { MapPin, Clock, Navigation, X as XIcon, QrCode, Star, ChevronDown, ChevronUp } from 'lucide-react-native';
@@ -11,9 +11,10 @@ interface ReservationCardProps {
   reservation: ReservationFromAPI;
   onCancel?: (id: string) => void;
   onHide?: (id: string) => void;
+  overrideExpired?: boolean;
 }
 
-export function ReservationCard({ reservation, onCancel, onHide: _onHide }: ReservationCardProps) {
+export function ReservationCard({ reservation, onCancel, onHide: _onHide, overrideExpired }: ReservationCardProps) {
   const { t } = useTranslation();
   const theme = useTheme();
   const router = useRouter();
@@ -26,13 +27,14 @@ export function ReservationCard({ reservation, onCancel, onHide: _onHide }: Rese
   const basket = reservation.basket;
   const r = reservation as any;
   const merchantName = r.restaurant_name ?? basket?.merchantName ?? (basket as any)?.merchant_name ?? 'Unknown';
-  const basketName = basket?.name ?? r.basket_name ?? r.name ?? 'Panier Surprise';
+  const basketName = basket?.name ?? r.basket_name ?? r.name ?? t('orders.surpriseBag', { defaultValue: 'Panier Surprise' });
   const address = r.restaurant_address ?? basket?.address ?? '';
   const pickupWindow = reservation.pickupWindow ?? basket?.pickupWindow ?? (r.pickup_start_time && r.pickup_end_time ? { start: r.pickup_start_time.substring(0, 5), end: r.pickup_end_time.substring(0, 5) } : null);
   const pickupCode = reservation.pickupCode ?? (reservation as any)?.pickup_code ?? reservation.id?.substring(0, 6)?.toUpperCase() ?? '';
   const quantity = reservation.quantity ?? 1;
   const total = reservation.total ?? (r.price_tier ? Number(r.price_tier) * (reservation.quantity ?? 1) : 0);
-  const status = (reservation.status ?? 'reserved').toLowerCase();
+  const rawStatus = (reservation.status ?? 'reserved').toLowerCase();
+  const status = overrideExpired ? 'expired' : rawStatus;
   const latitude = basket?.latitude ?? (basket as any)?.lat ?? 0;
   const longitude = basket?.longitude ?? (basket as any)?.lng ?? 0;
 
@@ -104,6 +106,36 @@ export function ReservationCard({ reservation, onCancel, onHide: _onHide }: Rese
   const isUpcoming = status === 'reserved' || status === 'ready' || status === 'pending' || status === 'confirmed';
   const isPast = status === 'collected' || status === 'completed' || status === 'picked_up';
 
+  // Live pickup countdown for upcoming orders
+  const [now, setNow] = useState(new Date());
+  useEffect(() => {
+    if (!isUpcoming || !pickupWindow) return;
+    const timer = setInterval(() => setNow(new Date()), 60000);
+    return () => clearInterval(timer);
+  }, [isUpcoming, pickupWindow]);
+
+  const pickupInfo = (() => {
+    if (!isUpcoming || !pickupWindow) return null;
+    const today = new Date();
+    const [sh, sm] = (pickupWindow.start ?? '').split(':').map(Number);
+    const [eh, em] = (pickupWindow.end ?? '').split(':').map(Number);
+    if (isNaN(sh) || isNaN(eh)) return null;
+    const startDate = new Date(today.getFullYear(), today.getMonth(), today.getDate(), sh, sm);
+    const endDate = new Date(today.getFullYear(), today.getMonth(), today.getDate(), eh, em);
+
+    if (now < startDate) {
+      const diff = Math.round((startDate.getTime() - now.getTime()) / 60000);
+      const h = Math.floor(diff / 60);
+      const m = diff % 60;
+      return { label: t('orders.startsIn', { defaultValue: 'Starts in' }), time: h > 0 ? `${h}h ${m}m` : `${m}m`, color: theme.colors.primary };
+    } else if (now <= endDate) {
+      const diff = Math.round((endDate.getTime() - now.getTime()) / 60000);
+      return { label: t('orders.endsIn', { defaultValue: 'Ends in' }), time: `${diff}m`, color: diff < 15 ? theme.colors.error : theme.colors.accentWarm };
+    } else {
+      return { label: t('orders.pickupEnded', { defaultValue: 'Pickup ended' }), time: '', color: theme.colors.muted };
+    }
+  })();
+
   return (
     <Animated.View
       style={[
@@ -131,6 +163,20 @@ export function ReservationCard({ reservation, onCancel, onHide: _onHide }: Rese
                 {basketName} × {quantity}{total > 0 ? ` · ${total} TND` : ''}
               </Text>
             ) : null}
+            {(r.created_at || r.pickup_date) && (
+              <Text style={[{ color: theme.colors.muted, ...theme.typography.caption, marginTop: 1, fontSize: 10 }]}>
+                {new Date(r.pickup_date ?? r.created_at).toLocaleDateString()}
+                {pickupWindow ? ` · ${pickupWindow.start?.substring(0, 5)} – ${pickupWindow.end?.substring(0, 5)}` : ''}
+              </Text>
+            )}
+            {pickupInfo && (
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 4 }}>
+                <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: pickupInfo.color }} />
+                <Text style={{ color: pickupInfo.color, ...theme.typography.caption, fontWeight: '600' }}>
+                  {pickupInfo.label} {pickupInfo.time}
+                </Text>
+              </View>
+            )}
           </View>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
             <View
@@ -186,7 +232,7 @@ export function ReservationCard({ reservation, onCancel, onHide: _onHide }: Rese
                 style={[
                   styles.pickupCodeContainer,
                   {
-                    backgroundColor: theme.colors.primaryLight,
+                    backgroundColor: theme.colors.primary,
                     borderRadius: theme.radii.r12,
                     padding: theme.spacing.lg,
                     marginTop: theme.spacing.md,
@@ -195,11 +241,11 @@ export function ReservationCard({ reservation, onCancel, onHide: _onHide }: Rese
               >
                 <View style={styles.pickupCodeRow}>
                   <View style={{ flex: 1 }}>
-                    <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, marginBottom: theme.spacing.xs }]}>
+                    <Text style={[{ color: 'rgba(255,255,255,0.7)', ...theme.typography.caption, marginBottom: theme.spacing.xs }]}>
                       {t('orders.pickupCode')}
                     </Text>
                     <Text
-                      style={[{ color: theme.colors.primary, ...theme.typography.h2, fontWeight: '700' as const, letterSpacing: 2 }]}
+                      style={[{ color: '#fff', ...theme.typography.h2, fontWeight: '700' as const, letterSpacing: 2 }]}
                     >
                       {pickupCode}
                     </Text>
@@ -210,16 +256,16 @@ export function ReservationCard({ reservation, onCancel, onHide: _onHide }: Rese
                       style={[
                         styles.qrButton,
                         {
-                          backgroundColor: theme.colors.primary + '20',
+                          backgroundColor: 'rgba(255,255,255,0.2)',
                           borderRadius: theme.radii.r12,
                           padding: theme.spacing.md,
                         },
                       ]}
                     >
                       {qrLoading ? (
-                        <ActivityIndicator size="small" color={theme.colors.primary} />
+                        <ActivityIndicator size="small" color="#fff" />
                       ) : (
-                        <QrCode size={22} color={theme.colors.primary} />
+                        <QrCode size={22} color="#fff" />
                       )}
                     </TouchableOpacity>
                   )}
@@ -231,7 +277,7 @@ export function ReservationCard({ reservation, onCancel, onHide: _onHide }: Rese
                       style={{ width: 180, height: 180, borderRadius: theme.radii.r8 }}
                       resizeMode="contain"
                     />
-                    <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, marginTop: theme.spacing.sm, textAlign: 'center' }]}>
+                    <Text style={[{ color: 'rgba(255,255,255,0.7)', ...theme.typography.caption, marginTop: theme.spacing.sm, textAlign: 'center' }]}>
                       {t('orders.showQrCode')}
                     </Text>
                   </View>
@@ -294,8 +340,17 @@ export function ReservationCard({ reservation, onCancel, onHide: _onHide }: Rese
                       },
                     ]}
                     onPress={() => {
-                      const restaurantId = basket?.merchantId ?? (basket as any)?.restaurant_id ?? '';
-                      router.push(`/review?restaurantId=${restaurantId}&reservationId=${reservation.id}` as never);
+                      const lid = String(r.location_id ?? r.restaurant_id ?? basket?.merchantId ?? '');
+                      router.push({ pathname: '/review', params: {
+                        reservationId: String(reservation.id),
+                        locationId: lid,
+                        locationName: merchantName,
+                        locationLogo: r.restaurant?.image_url ?? r.restaurant_image ?? r.org_image_url ?? '',
+                        basketImage: basket?.image_url ?? (basket as any)?.imageUrl ?? (basket as any)?.cover_image_url ?? '',
+                        basketName,
+                        quantity: String(quantity),
+                        total: String(total),
+                      }} as never);
                     }}
                   >
                     <Star size={14} color="#fff" fill="#fff" />

@@ -3,7 +3,7 @@ import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Modal, TextInput,
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import { useRouter } from 'expo-router';
-import { X, UserPlus, Trash2, Shield, Users, MapPin, Crown, ShieldCheck, Key, Plus, ChevronDown, ChevronUp, List, GitBranch, Mail } from 'lucide-react-native';
+import { X, UserPlus, Trash2, Shield, Users, MapPin, Crown, ShieldCheck, Key, Plus, ChevronDown, ChevronUp, List, Network, Mail } from 'lucide-react-native';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import {
@@ -18,6 +18,7 @@ import {
 } from '@/src/services/teams';
 import { getErrorMessage } from '@/src/lib/api';
 import { FeatureFlags } from '@/src/lib/featureFlags';
+import { DelayedLoader } from '@/src/components/DelayedLoader';
 
 type PermissionKey = 'availability' | 'reservations' | 'profile' | 'menu' | 'team';
 
@@ -149,7 +150,7 @@ function OrgChartView({
           : (members as any[]).filter((m: any) => m.location_id === loc.id);
       const displayMembers = locMembers.length > 0 ? locMembers : (members as any[]);
       const memberNodes: OrgNode[] = displayMembers.slice(0, 8).map((m: any) => {
-        const name: string = m.name ?? m.user_name ?? m.email ?? '?';
+        const name: string = m.name ?? m.user_name ?? m.email?.split('@')[0] ?? '?';
         const initials = name
           .split(' ')
           .map((w: string) => w[0] ?? '')
@@ -487,6 +488,8 @@ export default function TeamScreen() {
 
   const orgId = contextQuery.data?.organization_id;
   const hasOrg = !!orgId;
+  const myRole = contextQuery.data?.role ?? 'member';
+  const isOrgAdmin = myRole === 'owner' || myRole === 'admin';
 
   // Step 2: Fetch full org details (org + members + locations) in ONE call
   const orgDetailsQuery = useQuery({
@@ -627,6 +630,32 @@ export default function TeamScreen() {
     },
   });
 
+  const deleteLocationMutation = useMutation({
+    mutationFn: async (locationId: number) => {
+      if (!orgId) throw new Error('No organization');
+      const { deleteLocation } = await import('@/src/services/teams');
+      await deleteLocation(orgId, locationId);
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['org-details'] });
+      if (selectedLocation) setSelectedLocation(null);
+    },
+    onError: (err: any) => {
+      Alert.alert(t('common.error'), err?.message ?? t('common.errorOccurred'));
+    },
+  });
+
+  const handleDeleteLocation = useCallback((locationId: number, locationName: string) => {
+    Alert.alert(
+      t('business.team.deleteLocation', { defaultValue: 'Delete Location' }),
+      t('business.team.deleteLocationConfirm', { defaultValue: `Are you sure you want to delete "${locationName}"? Members will be unassigned.` }),
+      [
+        { text: t('common.cancel'), style: 'cancel' },
+        { text: t('common.confirm'), style: 'destructive', onPress: () => deleteLocationMutation.mutate(locationId) },
+      ]
+    );
+  }, [deleteLocationMutation, t]);
+
   const handleRemoveMember = useCallback((memberId: string, memberName: string) => {
     Alert.alert(
       t('business.profile.removeMember'),
@@ -746,7 +775,7 @@ export default function TeamScreen() {
           hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
         >
           {viewMode === 'list' ? (
-            <GitBranch size={22} color={theme.colors.textPrimary} />
+            <Network size={22} color={theme.colors.textPrimary} />
           ) : (
             <List size={22} color={theme.colors.textPrimary} />
           )}
@@ -762,7 +791,7 @@ export default function TeamScreen() {
     return (
       <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]}>
         {renderHeader()}
-        <View style={styles.centered}><ActivityIndicator size="large" color={theme.colors.primary} /></View>
+        <DelayedLoader />
       </SafeAreaView>
     );
   }
@@ -955,7 +984,8 @@ export default function TeamScreen() {
                 <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3 }}>
                   {t('business.team.locations', { defaultValue: 'Locations' })}
                 </Text>
-                {/* "+" button in Locations section header */}
+                {/* "+" button in Locations section header (admin only) */}
+                {isOrgAdmin && (
                 <TouchableOpacity
                   onPress={() => setShowAddLocationModal(true)}
                   style={{
@@ -969,6 +999,7 @@ export default function TeamScreen() {
                 >
                   <Plus size={18} color={theme.colors.primary} />
                 </TouchableOpacity>
+                )}
               </View>
 
               {/* "All" option to clear location filter */}
@@ -1062,6 +1093,15 @@ export default function TeamScreen() {
                       </Text>
                     )}
                   </View>
+                  {isOrgAdmin && (
+                    <TouchableOpacity
+                      onPress={() => handleDeleteLocation(loc.id, loc.name ?? loc.address ?? 'Location')}
+                      style={{ marginRight: 8 }}
+                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                    >
+                      <Trash2 size={16} color={theme.colors.error} />
+                    </TouchableOpacity>
+                  )}
                   <View style={{
                     backgroundColor: theme.colors.bg,
                     borderRadius: 12,
@@ -1132,6 +1172,7 @@ export default function TeamScreen() {
                 }}>
                   {t('business.team.buildTeamDesc')}
                 </Text>
+                {isOrgAdmin && (
                 <TouchableOpacity
                   onPress={handleAddMemberFromLocation}
                   style={{
@@ -1148,6 +1189,7 @@ export default function TeamScreen() {
                     {t('business.team.addFirstMember')}
                   </Text>
                 </TouchableOpacity>
+                )}
               </View>
             )}
 
@@ -1155,7 +1197,7 @@ export default function TeamScreen() {
             {displayedMembers.map((member: any, index: number) => {
               const memberId = String(member.membership_id ?? member.id ?? index);
               const memberRole = member.role ?? 'member';
-              const memberName = member.name ?? member.user_name ?? '';
+              const memberName = member.name ?? member.user_name ?? member.email?.split('@')[0] ?? '';
               const memberEmail = member.email ?? member.user_email ?? '';
               const badge = getRoleBadge(memberRole);
               const isOwner = memberRole === 'owner';
@@ -1163,8 +1205,10 @@ export default function TeamScreen() {
               const locationName = getLocationName(member.location_id);
 
               return (
-                <View
+                <TouchableOpacity
                   key={memberId}
+                  activeOpacity={0.7}
+                  onPress={() => router.push({ pathname: '/business/member-detail', params: { memberId, memberName, memberEmail, memberRole, locationName: locationName ?? '' } } as never)}
                   style={{
                     paddingHorizontal: theme.spacing.lg,
                     paddingVertical: theme.spacing.lg,
@@ -1239,8 +1283,8 @@ export default function TeamScreen() {
                     </View>
                   </View>
 
-                  {/* Quick action row for non-owner members */}
-                  {!isOwner && (
+                  {/* Quick action row for non-owner members (admin only) */}
+                  {!isOwner && isOrgAdmin && (
                     <View style={{
                       flexDirection: 'row',
                       marginTop: theme.spacing.md,
@@ -1290,12 +1334,12 @@ export default function TeamScreen() {
                       </TouchableOpacity>
                     </View>
                   )}
-                </View>
+                </TouchableOpacity>
               );
             })}
 
-            {/* Add Member Button (only shown when there are already members) */}
-            {displayedMembers.length > 0 && (
+            {/* Add Member Button (only shown when there are already members and user is admin) */}
+            {displayedMembers.length > 0 && isOrgAdmin && (
               <TouchableOpacity
                 onPress={handleAddMemberFromLocation}
                 style={[{

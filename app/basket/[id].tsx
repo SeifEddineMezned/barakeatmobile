@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, Image, TouchableOpacity, Linking, ActivityIndicator, Alert, Modal, TextInput } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Image, TouchableOpacity, Linking, Alert, Modal, TextInput } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import { useQuery } from '@tanstack/react-query';
@@ -11,6 +11,7 @@ import { fetchBasketById } from '@/src/services/baskets';
 import { normalizeRawBasketToBasket } from '@/src/utils/normalizeRestaurant';
 import { submitReport } from '@/src/services/reports';
 import { apiClient } from '@/src/lib/api';
+import { DelayedLoader } from '@/src/components/DelayedLoader';
 
 
 
@@ -117,17 +118,14 @@ export default function BasketDetailsScreen() {
 
   if (restaurantQuery.isLoading) {
     return (
-      <View style={[styles.container, { backgroundColor: theme.colors.bg, justifyContent: 'center', alignItems: 'center' }]}>
+      <View style={[styles.container, { backgroundColor: theme.colors.bg }]}>
         <TouchableOpacity
           style={[styles.backButton, { backgroundColor: 'rgba(255,255,255,0.9)', position: 'absolute', top: 52, left: 16, zIndex: 10 }]}
           onPress={() => router.back()}
         >
           <ChevronLeft size={22} color={theme.colors.textPrimary} />
         </TouchableOpacity>
-        <ActivityIndicator size="large" color={theme.colors.primary} />
-        <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.body, marginTop: 16 }]}>
-          {t('common.loading')}
-        </Text>
+        <DelayedLoader />
       </View>
     );
   }
@@ -292,50 +290,7 @@ export default function BasketDetailsScreen() {
             </View>
           </View>
 
-          {basket.description ? (
-            <View style={[styles.section, { marginTop: theme.spacing.lg }]}>
-              <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, marginBottom: theme.spacing.sm }]}>
-                {t('basket.description')}
-              </Text>
-              <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.body, lineHeight: 22 }]}>
-                {basket.description}
-              </Text>
-            </View>
-          ) : null}
-
-          {basket.exampleItems && basket.exampleItems.length > 0 && (
-            <View style={[styles.section, { marginTop: theme.spacing.lg }]}>
-              <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, marginBottom: theme.spacing.sm }]}>
-                {t('basket.whatYouMightGet')}
-              </Text>
-              <View style={styles.itemsGrid}>
-                {basket.exampleItems.map((item, index) => (
-                  <View
-                    key={index}
-                    style={[
-                      styles.itemChip,
-                      {
-                        backgroundColor: theme.colors.surface,
-                        borderRadius: theme.radii.r8,
-                        paddingHorizontal: theme.spacing.md,
-                        paddingVertical: theme.spacing.sm,
-                        ...theme.shadows.shadowSm,
-                      },
-                    ]}
-                  >
-                    <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.bodySm }]}>{item}</Text>
-                  </View>
-                ))}
-              </View>
-              <Text
-                style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, marginTop: theme.spacing.sm, fontStyle: 'italic' }]}
-              >
-                {t('basket.surpriseNote')}
-              </Text>
-            </View>
-          )}
-
-          {/* Quick action buttons — Call & Directions */}
+          {/* Quick action buttons — Call & Directions (above content) */}
           <View style={{ flexDirection: 'row', gap: 10, marginTop: theme.spacing.md }}>
             <TouchableOpacity
               style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.surface, borderRadius: theme.radii.r12, paddingVertical: 12, gap: 6, ...theme.shadows.shadowSm }}
@@ -353,8 +308,25 @@ export default function BasketDetailsScreen() {
             </TouchableOpacity>
           </View>
 
-          {/* Articles du menu — always shown */}
-          <View style={[styles.section, { marginTop: theme.spacing.xl }]}>
+          {/* Description */}
+          {basket.description ? (
+            <View style={[styles.section, { marginTop: theme.spacing.lg }]}>
+              <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, marginBottom: theme.spacing.sm }]}>
+                {t('basket.description')}
+              </Text>
+              <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.body, lineHeight: 22 }]}>
+                {basket.description}
+              </Text>
+              <Text
+                style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, marginTop: theme.spacing.sm, fontStyle: 'italic' }]}
+              >
+                {t('basket.surpriseNote')}
+              </Text>
+            </View>
+          ) : null}
+
+          {/* Articles du menu — horizontal scroll */}
+          <View style={[styles.section, { marginTop: theme.spacing.lg }]}>
             <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, marginBottom: theme.spacing.sm }]}>
               {t('basket.menuItems', { defaultValue: 'Articles du menu' })}
             </Text>

@@ -10,6 +10,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { fetchMyMenuItems, addMenuItem, deleteMenuItem, type MenuItemFromAPI } from '@/src/services/business';
 import { getErrorMessage, apiClient } from '@/src/lib/api';
 import { FeatureFlags } from '@/src/lib/featureFlags';
+import { DelayedLoader } from '@/src/components/DelayedLoader';
 
 export default function MenuItemsScreen() {
   const { t } = useTranslation();
@@ -250,9 +251,7 @@ export default function MenuItemsScreen() {
       </View>
 
       {menuQuery.isLoading ? (
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color={theme.colors.primary} />
-        </View>
+        <DelayedLoader />
       ) : menuQuery.isError ? (
         <View style={styles.loadingContainer}>
           <Text style={[{ color: theme.colors.error, ...theme.typography.body, textAlign: 'center' as const }]}>

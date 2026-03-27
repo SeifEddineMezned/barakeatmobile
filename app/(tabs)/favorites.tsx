@@ -60,11 +60,12 @@ export default function FavoritesScreen() {
     <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]} edges={[]}>
       {favoriteBaskets.length > 0 ? (
         <>
-          <View style={[styles.header, { paddingHorizontal: theme.spacing.xl, paddingTop: theme.spacing.xs, paddingBottom: theme.spacing.sm }]}>
+          <View style={[styles.header, { paddingHorizontal: theme.spacing.xl, paddingTop: theme.spacing.xs, paddingBottom: theme.spacing.sm, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }]}>
             <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h1 }]}>{t('favorites.title')}</Text>
-            <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.bodySm, marginTop: 2 }]}>
-              {t('favorites.count', { count: favoriteBaskets.length })}
-            </Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: theme.colors.primary + '14', borderRadius: 20, paddingHorizontal: 12, paddingVertical: 6, gap: 5 }}>
+              <Text style={{ color: theme.colors.primary, fontSize: 14, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>{favoriteBaskets.length}</Text>
+              <Heart size={14} color={theme.colors.primary} fill={theme.colors.primary} />
+            </View>
           </View>
           <ScrollView
             style={styles.content}

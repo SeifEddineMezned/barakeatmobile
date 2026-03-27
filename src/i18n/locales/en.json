@@ -22,7 +22,16 @@
     "adminRequired": "Admin access required",
     "errorOccurred": "An error occurred. Please try again.",
     "goBack": "Go back",
-    "featureSoon": "Feature Coming Soon"
+    "featureSoon": "Feature Coming Soon",
+    "create": "Create",
+    "optional": "optional",
+    "or": "OR",
+    "seeLess": "See less",
+    "seeMore": "...see more",
+    "and": "and",
+    "screenNotFound": "This screen doesn't exist.",
+    "goHome": "Go to home screen",
+    "errorOccurredDesc": "An unexpected error occurred. Please try again."
   },
   "onboarding": {
     "slide1": {
@@ -85,7 +94,21 @@
     "passwordRequirements": "Min 8 characters with uppercase, lowercase, a number and a special character (!@#$%...)",
     "tosRequired": "Please accept the Terms of Service to continue.",
     "continueWithGoogle": "Continue with Google",
-    "or": "or"
+    "or": "or",
+    "agreeToThe": "I agree to the ",
+    "termsOfService": "Terms of Service",
+    "privacyPolicy": "Privacy Policy"
+  },
+  "address": {
+    "addresses": "Addresses",
+    "addNew": "Add new address",
+    "saved": "Saved addresses",
+    "chooseLocation": "Choose location",
+    "moveMapPin": "Move the map to position the pin",
+    "confirmLocation": "Confirm location",
+    "labelPlace": "Label this place",
+    "customNamePlaceholder": "Or enter a custom name...",
+    "save": "Save address"
   },
   "home": {
     "search": "Search",
@@ -109,6 +132,7 @@
     "newPartner": "New Partner",
     "nearbySpots": "spots nearby",
     "otherSpots": "Other spots",
+    "locationUnknown": "No location",
     "welcomePopup": {
       "back": "Welcome back",
       "whatsNew": "What's new",
@@ -141,7 +165,9 @@
     "reviewQualite": "Quality",
     "reviewVariete": "Variety",
     "availableBaskets": "Available Baskets",
-    "noBaskets": "No baskets available right now"
+    "noBaskets": "No baskets available right now",
+    "menuItems": "Menu Items",
+    "noMenuItems": "No items to show yet"
   },
   "reserve": {
     "title": "Reserve Basket",
@@ -159,9 +185,24 @@
       "title": "Reservation Confirmed!",
       "pickupCode": "Pickup Code",
       "showThisCode": "Show this code when you arrive",
+      "scanQR": "Show this QR to the merchant",
       "addToCalendar": "Add to Calendar",
       "viewOrder": "View Order"
-    }
+    },
+    "processing": "Processing your reservation...",
+    "when": "When",
+    "where": "Where",
+    "done": "Done",
+    "confirmTitle": "Confirm Reservation",
+    "yesReserve": "Reserve!",
+    "notYet": "Not Yet",
+    "originalPrice": "Original",
+    "payCash": "Pay in Cash",
+    "payCashDesc": "Pay the merchant at pickup",
+    "payCard": "Pay by Card",
+    "payCardDesc": "Coming soon",
+    "cashWarning": "Ready to pick up this basket?\n\nIf your plans change, please cancel early — it frees up the spot for someone else.\n\nHeads up: repeated no-shows without cancelling may lead to a temporary pause on your reservations.",
+    "shareCode": "Share pickup info"
   },
   "orders": {
     "title": "Orders",
@@ -172,7 +213,12 @@
       "reserved": "Reserved",
       "ready": "Ready",
       "collected": "Collected",
-      "cancelled": "Cancelled"
+      "cancelled": "Cancelled",
+      "expired": "Expired",
+      "pending": "Pending",
+      "confirmed": "Confirmed",
+      "completed": "Completed",
+      "picked_up": "Picked Up"
     },
     "cancelOrder": "Cancel Order",
     "orderDetails": "Order Details",
@@ -192,11 +238,19 @@
     "endsIn": "Ends in",
     "pickupEnded": "Pickup ended",
     "tndSaved": "TND saved",
-    "kgCO2": "kg CO₂"
+    "kgCO2": "kg CO₂",
+    "reviewPromptTitle": "How was your experience?",
+    "reviewPromptDesc": "Your pickup is complete! Would you like to leave a review?",
+    "maybeLater": "Maybe later",
+    "nextPickup": "Next Pickup",
+    "pickupExpiring": "Pickup ending soon!",
+    "surpriseBag": "Surprise Bag"
   },
   "review": {
     "title": "Leave a Review",
     "rateExperience": "Rate your experience",
+    "comment": "Comment (optional)",
+    "commentPlaceholder": "Share your experience...",
     "submit": "Submit Review",
     "success": "Thank you for your review!",
     "error": "Could not submit review",
@@ -206,7 +260,9 @@
     "service": "Service",
     "quality": "Quality",
     "quantity": "Quantity",
-    "variety": "Variety"
+    "variety": "Variety",
+    "addPhoto": "Add a photo",
+    "photoOptional": "Optional"
   },
   "favorites": {
     "title": "Favorites",
@@ -265,11 +321,11 @@
     "deleteAccount": "Delete Account",
     "deleteAccountConfirm": "Are you sure you want to permanently delete your account? This action cannot be undone.",
     "deleteAccountSoon": "Account deletion will be available in a future update.",
-    "statMoneySaved": "Money Saved 💰",
+    "statMoneySaved": "Money Saved",
     "statMoneySavedDesc": "Calculated from the difference between original prices and what you paid",
-    "statCO2Saved": "CO₂ Saved 🌍",
-    "statBaskets": "Baskets Rescued 🧺",
-    "statSpots": "Places Explored 🗺️",
+    "statCO2Saved": "CO₂ Saved",
+    "statBaskets": "Baskets Rescued",
+    "statSpots": "Places Explored",
     "noCompletedReservations": "No completed reservations yet",
     "noPlacesVisited": "No places visited yet",
     "carTrips": "car trips avoided",
@@ -290,6 +346,7 @@
     "title": "Report Restaurant",
     "cta": "Report this restaurant",
     "reasonLabel": "Select a reason",
+    "reasonPlaceholder": "Select a reason...",
     "detailsLabel": "Additional details (optional)",
     "detailsPlaceholder": "Describe the issue...",
     "submit": "Submit Report",
@@ -334,9 +391,19 @@
     "notif_title_order_confirmed": "Order Confirmed",
     "notif_message_order_confirmed": "Your order at {{location}} is confirmed! Pickup: {{time}}. Code: {{code}}",
     "notif_message_pickup_confirmed": "Your pickup at {{restaurant}} was confirmed! Rate your experience?",
-    "notif_message_review_received": "A customer left you a review"
+    "notif_message_review_received": "A customer left you a review",
+    "pickupStartsTitle": "Pickup time!",
+    "pickupStartsBody": "Your order is ready for pickup.",
+    "pickupEndingSoonTitle": "Pickup ending soon!",
+    "pickupEndingSoonBody": "Your pickup window closes in 30 minutes.",
+    "favoriteNewBasket": "New basket available!",
+    "favoriteNewBasketBody": "A favorite location has a basket available today."
   },
   "business": {
+    "allLocations": "All locations",
+    "location": "Location",
+    "selectLocation": "Select location",
+    "unnamedLocation": "Unnamed location",
     "dashboard": {
       "title": "Dashboard",
       "greeting": "Hello",
@@ -397,7 +464,10 @@
       "saveChanges": "Save changes",
       "willDeactivate": "will be deactivated.",
       "todayQty": "Today",
-      "defaultQty": "Daily Reset"
+      "defaultQty": "Daily Reset",
+      "addPhoto": "Add Photo",
+      "maxPerCustomer": "Max bags per customer",
+      "sameAllDays": "Same for all days"
     },
     "orders": {
       "title": "Orders",
@@ -423,7 +493,11 @@
       "enterPickupCode": "Please enter the pickup code.",
       "incorrectCode": "Incorrect code. Please try again.",
       "pickupConfirmed": "Pickup confirmed!",
-      "orderMovedToPickedUp": "Order moved to picked up."
+      "orderMovedToPickedUp": "Order moved to picked up.",
+      "markReady": "Mark Ready",
+      "markCollected": "Collected",
+      "statusReserved": "Reserved",
+      "statusReady": "Ready"
     },
     "profile": {
       "title": "Business Profile",
@@ -463,7 +537,8 @@
       "menuItems": "Menu Items",
       "tempPassword": "Temporary password",
       "imageUpdated": "Image updated successfully.",
-      "memberAdded": "Team member added successfully."
+      "memberAdded": "Team member added successfully.",
+      "allLocationsLabel": "Organization"
     },
     "team": {
       "members": "Members",
@@ -490,7 +565,17 @@
       "roleLabel": "Role",
       "locationLabel": "Location",
       "all": "All",
-      "assigned": "Assigned"
+      "assigned": "Assigned",
+      "createOrg": "Create Organization",
+      "orgNamePlaceholder": "Organization name",
+      "orgCreated": "Organization created!",
+      "noOrgTitle": "No Organization Yet",
+      "noOrgDesc": "Create an organization to manage your team and locations.",
+      "deleteLocation": "Delete Location",
+      "deleteLocationConfirm": "Are you sure you want to delete this location?",
+      "memberDetail": "Member",
+      "recentActivity": "Recent Activity",
+      "noActivity": "No recent activity"
     },
     "createBasket": {
       "title": "New Basket",
@@ -509,7 +594,11 @@
       "suggest": "Suggest",
       "nameRequired": "Name is required.",
       "sellingPriceRequired": "Selling price is required.",
-      "quantityRequired": "Quantity must be at least 1."
+      "quantityRequired": "Quantity must be at least 1.",
+      "goToMenuItems": "Go to Menu Items",
+      "menuItems": "Menu Items",
+      "menuItemsDesc": "Select which menu items are in this basket (optional)",
+      "noMenuItems": "No menu items yet — add some in Menu Items"
     },
     "auth": {
       "businessSignIn": "Business Sign In",
@@ -552,6 +641,9 @@
       "quantity": "Daily Quantity",
       "pickupStart": "Pickup Start",
       "pickupEnd": "Pickup End",
+      "startTime": "Start Time",
+      "endTime": "End Time",
+      "useBusinessHours": "Use business hours for pickup",
       "paused": "Restaurant Paused",
       "active": "Restaurant Active",
       "save": "Save Changes",
@@ -572,7 +664,9 @@
       "scannedItems": "Scanned Items",
       "noItemsSelected": "No items selected",
       "selectAtLeastOne": "Select at least one item to add.",
-      "addSelectedItems": "Add {{count}} item(s)"
+      "addSelectedItems": "Add {{count}} item(s)",
+      "cameraPermRequired": "Camera permission is required to take photos.",
+      "takePhoto": "Photo"
     }
   },
   "errors": {
@@ -637,6 +731,72 @@
     "rank": "#{{rank}}",
     "meals": "meals",
     "showMore": "Show more",
-    "viewImpact": "View My Impact"
+    "viewImpact": "View My Impact",
+    "filterAll": "All",
+    "filterRegion": "My Region",
+    "you": "You",
+    "showAll": "Show full leaderboard",
+    "showLess": "Show less",
+    "levelUp": "Level Up!",
+    "levelUpDesc": "You reached level {{level}}!"
+  },
+  "streak": {
+    "warningTitle": "Your streak is about to expire!",
+    "warningDesc": "Order soon to keep your streak alive. It expires after 7 days of inactivity.",
+    "days": "day streak",
+    "orderNow": "Order Now",
+    "later": "Later"
+  },
+  "badges": {
+    "newBadge": "New Badge Unlocked!",
+    "badge_first_save": "First Save",
+    "badge_first_save_desc": "Rescued your first meal from waste",
+    "badge_onboarding": "Getting Started",
+    "badge_onboarding_desc": "Completed the onboarding tutorial",
+    "badge_food_saver": "Food Saver",
+    "badge_food_saver_desc": "Rescued 10 meals from waste",
+    "badge_food_saver_25": "Super Saver",
+    "badge_food_saver_25_desc": "Rescued 25 meals from waste",
+    "badge_food_saver_50": "Hero Saver",
+    "badge_food_saver_50_desc": "Rescued 50 meals from waste",
+    "badge_bakery_lover": "Bakery Lover",
+    "badge_bakery_lover_desc": "Saved 5 bakery items",
+    "badge_local_hero": "Local Hero",
+    "badge_local_hero_desc": "Visited 5 different places",
+    "badge_streak_3": "On a Roll",
+    "badge_streak_3_desc": "Achieved a 3-week streak",
+    "badge_streak_7": "Unstoppable",
+    "badge_streak_7_desc": "Achieved a 7-week streak",
+    "badge_generous": "Generous Heart",
+    "badge_generous_desc": "Made your first community donation",
+    "badge_big_spender": "Big Saver",
+    "badge_big_spender_desc": "Saved over 50 TND",
+    "badge_ramadan_saver": "Ramadan Spirit",
+    "badge_ramadan_saver_desc": "Saved food during Ramadan",
+    "badge_early_bird": "Early Bird",
+    "badge_early_bird_desc": "Rescued 3 meals in your first week"
+  },
+  "tutorial": {
+    "getStarted": "Get Started",
+    "customer": {
+      "discoverTitle": "Discover Baskets",
+      "discoverDesc": "Browse surprise baskets from bakeries, restaurants, and shops near you — all at a discount.",
+      "reserveTitle": "Reserve a Basket",
+      "reserveDesc": "Found something you like? Reserve it in one tap and get a pickup code.",
+      "pickupTitle": "Pick Up & Pay",
+      "pickupDesc": "Head to the shop during the pickup window. Show your code, pay, and enjoy!",
+      "rewardsTitle": "Earn Rewards",
+      "rewardsDesc": "Every rescue earns you XP, badges, and helps you climb the leaderboard."
+    },
+    "business": {
+      "dashboardTitle": "Your Dashboard",
+      "dashboardDesc": "See your orders, stats, and performance at a glance from your home screen.",
+      "basketsTitle": "Create Baskets",
+      "basketsDesc": "List surprise baskets with your surplus food. Set prices, quantities, and pickup times.",
+      "ordersTitle": "Manage Orders",
+      "ordersDesc": "View incoming reservations, verify pickup codes, and track completions.",
+      "performanceTitle": "Track Performance",
+      "performanceDesc": "Monitor your sales, food saved, and customer ratings over time."
+    }
   }
 }

@@ -23,6 +23,7 @@ import { fetchLocationById } from '@/src/services/restaurants';
 import { fetchBasketsByLocation } from '@/src/services/baskets';
 import { fetchReviewsByRestaurant, ReviewFromAPI } from '@/src/services/reviews';
 import { normalizeRawBasketToBasket } from '@/src/utils/normalizeRestaurant';
+import { DelayedLoader } from '@/src/components/DelayedLoader';
 
 const DESC_COLLAPSED_LINES = 3;
 
@@ -208,7 +209,7 @@ export default function RestaurantScreen() {
   // ── Loading state ──────────────────────────────────────────────────────────────
   if (isLoading) {
     return (
-      <View style={[styles.container, { backgroundColor: theme.colors.bg, justifyContent: 'center', alignItems: 'center' }]}>
+      <View style={[styles.container, { backgroundColor: theme.colors.bg }]}>
         <StatusBar style="dark" />
         <TouchableOpacity
           style={[styles.backBtn, { backgroundColor: 'rgba(255,255,255,0.9)', position: 'absolute', top: 52, left: 16 }]}
@@ -216,7 +217,7 @@ export default function RestaurantScreen() {
         >
           <ChevronLeft size={22} color={theme.colors.textPrimary} />
         </TouchableOpacity>
-        <ActivityIndicator size="large" color={theme.colors.primary} />
+        <DelayedLoader />
       </View>
     );
   }

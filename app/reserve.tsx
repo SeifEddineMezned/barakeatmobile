@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Animated, ActivityIndicator, Image, Modal } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Animated, ActivityIndicator, Image, Modal, Share, Easing } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
-import { X, Minus, Plus, Banknote, CreditCard, Check, AlertTriangle } from 'lucide-react-native';
+import { X, Minus, Plus, Banknote, CreditCard, Check, AlertTriangle, Copy, Download, Zap, Flame, Trophy } from 'lucide-react-native';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { StatusBar } from 'expo-status-bar';
@@ -10,6 +10,8 @@ import { PrimaryCTAButton } from '@/src/components/PrimaryCTAButton';
 import { fetchLocationById } from '@/src/services/restaurants';
 import { fetchBasketById, fetchBasketsByLocation } from '@/src/services/baskets';
 import { createReservation, fetchReservationQRCode } from '@/src/services/reservations';
+import { updateStreak, fetchGamificationStats, type StreakUpdateResult } from '@/src/services/gamification';
+// import { scheduleLocalNotification } from '@/src/services/pushNotifications';
 import { getErrorMessage } from '@/src/lib/api';
 import { FeatureFlags } from '@/src/lib/featureFlags';
 
@@ -28,6 +30,40 @@ export default function ReserveScreen() {
   const [showConfirmation, setShowConfirmation] = useState(false);
   const [confirmPhase, setConfirmPhase] = useState<'bouncing' | 'confirmed'>('bouncing');
   const [confirmData, setConfirmData] = useState<{ pickupCode: string; pickupStart: string; pickupEnd: string; address: string; qrCodeUrl?: string } | null>(null);
+  const [codeCopied, setCodeCopied] = useState(false);
+  const [streakData, setStreakData] = useState<StreakUpdateResult | null>(null);
+  const [showLevelUp, setShowLevelUp] = useState(false);
+  const xpBarAnim = React.useRef(new Animated.Value(0)).current;
+  const levelUpScale = React.useRef(new Animated.Value(0)).current;
+
+  // Gamification stats query
+  const gamificationQuery = useQuery({
+    queryKey: ['gamification-stats'],
+    queryFn: fetchGamificationStats,
+    staleTime: 60_000,
+  });
+
+  const handleCopyCode = async () => {
+    if (!confirmData?.pickupCode) return;
+    try {
+      await Share.share({ message: confirmData.pickupCode });
+      setCodeCopied(true);
+      setTimeout(() => setCodeCopied(false), 2000);
+    } catch {
+      // ignore
+    }
+  };
+
+  const handleShareQR = async () => {
+    if (!confirmData) return;
+    try {
+      await Share.share({
+        message: `Barakeat Pickup Code: ${confirmData.pickupCode}\nPickup: ${confirmData.pickupStart} - ${confirmData.pickupEnd}\n${confirmData.address}`,
+      });
+    } catch {
+      // ignore
+    }
+  };
 
   // Letter bounce animations
   const BARAKEAT = 'Barakeat'.split('');
@@ -126,6 +162,49 @@ export default function ReserveScreen() {
       void queryClient.invalidateQueries({ queryKey: ['location', resolvedLocationId] });
       void queryClient.invalidateQueries({ queryKey: ['baskets-by-location', resolvedLocationId] });
       void queryClient.invalidateQueries({ queryKey: ['basket', basketId] });
+      void queryClient.invalidateQueries({ queryKey: ['gamification-stats'] });
+
+      // Update streak
+      try {
+        const streakResult = await updateStreak();
+        if (streakResult.streak_changed) {
+          setStreakData(streakResult);
+        }
+      } catch (e) {
+        console.log('[Reserve] Streak update failed (non-critical):', e);
+      }
+
+      // Schedule local pickup reminders (disabled for Expo Go compatibility)
+      // TODO: Re-enable when using development build
+      // try {
+      //   const now = new Date();
+      //   const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+      //   if (pickupStart) {
+      //     const startDate = new Date(`${today}T${pickupStart}`);
+      //     const secsUntilStart = Math.floor((startDate.getTime() - now.getTime()) / 1000);
+      //     if (secsUntilStart > 60) {
+      //       void scheduleLocalNotification(
+      //         t('notifications.pickupStartsTitle', { defaultValue: 'Pickup time!' }),
+      //         t('notifications.pickupStartsBody', { defaultValue: 'Your order is ready for pickup.' }),
+      //         secsUntilStart,
+      //       );
+      //     }
+      //   }
+      //   if (pickupEnd) {
+      //     const endDate = new Date(`${today}T${pickupEnd}`);
+      //     const secsUntilEnd = Math.floor((endDate.getTime() - now.getTime()) / 1000);
+      //     const secsUntilWarning = secsUntilEnd - 1800; // 30 min before end
+      //     if (secsUntilWarning > 60) {
+      //       void scheduleLocalNotification(
+      //         t('notifications.pickupEndingSoonTitle', { defaultValue: 'Pickup ending soon!' }),
+      //         t('notifications.pickupEndingSoonBody', { defaultValue: 'Your pickup window closes in 30 minutes.' }),
+      //         secsUntilWarning,
+      //       );
+      //     }
+      //   }
+      // } catch (e) {
+      //   console.log('[Reserve] Notification scheduling failed (non-critical):', e);
+      // }
 
       // Fetch QR code
       if (data.id) {
@@ -140,7 +219,43 @@ export default function ReserveScreen() {
       }
 
       // Transition to confirmed after 3 seconds
-      setTimeout(() => setConfirmPhase('confirmed'), 3000);
+      setTimeout(() => {
+        setConfirmPhase('confirmed');
+
+        // Animate XP bar after confirmed phase renders
+        setTimeout(() => {
+          const gamData = gamificationQuery.data as any;
+          const currentXp = gamData?.xp ?? 0;
+          const currentLevel = gamData?.level ?? 1;
+          const xpGained = (quantity ?? 1) * 10;
+          const XP_THRESHOLDS = [0, 50, 120, 210, 320, 450, 600, 800, 1050, 1350, 1700, 2100, 2600, 3200, 3900, 4700, 5600, 6600, 7700, 9000];
+          const currentLevelThreshold = XP_THRESHOLDS[currentLevel - 1] ?? 0;
+          const nextLevelThreshold = XP_THRESHOLDS[currentLevel] ?? (currentLevelThreshold + 500);
+          const xpInLevel = currentXp - currentLevelThreshold;
+          const xpNeeded = nextLevelThreshold - currentLevelThreshold;
+          const pAfter = Math.max(0, Math.min(1, xpInLevel / xpNeeded));
+
+          Animated.timing(xpBarAnim, {
+            toValue: pAfter,
+            duration: 800,
+            useNativeDriver: false,
+            easing: Easing.out(Easing.cubic),
+          }).start();
+
+          // Check if level up
+          if (pAfter >= 1) {
+            setTimeout(() => {
+              setShowLevelUp(true);
+              Animated.spring(levelUpScale, {
+                toValue: 1,
+                useNativeDriver: true,
+                speed: 8,
+                bounciness: 12,
+              }).start();
+            }, 900);
+          }
+        }, 500);
+      }, 3000);
     },
     onError: (err) => {
       const msg = getErrorMessage(err);
@@ -416,57 +531,188 @@ export default function ReserveScreen() {
               </>
             ) : (
               <>
-                <View style={{ backgroundColor: '#e3ff5c', width: 80, height: 80, borderRadius: 40, justifyContent: 'center', alignItems: 'center', marginBottom: 24 }}>
-                  <Check size={40} color="#114b3c" />
+              <ScrollView contentContainerStyle={{ alignItems: 'center', paddingHorizontal: 24, paddingBottom: 40 }} showsVerticalScrollIndicator={false}>
+                <View style={{ backgroundColor: '#e3ff5c', width: 72, height: 72, borderRadius: 36, justifyContent: 'center', alignItems: 'center', marginBottom: 20 }}>
+                  <Check size={36} color="#114b3c" />
                 </View>
-                <Text style={{ color: '#fff', fontSize: 28, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
+                <Text style={{ color: '#fff', fontSize: 26, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
                   {t('reserve.success.title', { defaultValue: 'Order Confirmed!' })}
                 </Text>
 
-                <View style={{ backgroundColor: 'rgba(255,255,255,0.1)', borderRadius: 20, padding: 24, marginTop: 32, marginHorizontal: 32, width: '85%', alignItems: 'center' }}>
-                  {confirmData?.qrCodeUrl ? (
-                    <>
-                      <Text style={{ color: 'rgba(255,255,255,0.7)', ...theme.typography.caption, textAlign: 'center', marginBottom: 12 }}>
-                        {t('reserve.success.scanQR', { defaultValue: 'Show this QR to the merchant' })}
-                      </Text>
-                      <View style={{ backgroundColor: '#fff', borderRadius: 12, padding: 8, marginBottom: 16 }}>
-                        <Image source={{ uri: confirmData.qrCodeUrl }} style={{ width: 180, height: 180 }} resizeMode="contain" />
-                      </View>
-                    </>
-                  ) : null}
-
-                  <Text style={{ color: 'rgba(255,255,255,0.7)', ...theme.typography.caption, textAlign: 'center' }}>
+                {/* Pickup code card */}
+                <View style={{ backgroundColor: 'rgba(255,255,255,0.12)', borderRadius: 24, padding: 24, marginTop: 28, width: '100%', alignItems: 'center' }}>
+                  <Text style={{ color: 'rgba(255,255,255,0.6)', ...theme.typography.caption, textAlign: 'center', marginBottom: 8 }}>
                     {t('reserve.success.pickupCode', { defaultValue: 'Pickup Code' })}
                   </Text>
-                  <Text style={{ color: '#e3ff5c', fontSize: 32, fontWeight: '700', fontFamily: 'Poppins_700Bold', textAlign: 'center', letterSpacing: 6, marginTop: 8 }}>
-                    {confirmData?.pickupCode}
-                  </Text>
 
-                  <View style={{ marginTop: 20, gap: 12, alignSelf: 'stretch' }}>
-                    <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-                      <Text style={{ color: 'rgba(255,255,255,0.6)', ...theme.typography.bodySm }}>{t('reserve.when', { defaultValue: 'When' })}</Text>
-                      <Text style={{ color: '#fff', ...theme.typography.bodySm, fontWeight: '600' }}>{confirmData?.pickupStart} - {confirmData?.pickupEnd}</Text>
+                  {/* Code display with copy button */}
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 16 }}>
+                    <View style={{ backgroundColor: 'rgba(227,255,92,0.15)', borderRadius: 16, paddingVertical: 12, paddingHorizontal: 24 }}>
+                      <Text style={{ color: '#e3ff5c', fontSize: 30, fontWeight: '700', fontFamily: 'Poppins_700Bold', letterSpacing: 6, textAlign: 'center' }}>
+                        {confirmData?.pickupCode}
+                      </Text>
                     </View>
-                    <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-                      <Text style={{ color: 'rgba(255,255,255,0.6)', ...theme.typography.bodySm }}>{t('reserve.where', { defaultValue: 'Where' })}</Text>
-                      <Text style={{ color: '#fff', ...theme.typography.bodySm, fontWeight: '600' }} numberOfLines={1}>{confirmData?.address || ''}</Text>
-                    </View>
+                    <TouchableOpacity
+                      onPress={handleCopyCode}
+                      style={{ backgroundColor: codeCopied ? 'rgba(227,255,92,0.3)' : 'rgba(255,255,255,0.15)', borderRadius: 14, padding: 12 }}
+                    >
+                      {codeCopied ? <Check size={20} color="#e3ff5c" /> : <Copy size={20} color="#fff" />}
+                    </TouchableOpacity>
                   </View>
 
-                  <Text style={{ color: 'rgba(255,255,255,0.5)', ...theme.typography.caption, textAlign: 'center', marginTop: 16 }}>
-                    {t('reserve.success.showThisCode', { defaultValue: 'Show this code to the merchant at pickup' })}
-                  </Text>
+                  {/* QR Code */}
+                  {confirmData?.qrCodeUrl ? (
+                    <View style={{ alignItems: 'center', marginBottom: 16 }}>
+                      <View style={{ backgroundColor: '#fff', borderRadius: 16, padding: 12 }}>
+                        <Image source={{ uri: confirmData.qrCodeUrl }} style={{ width: 160, height: 160 }} resizeMode="contain" />
+                      </View>
+                      <Text style={{ color: 'rgba(255,255,255,0.5)', ...theme.typography.caption, textAlign: 'center', marginTop: 8 }}>
+                        {t('reserve.success.scanQR', { defaultValue: 'Show this QR to the merchant' })}
+                      </Text>
+                    </View>
+                  ) : null}
+
+                  {/* Share button */}
+                  <TouchableOpacity
+                    onPress={handleShareQR}
+                    style={{ flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: 'rgba(255,255,255,0.12)', borderRadius: 14, paddingVertical: 10, paddingHorizontal: 20 }}
+                  >
+                    <Download size={16} color="#fff" />
+                    <Text style={{ color: '#fff', ...theme.typography.bodySm, fontWeight: '600' }}>
+                      {t('reserve.shareCode', { defaultValue: 'Share pickup info' })}
+                    </Text>
+                  </TouchableOpacity>
                 </View>
+
+                {/* Pickup details card */}
+                <View style={{ backgroundColor: 'rgba(255,255,255,0.08)', borderRadius: 16, padding: 20, marginTop: 16, width: '100%', gap: 12 }}>
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                    <Text style={{ color: 'rgba(255,255,255,0.6)', ...theme.typography.bodySm }}>{t('reserve.when', { defaultValue: 'When' })}</Text>
+                    <Text style={{ color: '#fff', ...theme.typography.bodySm, fontWeight: '600' }}>{confirmData?.pickupStart} - {confirmData?.pickupEnd}</Text>
+                  </View>
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                    <Text style={{ color: 'rgba(255,255,255,0.6)', ...theme.typography.bodySm }}>{t('reserve.where', { defaultValue: 'Where' })}</Text>
+                    <Text style={{ color: '#fff', ...theme.typography.bodySm, fontWeight: '600', flex: 1, textAlign: 'right', marginLeft: 16 }} numberOfLines={2}>{confirmData?.address || ''}</Text>
+                  </View>
+                </View>
+
+                {/* Level Progress Card */}
+                {(() => {
+                  const gamData = gamificationQuery.data as any;
+                  const currentXp = gamData?.xp ?? 0;
+                  const currentLevel = gamData?.level ?? 1;
+                  const xpGained = (quantity ?? 1) * 10;
+                  const XP_THRESHOLDS = [0, 50, 120, 210, 320, 450, 600, 800, 1050, 1350, 1700, 2100, 2600, 3200, 3900, 4700, 5600, 6600, 7700, 9000];
+                  const currentLevelThreshold = XP_THRESHOLDS[currentLevel - 1] ?? 0;
+                  const nextLevelThreshold = XP_THRESHOLDS[currentLevel] ?? (currentLevelThreshold + 500);
+                  const xpInLevel = currentXp - currentLevelThreshold;
+                  const xpNeeded = nextLevelThreshold - currentLevelThreshold;
+
+                  return (
+                    <View style={{
+                      backgroundColor: 'rgba(255,255,255,0.08)',
+                      borderRadius: 16,
+                      padding: 20,
+                      marginHorizontal: 24,
+                      marginTop: 20,
+                      width: '100%',
+                    }}>
+                      {/* Level header */}
+                      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                          <Trophy size={18} color="#e3ff5c" />
+                          <Text style={{ color: '#fff', fontSize: 16, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
+                            Level {currentLevel}
+                          </Text>
+                        </View>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: 'rgba(227,255,92,0.15)', borderRadius: 12, paddingHorizontal: 10, paddingVertical: 4 }}>
+                          <Zap size={14} color="#e3ff5c" />
+                          <Text style={{ color: '#e3ff5c', fontSize: 14, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
+                            +{xpGained} XP
+                          </Text>
+                        </View>
+                      </View>
+
+                      {/* XP Progress Bar */}
+                      <View style={{ backgroundColor: 'rgba(255,255,255,0.1)', borderRadius: 6, height: 12, overflow: 'hidden' }}>
+                        <Animated.View style={{
+                          height: '100%',
+                          backgroundColor: '#e3ff5c',
+                          borderRadius: 6,
+                          width: xpBarAnim.interpolate({
+                            inputRange: [0, 1],
+                            outputRange: ['0%', '100%'],
+                          }),
+                        }} />
+                      </View>
+
+                      {/* XP text */}
+                      <Text style={{ color: 'rgba(255,255,255,0.6)', fontSize: 12, fontFamily: 'Poppins_400Regular', marginTop: 6, textAlign: 'right' }}>
+                        {xpInLevel}/{xpNeeded} XP
+                      </Text>
+
+                      {/* Streak display */}
+                      {streakData && streakData.current_streak > 0 && (
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 12, backgroundColor: 'rgba(255,107,53,0.15)', borderRadius: 12, paddingHorizontal: 10, paddingVertical: 6, alignSelf: 'flex-start' }}>
+                          <Flame size={14} color="#FF6B35" />
+                          <Text style={{ color: '#FF6B35', fontSize: 13, fontWeight: '600', fontFamily: 'Poppins_600SemiBold' }}>
+                            {streakData.current_streak > (streakData as any).previous_streak
+                              ? `Streak ${streakData.current_streak}!`
+                              : `Streak ${streakData.current_streak}`}
+                          </Text>
+                        </View>
+                      )}
+                    </View>
+                  );
+                })()}
 
                 <TouchableOpacity
                   onPress={() => { setShowConfirmation(false); router.replace('/(tabs)/orders' as never); }}
-                  style={{ backgroundColor: '#e3ff5c', borderRadius: 16, paddingVertical: 16, paddingHorizontal: 48, marginTop: 32 }}
+                  style={{ backgroundColor: '#e3ff5c', borderRadius: 16, paddingVertical: 16, paddingHorizontal: 48, marginTop: 20 }}
                 >
                   <Text style={{ color: '#114b3c', ...theme.typography.button, fontWeight: '700' }}>
                     {t('reserve.done', { defaultValue: 'Done' })}
                   </Text>
                 </TouchableOpacity>
-              </>
+              </ScrollView>
+
+              {/* Level Up Overlay */}
+              {showLevelUp && (() => {
+                const gamData = gamificationQuery.data as any;
+                const currentLevel = gamData?.level ?? 1;
+                return (
+                  <Animated.View style={{
+                    position: 'absolute',
+                    top: 0, left: 0, right: 0, bottom: 0,
+                    backgroundColor: 'rgba(0,0,0,0.7)',
+                    justifyContent: 'center',
+                    alignItems: 'center',
+                    transform: [{ scale: levelUpScale }],
+                  }}>
+                    <View style={{ backgroundColor: '#114b3c', borderRadius: 24, padding: 32, alignItems: 'center', width: '80%' }}>
+                      <Trophy size={48} color="#e3ff5c" />
+                      <Text style={{ color: '#e3ff5c', fontSize: 28, fontWeight: '700', fontFamily: 'Poppins_700Bold', marginTop: 16 }}>
+                        Level Up!
+                      </Text>
+                      <Text style={{ color: '#fff', fontSize: 18, fontWeight: '600', fontFamily: 'Poppins_600SemiBold', marginTop: 8 }}>
+                        Level {currentLevel + 1}
+                      </Text>
+                      <Text style={{ color: 'rgba(255,255,255,0.6)', fontSize: 14, fontFamily: 'Poppins_400Regular', marginTop: 8, textAlign: 'center' }}>
+                        Keep saving food to unlock more rewards!
+                      </Text>
+                      <TouchableOpacity
+                        onPress={() => setShowLevelUp(false)}
+                        style={{ backgroundColor: '#e3ff5c', borderRadius: 14, paddingVertical: 14, paddingHorizontal: 32, marginTop: 24 }}
+                      >
+                        <Text style={{ color: '#114b3c', fontSize: 16, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
+                          Continue
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
+                  </Animated.View>
+                );
+              })()}
+            </>
             )}
           </View>
         </View>

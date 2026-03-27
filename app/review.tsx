@@ -8,11 +8,14 @@ import {
   Alert,
   KeyboardAvoidingView,
   Platform,
+  TextInput,
+  Image,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
-import { X, Star } from 'lucide-react-native';
+import { X, Star, Camera } from 'lucide-react-native';
+import * as ImagePicker from 'expo-image-picker';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { StatusBar } from 'expo-status-bar';
@@ -88,7 +91,25 @@ export default function ReviewScreen() {
   // orders.tsx sends { locationId, reservationId } — read the exact same param names.
   // 'restaurantId' was the old name; 'locationId' is what the current orders screen sends
   // and what the backend expects as 'location_id' in the review payload.
-  const { locationId, reservationId } = useLocalSearchParams();
+  const {
+    locationId,
+    reservationId,
+    locationName,
+    locationLogo,
+    basketImage,
+    basketName,
+    quantity,
+    total,
+  } = useLocalSearchParams<{
+    locationId: string;
+    reservationId: string;
+    locationName?: string;
+    locationLogo?: string;
+    basketImage?: string;
+    basketName?: string;
+    quantity?: string;
+    total?: string;
+  }>();
   const { t } = useTranslation();
   const theme = useTheme();
   const router = useRouter();
@@ -98,6 +119,24 @@ export default function ReviewScreen() {
   const [ratingQuantity, setRatingQuantity] = useState(0);
   const [ratingQuality, setRatingQuality] = useState(0);
   const [ratingVariety, setRatingVariety] = useState(0);
+  const [comment, setComment] = useState('');
+  const [selectedImage, setSelectedImage] = useState<string | null>(null);
+
+  const pickImage = async () => {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert(t('common.error'), t('common.noPermission'));
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: 'images',
+      allowsEditing: true,
+      quality: 0.7,
+    });
+    if (!result.canceled && result.assets && result.assets.length > 0) {
+      setSelectedImage(result.assets[0].uri);
+    }
+  };
 
   const overallRating = Math.round(
     (ratingService + ratingQuantity + ratingQuality + ratingVariety) / 4
@@ -118,6 +157,8 @@ export default function ReviewScreen() {
         rating_quantity: ratingQuantity,
         rating_quality: ratingQuality,
         rating_variety: ratingVariety,
+        comment: comment.trim() || undefined,
+        image_url: selectedImage || undefined,
       });
     },
     onSuccess: () => {
@@ -161,6 +202,76 @@ export default function ReviewScreen() {
           contentContainerStyle={[{ padding: theme.spacing.xl }]}
           keyboardShouldPersistTaps="handled"
         >
+          {/* Order details card */}
+          {(basketImage || locationLogo || basketName || locationName) && (
+            <View
+              style={{
+                backgroundColor: theme.colors.surface,
+                borderRadius: theme.radii.r16,
+                padding: theme.spacing.lg,
+                marginBottom: theme.spacing.xl,
+                ...theme.shadows.shadowSm,
+              }}
+            >
+              {/* Basket image */}
+              {basketImage ? (
+                <Image
+                  source={{ uri: basketImage }}
+                  style={{
+                    width: '100%',
+                    height: 160,
+                    borderRadius: theme.radii.r16,
+                    marginBottom: theme.spacing.md,
+                  }}
+                  resizeMode="cover"
+                />
+              ) : null}
+
+              {/* Location row */}
+              <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: theme.spacing.sm }}>
+                {locationLogo ? (
+                  <Image
+                    source={{ uri: locationLogo }}
+                    style={{
+                      width: 36,
+                      height: 36,
+                      borderRadius: 18,
+                      marginRight: theme.spacing.sm,
+                      backgroundColor: theme.colors.divider,
+                    }}
+                  />
+                ) : null}
+                {locationName ? (
+                  <Text
+                    style={{
+                      color: theme.colors.textPrimary,
+                      ...theme.typography.body, fontWeight: '700' as const,
+                      flex: 1,
+                    }}
+                    numberOfLines={1}
+                  >
+                    {locationName}
+                  </Text>
+                ) : null}
+              </View>
+
+              {/* Basket name, quantity, total */}
+              {basketName ? (
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <Text style={{ color: theme.colors.textSecondary, ...theme.typography.body, flex: 1 }}>
+                    {basketName}
+                    {quantity && Number(quantity) > 0 ? ` x${quantity}` : ''}
+                  </Text>
+                  {total ? (
+                    <Text style={{ color: theme.colors.primary, ...theme.typography.body, fontWeight: '700' as const }}>
+                      {Number(total).toFixed(2)} TND
+                    </Text>
+                  ) : null}
+                </View>
+              ) : null}
+            </View>
+          )}
+
           <Text
             style={[
               {
@@ -204,6 +315,109 @@ export default function ReviewScreen() {
               value={ratingVariety}
               onChange={setRatingVariety}
             />
+          </View>
+
+          <Text
+            style={[
+              {
+                color: theme.colors.textPrimary,
+                ...theme.typography.body,
+                marginBottom: theme.spacing.sm,
+              },
+            ]}
+          >
+            {t('review.comment', { defaultValue: 'Comment (optional)' })}
+          </Text>
+          <TextInput
+            style={[
+              {
+                backgroundColor: theme.colors.surface,
+                borderRadius: theme.radii.r16,
+                padding: theme.spacing.lg,
+                color: theme.colors.textPrimary,
+                ...theme.typography.body,
+                minHeight: 100,
+                textAlignVertical: 'top',
+                ...theme.shadows.shadowSm,
+              },
+            ]}
+            placeholder={t('review.commentPlaceholder', { defaultValue: 'Share your experience...' })}
+            placeholderTextColor={theme.colors.muted}
+            value={comment}
+            onChangeText={setComment}
+            multiline
+            maxLength={500}
+          />
+
+          {/* Photo upload */}
+          <View style={{ marginTop: theme.spacing.xl }}>
+            <TouchableOpacity
+              onPress={pickImage}
+              style={{
+                flexDirection: 'row',
+                alignItems: 'center',
+                backgroundColor: '#114b3c',
+                borderRadius: theme.radii.r16,
+                padding: theme.spacing.lg,
+                ...theme.shadows.shadowSm,
+              }}
+            >
+              <Camera size={20} color="#e3ff5c" />
+              <Text
+                style={{
+                  color: '#e3ff5c',
+                  ...theme.typography.body,
+                  marginLeft: theme.spacing.sm,
+                  flex: 1,
+                }}
+              >
+                {t('review.addPhoto', { defaultValue: 'Add a photo' })}
+              </Text>
+              <Text
+                style={{
+                  color: 'rgba(227, 255, 92, 0.6)',
+                  ...theme.typography.caption,
+                }}
+              >
+                {t('review.photoOptional', { defaultValue: 'Optional' })}
+              </Text>
+            </TouchableOpacity>
+
+            {selectedImage && (
+              <View
+                style={{
+                  marginTop: theme.spacing.md,
+                  alignItems: 'flex-start',
+                }}
+              >
+                <View style={{ position: 'relative' }}>
+                  <Image
+                    source={{ uri: selectedImage }}
+                    style={{
+                      width: 120,
+                      height: 120,
+                      borderRadius: theme.radii.r16,
+                    }}
+                  />
+                  <TouchableOpacity
+                    onPress={() => setSelectedImage(null)}
+                    style={{
+                      position: 'absolute',
+                      top: -8,
+                      right: -8,
+                      backgroundColor: '#114b3c',
+                      borderRadius: 12,
+                      width: 24,
+                      height: 24,
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                    }}
+                  >
+                    <X size={14} color="#e3ff5c" />
+                  </TouchableOpacity>
+                </View>
+              </View>
+            )}
           </View>
 
         </ScrollView>

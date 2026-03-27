@@ -1,15 +1,16 @@
-import React, { useState, useMemo, useCallback, useEffect } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator, Alert, Modal } from 'react-native';
+import React, { useState, useMemo, useCallback, useEffect, useRef } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Alert, Animated, Dimensions } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import { useRouter } from 'expo-router';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { RefreshCw, ShoppingBag, Star, Flag } from 'lucide-react-native';
+import { RefreshCw, ShoppingBag, AlertTriangle, Clock } from 'lucide-react-native';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { useAuthStore } from '@/src/stores/authStore';
-import { fetchMyReservations, cancelReservation, hideReservation } from '@/src/services/reservations';
+import { fetchMyReservations, cancelReservation, hideReservation, type ReservationFromAPI } from '@/src/services/reservations';
 import { getErrorMessage } from '@/src/lib/api';
 import { ReservationCard } from '@/src/components/ReservationCard';
+import { DelayedLoader } from '@/src/components/DelayedLoader';
 
 function PickupCountdown({ startTime, endTime, theme, t }: { startTime: string; endTime: string; theme: any; t: any }) {
   const [now, setNow] = useState(new Date());
@@ -60,6 +61,159 @@ function PickupCountdown({ startTime, endTime, theme, t }: { startTime: string; 
   );
 }
 
+function CarouselBanner({ moneySaved, co2Saved, totalOrders, upcomingOrders, getPickupTimes, theme, t }: any) {
+  const scrollRef = useRef<ScrollView>(null);
+  const screenWidth = Dimensions.get('window').width;
+  const cardWidth = screenWidth - 2 * 20; // padding
+  const [activeSlide, setActiveSlide] = useState(0);
+
+  // Find closest upcoming order by pickup end time
+  const closestOrder = useMemo(() => {
+    if (!upcomingOrders.length) return null;
+    const now = new Date();
+    let closest: any = null;
+    let closestDiff = Infinity;
+    for (const r of upcomingOrders) {
+      const { start, end } = getPickupTimes(r);
+      if (!end) continue;
+      const [eh, em] = end.split(':').map(Number);
+      const endDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), eh, em);
+      const diff = endDate.getTime() - now.getTime();
+      if (diff > 0 && diff < closestDiff) {
+        closestDiff = diff;
+        closest = { reservation: r, start, end, minutesLeft: Math.round(diff / 60000) };
+      }
+    }
+    return closest;
+  }, [upcomingOrders, getPickupTimes]);
+
+  const slideCount = closestOrder ? 2 : 1;
+
+  return (
+    <View style={{ marginBottom: 16 }}>
+      <ScrollView
+        ref={scrollRef}
+        horizontal
+        pagingEnabled
+        showsHorizontalScrollIndicator={false}
+        onScroll={(e) => {
+          const idx = Math.round(e.nativeEvent.contentOffset.x / cardWidth);
+          setActiveSlide(idx);
+        }}
+        scrollEventThrottle={16}
+        style={{ marginHorizontal: -20 }}
+        contentContainerStyle={{ paddingHorizontal: 20 }}
+        snapToInterval={cardWidth + 10}
+        decelerationRate="fast"
+      >
+        {/* Slide 1: Impact */}
+        <View style={{
+          backgroundColor: theme.colors.primary,
+          borderRadius: theme.radii.r16,
+          padding: 20,
+          width: cardWidth,
+          marginRight: closestOrder ? 10 : 0,
+        }}>
+          <Text style={{ color: 'rgba(255,255,255,0.7)', ...theme.typography.bodySm }}>
+            {t('orders.yourImpact', { defaultValue: 'Your Impact' })}
+          </Text>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-around', marginTop: 16 }}>
+            <View style={{ alignItems: 'center' }}>
+              <Text style={{ color: '#fff', ...theme.typography.h2 }}>{moneySaved.toFixed(0)}</Text>
+              <Text style={{ color: 'rgba(255,255,255,0.7)', ...theme.typography.caption }}>{t('orders.tndSaved')}</Text>
+            </View>
+            <View style={{ alignItems: 'center' }}>
+              <Text style={{ color: '#fff', ...theme.typography.h2 }}>{co2Saved.toFixed(1)}</Text>
+              <Text style={{ color: 'rgba(255,255,255,0.7)', ...theme.typography.caption }}>{t('orders.kgCO2')}</Text>
+            </View>
+            <View style={{ alignItems: 'center' }}>
+              <Text style={{ color: '#fff', ...theme.typography.h2 }}>{totalOrders}</Text>
+              <Text style={{ color: 'rgba(255,255,255,0.7)', ...theme.typography.caption }}>{t('orders.title')}</Text>
+            </View>
+          </View>
+        </View>
+
+        {/* Slide 2: Pickup Countdown (only if upcoming order exists) */}
+        {closestOrder && (
+          <View style={{
+            backgroundColor: closestOrder.minutesLeft < 30 ? theme.colors.error : theme.colors.surface,
+            borderRadius: theme.radii.r16,
+            padding: 20,
+            width: cardWidth,
+          }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              {closestOrder.minutesLeft < 30 ? (
+                <AlertTriangle size={18} color="#fff" />
+              ) : (
+                <Clock size={18} color={theme.colors.primary} />
+              )}
+              <Text style={{
+                color: closestOrder.minutesLeft < 30 ? '#fff' : theme.colors.textPrimary,
+                ...theme.typography.bodySm,
+                fontWeight: '600',
+              }}>
+                {closestOrder.minutesLeft < 30
+                  ? t('orders.pickupExpiring', { defaultValue: 'Pickup ending soon!' })
+                  : t('orders.nextPickup', { defaultValue: 'Next Pickup' })}
+              </Text>
+            </View>
+            <Text style={{
+              color: closestOrder.minutesLeft < 30 ? '#fff' : theme.colors.textPrimary,
+              ...theme.typography.h2,
+              marginTop: 12,
+            }} numberOfLines={1}>
+              {(closestOrder.reservation as any).restaurant_name
+                ?? closestOrder.reservation.basket?.merchantName
+                ?? closestOrder.reservation.basket?.merchant_name
+                ?? ''}
+            </Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 8, gap: 6 }}>
+              <View style={{
+                width: 8, height: 8, borderRadius: 4,
+                backgroundColor: closestOrder.minutesLeft < 30 ? '#fff' : closestOrder.minutesLeft < 60 ? theme.colors.accentWarm : theme.colors.primary,
+              }} />
+              <Text style={{
+                color: closestOrder.minutesLeft < 30 ? 'rgba(255,255,255,0.85)' : theme.colors.textSecondary,
+                ...theme.typography.bodySm,
+                fontWeight: '600',
+              }}>
+                {closestOrder.start} - {closestOrder.end}
+              </Text>
+              <Text style={{
+                color: closestOrder.minutesLeft < 30 ? '#fff' : theme.colors.primary,
+                ...theme.typography.bodySm,
+                fontWeight: '700',
+                marginLeft: 'auto',
+              }}>
+                {closestOrder.minutesLeft > 60
+                  ? `${Math.floor(closestOrder.minutesLeft / 60)}h ${closestOrder.minutesLeft % 60}m`
+                  : `${closestOrder.minutesLeft}m`}
+              </Text>
+            </View>
+          </View>
+        )}
+      </ScrollView>
+
+      {/* Dots indicator */}
+      {slideCount > 1 && (
+        <View style={{ flexDirection: 'row', justifyContent: 'center', marginTop: 8, gap: 6 }}>
+          {Array.from({ length: slideCount }).map((_, i) => (
+            <View
+              key={i}
+              style={{
+                width: activeSlide === i ? 16 : 6,
+                height: 6,
+                borderRadius: 3,
+                backgroundColor: activeSlide === i ? theme.colors.primary : theme.colors.divider,
+              }}
+            />
+          ))}
+        </View>
+      )}
+    </View>
+  );
+}
+
 export default function OrdersScreen() {
   const { t } = useTranslation();
   const theme = useTheme();
@@ -67,8 +221,6 @@ export default function OrdersScreen() {
   const queryClient = useQueryClient();
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
   const [activeTab, setActiveTab] = useState<'upcoming' | 'past'>('upcoming');
-  const [reviewPrompt, setReviewPrompt] = useState<{ reservationId: string; locationName: string; locationId: string } | null>(null);
-  const [reviewDismissed, setReviewDismissed] = useState<Set<string>>(new Set());
 
   const reservationsQuery = useQuery({
     queryKey: ['reservations'],
@@ -97,20 +249,52 @@ export default function OrdersScreen() {
 
   const reservations = reservationsQuery.data ?? [];
 
+  // Helper: check if reservation's pickup time has ended
+  const isPickupExpired = useCallback((r: any) => {
+    const now = new Date();
+    const rr = r as any;
+    // Determine the reservation's date
+    const dateStr = rr.pickup_date ?? rr.reservation_date ?? rr.created_at ?? rr.createdAt;
+    if (!dateStr) return false;
+    const reservationDate = new Date(dateStr);
+    const todayStr = now.toISOString().split('T')[0];
+    const resDateStr = reservationDate.toISOString().split('T')[0];
+    // Past date = expired
+    if (resDateStr < todayStr) return true;
+    // Same date: check if pickup end time has passed
+    if (resDateStr === todayStr) {
+      const end = rr.pickup_end_time ?? rr.basket?.pickup_end_time ?? rr.restaurant?.pickup_end_time ?? rr.basket?.pickupWindow?.end ?? rr.pickupWindow?.end;
+      if (end) {
+        const [eh, em] = String(end).split(':').map(Number);
+        if (!isNaN(eh) && !isNaN(em)) {
+          const endDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), eh, em);
+          if (now > endDate) return true;
+        }
+      }
+    }
+    return false;
+  }, []);
+
   const upcomingOrders = useMemo(
     () => reservations.filter((r) => {
       const status = (r.status ?? '').toLowerCase();
-      return status === 'reserved' || status === 'ready' || status === 'pending' || status === 'confirmed';
+      if (status !== 'reserved' && status !== 'ready' && status !== 'pending' && status !== 'confirmed') return false;
+      // Move to past if pickup time has expired
+      return !isPickupExpired(r);
     }),
-    [reservations]
+    [reservations, isPickupExpired]
   );
 
   const pastOrders = useMemo(
     () => reservations.filter((r) => {
       const status = (r.status ?? '').toLowerCase();
-      return status === 'collected' || status === 'cancelled' || status === 'completed' || status === 'expired' || status === 'picked_up';
+      // Explicitly past statuses
+      if (status === 'collected' || status === 'cancelled' || status === 'completed' || status === 'expired' || status === 'picked_up') return true;
+      // Upcoming status but pickup expired = show in past
+      if ((status === 'reserved' || status === 'ready' || status === 'pending' || status === 'confirmed') && isPickupExpired(r)) return true;
+      return false;
     }),
-    [reservations]
+    [reservations, isPickupExpired]
   );
 
   const completedReservations = useMemo(
@@ -122,48 +306,64 @@ export default function OrdersScreen() {
   );
 
   const moneySaved = useMemo(() => completedReservations.reduce((sum, r) => {
-    const orig = r.basket?.originalPrice ?? Number((r.basket as any)?.original_price ?? 0);
-    const disc = r.basket?.discountedPrice ?? Number((r.basket as any)?.discounted_price ?? 0);
-    return sum + (Number(orig) - Number(disc)) * (r.quantity ?? 1);
+    const rr = r as any;
+    const orig = Number(r.basket?.originalPrice ?? rr.original_price ?? rr.basket?.original_price ?? 0);
+    const disc = Number(r.basket?.discountedPrice ?? rr.price_tier ?? rr.basket?.discounted_price ?? rr.basket?.selling_price ?? 0);
+    const saving = orig > 0 && disc > 0 ? (orig - disc) : 0;
+    return sum + saving * (r.quantity ?? 1);
   }, 0), [completedReservations]);
 
   const co2Saved = completedReservations.length * 2.5;
   const totalOrders = reservations.length;
 
-  // Auto-show review popup for recently picked-up orders without a review
-  useEffect(() => {
-    if (!reservations.length) return;
-    const needsReview = reservations.find((r) => {
-      const status = (r.status ?? '').toLowerCase();
-      const hasReview = (r as any).has_review === true;
-      const id = String(r.id ?? '');
-      return (status === 'picked_up' || status === 'collected') && !hasReview && !reviewDismissed.has(id);
-    });
-    if (needsReview && !reviewPrompt) {
-      const rr = needsReview as any;
-      setReviewPrompt({
-        reservationId: String(needsReview.id),
-        locationName: rr.restaurant_name ?? rr.basket?.merchantName ?? 'this location',
-        locationId: String(rr.location_id ?? rr.restaurant_id ?? ''),
-      });
-    }
-  }, [reservations, reviewDismissed, reviewPrompt]);
-
-  const isToday = (dateStr: string) => {
-    const d = new Date(dateStr);
-    const now = new Date();
-    return d.toDateString() === now.toDateString();
-  };
-
-  const todayReservations = useMemo(
-    () => reservations.filter((r) =>
-      isToday(r.created_at ?? r.createdAt ?? '') &&
-      (r.status ?? '').toLowerCase() !== 'cancelled'
-    ),
-    [reservations]
-  );
 
   const displayedOrders = activeTab === 'upcoming' ? upcomingOrders : pastOrders;
+
+  // Auto-cancel expired orders (pickup end time passed)
+  const expireCancelledRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!upcomingOrders.length) return;
+    const now = new Date();
+    const expiredIds: string[] = [];
+    for (const r of upcomingOrders) {
+      const id = String(r.id);
+      if (expireCancelledRef.current.has(id)) continue;
+      const { end } = getPickupTimes(r);
+      if (!end) continue;
+      const [eh, em] = end.split(':').map(Number);
+      if (isNaN(eh) || isNaN(em)) continue;
+
+      // Check reservation date — if not today, it's expired
+      const createdAt = (r as any).created_at ?? (r as any).createdAt;
+      const reservationDate = createdAt ? new Date(createdAt).toDateString() : now.toDateString();
+      const isToday = reservationDate === now.toDateString();
+
+      if (!isToday) {
+        expiredIds.push(id);
+        continue;
+      }
+
+      const endDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), eh, em);
+      if (now > endDate) {
+        expiredIds.push(id);
+      }
+    }
+
+    if (expiredIds.length > 0) {
+      expiredIds.forEach(async (id) => {
+        expireCancelledRef.current.add(id);
+        try {
+          await cancelReservation(id);
+        } catch (e) {
+          console.log('[Orders] Auto-cancel failed for', id, e);
+        }
+      });
+      // Refetch after a short delay to update the list
+      setTimeout(() => {
+        void queryClient.invalidateQueries({ queryKey: ['reservations'] });
+      }, 1500);
+    }
+  }, [upcomingOrders, queryClient]);
 
   const handleCancel = useCallback((id: string) => {
     Alert.alert(
@@ -245,12 +445,7 @@ export default function OrdersScreen() {
 
       <ScrollView style={styles.content} contentContainerStyle={[{ padding: theme.spacing.xl, paddingBottom: 100 }]}>
         {reservationsQuery.isLoading ? (
-          <View style={styles.centerState}>
-            <ActivityIndicator size="large" color={theme.colors.primary} />
-            <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.body, marginTop: 16 }]}>
-              {t('common.loading')}
-            </Text>
-          </View>
+          <DelayedLoader />
         ) : reservationsQuery.isError ? (
           <View style={styles.centerState}>
             <Text style={[{ color: theme.colors.error, ...theme.typography.body, textAlign: 'center' as const, marginBottom: 16 }]}>
@@ -268,65 +463,16 @@ export default function OrdersScreen() {
           </View>
         ) : (
           <>
-            {/* Impact Summary Card */}
-            <View style={{
-              backgroundColor: theme.colors.primary,
-              borderRadius: theme.radii.r16,
-              padding: 20,
-              marginBottom: 16,
-            }}>
-              <Text style={{ color: 'rgba(255,255,255,0.7)', ...theme.typography.bodySm }}>
-                {t('orders.yourImpact', { defaultValue: 'Your Impact' })}
-              </Text>
-              <View style={{ flexDirection: 'row', justifyContent: 'space-around', marginTop: 16 }}>
-                <View style={{ alignItems: 'center' }}>
-                  <Text style={{ color: '#fff', ...theme.typography.h2 }}>{moneySaved.toFixed(0)}</Text>
-                  <Text style={{ color: 'rgba(255,255,255,0.7)', ...theme.typography.caption }}>{t('orders.tndSaved')}</Text>
-                </View>
-                <View style={{ alignItems: 'center' }}>
-                  <Text style={{ color: '#fff', ...theme.typography.h2 }}>{co2Saved.toFixed(1)}</Text>
-                  <Text style={{ color: 'rgba(255,255,255,0.7)', ...theme.typography.caption }}>{t('orders.kgCO2')}</Text>
-                </View>
-                <View style={{ alignItems: 'center' }}>
-                  <Text style={{ color: '#fff', ...theme.typography.h2 }}>{totalOrders}</Text>
-                  <Text style={{ color: 'rgba(255,255,255,0.7)', ...theme.typography.caption }}>{t('orders.title')}</Text>
-                </View>
-              </View>
-            </View>
-
-            {/* Today's Reservations */}
-            {todayReservations.length > 0 && (
-              <View style={{ marginBottom: 16 }}>
-                <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3, marginBottom: 12 }}>
-                  {t('orders.todayPickups', { defaultValue: "Today's Pickups" })}
-                </Text>
-                {todayReservations.map((reservation) => {
-                  const { start, end } = getPickupTimes(reservation);
-                  return (
-                    <View key={`today-${reservation.id}`} style={{ marginBottom: 8 }}>
-                      {start && end && (
-                        <View style={{
-                          backgroundColor: theme.colors.surface,
-                          borderRadius: theme.radii.r12,
-                          padding: 12,
-                          marginBottom: 4,
-                        }}>
-                          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-                            <Text style={{ color: theme.colors.textPrimary, ...theme.typography.body, fontWeight: '600' }}>
-                              {reservation.basket?.merchantName ?? reservation.basket?.merchant_name ?? reservation.restaurant?.name ?? ''}
-                            </Text>
-                            <PickupCountdown startTime={start} endTime={end} theme={theme} t={t} />
-                          </View>
-                          <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, marginTop: 4 }}>
-                            {start} - {end}
-                          </Text>
-                        </View>
-                      )}
-                    </View>
-                  );
-                })}
-              </View>
-            )}
+            {/* Carousel: Impact + Pickup Countdown */}
+            <CarouselBanner
+              moneySaved={moneySaved}
+              co2Saved={co2Saved}
+              totalOrders={totalOrders}
+              upcomingOrders={upcomingOrders}
+              getPickupTimes={getPickupTimes}
+              theme={theme}
+              t={t}
+            />
 
             {/* Tabs for Upcoming / Past */}
             <View style={[styles.tabs, { marginBottom: theme.spacing.sm }]}>
@@ -435,71 +581,25 @@ export default function OrdersScreen() {
                 </TouchableOpacity>
               </View>
             ) : (
-              displayedOrders.map((reservation) => (
-                <ReservationCard
-                  key={reservation.id}
-                  reservation={reservation}
-                  onCancel={handleCancel}
-                  onHide={handleHide}
-                />
-              ))
+              displayedOrders.map((reservation) => {
+                const rStatus = (reservation.status ?? '').toLowerCase();
+                const isStillUpcomingStatus = rStatus === 'reserved' || rStatus === 'ready' || rStatus === 'pending' || rStatus === 'confirmed';
+                const expired = isStillUpcomingStatus && isPickupExpired(reservation);
+                return (
+                  <ReservationCard
+                    key={reservation.id}
+                    reservation={reservation}
+                    onCancel={handleCancel}
+                    onHide={handleHide}
+                    overrideExpired={expired}
+                  />
+                );
+              })
             )}
           </>
         )}
       </ScrollView>
 
-      {/* Review/Report popup after pickup */}
-      <Modal visible={!!reviewPrompt} transparent animationType="fade" onRequestClose={() => { setReviewDismissed(prev => new Set(prev).add(reviewPrompt?.reservationId ?? '')); setReviewPrompt(null); }}>
-        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 24 }}>
-          <View style={{ backgroundColor: theme.colors.surface, borderRadius: 24, padding: 24, width: '100%', maxWidth: 340, alignItems: 'center', ...theme.shadows.shadowLg }}>
-            <View style={{ width: 64, height: 64, borderRadius: 32, backgroundColor: theme.colors.primary + '14', justifyContent: 'center', alignItems: 'center', marginBottom: 16 }}>
-              <Star size={32} color={theme.colors.primary} />
-            </View>
-            <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3, textAlign: 'center', marginBottom: 8 }}>
-              {t('orders.reviewPromptTitle', { defaultValue: 'How was your experience?' })}
-            </Text>
-            <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm, textAlign: 'center', lineHeight: 20, marginBottom: 24 }}>
-              {t('orders.reviewPromptDesc', { defaultValue: `Your pickup at ${reviewPrompt?.locationName} is complete! Would you like to leave a review or report an issue?` })}
-            </Text>
-            <View style={{ flexDirection: 'row', gap: 10, width: '100%' }}>
-              <TouchableOpacity
-                onPress={() => {
-                  const rid = reviewPrompt?.reservationId;
-                  const lid = reviewPrompt?.locationId;
-                  setReviewDismissed(prev => new Set(prev).add(rid ?? ''));
-                  setReviewPrompt(null);
-                  router.push({ pathname: '/review', params: { reservationId: rid, locationId: lid } } as never);
-                }}
-                style={{ flex: 1, backgroundColor: theme.colors.primary, borderRadius: 14, paddingVertical: 14, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 6 }}
-              >
-                <Star size={16} color="#fff" />
-                <Text style={{ color: '#fff', ...theme.typography.body, fontWeight: '600' }}>
-                  {t('orders.leaveReview')}
-                </Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                onPress={() => {
-                  const lid = reviewPrompt?.locationId;
-                  setReviewDismissed(prev => new Set(prev).add(reviewPrompt?.reservationId ?? ''));
-                  setReviewPrompt(null);
-                  router.push({ pathname: '/review', params: { locationId: lid, report: 'true' } } as never);
-                }}
-                style={{ paddingVertical: 14, paddingHorizontal: 14, borderRadius: 14, borderWidth: 1, borderColor: theme.colors.divider, alignItems: 'center', justifyContent: 'center' }}
-              >
-                <Flag size={16} color={theme.colors.textSecondary} />
-              </TouchableOpacity>
-            </View>
-            <TouchableOpacity
-              onPress={() => { setReviewDismissed(prev => new Set(prev).add(reviewPrompt?.reservationId ?? '')); setReviewPrompt(null); }}
-              style={{ marginTop: 12 }}
-            >
-              <Text style={{ color: theme.colors.muted, ...theme.typography.bodySm }}>
-                {t('orders.maybeLater', { defaultValue: 'Maybe later' })}
-              </Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
     </SafeAreaView>
   );
 }

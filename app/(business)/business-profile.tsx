@@ -268,16 +268,19 @@ export default function BusinessProfileScreen() {
             </View>
             <View style={styles.profileInfo}>
               <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h2 }]}>
-                {profile?.name ?? user?.name}
+                {!selectedLocationId && contextQuery.data?.organization_name
+                  ? contextQuery.data.organization_name
+                  : profile?.name ?? user?.name}
               </Text>
               <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.bodySm, marginTop: 2 }]}>
-                {profile?.category}
+                {!selectedLocationId ? t('business.profile.allLocationsLabel', { defaultValue: 'Organization' }) : profile?.category}
               </Text>
             </View>
           </View>
         </View>
 
-        {/* Team Management Card */}
+        {/* Team Management Card (only visible to admin/owner) */}
+        {(contextQuery.data?.role === 'admin' || contextQuery.data?.role === 'owner') && (
         <TouchableOpacity
           onPress={() => router.push('/business/team' as never)}
           style={[styles.infoCard, {
@@ -311,14 +314,48 @@ export default function BusinessProfileScreen() {
           </View>
           <ChevronRight size={20} color={theme.colors.muted} />
         </TouchableOpacity>
+        )}
 
+        {/* Menu Items Card — above Business Info */}
+        <TouchableOpacity
+          onPress={() => router.push('/business/menu-items' as never)}
+          style={[styles.infoCard, {
+            backgroundColor: theme.colors.surface,
+            borderRadius: theme.radii.r16,
+            marginTop: theme.spacing.sm,
+            padding: theme.spacing.lg,
+            ...theme.shadows.shadowSm,
+            flexDirection: 'row',
+            alignItems: 'center',
+          }]}
+          activeOpacity={0.7}
+        >
+          <View style={[{
+            backgroundColor: theme.colors.primary + '12',
+            borderRadius: theme.radii.r12,
+            width: 44,
+            height: 44,
+            justifyContent: 'center',
+            alignItems: 'center',
+          }]}>
+            <UtensilsCrossed size={22} color={theme.colors.primary} />
+          </View>
+          <View style={{ flex: 1, marginLeft: 14 }}>
+            <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3 }]}>
+              {t('business.profile.menuItems')}
+            </Text>
+          </View>
+          <ChevronRight size={20} color={theme.colors.muted} />
+        </TouchableOpacity>
+
+        {/* Business Info Card */}
         <View style={[styles.infoCard, { backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, marginTop: theme.spacing.lg, ...theme.shadows.shadowSm }]}>
           <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, padding: theme.spacing.lg, paddingBottom: theme.spacing.sm }]}>
             {t('business.profile.businessInfo')}
           </Text>
 
           {[
-            { icon: Store, label: t('business.profile.name'), value: profile?.name ?? '-' },
+            { icon: Store, label: t('business.profile.name'), value: (!selectedLocationId && contextQuery.data?.organization_name) ? contextQuery.data.organization_name : (profile?.name ?? '-') },
             { icon: MapPin, label: t('business.profile.address'), value: profile?.address ?? '-' },
             { icon: Phone, label: t('business.profile.phone'), value: profile?.phone ?? '-' },
             { icon: Clock, label: t('business.profile.hours'), value: profile?.hours ?? '-' },
@@ -359,38 +396,6 @@ export default function BusinessProfileScreen() {
           ) : null}
 
         </View>
-
-        {/* Menu Items Card */}
-        <TouchableOpacity
-          onPress={() => router.push('/business/menu-items' as never)}
-          style={[styles.infoCard, {
-            backgroundColor: theme.colors.surface,
-            borderRadius: theme.radii.r16,
-            marginTop: theme.spacing.lg,
-            padding: theme.spacing.lg,
-            ...theme.shadows.shadowSm,
-            flexDirection: 'row',
-            alignItems: 'center',
-          }]}
-          activeOpacity={0.7}
-        >
-          <View style={[{
-            backgroundColor: theme.colors.primary + '12',
-            borderRadius: theme.radii.r12,
-            width: 44,
-            height: 44,
-            justifyContent: 'center',
-            alignItems: 'center',
-          }]}>
-            <UtensilsCrossed size={22} color={theme.colors.primary} />
-          </View>
-          <View style={{ flex: 1, marginLeft: 14 }}>
-            <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3 }]}>
-              {t('business.profile.menuItems')}
-            </Text>
-          </View>
-          <ChevronRight size={20} color={theme.colors.muted} />
-        </TouchableOpacity>
 
         <View style={[styles.infoCard, { backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, marginTop: theme.spacing.lg, ...theme.shadows.shadowSm }]}>
           <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, padding: theme.spacing.lg, paddingBottom: theme.spacing.sm }]}>

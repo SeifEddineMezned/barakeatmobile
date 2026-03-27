@@ -22,7 +22,16 @@
     "adminRequired": "Accès administrateur requis",
     "errorOccurred": "Une erreur est survenue. Veuillez réessayer.",
     "goBack": "Retour",
-    "featureSoon": "Fonctionnalité à venir"
+    "featureSoon": "Fonctionnalité à venir",
+    "create": "Créer",
+    "optional": "optionnel",
+    "or": "OU",
+    "seeLess": "Voir moins",
+    "seeMore": "...voir plus",
+    "and": "et",
+    "screenNotFound": "Cette page n'existe pas.",
+    "goHome": "Retour a l'accueil",
+    "errorOccurredDesc": "Une erreur inattendue s'est produite. Veuillez reessayer."
   },
   "onboarding": {
     "slide1": {
@@ -85,7 +94,21 @@
     "passwordRequirements": "Min 8 caractères avec majuscule, minuscule, chiffre et caractère spécial (!@#$%...)",
     "tosRequired": "Veuillez accepter les Conditions d'utilisation pour continuer.",
     "continueWithGoogle": "Continuer avec Google",
-    "or": "ou"
+    "or": "ou",
+    "agreeToThe": "J'accepte les ",
+    "termsOfService": "Conditions d'utilisation",
+    "privacyPolicy": "Politique de confidentialite"
+  },
+  "address": {
+    "addresses": "Adresses",
+    "addNew": "Ajouter une adresse",
+    "saved": "Adresses enregistrees",
+    "chooseLocation": "Choisir un emplacement",
+    "moveMapPin": "Deplacez la carte pour positionner le repere",
+    "confirmLocation": "Confirmer l'emplacement",
+    "labelPlace": "Nommer cet endroit",
+    "customNamePlaceholder": "Ou entrez un nom personnalise...",
+    "save": "Enregistrer l'adresse"
   },
   "home": {
     "search": "Rechercher",
@@ -109,6 +132,7 @@
     "newPartner": "Nouveau Partenaire",
     "nearbySpots": "spots à proximité",
     "otherSpots": "Autres spots",
+    "locationUnknown": "Pas de localisation",
     "welcomePopup": {
       "back": "Content de vous revoir",
       "whatsNew": "Quoi de neuf",
@@ -141,7 +165,9 @@
     "reviewQualite": "Qualité",
     "reviewVariete": "Variété",
     "availableBaskets": "Paniers disponibles",
-    "noBaskets": "Aucun panier disponible pour le moment"
+    "noBaskets": "Aucun panier disponible pour le moment",
+    "menuItems": "Articles du menu",
+    "noMenuItems": "Aucun article à afficher"
   },
   "reserve": {
     "title": "Réserver Panier",
@@ -159,9 +185,24 @@
       "title": "Réservation Confirmée!",
       "pickupCode": "Code de Retrait",
       "showThisCode": "Montrez ce code à votre arrivée",
+      "scanQR": "Montrez ce QR au commerçant",
       "addToCalendar": "Ajouter au Calendrier",
       "viewOrder": "Voir Commande"
-    }
+    },
+    "processing": "Traitement de votre réservation...",
+    "when": "Quand",
+    "where": "Où",
+    "done": "Terminé",
+    "confirmTitle": "Confirmer la réservation",
+    "yesReserve": "Réserver !",
+    "notYet": "Pas maintenant",
+    "originalPrice": "Original",
+    "payCash": "Payer en espèces",
+    "payCashDesc": "Payez le commerçant au retrait",
+    "payCard": "Payer par carte",
+    "payCardDesc": "Bientôt disponible",
+    "cashWarning": "Prêt à récupérer ce panier ?\n\nSi vos plans changent, annulez tôt — cela libère la place pour quelqu'un d'autre.\n\nAttention : des absences répétées sans annulation peuvent entraîner une pause temporaire de vos réservations.",
+    "shareCode": "Partager les infos de retrait"
   },
   "orders": {
     "title": "Commandes",
@@ -172,7 +213,12 @@
       "reserved": "Réservé",
       "ready": "Prêt",
       "collected": "Collecté",
-      "cancelled": "Annulé"
+      "cancelled": "Annulé",
+      "expired": "Expiré",
+      "pending": "En attente",
+      "confirmed": "Confirmé",
+      "completed": "Terminé",
+      "picked_up": "Récupéré"
     },
     "cancelOrder": "Annuler",
     "orderDetails": "Détails",
@@ -192,7 +238,13 @@
     "endsIn": "Se termine dans",
     "pickupEnded": "Retrait terminé",
     "tndSaved": "TND économisés",
-    "kgCO2": "kg CO₂"
+    "kgCO2": "kg CO₂",
+    "reviewPromptTitle": "Comment était votre expérience ?",
+    "reviewPromptDesc": "Votre retrait est terminé ! Souhaitez-vous laisser un avis ?",
+    "maybeLater": "Plus tard",
+    "nextPickup": "Prochain retrait",
+    "pickupExpiring": "Retrait bientôt terminé !",
+    "surpriseBag": "Panier Surprise"
   },
   "review": {
     "title": "Laisser un avis",
@@ -203,7 +255,14 @@
     "success": "Merci pour votre avis !",
     "error": "Impossible d'envoyer l'avis",
     "noRating": "N/A",
-    "noReviews": "(0 avis)"
+    "noReviews": "(0 avis)",
+    "ratingsTitle": "Évaluations",
+    "service": "Service",
+    "quality": "Qualité",
+    "quantity": "Quantité",
+    "variety": "Variété",
+    "addPhoto": "Ajouter une photo",
+    "photoOptional": "Optionnel"
   },
   "favorites": {
     "title": "Favoris",
@@ -262,11 +321,11 @@
     "deleteAccount": "Supprimer le compte",
     "deleteAccountConfirm": "Êtes-vous sûr de vouloir supprimer définitivement votre compte ? Cette action est irréversible.",
     "deleteAccountSoon": "La suppression de compte sera disponible dans une prochaine mise à jour.",
-    "statMoneySaved": "Argent Économisé 💰",
+    "statMoneySaved": "Argent Économisé",
     "statMoneySavedDesc": "Calculé à partir de la différence entre les prix originaux et ce que vous avez payé",
-    "statCO2Saved": "CO₂ Économisé 🌍",
-    "statBaskets": "Paniers Sauvés 🧺",
-    "statSpots": "Lieux Explorés 🗺️",
+    "statCO2Saved": "CO₂ Économisé",
+    "statBaskets": "Paniers Sauvés",
+    "statSpots": "Lieux Explorés",
     "noCompletedReservations": "Aucune réservation complétée pour l'instant",
     "noPlacesVisited": "Aucun lieu visité pour l'instant",
     "carTrips": "trajets en voiture évités",
@@ -291,7 +350,18 @@
     "detailsPlaceholder": "Fournissez plus de détails...",
     "submit": "Envoyer le signalement",
     "success": "Signalement envoyé. Merci.",
-    "error": "Impossible d'envoyer le signalement."
+    "error": "Impossible d'envoyer le signalement.",
+    "cta": "Signaler ce restaurant",
+    "done": "Terminé",
+    "localConfirmTitle": "Signalement enregistré",
+    "localConfirmMsg": "Merci. Votre signalement a été enregistré et sera examiné par notre équipe.",
+    "reasons": {
+      "food_quality": "Problème de qualité alimentaire",
+      "wrong_info": "Informations incorrectes",
+      "hygiene": "Problème d'hygiène",
+      "behavior": "Comportement inapproprié",
+      "other": "Autre"
+    }
   },
   "addressPicker": {
     "title": "Mes Adresses",
@@ -323,9 +393,19 @@
     "notif_title_order_confirmed": "Commande confirmée",
     "notif_message_order_confirmed": "Votre commande chez {{location}} est confirmée ! Retrait : {{time}}. Code : {{code}}",
     "notif_message_pickup_confirmed": "Votre retrait chez {{restaurant}} a été confirmé ! Évaluez votre expérience ?",
-    "notif_message_review_received": "Un client vous a laissé un avis"
+    "notif_message_review_received": "Un client vous a laissé un avis",
+    "pickupStartsTitle": "C'est l'heure du retrait !",
+    "pickupStartsBody": "Votre commande est prete a etre recuperee.",
+    "pickupEndingSoonTitle": "Retrait bientot termine !",
+    "pickupEndingSoonBody": "Votre creneau de retrait se termine dans 30 minutes.",
+    "favoriteNewBasket": "Nouveau panier disponible !",
+    "favoriteNewBasketBody": "Un de vos commerces favoris a un panier disponible aujourd'hui."
   },
   "business": {
+    "allLocations": "Tous les emplacements",
+    "location": "Emplacement",
+    "selectLocation": "Sélectionner un emplacement",
+    "unnamedLocation": "Emplacement sans nom",
     "dashboard": {
       "title": "Tableau de bord",
       "greeting": "Bonjour",
@@ -386,7 +466,10 @@
       "saveChanges": "Enregistrer les modifications",
       "willDeactivate": "sera désactivé.",
       "todayQty": "Aujourd'hui",
-      "defaultQty": "Réinit. journalière"
+      "defaultQty": "Réinit. journalière",
+      "addPhoto": "Ajouter une photo",
+      "maxPerCustomer": "Max paniers par client",
+      "sameAllDays": "Même pour tous les jours"
     },
     "orders": {
       "title": "Commandes",
@@ -412,7 +495,12 @@
       "confirmCode": "Confirmer le Code",
       "scanQR": "Scanner le QR Code",
       "enterPickupCode": "Veuillez entrer le code de retrait.",
-      "incorrectCode": "Code incorrect. Veuillez réessayer."
+      "incorrectCode": "Code incorrect. Veuillez réessayer.",
+      "confirmPickup": "Confirmer le retrait",
+      "pickupConfirmed": "Retrait confirmé !",
+      "orderMovedToPickedUp": "Commande déplacée vers collecté.",
+      "statusReadyForPickup": "Prêt au retrait",
+      "statusPickedUp": "Collecté"
     },
     "profile": {
       "title": "Profil",
@@ -452,7 +540,8 @@
       "menuItems": "Articles du menu",
       "tempPassword": "Mot de passe temporaire",
       "imageUpdated": "Image mise \u00e0 jour avec succ\u00e8s.",
-      "memberAdded": "Membre ajout\u00e9 avec succ\u00e8s."
+      "memberAdded": "Membre ajout\u00e9 avec succ\u00e8s.",
+      "allLocationsLabel": "Organisation"
     },
     "team": {
       "members": "Membres",
@@ -479,7 +568,17 @@
       "roleLabel": "Rôle",
       "locationLabel": "Emplacement",
       "all": "Tous",
-      "assigned": "Assigné"
+      "assigned": "Assigné",
+      "createOrg": "Créer une organisation",
+      "orgNamePlaceholder": "Nom de l'organisation",
+      "orgCreated": "Organisation créée !",
+      "noOrgTitle": "Pas encore d'organisation",
+      "noOrgDesc": "Créez une organisation pour gérer votre équipe et vos emplacements.",
+      "deleteLocation": "Supprimer l'emplacement",
+      "deleteLocationConfirm": "Êtes-vous sûr de vouloir supprimer cet emplacement ?",
+      "memberDetail": "Membre",
+      "recentActivity": "Activité récente",
+      "noActivity": "Aucune activité récente"
     },
     "createBasket": {
       "title": "Nouveau Panier",
@@ -498,7 +597,11 @@
       "suggest": "Suggérer",
       "nameRequired": "Le nom est requis.",
       "sellingPriceRequired": "Le prix de vente est requis.",
-      "quantityRequired": "La quantité doit être d'au moins 1."
+      "quantityRequired": "La quantité doit être d'au moins 1.",
+      "goToMenuItems": "Aller aux articles du menu",
+      "menuItems": "Articles du menu",
+      "menuItemsDesc": "Sélectionnez les articles du menu dans ce panier (optionnel)",
+      "noMenuItems": "Aucun article — ajoutez-en dans Articles du menu"
     },
     "auth": {
       "businessSignIn": "Connexion Commerce",
@@ -541,6 +644,9 @@
       "quantity": "Quantité quotidienne",
       "pickupStart": "Début du retrait",
       "pickupEnd": "Fin du retrait",
+      "startTime": "Heure de début",
+      "endTime": "Heure de fin",
+      "useBusinessHours": "Utiliser les horaires du commerce pour le retrait",
       "paused": "Restaurant en pause",
       "active": "Restaurant actif",
       "save": "Enregistrer",
@@ -561,7 +667,9 @@
       "scannedItems": "Articles scannés",
       "noItemsSelected": "Aucun article sélectionné",
       "selectAtLeastOne": "Sélectionnez au moins un article à ajouter.",
-      "addSelectedItems": "Ajouter {{count}} article(s)"
+      "addSelectedItems": "Ajouter {{count}} article(s)",
+      "cameraPermRequired": "L'accès à la caméra est requis pour prendre des photos.",
+      "takePhoto": "Photo"
     }
   },
   "errors": {
@@ -626,6 +734,72 @@
     "rank": "#{{rank}}",
     "meals": "repas",
     "showMore": "Voir plus",
-    "viewImpact": "Voir Mon Impact"
+    "viewImpact": "Voir Mon Impact",
+    "filterAll": "Tous",
+    "filterRegion": "Ma Région",
+    "you": "Vous",
+    "showAll": "Voir le classement complet",
+    "showLess": "Voir moins",
+    "levelUp": "Niveau superieur !",
+    "levelUpDesc": "Vous avez atteint le niveau {{level}} !"
+  },
+  "streak": {
+    "warningTitle": "Votre série est sur le point d'expirer !",
+    "warningDesc": "Commandez bientôt pour garder votre série active. Elle expire après 7 jours d'inactivité.",
+    "days": "jours de série",
+    "orderNow": "Commander",
+    "later": "Plus tard"
+  },
+  "badges": {
+    "newBadge": "Nouveau badge débloqué !",
+    "badge_first_save": "Premier Sauvetage",
+    "badge_first_save_desc": "Vous avez sauvé votre premier repas du gaspillage",
+    "badge_onboarding": "Premiers Pas",
+    "badge_onboarding_desc": "Vous avez terminé le tutoriel",
+    "badge_food_saver": "Sauveur de Repas",
+    "badge_food_saver_desc": "10 repas sauvés du gaspillage",
+    "badge_food_saver_25": "Super Sauveur",
+    "badge_food_saver_25_desc": "25 repas sauvés du gaspillage",
+    "badge_food_saver_50": "Héros du Sauvetage",
+    "badge_food_saver_50_desc": "50 repas sauvés du gaspillage",
+    "badge_bakery_lover": "Amateur de Boulangerie",
+    "badge_bakery_lover_desc": "5 articles de boulangerie sauvés",
+    "badge_local_hero": "Héros Local",
+    "badge_local_hero_desc": "5 commerces différents visités",
+    "badge_streak_3": "En forme",
+    "badge_streak_3_desc": "Série de 3 semaines atteinte",
+    "badge_streak_7": "Inarrêtable",
+    "badge_streak_7_desc": "Série de 7 semaines atteinte",
+    "badge_generous": "Coeur Généreux",
+    "badge_generous_desc": "Premier don communautaire effectué",
+    "badge_big_spender": "Grand Économe",
+    "badge_big_spender_desc": "Plus de 50 TND économisés",
+    "badge_ramadan_saver": "Esprit Ramadan",
+    "badge_ramadan_saver_desc": "Nourriture sauvée pendant le Ramadan",
+    "badge_early_bird": "Lève-tôt",
+    "badge_early_bird_desc": "3 repas sauvés dans votre première semaine"
+  },
+  "tutorial": {
+    "getStarted": "C'est parti !",
+    "customer": {
+      "discoverTitle": "Découvrez les paniers",
+      "discoverDesc": "Parcourez les paniers surprise de boulangeries, restaurants et commerces près de chez vous — tous à prix réduit.",
+      "reserveTitle": "Réservez un panier",
+      "reserveDesc": "Quelque chose vous plaît ? Réservez en un clic et recevez un code de retrait.",
+      "pickupTitle": "Récupérez & Payez",
+      "pickupDesc": "Rendez-vous au commerce pendant le créneau de retrait. Montrez votre code, payez et profitez !",
+      "rewardsTitle": "Gagnez des récompenses",
+      "rewardsDesc": "Chaque sauvetage vous rapporte de l'XP, des badges et vous fait grimper au classement."
+    },
+    "business": {
+      "dashboardTitle": "Votre tableau de bord",
+      "dashboardDesc": "Consultez vos commandes, statistiques et performances en un coup d'œil.",
+      "basketsTitle": "Créez des paniers",
+      "basketsDesc": "Proposez des paniers surprise avec vos surplus. Définissez prix, quantités et horaires de retrait.",
+      "ordersTitle": "Gérez les commandes",
+      "ordersDesc": "Visualisez les réservations, vérifiez les codes de retrait et suivez les complétions.",
+      "performanceTitle": "Suivez vos performances",
+      "performanceDesc": "Surveillez vos ventes, la nourriture sauvée et les avis clients au fil du temps."
+    }
   }
 }

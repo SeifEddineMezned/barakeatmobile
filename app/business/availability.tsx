@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Switch, Alert, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Switch, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
@@ -9,6 +9,7 @@ import { PrimaryCTAButton } from '@/src/components/PrimaryCTAButton';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { fetchMyProfile, updateQuantity, updateAvailability } from '@/src/services/business';
 import { useAuthStore } from '@/src/stores/authStore';
+import { DelayedLoader } from '@/src/components/DelayedLoader';
 
 export default function AvailabilityScreen() {
   const { t } = useTranslation();
@@ -81,9 +82,7 @@ export default function AvailabilityScreen() {
   if (profileQuery.isLoading) {
     return (
       <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]}>
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color={theme.colors.primary} />
-        </View>
+        <DelayedLoader />
       </SafeAreaView>
     );
   }

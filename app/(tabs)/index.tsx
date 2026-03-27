@@ -2,7 +2,7 @@ import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react'
 import { View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity, Modal, Platform, Dimensions, Animated, PanResponder, Image } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
-import { Search, X, RefreshCw, Settings, Bell, MapPin, ChevronDown } from 'lucide-react-native';
+import { Search, X, RefreshCw, Settings, Bell, MapPin, ChevronDown, Hand } from 'lucide-react-native';
 
 import { useRouter } from 'expo-router';
 import { useQuery } from '@tanstack/react-query';
@@ -52,6 +52,7 @@ export default function HomeScreen() {
   const { addresses, selectedId, hydrate: hydrateAddresses } = useAddressStore();
   const selectedAddress = addresses.find((a) => a.id === selectedId) ?? null;
   const unreadCount = useNotificationStore((s) => s.unreadCount);
+
 
   useEffect(() => {
     void hydrateAddresses();
@@ -254,6 +255,10 @@ export default function HomeScreen() {
     return ['Tous', ...Array.from(cats)];
   }, [baskets]);
 
+  // Simple Euclidean distance approximation (sufficient for sorting nearby locations)
+  const dist = (lat1: number, lon1: number, lat2: number, lon2: number) =>
+    Math.sqrt((lat1 - lat2) ** 2 + (lon1 - lon2) ** 2);
+
   const filteredBaskets = useMemo(() => {
     let result = baskets;
     if (activeCategory !== 'Tous') {
@@ -268,14 +273,42 @@ export default function HomeScreen() {
           b.category.toLowerCase().includes(q)
       );
     }
-    // Sort: available baskets first, then unavailable
+
+    // User location for proximity sorting
+    const userLat = selectedAddress?.lat;
+    const userLng = selectedAddress?.lng;
+    const hasUserLoc = userLat != null && userLng != null && isFinite(userLat) && isFinite(userLng);
+
+    // Sort: open & available first, then closed-for-today, then sold-out/unavailable
+    const now = new Date();
+    const isPickupClosed = (b: typeof result[0]) => {
+      const endStr = b.pickupWindow?.end;
+      if (!endStr) return false;
+      const [eh, em] = endStr.split(':').map(Number);
+      if (isNaN(eh) || isNaN(em)) return false;
+      const endDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), eh, em);
+      return now > endDate;
+    };
     result = [...result].sort((a, b) => {
-      const aAvail = a.isActive && a.quantityLeft > 0 ? 1 : 0;
-      const bAvail = b.isActive && b.quantityLeft > 0 ? 1 : 0;
-      return bAvail - aAvail;
+      const aAvail = a.isActive && a.quantityLeft > 0;
+      const bAvail = b.isActive && b.quantityLeft > 0;
+      const aClosed = aAvail && isPickupClosed(a);
+      const bClosed = bAvail && isPickupClosed(b);
+      // Tier: 0 = open & available, 1 = closed for today, 2 = unavailable
+      const aTier = !aAvail ? 2 : aClosed ? 1 : 0;
+      const bTier = !bAvail ? 2 : bClosed ? 1 : 0;
+      if (aTier !== bTier) return aTier - bTier;
+
+      // Within the same tier, sort by distance if user location is known
+      if (hasUserLoc) {
+        const aDist = a.hasCoords ? dist(userLat!, userLng!, a.latitude!, a.longitude!) : Infinity;
+        const bDist = b.hasCoords ? dist(userLat!, userLng!, b.latitude!, b.longitude!) : Infinity;
+        return aDist - bDist;
+      }
+      return 0;
     });
     return result;
-  }, [baskets, activeCategory, searchQuery]);
+  }, [baskets, activeCategory, searchQuery, selectedAddress]);
 
   const handleCategoryPress = useCallback((cat: string) => {
     setActiveCategory(cat);
@@ -422,15 +455,17 @@ export default function HomeScreen() {
               }}>
                 {t('home.welcomeBack')}
               </Text>
-              <Text style={{
-                color: '#fff',
-                fontSize: 24,
-                fontWeight: '700',
-                fontFamily: 'Poppins_700Bold',
-                marginTop: 2,
-              }}>
-                {firstName || t('home.search')} 👋
-              </Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 2, gap: 6 }}>
+                <Text style={{
+                  color: '#fff',
+                  fontSize: 24,
+                  fontWeight: '700',
+                  fontFamily: 'Poppins_700Bold',
+                }}>
+                  {firstName || t('home.search')}
+                </Text>
+                <Hand size={24} color="rgba(255,255,255,0.9)" />
+              </View>
             </View>
             {/* Hero image */}
             <Image
@@ -506,7 +541,7 @@ export default function HomeScreen() {
           }} />
         </View>
 
-        {/* Search bar — Fix 1: ensure input fills width and placeholder is always visible */}
+        {/* Static search bar */}
         <View style={{ paddingHorizontal: theme.spacing.xl }}>
           <View
             style={[
@@ -515,21 +550,21 @@ export default function HomeScreen() {
                 backgroundColor: theme.colors.surface,
                 borderRadius: theme.radii.r12,
                 ...theme.shadows.shadowSm,
+                height: 44,
               },
             ]}
           >
-            <Search size={18} color={theme.colors.muted} style={{ flexShrink: 0 }} />
+            <Search size={18} color={theme.colors.muted} />
             <TextInput
               style={[
                 styles.searchInput,
-                { color: theme.colors.textPrimary, fontFamily: 'Poppins_400Regular', fontSize: 14, flex: 1, minWidth: 0 },
+                { color: theme.colors.textPrimary, fontFamily: 'Poppins_400Regular', fontSize: 14, flex: 1 },
               ]}
               placeholder={t('home.searchPlaceholder')}
               placeholderTextColor={theme.colors.muted}
               value={searchQuery}
               onChangeText={setSearchQuery}
               returnKeyType="search"
-              clearButtonMode="while-editing"
             />
             {searchQuery.length > 0 && (
               <TouchableOpacity onPress={() => setSearchQuery('')} style={{ padding: 4 }}>
@@ -650,6 +685,18 @@ export default function HomeScreen() {
           ) : (
             filteredBaskets.map((basket) => {
               const isAvailable = basket.quantityLeft > 0;
+              // Check if pickup window has ended for today
+              const now = new Date();
+              const endStr = basket.pickupWindow?.end;
+              let isClosed = false;
+              if (endStr) {
+                const [eh, em] = endStr.split(':').map(Number);
+                if (!isNaN(eh) && !isNaN(em)) {
+                  const endDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), eh, em);
+                  isClosed = now > endDate;
+                }
+              }
+              const shouldFade = !isAvailable || isClosed;
               return (
                 <View
                   key={basket.id}
@@ -660,16 +707,30 @@ export default function HomeScreen() {
                     isFavorite={isBasketFavorite(basket.id)}
                     onFavoritePress={() => toggleBasketFavorite(basket.id)}
                   />
-                  {/* Fix 5: Android grey bug — use absolute overlay instead of parent opacity to avoid elevation/compositing issues */}
-                  {!isAvailable && (
+                  {shouldFade && (
                     <View
                       pointerEvents="none"
                       style={{
-                        ...StyleSheet.absoluteFillObject,
+                        position: 'absolute',
+                        top: 0,
+                        left: 0,
+                        right: 0,
+                        height: 120,
                         backgroundColor: 'rgba(255,255,255,0.55)',
-                        borderRadius: 16,
+                        borderTopLeftRadius: 16,
+                        borderTopRightRadius: 16,
+                        justifyContent: 'center',
+                        alignItems: 'center',
                       }}
-                    />
+                    >
+                      {isClosed && (
+                        <View style={{ backgroundColor: 'rgba(0,0,0,0.6)', borderRadius: 8, paddingHorizontal: 12, paddingVertical: 6 }}>
+                          <Text style={{ color: '#fff', fontSize: 12, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
+                            {t('home.closedToday', { defaultValue: 'Closed for today' })}
+                          </Text>
+                        </View>
+                      )}
+                    </View>
                   )}
                 </View>
               );

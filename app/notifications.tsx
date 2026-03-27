@@ -1,17 +1,17 @@
-import React, { useCallback } from 'react';
+import React, { useCallback, useState } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   FlatList,
   TouchableOpacity,
-  ActivityIndicator,
   RefreshControl,
+  Modal,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { CheckCheck, ArrowLeft } from 'lucide-react-native';
+import { CheckCheck, ArrowLeft, ShoppingBag, Star, XCircle, Bell, CheckCircle } from 'lucide-react-native';
 import { useRouter } from 'expo-router';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { StatusBar } from 'expo-status-bar';
@@ -22,6 +22,7 @@ import {
   NotificationFromAPI,
 } from '@/src/services/notifications';
 import { useNotificationStore } from '@/src/stores/notificationStore';
+import { DelayedLoader } from '@/src/components/DelayedLoader';
 
 function timeAgo(dateStr: string): string {
   const now = Date.now();
@@ -63,6 +64,23 @@ function resolveNotifText(
   return translated !== i18nKey ? translated : raw;
 }
 
+function getNotifIcon(type?: string | null, title?: string | null): { Icon: any; color: string; bg: string } {
+  const key = type ?? title ?? '';
+  if (key.includes('order_confirmed') || key.includes('new_reservation')) {
+    return { Icon: ShoppingBag, color: '#114b3c', bg: '#114b3c18' };
+  }
+  if (key.includes('pickup_confirmed') || key.includes('collected')) {
+    return { Icon: CheckCircle, color: '#22c55e', bg: '#22c55e18' };
+  }
+  if (key.includes('cancelled')) {
+    return { Icon: XCircle, color: '#ef4444', bg: '#ef444418' };
+  }
+  if (key.includes('review')) {
+    return { Icon: Star, color: '#f59e0b', bg: '#f59e0b18' };
+  }
+  return { Icon: Bell, color: '#6b7280', bg: '#6b728018' };
+}
+
 export default function NotificationsScreen() {
   const { t } = useTranslation();
   const theme = useTheme();
@@ -70,6 +88,7 @@ export default function NotificationsScreen() {
   const queryClient = useQueryClient();
   const decrementUnread = useNotificationStore((s) => s.decrementUnread);
   const clearUnread = useNotificationStore((s) => s.clearUnread);
+  const [detailNotif, setDetailNotif] = useState<NotificationFromAPI | null>(null);
 
   const notificationsQuery = useQuery({
     queryKey: ['notifications'],
@@ -100,6 +119,7 @@ export default function NotificationsScreen() {
           // silently fail
         }
       }
+      setDetailNotif(item);
     },
     [decrementUnread, queryClient]
   );
@@ -120,15 +140,17 @@ export default function NotificationsScreen() {
         activeOpacity={0.7}
       >
         <View style={styles.notificationRow}>
-          <View
-            style={[
-              styles.dot,
-              {
-                backgroundColor: item.is_read ? 'transparent' : theme.colors.primary,
-                marginRight: theme.spacing.md,
-              },
-            ]}
-          />
+          {(() => {
+            const { Icon, color, bg } = getNotifIcon(item.type, item.title);
+            return (
+              <View style={{ width: 40, height: 40, borderRadius: 20, backgroundColor: bg, justifyContent: 'center', alignItems: 'center', marginRight: theme.spacing.md }}>
+                <Icon size={18} color={color} />
+                {!item.is_read && (
+                  <View style={{ position: 'absolute', top: 0, right: 0, width: 10, height: 10, borderRadius: 5, backgroundColor: theme.colors.primary, borderWidth: 2, borderColor: theme.colors.surface }} />
+                )}
+              </View>
+            );
+          })()}
           <View style={styles.notificationContent}>
             {item.title ? (
               <Text
@@ -202,20 +224,7 @@ export default function NotificationsScreen() {
       </View>
 
       {notificationsQuery.isLoading ? (
-        <View style={styles.centerState}>
-          <ActivityIndicator size="large" color={theme.colors.primary} />
-          <Text
-            style={[
-              {
-                color: theme.colors.textSecondary,
-                ...theme.typography.body,
-                marginTop: 16,
-              },
-            ]}
-          >
-            {t('common.loading')}
-          </Text>
-        </View>
+        <DelayedLoader />
       ) : (
         <FlatList
           data={notificationsQuery.data ?? []}
@@ -252,6 +261,50 @@ export default function NotificationsScreen() {
           }
         />
       )}
+
+      {/* Notification detail popup */}
+      <Modal visible={detailNotif !== null} transparent animationType="fade" onRequestClose={() => setDetailNotif(null)}>
+        <TouchableOpacity style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 24 }} activeOpacity={1} onPress={() => setDetailNotif(null)}>
+          <View
+            style={{ backgroundColor: theme.colors.surface, borderRadius: 24, padding: 24, width: '100%', maxWidth: 380 }}
+            onStartShouldSetResponder={() => true}
+          >
+            {detailNotif && (() => {
+              const { Icon, color, bg } = getNotifIcon(detailNotif.type, detailNotif.title);
+              return (
+                <>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 16 }}>
+                    <View style={{ width: 48, height: 48, borderRadius: 24, backgroundColor: bg, justifyContent: 'center', alignItems: 'center', marginRight: 14 }}>
+                      <Icon size={22} color={color} />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      {detailNotif.title ? (
+                        <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3 }}>
+                          {resolveNotifText(detailNotif.title, t)}
+                        </Text>
+                      ) : null}
+                      <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, marginTop: 2 }}>
+                        {timeAgo(detailNotif.created_at)}
+                      </Text>
+                    </View>
+                  </View>
+                  <Text style={{ color: theme.colors.textPrimary, ...theme.typography.body, lineHeight: 22, marginBottom: 20 }}>
+                    {resolveNotifText(detailNotif.message, t, detailNotif.message)}
+                  </Text>
+                  <TouchableOpacity
+                    onPress={() => setDetailNotif(null)}
+                    style={{ backgroundColor: theme.colors.primary, borderRadius: 14, paddingVertical: 14, alignItems: 'center' }}
+                  >
+                    <Text style={{ color: '#fff', ...theme.typography.body, fontWeight: '600' }}>
+                      {t('common.close', { defaultValue: 'Close' })}
+                    </Text>
+                  </TouchableOpacity>
+                </>
+              );
+            })()}
+          </View>
+        </TouchableOpacity>
+      </Modal>
     </SafeAreaView>
   );
 }

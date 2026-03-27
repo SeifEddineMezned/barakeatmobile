@@ -1,8 +1,8 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { StatusBar } from 'expo-status-bar';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity, Modal, Alert, TextInput,
-  ActivityIndicator,
+  ActivityIndicator, Animated,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
@@ -11,7 +11,7 @@ import { useQuery } from '@tanstack/react-query';
 import {
   ChevronRight, User, Mail, Phone,
   CreditCard, Leaf, Banknote, ShoppingBag, UtensilsCrossed, Edit3, X, Check,
-  Flame, Lock, Trophy, Award, Star, Zap, Sun, Coffee, MapPin, Shuffle, Store,
+  Flame, Lock, Trophy, Award, Star, Zap, Sun, Coffee, MapPin, Shuffle, Store, BookOpen, Heart, Moon, Medal,
 } from 'lucide-react-native';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { useAuthStore } from '@/src/stores/authStore';
@@ -44,15 +44,19 @@ function getBadgeIcon(badgeId: string) {
     case 'streak_3': return Flame;
     case 'streak_7': return Flame;
     case 'streak_30': return Flame;
-    case 'saved_10': return Award;
-    case 'saved_25': return Award;
-    case 'saved_50': return Trophy;
+    case 'saved_10': case 'food_saver': return Award;
+    case 'saved_25': case 'food_saver_25': return Award;
+    case 'saved_50': case 'food_saver_50': return Medal;
     case 'saved_100': return Trophy;
     case 'bakery_lover': return Coffee;
     case 'local_hero': return MapPin;
     case 'variety_seeker': return Shuffle;
     case 'early_bird': return Sun;
-    default: return Zap;
+    case 'onboarding_complete': return BookOpen;
+    case 'generous': return Heart;
+    case 'big_spender': return Banknote;
+    case 'ramadan_saver': return Moon;
+    default: return Star;
   }
 }
 
@@ -66,6 +70,9 @@ export default function ProfileScreen() {
   const [showPrefsModal, setShowPrefsModal] = useState(false);
   const [selectedPrefs, setSelectedPrefs] = useState<string[]>([]);
   const [statModal, setStatModal] = useState<'money' | 'co2' | 'baskets' | 'spots' | null>(null);
+  const [badgeModal, setBadgeModal] = useState<Badge | null>(null);
+  const [levelModal, setLevelModal] = useState(false);
+  const [streakModal, setStreakModal] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [editName, setEditName] = useState(user?.name ?? '');
   const [editPhone, setEditPhone] = useState(user?.phone ?? '');
@@ -94,41 +101,93 @@ export default function ProfileScreen() {
   });
 
   const stats = useMemo(() => {
-    const gStats = gamificationQuery.data;
+    const gStats = gamificationQuery.data as any;
+    const gStatsInner = gStats?.stats ?? gStats;
+    const gLevel = gStats?.level;
     const reservations = reservationsQuery.data ?? [];
     const completedReservations = reservations.filter((r) => {
       const status = (r.status ?? '').toLowerCase();
-      return status === 'collected' || status === 'completed';
+      return status === 'collected' || status === 'completed' || status === 'picked_up';
     });
-    const basketsBought = completedReservations.reduce((sum, r) => sum + (r.quantity ?? 1), 0);
-    const mealsSaved = gStats?.meals_saved ?? basketsBought;
-    const moneySaved = completedReservations.reduce((sum, r) => {
-      const orig = r.basket?.originalPrice ?? (r.basket as any)?.original_price ?? 0;
-      const disc = r.basket?.discountedPrice ?? (r.basket as any)?.discounted_price ?? 0;
-      return sum + (Number(orig) - Number(disc)) * (r.quantity ?? 1);
-    }, 0);
+    // Prefer authoritative backend stats, fall back to local calculation
+    const basketsBought = gStatsInner?.meals_saved ?? completedReservations.length;
+    const mealsSaved = gStatsInner?.meals_saved ?? completedReservations.length;
+    const moneySaved = gStatsInner?.money_saved != null
+      ? Math.max(0, parseFloat(gStatsInner.money_saved) || 0)
+      : completedReservations.reduce((sum, r) => {
+          const rAny = r as any;
+          const orig = Number(rAny.original_price ?? r.basket?.originalPrice ?? (r.basket as any)?.original_price ?? 0);
+          const disc = Number(rAny.price_tier ?? rAny.selling_price ?? r.basket?.discountedPrice ?? (r.basket as any)?.discounted_price ?? (r.basket as any)?.price_tier ?? 0);
+          return sum + Math.max(0, (orig - disc) * (r.quantity ?? 1));
+        }, 0);
     const co2Saved = mealsSaved * 2.5;
 
-    const xp = gStats?.xp ?? mealsSaved * 10;
-    const level = (typeof gStats?.level === 'number' ? gStats.level : null) ?? Math.floor(xp / 100) + 1;
+    const xp = (typeof gLevel === 'object' ? gLevel?.xp : null) ?? gStatsInner?.xp ?? mealsSaved * 10;
+    const level = (typeof gLevel === 'object' ? gLevel?.level : typeof gLevel === 'number' ? gLevel : null) ?? Math.floor(xp / 100) + 1;
     const xpInLevel = xp % 100;
     const xpProgress = xpInLevel / 100;
-    const currentStreak = gStats?.current_streak ?? 0;
+    const currentStreak = gStatsInner?.current_streak ?? 0;
 
-    const badges: Badge[] =
+    const rawBadges: Badge[] =
       gStats?.badges && gStats.badges.length > 0
         ? gStats.badges
         : PLACEHOLDER_BADGES;
+    // Sort: unlocked badges first
+    const badges = [...rawBadges].sort((a, b) => (a.unlocked === b.unlocked ? 0 : a.unlocked ? -1 : 1));
 
-    const businessesTried = new Set(completedReservations.map((r) => r.basket?.merchantName ?? (r.basket as any)?.merchant_name ?? r.basket?.merchantId ?? (r.basket as any)?.merchant_id ?? (r.basket as any)?.restaurant_id).filter(Boolean)).size;
+    // Use backend unique_restaurants, fall back to local dedup using restaurant_name (flat field from API)
+    const businessesTried = gStatsInner?.unique_restaurants ??
+      new Set(completedReservations.map((r) => {
+        const rAny = r as any;
+        return rAny.restaurant_name ?? r.basket?.merchantName ?? (r.basket as any)?.merchant_name ?? rAny.location_id ?? rAny.restaurant_id;
+      }).filter(Boolean)).size;
 
     return { basketsBought, moneySaved, co2Saved, level, xp, xpInLevel, xpProgress, currentStreak, badges, businessesTried };
   }, [gamificationQuery.data, reservationsQuery.data]);
 
+  // Animated XP bar
+  const xpAnim = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    Animated.timing(xpAnim, {
+      toValue: stats.xpProgress,
+      duration: 800,
+      useNativeDriver: false,
+    }).start();
+  }, [stats.xpProgress]);
+
+  // Level-up detection
+  const prevLevelRef = useRef(stats.level);
+  const [showLevelUp, setShowLevelUp] = useState(false);
+  const levelUpScale = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    if (stats.level > prevLevelRef.current && prevLevelRef.current > 0) {
+      setShowLevelUp(true);
+      levelUpScale.setValue(0);
+      Animated.spring(levelUpScale, { toValue: 1, friction: 5, tension: 60, useNativeDriver: true }).start();
+      setTimeout(() => setShowLevelUp(false), 4000);
+    }
+    prevLevelRef.current = stats.level;
+  }, [stats.level]);
+
+  const [showAllLeaderboard, setShowAllLeaderboard] = useState(false);
+  const leaderboardScrollRef = useRef<ScrollView>(null);
+
+  const myLeaderboardIndex = useMemo(() => {
+    const entries = leaderboardQuery.data ?? [];
+    return entries.findIndex((e) => String(e.user_id) === String(user?.id));
+  }, [leaderboardQuery.data, user?.id]);
+
   const leaderboardData = useMemo(() => {
     const entries = leaderboardQuery.data ?? [];
-    return entries.slice(0, 10);
-  }, [leaderboardQuery.data]);
+    if (showAllLeaderboard) return entries;
+    // Collapsed: show user ±2 (5 entries centered on user, or top 5 if user is near top)
+    if (myLeaderboardIndex >= 0) {
+      const start = Math.max(0, myLeaderboardIndex - 2);
+      const end = Math.min(entries.length, start + 5);
+      return entries.slice(start, end);
+    }
+    return entries.slice(0, 5);
+  }, [leaderboardQuery.data, showAllLeaderboard, myLeaderboardIndex]);
 
   const FOOD_PREFS = ['Vegetarian', 'Vegan', 'Halal', 'Gluten-Free', 'Nut Allergy', 'Lactose-Free', 'Shellfish Allergy', 'No Pork'];
   const FOOD_PREF_KEY_MAP: Record<string, string> = {
@@ -210,7 +269,8 @@ export default function ProfileScreen() {
 
           {/* Level badge + Streak row */}
           <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: theme.spacing.md, gap: 10 }}>
-            <View
+            <TouchableOpacity
+              onPress={() => setLevelModal(true)}
               style={{
                 backgroundColor: theme.colors.secondary,
                 borderRadius: theme.radii.pill,
@@ -227,13 +287,13 @@ export default function ProfileScreen() {
               >
                 {t('impact.level', { level: String(stats.level) })}
               </Text>
-            </View>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => setStreakModal(true)} style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
               <Flame size={16} color="#FF6B35" />
               <Text style={{ color: '#fff', ...theme.typography.bodySm, fontWeight: '600' as const }}>
                 {stats.currentStreak}
               </Text>
-            </View>
+            </TouchableOpacity>
           </View>
 
           {/* XP Progress Bar */}
@@ -246,12 +306,15 @@ export default function ProfileScreen() {
                 overflow: 'hidden' as const,
               }}
             >
-              <View
+              <Animated.View
                 style={{
                   backgroundColor: theme.colors.secondary,
                   borderRadius: theme.radii.pill,
                   height: 6,
-                  width: `${Math.max(stats.xpProgress * 100, 2)}%` as any,
+                  width: xpAnim.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: ['2%', '100%'],
+                  }),
                 }}
               />
             </View>
@@ -328,10 +391,16 @@ export default function ProfileScreen() {
             contentContainerStyle={{ gap: theme.spacing.md }}
           >
             {stats.badges.map((badge) => {
-              const BadgeIcon = badge.unlocked ? getBadgeIcon(badge.badge_id) : Lock;
+              const bid = badge.badge_id ?? badge.id;
+              const BadgeIcon = badge.unlocked ? getBadgeIcon(bid) : Lock;
+              const badgeName = badge.nameKey
+                ? t(`badges.${badge.nameKey}`, { defaultValue: badge.name ?? bid })
+                : badge.name ?? bid;
               return (
-                <View
+                <TouchableOpacity
                   key={badge.id}
+                  onPress={() => setBadgeModal(badge)}
+                  activeOpacity={0.7}
                   style={[
                     styles.badgeCard,
                     {
@@ -374,11 +443,9 @@ export default function ProfileScreen() {
                     ]}
                     numberOfLines={2}
                   >
-                    {badge.unlocked
-                      ? badge.name ?? badge.badge_id
-                      : t('impact.locked')}
+                    {badge.unlocked ? badgeName : t('impact.locked')}
                   </Text>
-                </View>
+                </TouchableOpacity>
               );
             })}
           </ScrollView>
@@ -434,116 +501,95 @@ export default function ProfileScreen() {
                 },
               ]}
             >
-              {leaderboardData.map((entry, index) => (
-                <View
-                  key={`lb-${entry.user_id}-${index}`}
-                  style={[
-                    styles.leaderboardRow,
-                    {
-                      paddingHorizontal: theme.spacing.lg,
-                      paddingVertical: theme.spacing.md,
-                      borderTopWidth: index === 0 ? 0 : 1,
-                      borderTopColor: theme.colors.divider,
-                    },
-                  ]}
-                >
-                  <Text
-                    style={[
-                      {
-                        color:
-                          entry.rank <= 3
-                            ? theme.colors.accentWarm
-                            : theme.colors.textSecondary,
-                        ...theme.typography.h3,
-                        width: 32,
-                      },
-                    ]}
-                  >
-                    {t('impact.rank', { rank: entry.rank })}
-                  </Text>
-                  <View
-                    style={[
-                      styles.leaderboardAvatar,
-                      {
-                        backgroundColor: theme.colors.primary + '15',
-                        borderRadius: 18,
-                        width: 36,
-                        height: 36,
-                        marginHorizontal: theme.spacing.md,
-                      },
-                    ]}
-                  >
-                    <User size={18} color={theme.colors.primary} />
-                  </View>
-                  <Text
-                    style={[
-                      {
-                        color: theme.colors.textPrimary,
-                        ...theme.typography.body,
-                        flex: 1,
-                      },
-                    ]}
-                    numberOfLines={1}
-                  >
-                    {entry.name}
-                  </Text>
-                  <Text
-                    style={[
-                      {
-                        color: theme.colors.textSecondary,
-                        ...theme.typography.bodySm,
-                      },
-                    ]}
-                  >
-                    {entry.meals_saved} {t('impact.meals')}
-                  </Text>
-                </View>
-              ))}
+              <ScrollView ref={leaderboardScrollRef} nestedScrollEnabled showsVerticalScrollIndicator={false} style={{ maxHeight: showAllLeaderboard ? 400 : undefined }}>
+                {leaderboardData.map((entry, index) => {
+                  const isMe = String(entry.user_id) === String(user?.id);
+                  return (
+                    <View
+                      key={`lb-${entry.user_id}-${index}`}
+                      onLayout={(e) => {
+                        if (isMe && showAllLeaderboard && leaderboardScrollRef.current) {
+                          leaderboardScrollRef.current.scrollTo({ y: Math.max(0, e.nativeEvent.layout.y - 80), animated: true });
+                        }
+                      }}
+                      style={[
+                        styles.leaderboardRow,
+                        {
+                          paddingHorizontal: theme.spacing.lg,
+                          paddingVertical: theme.spacing.md,
+                          borderTopWidth: index === 0 ? 0 : 1,
+                          borderTopColor: theme.colors.divider,
+                          backgroundColor: isMe ? theme.colors.primary + '12' : 'transparent',
+                        },
+                      ]}
+                    >
+                      <Text
+                        style={{
+                          color: entry.rank <= 3 ? theme.colors.accentWarm : theme.colors.textSecondary,
+                          ...theme.typography.h3,
+                          width: 32,
+                          fontWeight: '700' as const,
+                        }}
+                      >
+                        #{entry.rank}
+                      </Text>
+                      <View
+                        style={[
+                          styles.leaderboardAvatar,
+                          {
+                            backgroundColor: isMe ? theme.colors.primary + '25' : theme.colors.primary + '15',
+                            borderRadius: 18,
+                            width: 36,
+                            height: 36,
+                            marginHorizontal: theme.spacing.md,
+                            borderWidth: isMe ? 2 : 0,
+                            borderColor: theme.colors.primary,
+                          },
+                        ]}
+                      >
+                        <User size={18} color={theme.colors.primary} />
+                      </View>
+                      <Text
+                        style={{
+                          color: isMe ? theme.colors.primary : theme.colors.textPrimary,
+                          ...theme.typography.body,
+                          flex: 1,
+                          fontWeight: isMe ? '700' as const : '400' as const,
+                        }}
+                        numberOfLines={1}
+                      >
+                        {entry.name}{isMe ? ` (${t('impact.you', { defaultValue: 'You' })})` : ''}
+                      </Text>
+                      <Text
+                        style={{
+                          color: theme.colors.textSecondary,
+                          ...theme.typography.bodySm,
+                        }}
+                      >
+                        {entry.meals_saved} {t('impact.meals')}
+                      </Text>
+                    </View>
+                  );
+                })}
+              </ScrollView>
 
-              {(leaderboardQuery.data?.length ?? 0) > 10 && (
+              {(leaderboardQuery.data?.length ?? 0) > 5 && (
                 <TouchableOpacity
-                  style={[
-                    {
-                      paddingVertical: theme.spacing.md,
-                      borderTopWidth: 1,
-                      borderTopColor: theme.colors.divider,
-                      alignItems: 'center' as const,
-                    },
-                  ]}
-                  onPress={() => router.push('/leaderboard' as any)}
+                  style={{
+                    paddingVertical: theme.spacing.md,
+                    borderTopWidth: 1,
+                    borderTopColor: theme.colors.divider,
+                    alignItems: 'center' as const,
+                  }}
+                  onPress={() => setShowAllLeaderboard(!showAllLeaderboard)}
                 >
-                  <Text style={[{ color: theme.colors.primary, ...theme.typography.button }]}>
-                    {t('impact.showMore')}
+                  <Text style={{ color: theme.colors.primary, ...theme.typography.button }}>
+                    {showAllLeaderboard ? t('impact.showLess', { defaultValue: 'Show Less' }) : t('impact.showMore')}
                   </Text>
                 </TouchableOpacity>
               )}
             </View>
           )}
-        </View>
-
-        {/* Food Preferences */}
-        <View
-          style={[
-            {
-              backgroundColor: theme.colors.surface,
-              borderRadius: theme.radii.r16,
-              marginBottom: theme.spacing.lg,
-              ...theme.shadows.shadowSm,
-            },
-          ]}
-        >
-          <TouchableOpacity
-            style={[styles.menuItem, { padding: theme.spacing.lg }]}
-            onPress={() => setShowPrefsModal(true)}
-          >
-            <View style={styles.menuItemLeft}>
-              <UtensilsCrossed size={20} color={theme.colors.textSecondary} />
-              <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.body, marginLeft: 12 }]}>
-                {t('profile.foodPreferences')}
-              </Text>
-            </View>
-            <ChevronRight size={20} color={theme.colors.muted} />
-          </TouchableOpacity>
         </View>
 
         {/* Personal Info Card */}
@@ -694,6 +740,31 @@ export default function ProfileScreen() {
           </View>
         </View>
 
+        {/* Food Preferences — below Personal Info */}
+        <View
+          style={[
+            {
+              backgroundColor: theme.colors.surface,
+              borderRadius: theme.radii.r16,
+              marginBottom: theme.spacing.lg,
+              ...theme.shadows.shadowSm,
+            },
+          ]}
+        >
+          <TouchableOpacity
+            style={[styles.menuItem, { padding: theme.spacing.lg }]}
+            onPress={() => setShowPrefsModal(true)}
+          >
+            <View style={styles.menuItemLeft}>
+              <UtensilsCrossed size={20} color={theme.colors.textSecondary} />
+              <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.body, marginLeft: 12 }]}>
+                {t('profile.foodPreferences')}
+              </Text>
+            </View>
+            <ChevronRight size={20} color={theme.colors.muted} />
+          </TouchableOpacity>
+        </View>
+
         <View style={{ height: 30 }} />
       </ScrollView>
 
@@ -727,7 +798,7 @@ export default function ProfileScreen() {
               const reservations = reservationsQuery.data ?? [];
               const completed = reservations.filter((r) => {
                 const status = (r.status ?? '').toLowerCase();
-                return status === 'collected' || status === 'completed';
+                return status === 'collected' || status === 'completed' || status === 'picked_up';
               });
               const recent5 = completed.slice(-5).reverse();
               return (
@@ -748,31 +819,37 @@ export default function ProfileScreen() {
                       </Text>
                     ) : (
                       recent5.map((r, i) => {
-                        const orig = r.basket?.originalPrice ?? (r.basket as any)?.original_price ?? 0;
-                        const disc = r.basket?.discountedPrice ?? (r.basket as any)?.discounted_price ?? 0;
-                        const saving = (Number(orig) - Number(disc)) * (r.quantity ?? 1);
-                        const name = r.basket?.name ?? (r.basket as any)?.basket_name ?? 'Basket';
+                        const rAny = r as any;
+                        const orig = Number(rAny.original_price ?? r.basket?.originalPrice ?? (r.basket as any)?.original_price ?? 0);
+                        const disc = Number(rAny.price_tier ?? rAny.selling_price ?? r.basket?.discountedPrice ?? (r.basket as any)?.discounted_price ?? (r.basket as any)?.price_tier ?? 0);
+                        const saving = Math.max(0, (orig - disc) * (r.quantity ?? 1));
+                        const name = rAny.basket_name ?? rAny.restaurant_name ?? r.basket?.name ?? (r.basket as any)?.basket_name ?? 'Basket';
                         return (
                           <View
                             key={`ms-${i}`}
                             style={{
-                              flexDirection: 'row' as const,
-                              justifyContent: 'space-between' as const,
-                              alignItems: 'center' as const,
                               paddingVertical: theme.spacing.sm,
                               borderBottomWidth: 1,
                               borderBottomColor: theme.colors.divider,
                             }}
                           >
                             <Text
-                              style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, flex: 1 }}
+                              style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '600' as const }}
                               numberOfLines={1}
                             >
                               {name}
                             </Text>
-                            <Text style={{ color: theme.colors.accentFresh, ...theme.typography.bodySm, fontWeight: '600' as const, marginLeft: 8 }}>
-                              {saving > 0 ? `+${saving.toFixed(2)} TND` : '—'}
-                            </Text>
+                            <View style={{ flexDirection: 'row' as const, justifyContent: 'space-between' as const, marginTop: 4 }}>
+                              <Text style={{ color: theme.colors.muted, ...theme.typography.caption }}>
+                                {t('profile.origPrice', { defaultValue: 'Original' })}: {orig.toFixed(2)} TND
+                              </Text>
+                              <Text style={{ color: theme.colors.muted, ...theme.typography.caption }}>
+                                {t('profile.boughtAt', { defaultValue: 'Paid' })}: {disc.toFixed(2)} TND
+                              </Text>
+                              <Text style={{ color: theme.colors.accentFresh, ...theme.typography.caption, fontWeight: '700' as const }}>
+                                {saving > 0 ? `+${saving.toFixed(2)}` : '0'} TND
+                              </Text>
+                            </View>
                           </View>
                         );
                       })
@@ -838,7 +915,7 @@ export default function ProfileScreen() {
               const reservations = reservationsQuery.data ?? [];
               const completed = reservations.filter((r) => {
                 const status = (r.status ?? '').toLowerCase();
-                return status === 'collected' || status === 'completed';
+                return status === 'collected' || status === 'completed' || status === 'picked_up';
               });
               const last8 = completed.slice(-8).reverse();
               return (
@@ -856,8 +933,10 @@ export default function ProfileScreen() {
                       </Text>
                     ) : (
                       last8.map((r, i) => {
-                        const name = r.basket?.name ?? (r.basket as any)?.basket_name ?? 'Basket';
-                        const rawDate = (r as any).created_at ?? (r as any).pickup_date ?? '';
+                        const rAny = r as any;
+                        const name = rAny.basket_name ?? rAny.restaurant_name ?? r.basket?.name ?? (r.basket as any)?.basket_name ?? t('profile.basket', { defaultValue: 'Basket' });
+                        const qty = r.quantity ?? 1;
+                        const rawDate = rAny.created_at ?? rAny.pickup_date ?? '';
                         const dateStr = rawDate ? new Date(rawDate).toLocaleDateString() : '—';
                         return (
                           <View
@@ -875,7 +954,7 @@ export default function ProfileScreen() {
                               style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, flex: 1 }}
                               numberOfLines={1}
                             >
-                              {name}
+                              {name}{qty > 1 ? ` x${qty}` : ''}
                             </Text>
                             <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, marginLeft: 8 }}>
                               {dateStr}
@@ -895,12 +974,12 @@ export default function ProfileScreen() {
               const reservations = reservationsQuery.data ?? [];
               const completed = reservations.filter((r) => {
                 const status = (r.status ?? '').toLowerCase();
-                return status === 'collected' || status === 'completed';
+                return status === 'collected' || status === 'completed' || status === 'picked_up';
               });
               const uniquePlaces = Array.from(
                 new Set(
                   completed
-                    .map((r) => r.basket?.merchantName ?? (r.basket as any)?.merchant_name ?? (r.basket as any)?.restaurant_name ?? null)
+                    .map((r) => (r as any).restaurant_name ?? r.basket?.merchantName ?? (r.basket as any)?.merchant_name ?? null)
                     .filter((n): n is string => Boolean(n))
                 )
               );
@@ -959,6 +1038,161 @@ export default function ProfileScreen() {
               <Text style={{ color: theme.colors.textPrimary, ...theme.typography.button }}>
                 {t('common.close')}
               </Text>
+            </TouchableOpacity>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* Badge Detail Modal */}
+      <Modal visible={badgeModal !== null} transparent animationType="fade" onRequestClose={() => setBadgeModal(null)}>
+        <TouchableOpacity style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 24 }} activeOpacity={1} onPress={() => setBadgeModal(null)}>
+          <TouchableOpacity activeOpacity={1} onPress={() => {}} style={{ backgroundColor: theme.colors.surface, borderRadius: 24, padding: 24, width: '100%', maxWidth: 340, alignItems: 'center' }}>
+            {badgeModal && (() => {
+              const bid = badgeModal.badge_id ?? badgeModal.id;
+              const BadgeIcon = badgeModal.unlocked ? getBadgeIcon(bid) : Lock;
+              const badgeName = badgeModal.nameKey
+                ? t(`badges.${badgeModal.nameKey}`, { defaultValue: badgeModal.name ?? bid })
+                : badgeModal.name ?? bid;
+              const badgeDesc = badgeModal.descKey
+                ? t(`badges.${badgeModal.descKey}`, { defaultValue: badgeModal.description ?? '' })
+                : badgeModal.description ?? '';
+              return (
+                <>
+                  <View style={{ backgroundColor: badgeModal.unlocked ? theme.colors.primary + '15' : theme.colors.divider, borderRadius: 36, width: 72, height: 72, justifyContent: 'center', alignItems: 'center', marginBottom: 16 }}>
+                    <BadgeIcon size={32} color={badgeModal.unlocked ? theme.colors.primary : theme.colors.muted} />
+                  </View>
+                  <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3, textAlign: 'center', marginBottom: 8 }}>
+                    {badgeModal.unlocked ? badgeName : t('impact.locked')}
+                  </Text>
+                  {badgeModal.unlocked && badgeDesc ? (
+                    <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm, textAlign: 'center', lineHeight: 20, marginBottom: 12 }}>
+                      {badgeDesc}
+                    </Text>
+                  ) : !badgeModal.unlocked ? (
+                    <Text style={{ color: theme.colors.muted, ...theme.typography.bodySm, textAlign: 'center', lineHeight: 20, marginBottom: 12 }}>
+                      {t('badges.lockedDesc', { defaultValue: 'Keep saving food to unlock this badge!' })}
+                    </Text>
+                  ) : null}
+                  {badgeModal.unlocked && badgeModal.unlocked_at && (
+                    <Text style={{ color: theme.colors.muted, ...theme.typography.caption, marginBottom: 12 }}>
+                      {t('badges.unlockedOn', { defaultValue: 'Unlocked on' })} {new Date(badgeModal.unlocked_at).toLocaleDateString()}
+                    </Text>
+                  )}
+                </>
+              );
+            })()}
+            <TouchableOpacity onPress={() => setBadgeModal(null)} style={{ backgroundColor: theme.colors.bg, borderRadius: theme.radii.r12, paddingVertical: theme.spacing.md, alignItems: 'center', width: '100%', borderWidth: 1, borderColor: theme.colors.divider, marginTop: 4 }}>
+              <Text style={{ color: theme.colors.textPrimary, ...theme.typography.button }}>{t('common.close')}</Text>
+            </TouchableOpacity>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* Level Detail Modal */}
+      <Modal visible={levelModal} transparent animationType="fade" onRequestClose={() => setLevelModal(false)}>
+        <TouchableOpacity style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 24 }} activeOpacity={1} onPress={() => setLevelModal(false)}>
+          <TouchableOpacity activeOpacity={1} onPress={() => {}} style={{ backgroundColor: theme.colors.surface, borderRadius: 24, padding: 24, width: '100%', maxWidth: 340 }}>
+            <View style={{ alignItems: 'center', marginBottom: 16 }}>
+              <View style={{ backgroundColor: theme.colors.secondary, borderRadius: 32, width: 64, height: 64, justifyContent: 'center', alignItems: 'center' }}>
+                <Text style={{ color: theme.colors.primaryDark, fontSize: 24, fontWeight: '800', fontFamily: 'Poppins_700Bold' }}>{stats.level}</Text>
+              </View>
+            </View>
+            <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h2, textAlign: 'center', marginBottom: 4 }}>
+              {t('impact.level', { level: String(stats.level) })}
+            </Text>
+            <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm, textAlign: 'center', marginBottom: 16 }}>
+              {t('level.description', { defaultValue: 'Earn XP by saving food. The bar fills up and you level up when it reaches 100 XP.' })}
+            </Text>
+            {/* XP bar */}
+            <View style={{ backgroundColor: theme.colors.divider, borderRadius: 8, height: 12, overflow: 'hidden', marginBottom: 8 }}>
+              <View style={{ backgroundColor: theme.colors.primary, borderRadius: 8, height: 12, width: `${Math.max(stats.xpProgress * 100, 2)}%` as any }} />
+            </View>
+            <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, textAlign: 'center', marginBottom: 16 }}>
+              {stats.xpInLevel} / 100 XP — {100 - stats.xpInLevel} XP {t('level.toNext', { defaultValue: 'to next level' })}
+            </Text>
+            <View style={{ backgroundColor: theme.colors.bg, borderRadius: theme.radii.r12, padding: 12, marginBottom: 16, gap: 6 }}>
+              <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '600' as const }}>
+                {t('level.howItWorks', { defaultValue: 'How it works' })}
+              </Text>
+              <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, lineHeight: 18 }}>
+                {t('level.rule1', { defaultValue: '• Each basket saved = +10 XP' })}
+              </Text>
+              <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, lineHeight: 18 }}>
+                {t('level.rule2', { defaultValue: '• Every 100 XP = 1 level up' })}
+              </Text>
+              <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, lineHeight: 18 }}>
+                {t('level.rule3', { defaultValue: '• Total XP earned so far:' })} {stats.xp} XP
+              </Text>
+            </View>
+            <TouchableOpacity onPress={() => setLevelModal(false)} style={{ backgroundColor: theme.colors.bg, borderRadius: theme.radii.r12, paddingVertical: theme.spacing.md, alignItems: 'center', borderWidth: 1, borderColor: theme.colors.divider }}>
+              <Text style={{ color: theme.colors.textPrimary, ...theme.typography.button }}>{t('common.close')}</Text>
+            </TouchableOpacity>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* Streak Detail Modal */}
+      <Modal visible={streakModal} transparent animationType="fade" onRequestClose={() => setStreakModal(false)}>
+        <TouchableOpacity style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 24 }} activeOpacity={1} onPress={() => setStreakModal(false)}>
+          <TouchableOpacity activeOpacity={1} onPress={() => {}} style={{ backgroundColor: theme.colors.surface, borderRadius: 24, padding: 24, width: '100%', maxWidth: 340 }}>
+            {(() => {
+              const gStats = gamificationQuery.data as any;
+              const gStatsInner = gStats?.stats ?? gStats;
+              const currentStreak = gStatsInner?.current_streak ?? 0;
+              const longestStreak = gStatsInner?.longest_streak ?? 0;
+              const lastPickup = gStatsInner?.last_pickup_date;
+              const daysSince = gStatsInner?.days_since_last_pickup;
+              const expiresSoon = gStatsInner?.streak_expires_soon;
+              const daysLeft = daysSince != null ? Math.max(0, 7 - daysSince) : null;
+              return (
+                <>
+                  <View style={{ alignItems: 'center', marginBottom: 16 }}>
+                    <View style={{ backgroundColor: '#FF6B3518', borderRadius: 32, width: 64, height: 64, justifyContent: 'center', alignItems: 'center' }}>
+                      <Flame size={32} color="#FF6B35" />
+                    </View>
+                  </View>
+                  <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h2, textAlign: 'center', marginBottom: 4 }}>
+                    {currentStreak} {t('streak.days', { defaultValue: 'day streak' })}
+                  </Text>
+                  {expiresSoon && (
+                    <View style={{ backgroundColor: '#FF6B3515', borderRadius: 10, paddingVertical: 6, paddingHorizontal: 12, alignSelf: 'center', marginBottom: 12 }}>
+                      <Text style={{ color: '#FF6B35', ...theme.typography.caption, fontWeight: '700' as const }}>
+                        {daysLeft != null
+                          ? t('streak.expiresIn', { days: daysLeft, defaultValue: `Expires in ${daysLeft} day(s)` })
+                          : t('streak.expiresSoon', { defaultValue: 'Expires soon!' })}
+                      </Text>
+                    </View>
+                  )}
+                  <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm, textAlign: 'center', marginBottom: 16 }}>
+                    {t('streak.description', { defaultValue: 'Your streak counts consecutive weeks with at least one order. It resets after 7 days of inactivity.' })}
+                  </Text>
+                  <View style={{ backgroundColor: theme.colors.bg, borderRadius: theme.radii.r12, padding: 12, marginBottom: 16, gap: 8 }}>
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                      <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm }}>{t('streak.current', { defaultValue: 'Current streak' })}</Text>
+                      <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '700' as const }}>{currentStreak}</Text>
+                    </View>
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                      <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm }}>{t('streak.longest', { defaultValue: 'Longest streak' })}</Text>
+                      <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '700' as const }}>{longestStreak}</Text>
+                    </View>
+                    {lastPickup && (
+                      <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                        <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm }}>{t('streak.lastOrder', { defaultValue: 'Last order' })}</Text>
+                        <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '700' as const }}>{new Date(lastPickup).toLocaleDateString()}</Text>
+                      </View>
+                    )}
+                    {daysLeft != null && (
+                      <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                        <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm }}>{t('streak.expiresLabel', { defaultValue: 'Expires in' })}</Text>
+                        <Text style={{ color: daysLeft <= 2 ? '#FF6B35' : theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '700' as const }}>{daysLeft} {t('streak.daysUnit', { defaultValue: 'days' })}</Text>
+                      </View>
+                    )}
+                  </View>
+                </>
+              );
+            })()}
+            <TouchableOpacity onPress={() => setStreakModal(false)} style={{ backgroundColor: theme.colors.bg, borderRadius: theme.radii.r12, paddingVertical: theme.spacing.md, alignItems: 'center', borderWidth: 1, borderColor: theme.colors.divider }}>
+              <Text style={{ color: theme.colors.textPrimary, ...theme.typography.button }}>{t('common.close')}</Text>
             </TouchableOpacity>
           </TouchableOpacity>
         </TouchableOpacity>
@@ -1024,6 +1258,42 @@ export default function ProfileScreen() {
           </View>
         </TouchableOpacity>
       </Modal>
+
+      {/* Level-up popup */}
+      {showLevelUp && (
+        <Modal visible transparent animationType="fade" onRequestClose={() => setShowLevelUp(false)}>
+          <TouchableOpacity
+            style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 24 }}
+            activeOpacity={1}
+            onPress={() => setShowLevelUp(false)}
+          >
+            <Animated.View
+              style={{
+                backgroundColor: '#114b3c',
+                borderRadius: 28,
+                padding: 32,
+                alignItems: 'center',
+                width: 280,
+                transform: [{ scale: levelUpScale }],
+              }}
+              onStartShouldSetResponder={() => true}
+            >
+              <View style={{ width: 72, height: 72, borderRadius: 36, backgroundColor: 'rgba(227,255,92,0.15)', justifyContent: 'center', alignItems: 'center', marginBottom: 16 }}>
+                <Trophy size={36} color="#e3ff5c" />
+              </View>
+              <Text style={{ color: 'rgba(255,255,255,0.7)', fontSize: 13, fontFamily: 'Poppins_500Medium', marginBottom: 4 }}>
+                {t('impact.levelUp', { defaultValue: 'Level Up!' })}
+              </Text>
+              <Text style={{ color: '#e3ff5c', fontSize: 40, fontWeight: '700', fontFamily: 'Poppins_700Bold', marginBottom: 8 }}>
+                {stats.level}
+              </Text>
+              <Text style={{ color: 'rgba(255,255,255,0.6)', fontSize: 13, fontFamily: 'Poppins_400Regular', textAlign: 'center' }}>
+                {t('impact.levelUpDesc', { defaultValue: 'You reached level {{level}}!', level: stats.level })}
+              </Text>
+            </Animated.View>
+          </TouchableOpacity>
+        </Modal>
+      )}
     </View>
   );
 }

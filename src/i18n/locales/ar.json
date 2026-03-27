@@ -22,7 +22,16 @@
     "adminRequired": "يتطلب صلاحيات المسؤول",
     "errorOccurred": "حدث خطأ. يرجى المحاولة مرة أخرى.",
     "goBack": "رجوع",
-    "featureSoon": "ميزة قادمة قريباً"
+    "featureSoon": "ميزة قادمة قريباً",
+    "create": "إنشاء",
+    "optional": "اختياري",
+    "or": "أو",
+    "seeLess": "عرض أقل",
+    "seeMore": "...عرض المزيد",
+    "and": "و",
+    "screenNotFound": "هذه الصفحة غير موجودة.",
+    "goHome": "العودة للصفحة الرئيسية",
+    "errorOccurredDesc": "حدث خطأ غير متوقع. يرجى المحاولة مرة أخرى."
   },
   "onboarding": {
     "slide1": {
@@ -85,7 +94,21 @@
     "passwordRequirements": "8 أحرف على الأقل مع حرف كبير وصغير ورقم ورمز خاص (!@#$%...)",
     "tosRequired": "يرجى قبول شروط الخدمة للمتابعة.",
     "continueWithGoogle": "المتابعة مع Google",
-    "or": "أو"
+    "or": "أو",
+    "agreeToThe": "أوافق على ",
+    "termsOfService": "شروط الخدمة",
+    "privacyPolicy": "سياسة الخصوصية"
+  },
+  "address": {
+    "addresses": "العناوين",
+    "addNew": "إضافة عنوان جديد",
+    "saved": "العناوين المحفوظة",
+    "chooseLocation": "اختر الموقع",
+    "moveMapPin": "حرك الخريطة لتحديد الموقع",
+    "confirmLocation": "تأكيد الموقع",
+    "labelPlace": "تسمية هذا المكان",
+    "customNamePlaceholder": "أو أدخل اسمًا مخصصًا...",
+    "save": "حفظ العنوان"
   },
   "home": {
     "search": "بحث",
@@ -109,6 +132,7 @@
     "newPartner": "شريك جديد",
     "nearbySpots": "أماكن قريبة",
     "otherSpots": "أماكن أخرى",
+    "locationUnknown": "بدون موقع",
     "welcomePopup": {
       "back": "مرحبًا بعودتك",
       "whatsNew": "ما الجديد",
@@ -141,7 +165,9 @@
     "reviewQualite": "الجودة",
     "reviewVariete": "التنوع",
     "availableBaskets": "السلال المتاحة",
-    "noBaskets": "لا توجد سلال متاحة حالياً"
+    "noBaskets": "لا توجد سلال متاحة حالياً",
+    "menuItems": "عناصر القائمة",
+    "noMenuItems": "لا توجد عناصر لعرضها بعد"
   },
   "reserve": {
     "title": "حجز سلة",
@@ -159,9 +185,24 @@
       "title": "تم تأكيد الحجز!",
       "pickupCode": "رمز الاستلام",
       "showThisCode": "أظهر هذا الرمز عند وصولك",
+      "scanQR": "أظهر رمز QR للتاجر",
       "addToCalendar": "إضافة إلى التقويم",
       "viewOrder": "عرض الطلب"
-    }
+    },
+    "processing": "جاري معالجة حجزك...",
+    "when": "متى",
+    "where": "أين",
+    "done": "تم",
+    "confirmTitle": "تأكيد الحجز",
+    "yesReserve": "احجز!",
+    "notYet": "ليس الآن",
+    "originalPrice": "السعر الأصلي",
+    "payCash": "الدفع نقدًا",
+    "payCashDesc": "ادفع للتاجر عند الاستلام",
+    "payCard": "الدفع بالبطاقة",
+    "payCardDesc": "قريبًا",
+    "cashWarning": "مستعد لاستلام هذا السلة؟\n\nإذا تغيرت خططك، يرجى الإلغاء مبكرًا — لتحرير المكان لشخص آخر.\n\nتنبيه: الغياب المتكرر بدون إلغاء قد يؤدي إلى إيقاف مؤقت لحجوزاتك.",
+    "shareCode": "مشاركة معلومات الاستلام"
   },
   "orders": {
     "title": "الطلبات",
@@ -172,7 +213,12 @@
       "reserved": "محجوز",
       "ready": "جاهز",
       "collected": "تم الاستلام",
-      "cancelled": "ملغي"
+      "cancelled": "ملغي",
+      "expired": "منتهي الصلاحية",
+      "pending": "قيد الانتظار",
+      "confirmed": "مؤكد",
+      "completed": "مكتمل",
+      "picked_up": "تم الاستلام"
     },
     "cancelOrder": "إلغاء الطلب",
     "orderDetails": "تفاصيل الطلب",
@@ -192,7 +238,13 @@
     "endsIn": "تنتهي في",
     "pickupEnded": "انتهى وقت الاستلام",
     "tndSaved": "د.ت موفرة",
-    "kgCO2": "كجم CO₂"
+    "kgCO2": "كجم CO₂",
+    "reviewPromptTitle": "كيف كانت تجربتك؟",
+    "reviewPromptDesc": "تم استلامك! هل تريد ترك تقييم؟",
+    "maybeLater": "ربما لاحقاً",
+    "nextPickup": "الاستلام التالي",
+    "pickupExpiring": "الاستلام ينتهي قريبًا!",
+    "surpriseBag": "سلة مفاجآت"
   },
   "review": {
     "title": "اترك تقييمًا",
@@ -203,7 +255,14 @@
     "success": "شكرًا لتقييمك!",
     "error": "تعذر إرسال التقييم",
     "noRating": "غ/م",
-    "noReviews": "(0 تقييمات)"
+    "noReviews": "(0 تقييمات)",
+    "ratingsTitle": "التقييمات",
+    "service": "الخدمة",
+    "quality": "الجودة",
+    "quantity": "الكمية",
+    "variety": "التنوع",
+    "addPhoto": "أضف صورة",
+    "photoOptional": "اختياري"
   },
   "favorites": {
     "title": "المفضلة",
@@ -262,11 +321,11 @@
     "deleteAccount": "حذف الحساب",
     "deleteAccountConfirm": "هل أنت متأكد من رغبتك في حذف حسابك نهائياً؟ لا يمكن التراجع عن هذا الإجراء.",
     "deleteAccountSoon": "سيتاح حذف الحساب في تحديث قادم.",
-    "statMoneySaved": "أموال موفرة 💰",
+    "statMoneySaved": "أموال موفرة",
     "statMoneySavedDesc": "محسوبة من الفارق بين السعر الأصلي والسعر المخفض لكل سلة اشتريتها.",
-    "statCO2Saved": "CO₂ موفر 🌍",
-    "statBaskets": "سلال منقذة 🧺",
-    "statSpots": "أماكن مستكشفة 🗺️",
+    "statCO2Saved": "CO₂ موفر",
+    "statBaskets": "سلال منقذة",
+    "statSpots": "أماكن مستكشفة",
     "noCompletedReservations": "لا توجد حجوزات مكتملة بعد",
     "noPlacesVisited": "لم تزر أي مكان بعد",
     "carTrips": "رحلات سيارة",
@@ -291,7 +350,18 @@
     "detailsPlaceholder": "قدم المزيد من التفاصيل...",
     "submit": "إرسال البلاغ",
     "success": "تم إرسال البلاغ. شكرًا.",
-    "error": "تعذر إرسال البلاغ."
+    "error": "تعذر إرسال البلاغ.",
+    "cta": "الإبلاغ عن هذا المطعم",
+    "done": "تم",
+    "localConfirmTitle": "تم تسجيل البلاغ",
+    "localConfirmMsg": "شكرًا. تم حفظ بلاغك وسيتم مراجعته من قبل فريقنا.",
+    "reasons": {
+      "food_quality": "مشكلة في جودة الطعام",
+      "wrong_info": "معلومات خاطئة",
+      "hygiene": "مخاوف صحية",
+      "behavior": "سلوك غير لائق",
+      "other": "أخرى"
+    }
   },
   "addressPicker": {
     "title": "عناويني",
@@ -320,10 +390,22 @@
     "notif_title_review_received": "تقييم جديد",
     "notif_message_new_reservation": "تم حجز {{count}} سلة في مطعمك",
     "notif_message_reservation_cancelled": "تم إلغاء {{count}} حجز",
-    "notif_message_pickup_confirmed": "تم تأكيد استلامك من {{restaurant}}!",
-    "notif_message_review_received": "ترك لك أحد العملاء تقييمًا"
+    "notif_title_order_confirmed": "تم تأكيد الطلب",
+    "notif_message_order_confirmed": "تم تأكيد طلبك في {{location}}! الاستلام: {{time}}. الرمز: {{code}}",
+    "notif_message_pickup_confirmed": "تم تأكيد استلامك من {{restaurant}}! قيّم تجربتك؟",
+    "notif_message_review_received": "ترك لك أحد العملاء تقييمًا",
+    "pickupStartsTitle": "وقت الاستلام!",
+    "pickupStartsBody": "طلبك جاهز للاستلام.",
+    "pickupEndingSoonTitle": "الاستلام ينتهي قريبًا!",
+    "pickupEndingSoonBody": "نافذة الاستلام تغلق خلال 30 دقيقة.",
+    "favoriteNewBasket": "سلة جديدة متاحة!",
+    "favoriteNewBasketBody": "أحد مواقعك المفضلة لديه سلة متاحة اليوم."
   },
   "business": {
+    "allLocations": "جميع المواقع",
+    "location": "الموقع",
+    "selectLocation": "اختر الموقع",
+    "unnamedLocation": "موقع بدون اسم",
     "dashboard": {
       "title": "لوحة التحكم",
       "greeting": "مرحبًا",
@@ -415,7 +497,10 @@
       "saveChanges": "حفظ التعديلات",
       "willDeactivate": "سيتم إلغاء تفعيله.",
       "todayQty": "اليوم",
-      "defaultQty": "إعادة التعيين اليومية"
+      "defaultQty": "إعادة التعيين اليومية",
+      "addPhoto": "إضافة صورة",
+      "maxPerCustomer": "الحد الأقصى لكل عميل",
+      "sameAllDays": "نفس الشيء لجميع الأيام"
     },
     "orders": {
       "title": "الطلبات",
@@ -441,7 +526,12 @@
       "confirmCode": "تأكيد الرمز",
       "scanQR": "مسح رمز QR",
       "enterPickupCode": "يرجى إدخال رمز الاستلام.",
-      "incorrectCode": "الرمز غير صحيح. يرجى المحاولة مرة أخرى."
+      "incorrectCode": "الرمز غير صحيح. يرجى المحاولة مرة أخرى.",
+      "confirmPickup": "تأكيد الاستلام",
+      "pickupConfirmed": "تم تأكيد الاستلام!",
+      "orderMovedToPickedUp": "تم نقل الطلب إلى مستلم.",
+      "statusReadyForPickup": "جاهز للاستلام",
+      "statusPickedUp": "تم الاستلام"
     },
     "profile": {
       "title": "ملف التجارة",
@@ -481,7 +571,8 @@
       "menuItems": "عناصر القائمة",
       "tempPassword": "كلمة مرور مؤقتة",
       "imageUpdated": "تم تحديث الصورة بنجاح.",
-      "memberAdded": "تمت إضافة العضو بنجاح."
+      "memberAdded": "تمت إضافة العضو بنجاح.",
+      "allLocationsLabel": "المنظمة"
     },
     "team": {
       "members": "أعضاء",
@@ -508,7 +599,17 @@
       "roleLabel": "الدور",
       "locationLabel": "الموقع",
       "all": "الكل",
-      "assigned": "مُعيَّن"
+      "assigned": "مُعيَّن",
+      "createOrg": "إنشاء منظمة",
+      "orgNamePlaceholder": "اسم المنظمة",
+      "orgCreated": "تم إنشاء المنظمة!",
+      "noOrgTitle": "لا توجد منظمة بعد",
+      "noOrgDesc": "أنشئ منظمة لإدارة فريقك ومواقعك.",
+      "deleteLocation": "حذف الموقع",
+      "deleteLocationConfirm": "هل أنت متأكد من حذف هذا الموقع؟",
+      "memberDetail": "العضو",
+      "recentActivity": "النشاط الأخير",
+      "noActivity": "لا يوجد نشاط حديث"
     },
     "createBasket": {
       "title": "سلة جديدة",
@@ -527,7 +628,11 @@
       "suggest": "اقتراح",
       "nameRequired": "اسم السلة مطلوب.",
       "sellingPriceRequired": "سعر البيع مطلوب.",
-      "quantityRequired": "الكمية يجب أن تكون 1 على الأقل."
+      "quantityRequired": "الكمية يجب أن تكون 1 على الأقل.",
+      "goToMenuItems": "الذهاب لعناصر القائمة",
+      "menuItems": "عناصر القائمة",
+      "menuItemsDesc": "اختر عناصر القائمة في هذه السلة (اختياري)",
+      "noMenuItems": "لا توجد عناصر بعد — أضف بعضها في عناصر القائمة"
     },
     "auth": {
       "businessSignIn": "دخول التجارة",
@@ -570,6 +675,9 @@
       "quantity": "الكمية اليومية",
       "pickupStart": "بداية الاستلام",
       "pickupEnd": "نهاية الاستلام",
+      "startTime": "وقت البداية",
+      "endTime": "وقت النهاية",
+      "useBusinessHours": "استخدم ساعات العمل للاستلام",
       "paused": "المطعم متوقف",
       "active": "المطعم نشط",
       "save": "حفظ التغييرات",
@@ -590,7 +698,9 @@
       "scannedItems": "العناصر الممسوحة",
       "noItemsSelected": "لم يتم اختيار عناصر",
       "selectAtLeastOne": "اختر عنصراً واحداً على الأقل للإضافة.",
-      "addSelectedItems": "إضافة العناصر المختارة"
+      "addSelectedItems": "إضافة العناصر المختارة",
+      "cameraPermRequired": "مطلوب إذن الكاميرا لالتقاط الصور.",
+      "takePhoto": "صورة"
     }
   },
   "errors": {
@@ -655,6 +765,43 @@
     "rank": "#{{rank}}",
     "meals": "وجبات",
     "showMore": "عرض المزيد",
-    "viewImpact": "عرض تأثيري"
+    "viewImpact": "عرض تأثيري",
+    "filterAll": "الكل",
+    "filterRegion": "منطقتي",
+    "you": "أنت",
+    "showAll": "عرض الترتيب الكامل",
+    "showLess": "عرض أقل",
+    "levelUp": "ترقية المستوى!",
+    "levelUpDesc": "وصلت إلى المستوى {{level}}!"
+  },
+  "streak": {
+    "warningTitle": "سلسلتك على وشك الانتهاء!",
+    "warningDesc": "اطلب قريبًا للحفاظ على سلسلتك. تنتهي بعد 7 أيام من عدم النشاط.",
+    "days": "يوم متتالي",
+    "orderNow": "اطلب الآن",
+    "later": "لاحقًا"
+  },
+  "tutorial": {
+    "getStarted": "هيا نبدأ!",
+    "customer": {
+      "discoverTitle": "اكتشف السلال",
+      "discoverDesc": "تصفح سلال المفاجآت من المخابز والمطاعم والمحلات القريبة منك — بأسعار مخفضة.",
+      "reserveTitle": "احجز سلة",
+      "reserveDesc": "وجدت ما يعجبك؟ احجزها بنقرة واحدة واحصل على رمز الاستلام.",
+      "pickupTitle": "استلم وادفع",
+      "pickupDesc": "توجه إلى المحل خلال فترة الاستلام. أظهر رمزك، ادفع، واستمتع!",
+      "rewardsTitle": "اكسب مكافآت",
+      "rewardsDesc": "كل إنقاذ يكسبك نقاط خبرة وشارات ويرفعك في لوحة المتصدرين."
+    },
+    "business": {
+      "dashboardTitle": "لوحة التحكم",
+      "dashboardDesc": "شاهد طلباتك وإحصائياتك وأدائك بنظرة واحدة من شاشتك الرئيسية.",
+      "basketsTitle": "أنشئ سلالاً",
+      "basketsDesc": "اعرض سلال مفاجآت بفائض طعامك. حدد الأسعار والكميات وأوقات الاستلام.",
+      "ordersTitle": "أدر الطلبات",
+      "ordersDesc": "اعرض الحجوزات الواردة، تحقق من رموز الاستلام، وتابع الإكمال.",
+      "performanceTitle": "تابع الأداء",
+      "performanceDesc": "راقب مبيعاتك والطعام المنقذ وتقييمات العملاء بمرور الوقت."
+    }
   }
 }

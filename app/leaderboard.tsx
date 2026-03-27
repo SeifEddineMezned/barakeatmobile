@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import {
-  View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator,
+  View, Text, StyleSheet, FlatList, TouchableOpacity,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -10,6 +10,7 @@ import { ChevronLeft, User, Trophy } from 'lucide-react-native';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { useAuthStore } from '@/src/stores/authStore';
 import { fetchLeaderboard, type LeaderboardEntry } from '@/src/services/gamification';
+import { DelayedLoader } from '@/src/components/DelayedLoader';
 
 type FilterTab = 'all' | 'region';
 
@@ -20,6 +21,7 @@ export default function LeaderboardScreen() {
   const { user } = useAuthStore();
 
   const [activeFilter, setActiveFilter] = useState<FilterTab>('all');
+  const [showFull, setShowFull] = useState(false);
 
   const leaderboardQuery = useQuery({
     queryKey: ['leaderboard'],
@@ -27,7 +29,17 @@ export default function LeaderboardScreen() {
     staleTime: 60_000,
   });
 
-  const entries = leaderboardQuery.data ?? [];
+  const allEntries = leaderboardQuery.data ?? [];
+
+  // By default show only the user's position with nearby users
+  const entries = (() => {
+    if (showFull || !user?.id) return allEntries;
+    const userIdx = allEntries.findIndex((e) => e.user_id === Number(user.id));
+    if (userIdx === -1) return allEntries; // user not found, show all
+    const start = Math.max(0, userIdx - 2);
+    const end = Math.min(allEntries.length, userIdx + 3);
+    return allEntries.slice(start, end);
+  })();
 
   const renderEntry = ({ item, index }: { item: LeaderboardEntry; index: number }) => {
     const isCurrentUser = user?.id != null && item.user_id === Number(user.id);
@@ -237,9 +249,7 @@ export default function LeaderboardScreen() {
 
       {/* Leaderboard list */}
       {leaderboardQuery.isLoading ? (
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color={theme.colors.primary} />
-        </View>
+        <DelayedLoader />
       ) : leaderboardQuery.isError ? (
         <View style={styles.loadingContainer}>
           <Text
@@ -281,6 +291,32 @@ export default function LeaderboardScreen() {
             data={entries}
             keyExtractor={(item, index) => `lb-${item.user_id}-${index}`}
             renderItem={renderEntry}
+            ListHeaderComponent={!showFull && entries.length > 0 && entries[0]?.rank > 1 ? (
+              <View style={{ alignItems: 'center', paddingVertical: 8 }}>
+                <Text style={{ color: theme.colors.textSecondary, fontSize: 18, letterSpacing: 4 }}>...</Text>
+              </View>
+            ) : null}
+            ListFooterComponent={
+              <View>
+                {!showFull && entries.length > 0 && entries[entries.length - 1]?.rank < allEntries.length && (
+                  <View style={{ alignItems: 'center', paddingVertical: 8 }}>
+                    <Text style={{ color: theme.colors.textSecondary, fontSize: 18, letterSpacing: 4 }}>...</Text>
+                  </View>
+                )}
+                {allEntries.length > 5 && (
+                  <TouchableOpacity
+                    onPress={() => setShowFull(!showFull)}
+                    style={{ alignItems: 'center', paddingVertical: 14 }}
+                  >
+                    <Text style={{ color: theme.colors.primary, ...theme.typography.bodySm, fontWeight: '600' as const }}>
+                      {showFull
+                        ? t('impact.showLess', { defaultValue: 'Show less' })
+                        : t('impact.showAll', { defaultValue: 'Show full leaderboard' })}
+                    </Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            }
             ListEmptyComponent={renderEmpty}
             showsVerticalScrollIndicator={false}
             contentContainerStyle={{ paddingBottom: 40 }}

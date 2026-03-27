@@ -64,6 +64,13 @@
         {
           "cameraPermission": "Allow Barakeat to use your camera to scan QR codes for order pickup."
         }
+      ],
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/images/icon.png",
+          "color": "#114b3c"
+        }
       ]
     ],
     "experiments": {

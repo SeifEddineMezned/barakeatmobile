@@ -325,16 +325,29 @@ export default function BusinessTabLayout() {
               let icon = null;
               let badge = 0;
               const iconSize = 22;
+              const renderBizIcon = (IconComp: any) => {
+                if (isFocused && iconFill !== 'transparent') {
+                  return (
+                    <View>
+                      <IconComp size={iconSize} color={iconFill} fill={iconFill} />
+                      <View style={{ position: 'absolute', top: 0, left: 0 }}>
+                        <IconComp size={iconSize} color={iconStroke} fill="transparent" />
+                      </View>
+                    </View>
+                  );
+                }
+                return <IconComp size={iconSize} color={iconStroke} fill="transparent" />;
+              };
               switch (route.name) {
-                case 'dashboard': icon = <LayoutDashboard size={iconSize} color={iconStroke} fill={iconFill} />; break;
-                case 'my-baskets': icon = <ShoppingBag size={iconSize} color={iconStroke} fill={iconFill} />; break;
+                case 'dashboard': icon = renderBizIcon(LayoutDashboard); break;
+                case 'my-baskets': icon = renderBizIcon(ShoppingBag); break;
                 case 'incoming-orders':
-                  icon = <ClipboardList size={iconSize} color={iconStroke} fill={iconFill} />;
+                  icon = renderBizIcon(ClipboardList);
                   if (pendingOrderCount > 0) {
                     badge = pendingOrderCount;
                   }
                   break;
-                case 'business-profile': icon = <User size={iconSize} color={iconStroke} fill={iconFill} />; break;
+                case 'business-profile': icon = renderBizIcon(User); break;
               }
 
               return (

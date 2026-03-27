@@ -5,6 +5,7 @@ import {
 } from 'react-native';
 import { MapPin, Home, Briefcase, Plus, ChevronLeft, X, Check, Trash2 } from 'lucide-react-native';
 import { useTheme } from '@/src/theme/ThemeProvider';
+import { useTranslation } from 'react-i18next';
 import { useAddressStore } from '@/src/stores/addressStore';
 
 let MapView: any = null;
@@ -25,6 +26,7 @@ interface Props {
 
 export function LocationPickerModal({ visible, onClose }: Props) {
   const theme = useTheme();
+  const { t } = useTranslation();
   const { addresses, selectedId, addAddress, removeAddress, selectAddress } = useAddressStore();
 
   const [step, setStep] = useState<Step>('list');
@@ -63,7 +65,7 @@ export function LocationPickerModal({ visible, onClose }: Props) {
         {step === 'list' && (
           <View style={[styles.sheet, { backgroundColor: theme.colors.bg, maxHeight: SCREEN_HEIGHT * 0.7 }]}>
             <View style={[styles.sheetHeader, { borderBottomColor: theme.colors.divider }]}>
-              <Text style={[theme.typography.h2, { color: theme.colors.textPrimary, flex: 1 }]}>Addresses</Text>
+              <Text style={[theme.typography.h2, { color: theme.colors.textPrimary, flex: 1 }]}>{t('address.addresses', { defaultValue: 'Addresses' })}</Text>
               <TouchableOpacity onPress={handleClose} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
                 <X size={22} color={theme.colors.textPrimary} />
               </TouchableOpacity>
@@ -79,7 +81,7 @@ export function LocationPickerModal({ visible, onClose }: Props) {
                   <Plus size={18} color={theme.colors.primary} />
                 </View>
                 <Text style={[theme.typography.body, { color: theme.colors.primary, fontWeight: '600' as const }]}>
-                  Add new address
+                  {t('address.addNew', { defaultValue: 'Add new address' })}
                 </Text>
               </TouchableOpacity>
 
@@ -87,7 +89,7 @@ export function LocationPickerModal({ visible, onClose }: Props) {
               {addresses.length > 0 && (
                 <>
                   <Text style={[theme.typography.caption, { color: theme.colors.textSecondary, fontWeight: '600' as const, marginBottom: 8, letterSpacing: 0.5, textTransform: 'uppercase' as const }]}>
-                    Saved addresses
+                    {t('address.saved', { defaultValue: 'Saved addresses' })}
                   </Text>
                   {addresses.map((addr) => {
                     const isSelected = addr.id === selectedId;
@@ -133,7 +135,7 @@ export function LocationPickerModal({ visible, onClose }: Props) {
               <TouchableOpacity onPress={() => setStep('list')} style={{ marginRight: 12 }}>
                 <ChevronLeft size={24} color={theme.colors.textPrimary} />
               </TouchableOpacity>
-              <Text style={[theme.typography.h3, { color: theme.colors.textPrimary }]}>Choose location</Text>
+              <Text style={[theme.typography.h3, { color: theme.colors.textPrimary }]}>{t('address.chooseLocation', { defaultValue: 'Choose location' })}</Text>
             </View>
 
             <View style={{ flex: 1 }}>
@@ -169,7 +171,7 @@ export function LocationPickerModal({ visible, onClose }: Props) {
               <View style={[styles.tooltip, { backgroundColor: 'rgba(0,0,0,0.75)' }]}>
                 <MapPin size={14} color="#fff" />
                 <Text style={[theme.typography.caption, { color: '#fff', marginLeft: 6 }]}>
-                  Move the map to position the pin
+                  {t('address.moveMapPin', { defaultValue: 'Move the map to position the pin' })}
                 </Text>
               </View>
             </View>
@@ -179,7 +181,7 @@ export function LocationPickerModal({ visible, onClose }: Props) {
                 onPress={handleMapConfirm}
                 style={[styles.confirmBtn, { backgroundColor: theme.colors.primary, borderRadius: theme.radii.r16 }]}
               >
-                <Text style={[theme.typography.button, { color: '#fff' }]}>Confirm location</Text>
+                <Text style={[theme.typography.button, { color: '#fff' }]}>{t('address.confirmLocation', { defaultValue: 'Confirm location' })}</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -192,7 +194,7 @@ export function LocationPickerModal({ visible, onClose }: Props) {
               <TouchableOpacity onPress={() => setStep('map')} style={{ marginRight: 12 }}>
                 <ChevronLeft size={24} color={theme.colors.textPrimary} />
               </TouchableOpacity>
-              <Text style={[theme.typography.h3, { color: theme.colors.textPrimary }]}>Label this place</Text>
+              <Text style={[theme.typography.h3, { color: theme.colors.textPrimary }]}>{t('address.labelPlace', { defaultValue: 'Label this place' })}</Text>
             </View>
 
             <View style={{ paddingHorizontal: 20, paddingBottom: 48, paddingTop: 8 }}>
@@ -237,7 +239,7 @@ export function LocationPickerModal({ visible, onClose }: Props) {
                     borderColor: theme.colors.divider,
                   },
                 ]}
-                placeholder="Or enter a custom name..."
+                placeholder={t('address.customNamePlaceholder', { defaultValue: 'Or enter a custom name...' })}
                 placeholderTextColor={theme.colors.muted}
                 value={labelInput}
                 onChangeText={setLabelInput}
@@ -247,7 +249,7 @@ export function LocationPickerModal({ visible, onClose }: Props) {
                 onPress={handleFormSave}
                 style={[styles.confirmBtn, { backgroundColor: theme.colors.primary, borderRadius: theme.radii.r16 }]}
               >
-                <Text style={[theme.typography.button, { color: '#fff' }]}>Save address</Text>
+                <Text style={[theme.typography.button, { color: '#fff' }]}>{t('address.save', { defaultValue: 'Save address' })}</Text>
               </TouchableOpacity>
             </View>
           </View>

@@ -23,7 +23,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import { useRouter } from 'expo-router';
 import { useQuery } from '@tanstack/react-query';
-import { Search, Navigation, X, Clock, MapPin, ShoppingBag, ChevronUp, ChevronLeft } from 'lucide-react-native';
+import { Search, Navigation, X, Clock, MapPin, ShoppingBag, ChevronUp, ChevronLeft, Sparkles } from 'lucide-react-native';
 import * as Location from 'expo-location';
 import { StatusBar } from 'expo-status-bar';
 import { useTheme } from '@/src/theme/ThemeProvider';
@@ -211,6 +211,22 @@ export default function MapViewScreen() {
   const [selectedBasket, setSelectedBasket] = useState<BasketWithDist | null>(null);
   const [radius, setRadius] = useState(5);
   const [searchQuery, setSearchQuery] = useState('');
+  const [searchExpanded, setSearchExpanded] = useState(false);
+  const searchWidthAnim = useRef(new Animated.Value(44)).current;
+  const searchInputRef = useRef<TextInput>(null);
+
+  const toggleSearch = useCallback(() => {
+    if (searchExpanded) {
+      setSearchQuery('');
+      searchInputRef.current?.blur();
+      Animated.timing(searchWidthAnim, { toValue: 44, duration: 250, useNativeDriver: false }).start(() => setSearchExpanded(false));
+    } else {
+      setSearchExpanded(true);
+      Animated.timing(searchWidthAnim, { toValue: Dimensions.get('window').width - 80, duration: 250, useNativeDriver: false }).start(() => {
+        searchInputRef.current?.focus();
+      });
+    }
+  }, [searchExpanded, searchWidthAnim]);
 
   const pulseAnim = useRef(new Animated.Value(0)).current;
   const [circleFill, setCircleFill] = useState(0.08);
@@ -264,26 +280,6 @@ export default function MapViewScreen() {
       mapRef.current.animateToRegion({ ...userLocation, latitudeDelta: Math.max(0.02, radius * 0.015), longitudeDelta: Math.max(0.02, radius * 0.015) }, 600);
     }
   }, [userLocation, radius]);
-
-  const [locLoading, setLocLoading] = useState(false);
-  const handlePinMyLocation = useCallback(async () => {
-    setLocLoading(true);
-    try {
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') { setLocationStatus('denied'); setLocLoading(false); return; }
-      setLocationStatus('granted');
-      const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-      const coords = { latitude: pos.coords.latitude, longitude: pos.coords.longitude };
-      setUserLocation(coords);
-      if (mapRef.current) {
-        mapRef.current.animateToRegion({ ...coords, latitudeDelta: Math.max(0.02, radius * 0.015), longitudeDelta: Math.max(0.02, radius * 0.015) }, 600);
-      }
-    } catch (e) {
-      setLocationStatus('denied');
-    } finally {
-      setLocLoading(false);
-    }
-  }, [radius]);
 
   const center = userLocation ?? DEFAULT_CENTER;
 
@@ -366,6 +362,17 @@ export default function MapViewScreen() {
         <ChevronLeft size={22} color="#114b3c" />
       </TouchableOpacity>
 
+      {/* ── Title — hidden when search is expanded ── */}
+      {!searchExpanded && (
+        <View style={{ position: 'absolute', top: insets.top + 8, left: 0, right: 0, zIndex: 10, alignItems: 'center', pointerEvents: 'none' }}>
+          <View style={{ backgroundColor: 'rgba(255,255,255,0.92)', borderRadius: 22, paddingHorizontal: 18, paddingVertical: 10, shadowColor: '#000', shadowOpacity: 0.12, shadowRadius: 8, shadowOffset: { width: 0, height: 2 }, elevation: 5 }}>
+            <Text style={{ color: '#114b3c', fontSize: 17, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
+              {t('home.discover', { defaultValue: 'Discover' })}
+            </Text>
+          </View>
+        </View>
+      )}
+
       {/* ── Full-screen Map ── */}
       {Platform.OS !== 'web' && MapView ? (
         <MapView
@@ -413,14 +420,40 @@ export default function MapViewScreen() {
         <MapFallback markers={markers} radius={radius} style={StyleSheet.absoluteFillObject} />
       )}
 
-      {/* ── Floating search bar ── */}
-      <View style={[styles.floatingSearch, { top: insets.top + 8, marginHorizontal: 56 }]}>
-        <View style={[styles.searchBar, { backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, ...theme.shadows.shadowMd }]}>
-          <Search size={18} color={theme.colors.muted} />
-          <TextInput style={[styles.searchInput, { color: theme.colors.textPrimary, ...theme.typography.body }]} placeholder={t('home.searchPlaceholder')} placeholderTextColor={theme.colors.muted} value={searchQuery} onChangeText={setSearchQuery} />
-          {searchQuery.length > 0 && (<TouchableOpacity onPress={() => setSearchQuery('')}><X size={18} color={theme.colors.muted} /></TouchableOpacity>)}
-        </View>
-      </View>
+      {/* ── Expandable search button (top-right) ── */}
+      <Animated.View style={{
+        position: 'absolute',
+        top: insets.top + 8,
+        right: 16,
+        zIndex: 10,
+        width: searchWidthAnim,
+        height: 44,
+        backgroundColor: theme.colors.surface,
+        borderRadius: 22,
+        ...theme.shadows.shadowMd,
+        flexDirection: 'row',
+        alignItems: 'center',
+        overflow: 'hidden',
+      }}>
+        <TouchableOpacity
+          onPress={toggleSearch}
+          style={{ width: 44, height: 44, justifyContent: 'center', alignItems: 'center' }}
+        >
+          {searchExpanded ? <X size={18} color={theme.colors.muted} /> : <Search size={18} color={theme.colors.primary} />}
+        </TouchableOpacity>
+        {searchExpanded && (
+          <TextInput
+            ref={searchInputRef}
+            style={{ flex: 1, color: theme.colors.textPrimary, ...theme.typography.body, paddingRight: 14 }}
+            placeholder={t('home.searchPlaceholder')}
+            placeholderTextColor={theme.colors.muted}
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+            onSubmitEditing={toggleSearch}
+            returnKeyType="search"
+          />
+        )}
+      </Animated.View>
 
       {/* ── Floating radius slider ── */}
       <View style={[styles.floatingRadius, { top: insets.top + 64, marginHorizontal: 16 }]}>
@@ -449,21 +482,6 @@ export default function MapViewScreen() {
         )}
       </TouchableOpacity>
 
-      {/* ── "Use current location" explicit text button ── */}
-      <View style={{ position: 'absolute', bottom: COLLAPSED_HEIGHT + 16, left: 16, right: 72, zIndex: 10 }}>
-        <TouchableOpacity
-          onPress={() => void handlePinMyLocation()}
-          accessibilityLabel="Use current location"
-          style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.primary, borderRadius: 24, paddingVertical: 11, paddingHorizontal: 18, ...theme.shadows.shadowLg }}
-        >
-          {locLoading ? (
-            <ActivityIndicator size="small" color="#fff" style={{ marginRight: 8 }} />
-          ) : (
-            <Navigation size={16} color="#fff" style={{ marginRight: 8 }} />
-          )}
-          <Text style={{ color: '#fff', fontFamily: 'Poppins_600SemiBold', fontSize: 13, fontWeight: '600' }}>Use current location</Text>
-        </TouchableOpacity>
-      </View>
 
       {/* ── Location denied banner ── */}
       {locationStatus === 'denied' && (
@@ -476,7 +494,7 @@ export default function MapViewScreen() {
       {/* ── Easter egg ── */}
       {showConstellationBanner && (
         <View style={{ position: 'absolute', bottom: COLLAPSED_HEIGHT + 20, left: 16, right: 16, zIndex: 30, backgroundColor: '#114b3c', borderRadius: 16, paddingVertical: 14, paddingHorizontal: 18, flexDirection: 'row', alignItems: 'center', shadowColor: '#000', shadowOpacity: 0.25, shadowRadius: 8, elevation: 8 }}>
-          <Text style={{ fontSize: 18, marginRight: 10 }}>🌟</Text>
+          <Sparkles size={18} color="#e3ff5c" style={{ marginRight: 10 }} />
           <Text style={{ color: '#fff', fontSize: 13, fontWeight: '600', fontFamily: 'Poppins_600SemiBold', flex: 1 }}>You found the Barakeat Constellation! +50 XP</Text>
         </View>
       )}

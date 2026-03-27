@@ -236,10 +236,10 @@ export default function SignUpScreen() {
                     {tosAccepted && <Text style={{ color: '#114b3c', fontSize: 13, fontWeight: '700' as const, lineHeight: 18 }}>✓</Text>}
                   </TouchableOpacity>
                   <Text style={{ color: 'rgba(255,255,255,0.85)', ...theme.typography.bodySm, flex: 1, flexWrap: 'wrap' }}>
-                    {'I agree to the '}
-                    <Text style={{ color: '#e3ff5c', fontWeight: '600' as const }}>Terms of Service</Text>
-                    {' and '}
-                    <Text style={{ color: '#e3ff5c', fontWeight: '600' as const }}>Privacy Policy</Text>
+                    {t('auth.agreeToThe', { defaultValue: 'I agree to the ' })}
+                    <Text style={{ color: '#e3ff5c', fontWeight: '600' as const }}>{t('auth.termsOfService', { defaultValue: 'Terms of Service' })}</Text>
+                    {' ' + t('common.and', { defaultValue: 'and' }) + ' '}
+                    <Text style={{ color: '#e3ff5c', fontWeight: '600' as const }}>{t('auth.privacyPolicy', { defaultValue: 'Privacy Policy' })}</Text>
                   </Text>
                 </View>
 

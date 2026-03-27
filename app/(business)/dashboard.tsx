@@ -1,5 +1,5 @@
 import React, { useState, useCallback } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Modal, Dimensions, ActivityIndicator, Image, Animated as RNAnimated } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Modal, Dimensions, Image, Animated as RNAnimated } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import { TrendingUp, ShoppingBag, Banknote, Clock, Leaf, Star, X, Package, AlertCircle, Store, Settings, Bell, ChevronDown, Check, Building2 } from 'lucide-react-native';
@@ -14,6 +14,7 @@ import { fetchStats, fetchTodayOrders, fetchAnalytics, fetchMyProfile } from '@/
 import { fetchMyContext, fetchOrganizationDetails } from '@/src/services/teams';
 import { apiClient } from '@/src/lib/api';
 import { LineChart } from '@/src/components/LineChart';
+import { DelayedLoader } from '@/src/components/DelayedLoader';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
 
@@ -288,8 +289,8 @@ export default function BusinessDashboard() {
 
   if (isLoading) {
     return (
-      <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg, justifyContent: 'center', alignItems: 'center' }]} edges={[]}>
-        <ActivityIndicator size="large" color={theme.colors.primary} />
+      <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]} edges={[]}>
+        <DelayedLoader />
       </SafeAreaView>
     );
   }

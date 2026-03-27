@@ -242,3 +242,12 @@ export async function addLocation(
   const data = res.data;
   return (data?.location ?? data) as OrgLocationFromAPI;
 }
+
+// ---------------------------------------------------------
+// Delete a location from an organization.
+// Backend endpoint: DELETE /api/teams/organizations/:orgId/locations/:locationId
+// ---------------------------------------------------------
+export async function deleteLocation(orgId: number | string, locationId: number | string): Promise<void> {
+  console.log('[Teams] Deleting location:', locationId, 'from org:', orgId);
+  await apiClient.delete(`/api/teams/organizations/${orgId}/locations/${locationId}`);
+}

@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useCallback } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Linking, Modal, TextInput, KeyboardAvoidingView, Platform } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Linking, Modal, TextInput, KeyboardAvoidingView, Platform, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import { Phone, CheckCircle, XCircle, Clock, QrCode, ClipboardList } from 'lucide-react-native';
@@ -168,8 +168,7 @@ export default function IncomingOrdersScreen() {
     } finally {
       setVerifyLoading(false);
     }
-<<<<<<< HEAD
-  }, [verifyModalOrderId, verifyModalAction, typedCode, orders, updateOrderStatus, selectedLocationId, queryClient, t]);
+  }, [verifyModalOrderId, typedCode, orders, closeVerifyModal, selectedLocationId, queryClient, t]);
 
   const handleCancel = useCallback((orderId: string) => {
     Alert.alert(
@@ -195,9 +194,6 @@ export default function IncomingOrdersScreen() {
       ]
     );
   }, [queryClient, t]);
-=======
-  }, [verifyModalOrderId, typedCode, orders, selectedLocationId, queryClient, t, closeVerifyModal]);
->>>>>>> 808e358afa82adccb3745465e7afc5e4b0c98797
 
   const handleCall = useCallback((phone?: string) => {
     if (phone) {

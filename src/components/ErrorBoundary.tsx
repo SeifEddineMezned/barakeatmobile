@@ -1,5 +1,7 @@
 import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import { AlertTriangle } from 'lucide-react-native';
+import i18n from '@/src/i18n';
 
 interface Props {
   children: React.ReactNode;
@@ -29,17 +31,17 @@ export class ErrorBoundary extends React.Component<Props, State> {
       return (
         <View style={styles.container}>
           <View style={styles.card}>
-            <Text style={styles.emoji}>⚠️</Text>
-            <Text style={styles.title}>Something went wrong</Text>
+            <AlertTriangle size={48} color="#FF9800" />
+            <Text style={styles.title}>{i18n.t('common.errorOccurred')}</Text>
             <Text style={styles.subtitle}>
-              An unexpected error occurred. Please try again.
+              {i18n.t('common.errorOccurredDesc', { defaultValue: 'An unexpected error occurred. Please try again.' })}
             </Text>
             <TouchableOpacity
               style={styles.button}
               onPress={() => this.setState({ hasError: false, error: null })}
               activeOpacity={0.8}
             >
-              <Text style={styles.buttonText}>Try again</Text>
+              <Text style={styles.buttonText}>{i18n.t('common.retry')}</Text>
             </TouchableOpacity>
           </View>
         </View>
