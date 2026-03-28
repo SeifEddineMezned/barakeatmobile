@@ -17,17 +17,22 @@ import * as WebBrowser from 'expo-web-browser';
 WebBrowser.maybeCompleteAuthSession();
 
 // ── Google OAuth helpers ─────────────────────────────────────────────────────
-// IMPORTANT: We use the WEB client ID for all platforms. This is required
-// because native client IDs do NOT return an id_token during auth code
-// exchange for public clients (no client_secret). The Web client ID with
-// an Expo Auth redirect URI returns both access_token and id_token.
-const GOOGLE_WEB_CLIENT_ID = '563732969753-6qpdd2nmllsgqh3am96o4q683bl233ph.apps.googleusercontent.com';
-
-// Expo Auth proxy redirect URI — matches the Google Cloud Console config
-const EXPO_REDIRECT_URI = 'https://auth.expo.io/@smzd/barakeat-surprise-baskets';
+// Native client IDs for platform-specific OAuth flows with custom scheme redirects.
+// These work with WebBrowser.openAuthSessionAsync in Expo Go.
+const GOOGLE_CLIENT = {
+  ios: {
+    clientId: '563732969753-tjbeid6kat52st6anrt34p31g8dp0ajt.apps.googleusercontent.com',
+    scheme: 'com.googleusercontent.apps.563732969753-tjbeid6kat52st6anrt34p31g8dp0ajt',
+  },
+  android: {
+    clientId: '563732969753-rjog1l089e2kksn56b6qladv603lt09g.apps.googleusercontent.com',
+    scheme: 'com.googleusercontent.apps.563732969753-rjog1l089e2kksn56b6qladv603lt09g',
+  },
+} as const;
 
 function buildGoogleAuthUrl(): { url: string; redirectUri: string; codeVerifier: string; clientId: string } {
-  const redirectUri = EXPO_REDIRECT_URI;
+  const cfg = Platform.OS === 'ios' ? GOOGLE_CLIENT.ios : GOOGLE_CLIENT.android;
+  const redirectUri = `${cfg.scheme}:/oauth2redirect`;
   // Plain PKCE: code_challenge === code_verifier (no SHA-256, no expo-crypto)
   const codeVerifier = [
     Math.random().toString(36).substring(2),
@@ -35,7 +40,7 @@ function buildGoogleAuthUrl(): { url: string; redirectUri: string; codeVerifier:
     Math.random().toString(36).substring(2),
   ].join('');
   const params = new URLSearchParams({
-    client_id: GOOGLE_WEB_CLIENT_ID,
+    client_id: cfg.clientId,
     redirect_uri: redirectUri,
     response_type: 'code',
     scope: 'openid email profile',
@@ -43,11 +48,13 @@ function buildGoogleAuthUrl(): { url: string; redirectUri: string; codeVerifier:
     code_challenge_method: 'plain',
     access_type: 'online',
   });
+  console.log('[Google] Platform:', Platform.OS, '| clientId:', cfg.clientId.substring(0, 20) + '...');
+  console.log('[Google] redirectUri:', redirectUri);
   return {
     url: `https://accounts.google.com/o/oauth2/v2/auth?${params}`,
     redirectUri,
     codeVerifier,
-    clientId: GOOGLE_WEB_CLIENT_ID,
+    clientId: cfg.clientId,
   };
 }
 
