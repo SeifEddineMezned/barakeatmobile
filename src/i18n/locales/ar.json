@@ -94,6 +94,7 @@
     "passwordRequirements": "8 أحرف على الأقل مع حرف كبير وصغير ورقم ورمز خاص (!@#$%...)",
     "tosRequired": "يرجى قبول شروط الخدمة للمتابعة.",
     "continueWithGoogle": "المتابعة مع Google",
+    "googleAuthError": "فشل تسجيل الدخول عبر Google. يرجى المحاولة مرة أخرى.",
     "or": "أو",
     "agreeToThe": "أوافق على ",
     "termsOfService": "شروط الخدمة",

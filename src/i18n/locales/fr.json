@@ -94,6 +94,7 @@
     "passwordRequirements": "Min 8 caractères avec majuscule, minuscule, chiffre et caractère spécial (!@#$%...)",
     "tosRequired": "Veuillez accepter les Conditions d'utilisation pour continuer.",
     "continueWithGoogle": "Continuer avec Google",
+    "googleAuthError": "Échec de la connexion Google. Veuillez réessayer.",
     "or": "ou",
     "agreeToThe": "J'accepte les ",
     "termsOfService": "Conditions d'utilisation",

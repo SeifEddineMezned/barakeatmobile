@@ -94,6 +94,7 @@
     "passwordRequirements": "Min 8 characters with uppercase, lowercase, a number and a special character (!@#$%...)",
     "tosRequired": "Please accept the Terms of Service to continue.",
     "continueWithGoogle": "Continue with Google",
+    "googleAuthError": "Google sign-in failed. Please try again.",
     "or": "or",
     "agreeToThe": "I agree to the ",
     "termsOfService": "Terms of Service",

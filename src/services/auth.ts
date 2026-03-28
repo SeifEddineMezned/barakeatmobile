@@ -84,6 +84,18 @@ export async function restaurantAccessRequest(data: RestaurantAccessRequest): Pr
   await apiClient.post('/api/auth/restaurant-access/request', data);
 }
 
+export async function loginWithGoogle(accessToken: string, idToken: string): Promise<AuthResponse> {
+  console.log('[Auth] Logging in with Google idToken');
+  console.log('[Auth] idToken exists:', !!idToken, '| length:', idToken?.length ?? 0);
+  console.log('[Auth] accessToken exists:', !!accessToken);
+  const res = await apiClient.post<AuthResponse>('/api/auth/google', { accessToken, idToken });
+  const { token, user } = res.data;
+  await saveToken(token);
+  await saveUser(user);
+  console.log('[Auth] Google login successful, user:', user.name);
+  return res.data;
+}
+
 export async function logout(): Promise<void> {
   await clearSession();
   console.log('[Auth] Logged out');
