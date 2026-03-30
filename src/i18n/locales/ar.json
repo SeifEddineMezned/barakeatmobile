@@ -132,6 +132,10 @@
     "km": "كم",
     "newPartner": "شريك جديد",
     "nearbySpots": "أماكن قريبة",
+    "allSpots": "{{count}} مكان متاح",
+    "noSpots": "لا توجد أماكن",
+    "locationDeniedHint": "فعّل خدمة الموقع لرؤية النتائج القريبة",
+    "expandRadiusHint": "جرب توسيع نطاق البحث",
     "otherSpots": "أماكن أخرى",
     "locationUnknown": "بدون موقع",
     "welcomePopup": {
@@ -245,7 +249,9 @@
     "maybeLater": "ربما لاحقاً",
     "nextPickup": "الاستلام التالي",
     "pickupExpiring": "الاستلام ينتهي قريبًا!",
-    "surpriseBag": "سلة مفاجآت"
+    "surpriseBag": "سلة مفاجآت",
+    "noUpcoming": "لا توجد طلبات قادمة",
+    "noPast": "لا توجد طلبات سابقة"
   },
   "review": {
     "title": "اترك تقييمًا",
@@ -782,7 +788,37 @@
     "orderNow": "اطلب الآن",
     "later": "لاحقًا"
   },
+  "badges": {
+    "newBadge": "شارة جديدة مفتوحة!",
+    "badge_first_save": "أول إنقاذ",
+    "badge_first_save_desc": "أنقذت أول وجبة من الهدر",
+    "badge_onboarding": "البداية",
+    "badge_onboarding_desc": "أكملت الشرح التعريفي",
+    "badge_food_saver": "منقذ الطعام",
+    "badge_food_saver_desc": "أنقذت 10 وجبات من الهدر",
+    "badge_food_saver_25": "المنقذ الرائع",
+    "badge_food_saver_25_desc": "أنقذت 25 وجبة من الهدر",
+    "badge_food_saver_50": "بطل الإنقاذ",
+    "badge_food_saver_50_desc": "أنقذت 50 وجبة من الهدر",
+    "badge_bakery_lover": "عاشق المخبز",
+    "badge_bakery_lover_desc": "أنقذت 5 منتجات مخبز",
+    "badge_local_hero": "البطل المحلي",
+    "badge_local_hero_desc": "زرت 5 أماكن مختلفة",
+    "badge_streak_3": "في قمة الأداء",
+    "badge_streak_3_desc": "حققت سلسلة 3 أسابيع",
+    "badge_streak_7": "لا يُوقف",
+    "badge_streak_7_desc": "حققت سلسلة 7 أسابيع",
+    "badge_generous": "قلب كريم",
+    "badge_generous_desc": "أجريت أول تبرع مجتمعي",
+    "badge_big_spender": "الموفر الكبير",
+    "badge_big_spender_desc": "وفرت أكثر من 50 د.ت",
+    "badge_ramadan_saver": "روح رمضان",
+    "badge_ramadan_saver_desc": "أنقذت طعامًا خلال شهر رمضان",
+    "badge_early_bird": "الطائر المبكر",
+    "badge_early_bird_desc": "أنقذت 3 وجبات في أسبوعك الأول"
+  },
   "tutorial": {
+
     "getStarted": "هيا نبدأ!",
     "customer": {
       "discoverTitle": "اكتشف السلال",

@@ -109,23 +109,50 @@ export default function ProfileScreen() {
       const status = (r.status ?? '').toLowerCase();
       return status === 'collected' || status === 'completed' || status === 'picked_up';
     });
+
     // Prefer authoritative backend stats, fall back to local calculation
     const basketsBought = gStatsInner?.meals_saved ?? completedReservations.length;
     const mealsSaved = gStatsInner?.meals_saved ?? completedReservations.length;
+
     const moneySaved = gStatsInner?.money_saved != null
       ? Math.max(0, parseFloat(gStatsInner.money_saved) || 0)
       : completedReservations.reduce((sum, r) => {
           const rAny = r as any;
-          const orig = Number(rAny.original_price ?? r.basket?.originalPrice ?? (r.basket as any)?.original_price ?? 0);
-          const disc = Number(rAny.price_tier ?? rAny.selling_price ?? r.basket?.discountedPrice ?? (r.basket as any)?.discounted_price ?? (r.basket as any)?.price_tier ?? 0);
+          // Check basket, then restaurant sub-object, then reservation top-level
+          const orig = Number(
+            rAny.original_price ??
+            r.basket?.originalPrice ??
+            (r.basket as any)?.original_price ??
+            rAny.restaurant?.original_price ??    // ← API stores original price here
+            0
+          );
+          const disc = Number(
+            rAny.price_tier ??
+            rAny.selling_price ??
+            r.basket?.discountedPrice ??
+            (r.basket as any)?.discounted_price ??
+            (r.basket as any)?.price_tier ??
+            rAny.restaurant?.price_tier ??        // ← API stores discounted price here
+            (r as any).total ??
+            0
+          );
           return sum + Math.max(0, (orig - disc) * (r.quantity ?? 1));
         }, 0);
+
     const co2Saved = mealsSaved * 2.5;
 
+    // XP: handle both flat API shape and nested level-object shape
     const xp = (typeof gLevel === 'object' ? gLevel?.xp : null) ?? gStatsInner?.xp ?? mealsSaved * 10;
     const level = (typeof gLevel === 'object' ? gLevel?.level : typeof gLevel === 'number' ? gLevel : null) ?? Math.floor(xp / 100) + 1;
-    const xpInLevel = xp % 100;
-    const xpProgress = xpInLevel / 100;
+
+    // Use XP threshold table for accurate in-level progress (not simple % 100)
+    const XP_THRESHOLDS = [0, 50, 120, 210, 320, 450, 600, 800, 1050, 1350, 1700, 2100, 2600, 3200, 3900, 4700, 5600, 6600, 7700, 9000];
+    const currentLevelThreshold = XP_THRESHOLDS[level - 1] ?? 0;
+    const nextLevelThreshold = XP_THRESHOLDS[level] ?? (currentLevelThreshold + 500);
+    const xpInLevel = Math.max(0, xp - currentLevelThreshold);
+    const xpBandSize = Math.max(1, nextLevelThreshold - currentLevelThreshold);
+    const xpProgress = Math.min(1, xpInLevel / xpBandSize);
+
     const currentStreak = gStatsInner?.current_streak ?? 0;
 
     const rawBadges: Badge[] =
@@ -142,8 +169,9 @@ export default function ProfileScreen() {
         return rAny.restaurant_name ?? r.basket?.merchantName ?? (r.basket as any)?.merchant_name ?? rAny.location_id ?? rAny.restaurant_id;
       }).filter(Boolean)).size;
 
-    return { basketsBought, moneySaved, co2Saved, level, xp, xpInLevel, xpProgress, currentStreak, badges, businessesTried };
+    return { basketsBought, moneySaved, co2Saved, level, xp, xpInLevel, xpBandSize, xpProgress, currentStreak, badges, businessesTried };
   }, [gamificationQuery.data, reservationsQuery.data]);
+
 
   // Animated XP bar
   const xpAnim = useRef(new Animated.Value(0)).current;
@@ -327,7 +355,7 @@ export default function ProfileScreen() {
                 fontSize: 10,
               }}
             >
-              {t('impact.xpProgress', { current: stats.xpInLevel, next: 100 })}
+              {t('impact.xpProgress', { current: stats.xpInLevel, next: stats.xpBandSize })}
             </Text>
           </View>
         </View>

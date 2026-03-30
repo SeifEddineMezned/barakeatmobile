@@ -275,8 +275,8 @@ export default function BusinessTabLayout() {
               bottom: 20,
               left: 32,
               right: 32,
-              height: 60,
-              backgroundColor: theme.colors.surface,
+              height: 68,
+              backgroundColor: theme.colors.primary,
               borderRadius: 30,
               borderTopWidth: 0,
               shadowColor: '#000',
@@ -296,8 +296,8 @@ export default function BusinessTabLayout() {
               style={{
                 position: 'absolute',
                 width: tabWidth - 12,
-                height: 44,
-                backgroundColor: theme.colors.primary + '12',
+                height: 52,
+                backgroundColor: 'rgba(255,255,255,0.18)',
                 borderRadius: 22,
                 left: 6,
                 transform: [{ translateX: glassAnim }],
@@ -307,9 +307,8 @@ export default function BusinessTabLayout() {
             {state.routes.map((route, index) => {
               const { options } = descriptors[route.key];
               const isFocused = state.index === index;
-              const color = isFocused ? theme.colors.primary : theme.colors.textSecondary;
-              const iconStroke = isFocused ? '#FFFFFF' : theme.colors.textSecondary;
-              const iconFill = isFocused ? theme.colors.primary : 'transparent';
+              const color = isFocused ? '#FFFFFF' : 'rgba(255,255,255,0.65)';
+              const iconColor = isFocused ? '#FFFFFF' : 'rgba(255,255,255,0.65)';
 
               const onPress = () => {
                 const event = navigation.emit({
@@ -325,19 +324,10 @@ export default function BusinessTabLayout() {
               let icon = null;
               let badge = 0;
               const iconSize = 22;
-              const renderBizIcon = (IconComp: any) => {
-                if (isFocused && iconFill !== 'transparent') {
-                  return (
-                    <View>
-                      <IconComp size={iconSize} color={iconFill} fill={iconFill} />
-                      <View style={{ position: 'absolute', top: 0, left: 0 }}>
-                        <IconComp size={iconSize} color={iconStroke} fill="transparent" />
-                      </View>
-                    </View>
-                  );
-                }
-                return <IconComp size={iconSize} color={iconStroke} fill="transparent" />;
-              };
+              // Single clean icon — no double-stacking which caused washout on dark bg
+              const renderBizIcon = (IconComp: any) => (
+                <IconComp size={iconSize} color={iconColor} />
+              );
               switch (route.name) {
                 case 'dashboard': icon = renderBizIcon(LayoutDashboard); break;
                 case 'my-baskets': icon = renderBizIcon(ShoppingBag); break;
@@ -358,7 +348,8 @@ export default function BusinessTabLayout() {
                     flex: 1,
                     alignItems: 'center',
                     justifyContent: 'center',
-                    height: 60,
+                    height: 68,
+                    paddingHorizontal: 4,
                   }}
                   activeOpacity={0.7}
                 >
@@ -386,10 +377,10 @@ export default function BusinessTabLayout() {
                     ellipsizeMode="tail"
                     style={{
                       color,
-                      fontSize: 9,
+                      fontSize: 8,
                       fontFamily: 'Poppins_500Medium',
-                      marginTop: 2,
-                      maxWidth: tabWidth - 8,
+                      marginTop: 3,
+                      width: tabWidth - 16,
                       textAlign: 'center',
                     }}
                   >

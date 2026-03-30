@@ -25,19 +25,20 @@ export default function CreateBasketScreen() {
   const theme = useTheme();
   const router = useRouter();
   const { baskets: storeBaskets } = useBusinessStore();
+  const selectedLocationId = useBusinessStore((s) => s.selectedLocationId);
   const queryClient = useQueryClient();
 
   // ── Fetch profile for default pickup times
   const profileQuery = useQuery({
-    queryKey: ['my-profile'],
-    queryFn: fetchMyProfile,
+    queryKey: ['my-profile', selectedLocationId],
+    queryFn: () => fetchMyProfile(selectedLocationId),
     staleTime: 60_000,
   });
 
   // ── Fetch live baskets to populate edit fields
   const basketsQuery = useQuery({
-    queryKey: ['my-baskets'],
-    queryFn: fetchMyBaskets,
+    queryKey: ['my-baskets', selectedLocationId],
+    queryFn: () => fetchMyBaskets(selectedLocationId),
     staleTime: 60_000,
   });
 

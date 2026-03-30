@@ -118,11 +118,6 @@ export default function MyBasketsScreen() {
   const [tempQuantity, setTempQuantity] = useState(0);
   const [detailBasket, setDetailBasket] = useState<typeof baskets[0] | null>(null);
   const [detailTodayQty, setDetailTodayQty] = useState(0);
-  const [detailDailyQty, setDetailDailyQty] = useState(0);
-  const [sameAllDays, setSameAllDays] = useState(true);
-  const DAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'] as const;
-  const DAY_LABELS: Record<string, string> = { mon: 'M', tue: 'T', wed: 'W', thu: 'T', fri: 'F', sat: 'S', sun: 'S' };
-  const [daySchedule, setDaySchedule] = useState<Record<string, number>>({ mon: 0, tue: 0, wed: 0, thu: 0, fri: 0, sat: 0, sun: 0 });
   const [showFullDesc, setShowFullDesc] = useState(false);
   const [showPickupEditor, setShowPickupEditor] = useState(false);
   const [pickupStartTime, setPickupStartTime] = useState('');
@@ -285,34 +280,52 @@ export default function MyBasketsScreen() {
                     setMenuOpenId(null);
                     setDetailBasket(basket);
                     setDetailTodayQty(basket.quantityLeft);
-                    setDetailDailyQty(basket.quantityTotal);
                     setShowFullDesc(false);
                     setPickupStartTime(basket.pickupWindow.start);
                     setPickupEndTime(basket.pickupWindow.end);
                     setShowPickupEditor(false);
                     setUseBusinessHours(false);
                     setDetailMaxPerCustomer((basket as any).maxPerCustomer ?? 5);
-                    // Init schedule from basket data or default to same for all days
-                    const rawBasket = basketsQuery.data?.find((b: any) => String(b.id) === basket.id);
-                    const schedule = (rawBasket as any)?.daily_reinit_schedule;
-                    if (schedule && typeof schedule === 'object' && !Array.isArray(schedule)) {
-                      setSameAllDays(false);
-                      setDaySchedule({ mon: schedule.mon ?? 0, tue: schedule.tue ?? 0, wed: schedule.wed ?? 0, thu: schedule.thu ?? 0, fri: schedule.fri ?? 0, sat: schedule.sat ?? 0, sun: schedule.sun ?? 0 });
-                    } else {
-                      setSameAllDays(true);
-                      const qty = basket.quantityTotal;
-                      setDaySchedule({ mon: qty, tue: qty, wed: qty, thu: qty, fri: qty, sat: qty, sun: qty });
-                    }
                   }}
                 >
                   <View style={styles.cardRow}>
-                    {basket.imageUrl ? (
-                      <Image source={{ uri: basket.imageUrl }} style={[styles.basketImage, { borderRadius: theme.radii.r12 }]} />
-                    ) : (
-                      <View style={[styles.basketImage, { borderRadius: theme.radii.r12, backgroundColor: theme.colors.primary + '10', justifyContent: 'center', alignItems: 'center' }]}>
-                        <ShoppingBag size={28} color={theme.colors.primary} />
+                    {/* Image with quantity badge overlay */}
+                    <View style={{ position: 'relative' }}>
+                      {basket.imageUrl ? (
+                        <Image source={{ uri: basket.imageUrl }} style={[styles.basketImage, { borderRadius: theme.radii.r12 }]} />
+                      ) : (
+                        <View style={[styles.basketImage, { borderRadius: theme.radii.r12, backgroundColor: theme.colors.primary + '10', justifyContent: 'center', alignItems: 'center' }]}>
+                          <ShoppingBag size={28} color={theme.colors.primary} />
+                        </View>
+                      )}
+                      {/* Quantity badge – top-right corner of image */}
+                      <View style={{
+                        position: 'absolute',
+                        top: 4,
+                        right: 4,
+                        backgroundColor: isSoldOut ? theme.colors.error : theme.colors.primary,
+                        borderRadius: theme.radii.pill,
+                        minWidth: 22,
+                        height: 22,
+                        justifyContent: 'center',
+                        alignItems: 'center',
+                        paddingHorizontal: 5,
+                        shadowColor: '#000',
+                        shadowOffset: { width: 0, height: 1 },
+                        shadowOpacity: 0.25,
+                        shadowRadius: 3,
+                        elevation: 3,
+                      }}>
+                        <Text style={{
+                          color: '#FFFFFF',
+                          fontSize: 10,
+                          fontWeight: '700',
+                          fontFamily: 'Poppins_700Bold',
+                        }}>
+                          {basket.quantityLeft}
+                        </Text>
                       </View>
-                    )}
+                    </View>
                     <View style={styles.basketInfo}>
                       <View style={styles.basketNameRow}>
                         <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.body, fontWeight: '600' as const, flex: 1 }]} numberOfLines={1}>
@@ -334,19 +347,9 @@ export default function MyBasketsScreen() {
                           {basket.originalPrice} TND
                         </Text>
                       </View>
+                      {/* Only pickup window chip remains – quantity removed from text area */}
                       <View style={[styles.metaRow, { marginTop: 6 }]}>
-                        <View style={[styles.metaChip, { backgroundColor: isSoldOut ? theme.colors.error + '15' : theme.colors.primary + '12', borderRadius: theme.radii.pill, paddingHorizontal: 8, paddingVertical: 3 }]}>
-                          <ShoppingBag size={10} color={isSoldOut ? theme.colors.error : theme.colors.primary} />
-                          <Text style={[{
-                            color: isSoldOut ? theme.colors.error : theme.colors.primary,
-                            ...theme.typography.caption,
-                            fontWeight: '600' as const,
-                            marginLeft: 4,
-                          }]}>
-                            {isSoldOut ? t('business.baskets.soldOut') : basket.quantityLeft}
-                          </Text>
-                        </View>
-                        <View style={[styles.metaChip, { backgroundColor: theme.colors.bg, borderRadius: theme.radii.pill, paddingHorizontal: 8, paddingVertical: 3, marginLeft: 6 }]}>
+                        <View style={[styles.metaChip, { backgroundColor: theme.colors.bg, borderRadius: theme.radii.pill, paddingHorizontal: 8, paddingVertical: 3 }]}>
                           <Clock size={10} color={theme.colors.textSecondary} />
                           <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, marginLeft: 3 }]}>
                             {basket.pickupWindow.start}-{basket.pickupWindow.end}
@@ -402,12 +405,13 @@ export default function MyBasketsScreen() {
             maxHeight: '90%',
             width: '100%',
             maxWidth: 420,
+            overflow: 'hidden',
             ...theme.shadows.shadowLg,
           }}>
 
-            <ScrollView showsVerticalScrollIndicator={false}>
+            <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ flexGrow: 0 }}>
               {/* Pause pill + close button header */}
-              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 20, marginBottom: 12 }}>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 20, paddingTop: 20, marginBottom: 12 }}>
                 <TouchableOpacity
                   onPress={() => handleToggle(detailBasket!.id)}
                   style={{
@@ -540,26 +544,22 @@ export default function MyBasketsScreen() {
                   </View>
                 </View>
 
-                {/* Pickup Time */}
+                {/* Pickup Time — display row removed per CEO request.
+                     The inline editor below remains so retrait is still editable when tapping "Edit pickup time". */}
                 <TouchableOpacity
                   onPress={() => setShowPickupEditor(!showPickupEditor)}
                   style={{
                     flexDirection: 'row',
-                    justifyContent: 'space-between',
                     alignItems: 'center',
-                    backgroundColor: theme.colors.bg,
-                    borderRadius: theme.radii.r12,
-                    padding: 14,
+                    gap: 8,
+                    paddingVertical: 8,
                   }}
                 >
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-                    <Clock size={18} color={theme.colors.primary} />
-                    <Text style={{ color: theme.colors.textPrimary, ...theme.typography.body }}>
-                      {t('basket.pickupWindow', { defaultValue: 'Pickup Time' })}
-                    </Text>
-                  </View>
-                  <Text style={{ color: theme.colors.primary, ...theme.typography.body, fontWeight: '600' }}>
-                    {pickupStartTime} - {pickupEndTime}
+                  <Clock size={15} color={theme.colors.primary} />
+                  <Text style={{ color: theme.colors.primary, ...theme.typography.bodySm, fontWeight: '600' }}>
+                    {showPickupEditor
+                      ? t('business.availability.hidePickupEditor', { defaultValue: 'Hide pickup time editor' })
+                      : t('business.availability.editPickupTime', { defaultValue: 'Edit pickup time' })}
                   </Text>
                 </TouchableOpacity>
 
@@ -698,8 +698,8 @@ export default function MyBasketsScreen() {
                   borderRadius: theme.radii.r16,
                   padding: 16,
                   marginHorizontal: 16,
-                  marginTop: 20,
-                  marginBottom: 40,
+                  marginTop: 16,
+                  marginBottom: 20,
                   alignItems: 'center',
                 }}
               >

@@ -132,6 +132,10 @@
     "km": "km",
     "newPartner": "New Partner",
     "nearbySpots": "spots nearby",
+    "allSpots": "{{count}} spots available",
+    "noSpots": "No spots found",
+    "locationDeniedHint": "Enable location for nearby results",
+    "expandRadiusHint": "Try increasing the radius filter",
     "otherSpots": "Other spots",
     "locationUnknown": "No location",
     "welcomePopup": {
@@ -245,7 +249,9 @@
     "maybeLater": "Maybe later",
     "nextPickup": "Next Pickup",
     "pickupExpiring": "Pickup ending soon!",
-    "surpriseBag": "Surprise Bag"
+    "surpriseBag": "Surprise Bag",
+    "noUpcoming": "No upcoming orders",
+    "noPast": "No past orders"
   },
   "review": {
     "title": "Leave a Review",
@@ -344,8 +350,8 @@
     }
   },
   "report": {
-    "title": "Report Restaurant",
-    "cta": "Report this restaurant",
+    "title": "Report a Business",
+    "cta": "Report this business",
     "reasonLabel": "Select a reason",
     "reasonPlaceholder": "Select a reason...",
     "detailsLabel": "Additional details (optional)",

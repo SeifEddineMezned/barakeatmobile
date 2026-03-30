@@ -541,7 +541,6 @@ export default function HomeScreen() {
           }} />
         </View>
 
-        {/* Static search bar */}
         <View style={{ paddingHorizontal: theme.spacing.xl }}>
           <View
             style={[
@@ -551,6 +550,7 @@ export default function HomeScreen() {
                 borderRadius: theme.radii.r12,
                 ...theme.shadows.shadowSm,
                 height: 44,
+                alignItems: 'center',
               },
             ]}
           >
@@ -558,13 +558,14 @@ export default function HomeScreen() {
             <TextInput
               style={[
                 styles.searchInput,
-                { color: theme.colors.textPrimary, fontFamily: 'Poppins_400Regular', fontSize: 14, flex: 1 },
+                { color: theme.colors.textPrimary, fontFamily: 'Poppins_400Regular', fontSize: 14, flex: 1, textAlign: 'center' },
               ]}
               placeholder={t('home.searchPlaceholder')}
               placeholderTextColor={theme.colors.muted}
               value={searchQuery}
               onChangeText={setSearchQuery}
               returnKeyType="search"
+              textAlignVertical="center"
             />
             {searchQuery.length > 0 && (
               <TouchableOpacity onPress={() => setSearchQuery('')} style={{ padding: 4 }}>
@@ -683,58 +684,14 @@ export default function HomeScreen() {
               </Text>
             </View>
           ) : (
-            filteredBaskets.map((basket) => {
-              const isAvailable = basket.quantityLeft > 0;
-              // Check if pickup window has ended for today
-              const now = new Date();
-              const endStr = basket.pickupWindow?.end;
-              let isClosed = false;
-              if (endStr) {
-                const [eh, em] = endStr.split(':').map(Number);
-                if (!isNaN(eh) && !isNaN(em)) {
-                  const endDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), eh, em);
-                  isClosed = now > endDate;
-                }
-              }
-              const shouldFade = !isAvailable || isClosed;
-              return (
-                <View
-                  key={basket.id}
-                  style={{ position: 'relative' }}
-                >
-                  <BasketCard
-                    basket={basket}
-                    isFavorite={isBasketFavorite(basket.id)}
-                    onFavoritePress={() => toggleBasketFavorite(basket.id)}
-                  />
-                  {shouldFade && (
-                    <View
-                      pointerEvents="none"
-                      style={{
-                        position: 'absolute',
-                        top: 0,
-                        left: 0,
-                        right: 0,
-                        height: 120,
-                        backgroundColor: 'rgba(255,255,255,0.55)',
-                        borderTopLeftRadius: 16,
-                        borderTopRightRadius: 16,
-                        justifyContent: 'center',
-                        alignItems: 'center',
-                      }}
-                    >
-                      {isClosed && (
-                        <View style={{ backgroundColor: 'rgba(0,0,0,0.6)', borderRadius: 8, paddingHorizontal: 12, paddingVertical: 6 }}>
-                          <Text style={{ color: '#fff', fontSize: 12, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
-                            {t('home.closedToday', { defaultValue: 'Closed for today' })}
-                          </Text>
-                        </View>
-                      )}
-                    </View>
-                  )}
-                </View>
-              );
-            })
+            filteredBaskets.map((basket) => (
+              <BasketCard
+                key={basket.id}
+                basket={basket}
+                isFavorite={isBasketFavorite(basket.id)}
+                onFavoritePress={() => toggleBasketFavorite(basket.id)}
+              />
+            ))
           )}
         </ScrollView>
       </View>

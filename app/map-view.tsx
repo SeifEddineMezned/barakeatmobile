@@ -506,9 +506,20 @@ export default function MapViewScreen() {
             <View style={{ width: 36, height: 4, borderRadius: 2, backgroundColor: theme.colors.divider }} />
           </View>
           <View style={{ paddingHorizontal: 20, paddingBottom: 10, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-            <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3 }}>
-              {nearbyBaskets.length} {t('home.nearbySpots', { defaultValue: 'spots nearby' })}
-            </Text>
+            <View>
+              <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3 }}>
+                {nearbyBaskets.length > 0
+                  ? `${nearbyBaskets.length} ${t('home.nearbySpots', { defaultValue: 'spots nearby' })}`
+                  : t('home.noSpots', { defaultValue: 'No spots in this area' })}
+              </Text>
+              {nearbyBaskets.length === 0 && (
+                <Text style={{ color: theme.colors.muted, fontSize: 11, fontFamily: 'Poppins_400Regular', marginTop: 1 }}>
+                  {locationStatus === 'denied'
+                    ? t('home.locationDeniedHint', { defaultValue: 'Enable location to find spots near you' })
+                    : t('home.expandRadiusHint', { defaultValue: 'Try increasing the radius slider above' })}
+                </Text>
+              )}
+            </View>
             <TouchableOpacity onPress={toggleSheet}>
               <ChevronUp size={20} color={theme.colors.muted} style={{ transform: [{ rotate: isExpanded ? '180deg' : '0deg' }] }} />
             </TouchableOpacity>
@@ -540,6 +551,21 @@ export default function MapViewScreen() {
                 </View>
               </View>
             </TouchableOpacity>
+          ) : nearbyBaskets.length === 0 ? (
+            // Proper empty state — do NOT show restaurants that are outside the radius
+            <View style={{ alignItems: 'center', paddingVertical: 24, paddingHorizontal: 16 }}>
+              <MapPin size={32} color={theme.colors.muted} />
+              <Text style={{ color: theme.colors.textSecondary, ...theme.typography.body, fontWeight: '600', marginTop: 12, textAlign: 'center' }}>
+                {locationsQuery.isLoading
+                  ? t('common.loading')
+                  : t('home.noSpots', { defaultValue: 'No spots in this area' })}
+              </Text>
+              <Text style={{ color: theme.colors.muted, ...theme.typography.caption, marginTop: 6, textAlign: 'center' }}>
+                {locationStatus === 'denied'
+                  ? t('home.locationDeniedHint', { defaultValue: 'Enable location to find spots near you' })
+                  : t('home.expandRadiusHint', { defaultValue: 'Try increasing the radius slider above' })}
+              </Text>
+            </View>
           ) : (
             nearbyBaskets.map((basket) => (
               <TouchableOpacity key={basket.id} onPress={() => router.push(`/basket/${basket.id}` as never)} activeOpacity={0.9} style={{ flexDirection: 'row', padding: 12, backgroundColor: theme.colors.bg, borderRadius: 12, marginBottom: 8 }}>

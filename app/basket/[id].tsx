@@ -212,7 +212,7 @@ export default function BasketDetailsScreen() {
           </TouchableOpacity>
 
           <View style={[styles.heroBottomInfo, { paddingHorizontal: theme.spacing.xl }]}>
-            <View style={[styles.bagsChip, { backgroundColor: theme.colors.primary, borderRadius: theme.radii.r8 }]}>
+            <View style={[styles.bagsChip, { backgroundColor: basket.quantityLeft <= 0 ? theme.colors.error : theme.colors.primary, borderRadius: theme.radii.r8 }]}>
               <ShoppingBag size={13} color="#fff" />
               <Text style={[{ color: '#fff', ...theme.typography.caption, fontWeight: '700' as const, marginLeft: 4 }]}>
                 {basket.quantityLeft} {t('basket.quantity', { count: basket.quantityLeft })}

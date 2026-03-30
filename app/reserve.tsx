@@ -225,8 +225,10 @@ export default function ReserveScreen() {
         // Animate XP bar after confirmed phase renders
         setTimeout(() => {
           const gamData = gamificationQuery.data as any;
-          const currentXp = gamData?.xp ?? 0;
-          const currentLevel = gamData?.level ?? 1;
+          const rawLevel = gamData?.level;
+          const isLevelObject = rawLevel !== null && typeof rawLevel === 'object';
+          const currentLevel: number = isLevelObject ? Number(rawLevel?.level ?? 1) : Number(rawLevel ?? 1);
+          const currentXp: number = isLevelObject ? Number(rawLevel?.xp ?? 0) : Number(gamData?.xp ?? 0);
           const xpGained = (quantity ?? 1) * 10;
           const XP_THRESHOLDS = [0, 50, 120, 210, 320, 450, 600, 800, 1050, 1350, 1700, 2100, 2600, 3200, 3900, 4700, 5600, 6600, 7700, 9000];
           const currentLevelThreshold = XP_THRESHOLDS[currentLevel - 1] ?? 0;
@@ -599,8 +601,17 @@ export default function ReserveScreen() {
                 {/* Level Progress Card */}
                 {(() => {
                   const gamData = gamificationQuery.data as any;
-                  const currentXp = gamData?.xp ?? 0;
-                  const currentLevel = gamData?.level ?? 1;
+
+                  // The API can return `level` as a plain number OR as a nested object
+                  // {level, xp, currentLevelXp, nextLevelXp}. Handle both shapes.
+                  const rawLevel = gamData?.level;
+                  const isLevelObject = rawLevel !== null && typeof rawLevel === 'object';
+                  const currentLevel: number = isLevelObject
+                    ? Number(rawLevel?.level ?? 1)
+                    : Number(rawLevel ?? 1);
+                  const currentXp: number = isLevelObject
+                    ? Number(rawLevel?.xp ?? 0)
+                    : Number(gamData?.xp ?? 0);
                   const xpGained = (quantity ?? 1) * 10;
                   const XP_THRESHOLDS = [0, 50, 120, 210, 320, 450, 600, 800, 1050, 1350, 1700, 2100, 2600, 3200, 3900, 4700, 5600, 6600, 7700, 9000];
                   const currentLevelThreshold = XP_THRESHOLDS[currentLevel - 1] ?? 0;
@@ -679,7 +690,11 @@ export default function ReserveScreen() {
               {/* Level Up Overlay */}
               {showLevelUp && (() => {
                 const gamData = gamificationQuery.data as any;
-                const currentLevel = gamData?.level ?? 1;
+                const rawLevel = gamData?.level;
+                const isLevelObject = rawLevel !== null && typeof rawLevel === 'object';
+                const currentLevel: number = isLevelObject
+                  ? Number(rawLevel?.level ?? 1)
+                  : Number(rawLevel ?? 1);
                 return (
                   <Animated.View style={{
                     position: 'absolute',

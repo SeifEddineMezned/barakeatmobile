@@ -26,6 +26,7 @@ export interface BusinessProfileFromAPI {
   longitude?: number | null;
   total_baskets_sold?: number;
   total_revenue?: number;
+  average_rating?: number;
   organization_id?: number | null;
   reserved_today?: number;
   permissions?: Record<string, unknown> | null;

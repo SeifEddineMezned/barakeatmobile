@@ -1,6 +1,79 @@
 import type { Basket } from '@/src/types';
 import type { RestaurantFromAPI, LocationFromAPI } from '@/src/services/restaurants';
 
+// ── Tunisia coordinate lookup table ──────────────────────────────────────────
+// Used as a fallback when the API does not return GPS coordinates.
+// Keys are lowercase substrings; the FIRST match wins (most-specific first).
+const TN_COORDS: Array<[string, { lat: number; lng: number }]> = [
+  // ── Tunis districts ──────────────────────────────────────
+  ['menzah 9',          { lat: 36.8542, lng: 10.1861 }],
+  ['menzah 8',          { lat: 36.8558, lng: 10.1903 }],
+  ['menzah 7',          { lat: 36.8567, lng: 10.1917 }],
+  ['menzah 6',          { lat: 36.8594, lng: 10.1883 }],
+  ['menzah 5',          { lat: 36.8581, lng: 10.1875 }],
+  ['menzah',            { lat: 36.8581, lng: 10.1875 }],
+  ['el menzah',         { lat: 36.8581, lng: 10.1875 }],
+  ['centre urbain nord',{ lat: 36.8508, lng: 10.2044 }],
+  ['berges du lac',     { lat: 36.8333, lng: 10.2333 }],
+  ['lac 2',             { lat: 36.8400, lng: 10.2500 }],
+  ['lac 1',             { lat: 36.8333, lng: 10.2333 }],
+  ['lac',               { lat: 36.8333, lng: 10.2333 }],
+  ['ennasr',            { lat: 36.8783, lng: 10.2056 }],
+  ['mutuelleville',     { lat: 36.8167, lng: 10.2031 }],
+  ['montplaisir',       { lat: 36.8094, lng: 10.1717 }],
+  ['el manar',          { lat: 36.8419, lng: 10.1986 }],
+  ['el bardo',          { lat: 36.8083, lng: 10.1333 }],
+  ['bardo',             { lat: 36.8083, lng: 10.1333 }],
+  ['tunis',             { lat: 36.8065, lng: 10.1815 }],
+  // ── Greater Tunis suburbs ──────────────────────────────────
+  ['halk el wed',       { lat: 36.7200, lng: 10.3500 }],
+  ['halk elwed',        { lat: 36.7200, lng: 10.3500 }],
+  ['halkelwed',         { lat: 36.7200, lng: 10.3500 }],
+  ['sidi daoud',        { lat: 36.8908, lng: 10.3272 }],
+  ['sidi bou said',     { lat: 36.8706, lng: 10.3403 }],
+  ['gammarth',          { lat: 36.9319, lng: 10.2775 }],
+  ['la marsa',          { lat: 36.8783, lng: 10.3237 }],
+  ['marsa',             { lat: 36.8783, lng: 10.3237 }],
+  ['carthage',          { lat: 36.8528, lng: 10.3244 }],
+  ['la goulette',       { lat: 36.8189, lng: 10.3058 }],
+  ['goulette',          { lat: 36.8189, lng: 10.3058 }],
+  ['el aouina',         { lat: 36.8903, lng: 10.2394 }],
+  ['aouina',            { lat: 36.8903, lng: 10.2394 }],
+  ['soukra',            { lat: 36.9056, lng: 10.2044 }],
+  ['ariana',            { lat: 36.8767, lng: 10.1838 }],
+  ['rades',             { lat: 36.7625, lng: 10.2736 }],
+  ['radès',             { lat: 36.7625, lng: 10.2736 }],
+  ['megrine',           { lat: 36.7614, lng: 10.2239 }],
+  ['mégrine',           { lat: 36.7614, lng: 10.2239 }],
+  ['hammam lif',        { lat: 36.7256, lng: 10.3425 }],
+  ['hammam-lif',        { lat: 36.7256, lng: 10.3425 }],
+  ['ben arous',         { lat: 36.7531, lng: 10.2286 }],
+  ['el mourouj',        { lat: 36.7283, lng: 10.2036 }],
+  ['mourouj',           { lat: 36.7283, lng: 10.2036 }],
+  // ── Other governorates ─────────────────────────────────────
+  ['bizerte',           { lat: 37.2746, lng: 9.8739 }],
+  ['nabeul',            { lat: 36.4678, lng: 10.7347 }],
+  ['hammamet',          { lat: 36.3989, lng: 10.6142 }],
+  ['sousse',            { lat: 35.8256, lng: 10.6400 }],
+  ['monastir',          { lat: 35.7643, lng: 10.8113 }],
+  ['sfax',              { lat: 34.7478, lng: 10.7661 }],
+  ['kairouan',          { lat: 35.6781, lng: 10.0961 }],
+  ['gabes',             { lat: 33.8833, lng: 10.0972 }],
+  ['gabès',             { lat: 33.8833, lng: 10.0972 }],
+  ['gafsa',             { lat: 34.4311, lng: 8.7842 }],
+  ['tozeur',            { lat: 33.9197, lng: 8.1331 }],
+];
+
+/** Extract approximate GPS coordinates from a free-text Tunisian address. */
+function geocodeFromAddress(address: string): { lat: number; lng: number } | null {
+  if (!address) return null;
+  const lower = address.toLowerCase();
+  for (const [key, coords] of TN_COORDS) {
+    if (lower.includes(key)) return coords;
+  }
+  return null;
+}
+
 // Raw shape returned by GET /api/baskets/:id and GET /api/baskets/location/:id
 export interface RawBasketFromAPI {
   id: number | string;
@@ -163,6 +236,16 @@ export function normalizeLocationToBasket(loc: LocationFromAPI): Basket {
     loc.latitude != null && loc.longitude != null &&
     isFinite(Number(loc.latitude)) && isFinite(Number(loc.longitude));
 
+  // Fallback: derive approximate coordinates from address text
+  const fallbackCoords = hasCoords ? null : geocodeFromAddress(loc.address ?? '');
+  const finalHasCoords = hasCoords || fallbackCoords !== null;
+  const finalLat = hasCoords ? Number(loc.latitude) : (fallbackCoords?.lat ?? null as unknown as number);
+  const finalLng = hasCoords ? Number(loc.longitude) : (fallbackCoords?.lng ?? null as unknown as number);
+
+  if (!hasCoords && fallbackCoords) {
+    console.log(`[Geo] Approximated coords for "${loc.display_name ?? loc.name}" from address "${loc.address}":`, fallbackCoords);
+  }
+
   const basketCount = loc.basket_count ?? 0;
 
   return {
@@ -187,9 +270,9 @@ export function normalizeLocationToBasket(loc: LocationFromAPI): Basket {
     quantityTotal: totalBasketQty,
     distance: 0,
     address: loc.address ?? '',
-    latitude: hasCoords ? Number(loc.latitude) : null as unknown as number,
-    longitude: hasCoords ? Number(loc.longitude) : null as unknown as number,
-    hasCoords,
+    latitude: finalLat,
+    longitude: finalLng,
+    hasCoords: finalHasCoords,
     exampleItems: bagDesc ? parseBagDescription(bagDesc) : [],
     coverImageUrl: loc.cover_image_url ?? loc.image_url ?? undefined,
     imageUrl: loc.cover_image_url ?? loc.image_url ?? undefined,

@@ -199,7 +199,7 @@ export default function BusinessDashboard() {
   });
 
   const reviewsQuery = useQuery({
-    queryKey: ['my-reviews'],
+    queryKey: ['my-reviews', selectedLocationId, profileQuery.data?.id],
     queryFn: async () => {
       const profileData = profileQuery.data;
       const restaurantId = profileData?.id;
@@ -225,19 +225,50 @@ export default function BusinessDashboard() {
 
   const isLoading = statsQuery.isLoading && analyticsQuery.isLoading && todayQuery.isLoading && profileQuery.isLoading;
 
+  // Compute average rating from all sources — fall back to reviewsQuery averages
+  // so even a single user review shows the real score instead of '--'
+  const reviewAvg = reviewsQuery.data
+    ? ((reviewsQuery.data.service + reviewsQuery.data.quantite + reviewsQuery.data.qualite + reviewsQuery.data.variete) / 4)
+    : null;
+
   const stats = {
+    // ─ Today ─────────────────────────────────────────────
     totalRevenue: analytics?.summary?.revenue_today ?? statsData?.today_revenue ?? 0,
     totalBasketsSold: analytics?.summary?.baskets_sold_today ?? statsData?.today_baskets ?? 0,
-    pendingOrders: todayOrders.filter((o: any) => o.status === 'confirmed' || o.status === 'reserved' || o.status === 'pending').length,
+    pendingOrders: todayOrders.filter((o: any) => ['confirmed', 'reserved', 'pending'].includes(o.status ?? '')).length,
     mealsRescued: analytics?.summary?.pickups_today ?? 0,
+    // ─ Overview ──────────────────────────────────────────
     activeBaskets: profileQuery.data?.available_quantity ?? 0,
-    averageRating: statsData?.average_rating ?? profileQuery.data?.average_rating ?? 0,
+    averageRating: (statsData?.average_rating && statsData.average_rating > 0)
+      ? statsData.average_rating
+      : ((profileQuery.data?.average_rating && profileQuery.data.average_rating > 0)
+        ? profileQuery.data.average_rating
+        : (reviewAvg ?? 0)),
+    // ─ Monthly totals ─────────────────────────────────────
+    monthlyRevenue: statsData?.monthly_revenue ?? statsData?.total_revenue ?? 0,
+    monthlyBaskets: statsData?.monthly_baskets ?? statsData?.total_completed ?? 0,
+    totalOrders: statsData?.total_reservations ?? 0,
+    totalCompleted: statsData?.total_completed ?? 0,
+    totalCancelled: statsData?.total_cancelled ?? 0,
+    // ─ Weekly chart (baskets + revenue per weekday) ───────
     dailySales: (analytics?.weekly ?? []).map((d: any) => d.baskets_sold ?? 0),
-    dailyLabels: (analytics?.weekly ?? []).map((d: any) => d.dayName ? t(`business.dashboard.days.${d.dayName}`, { defaultValue: d.dayName }) : ''),
-    weeklySales: (analytics?.monthly ?? []).map((m: any) => m.baskets_sold ?? 0),
-    weeklyLabels: (analytics?.monthly ?? []).map((m: any) => m.monthName ? t(`business.dashboard.months.${m.monthName}`, { defaultValue: m.monthName }) : ''),
-    weeklyRevenue: (analytics?.monthly ?? []).map((m: any) => m.revenue ?? 0),
+    dailyRevenue: (analytics?.weekly ?? []).map((d: any) => d.revenue ?? 0),
+    dailyLabels: (analytics?.weekly ?? []).map((d: any) =>
+      d.dayName ? d.dayName.substring(0, 3) : (d.day ?? '')
+    ),
+    // ─ Monthly chart (baskets per month) ─────────────────
+    monthlySales: (analytics?.monthly ?? []).map((m: any) => m.baskets_sold ?? 0),
+    monthlyLabels: (analytics?.monthly ?? []).map((m: any) =>
+      m.monthName ? m.monthName.substring(0, 3) : (m.month ?? '')
+    ),
+    monthlyRevenueArr: (analytics?.monthly ?? []).map((m: any) => m.revenue ?? 0),
+    // ─ Status breakdown ───────────────────────────────────
+    statusConfirmed: analytics?.statusBreakdown?.confirmed ?? 0,
+    statusPickedUp: analytics?.statusBreakdown?.picked_up ?? 0,
+    statusCancelled: analytics?.statusBreakdown?.cancelled ?? 0,
   };
+
+  const weeklyRevenueTotal = stats.dailyRevenue.reduce((a: number, b: number) => a + b, 0);
 
   const [showRatingModal, setShowRatingModal] = useState(false);
 
@@ -507,29 +538,60 @@ export default function BusinessDashboard() {
             <View style={styles.statsRow}>
               <StatMiniCard icon={TrendingUp} value={stats.activeBaskets} label={t('business.dashboard.activeBaskets')} color={theme.colors.primary} theme={theme} />
               <View style={{ width: 10 }} />
-              <StatMiniCard icon={Leaf} value={`${(stats.mealsRescued * 2.5).toFixed(0)} kg`} label={t('business.dashboard.co2Saved')} color={theme.colors.accentFresh} theme={theme} />
+              <StatMiniCard icon={Banknote} value={`${stats.monthlyRevenue} TND`} label="Revenus ce mois" color={theme.colors.accentWarm} theme={theme} />
             </View>
             <View style={[styles.statsRow, { marginTop: 10 }]}>
-              <StatMiniCard icon={Banknote} value={stats.totalRevenue} suffix="TND" label={t('business.dashboard.revenue')} color={theme.colors.accentWarm} theme={theme} />
+              <StatMiniCard icon={ShoppingBag} value={stats.monthlyBaskets} label="Paniers ce mois" color={theme.colors.accentFresh} theme={theme} />
               <View style={{ width: 10 }} />
               <StatMiniCard icon={AlertCircle} value={stats.pendingOrders} label={t('business.dashboard.pendingOrders')} color={theme.colors.error} theme={theme} />
             </View>
           </View>
         </RNAnimated.View>
 
+        {/* ── Order Status Breakdown ── */}
+        {(stats.statusPickedUp > 0 || stats.statusConfirmed > 0 || stats.statusCancelled > 0) && (
+          <View style={{ paddingHorizontal: theme.spacing.xl, marginTop: theme.spacing.lg }}>
+            <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, marginBottom: theme.spacing.md }]}>
+              {'Statut des commandes'}
+            </Text>
+            <View style={{ flexDirection: 'row' }}>
+              <View style={{ flex: 1, backgroundColor: '#16a34a12', borderRadius: theme.radii.r12, padding: 14, alignItems: 'center', borderWidth: 1, borderColor: '#16a34a30', marginRight: 6 }}>
+                <Text style={{ color: '#16a34a', fontSize: 22, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>{`${stats.statusPickedUp}`}</Text>
+                <Text style={{ color: '#16a34a', fontSize: 10, fontFamily: 'Poppins_400Regular', marginTop: 2, textAlign: 'center' }}>{'Récupérés'}</Text>
+              </View>
+              <View style={{ flex: 1, backgroundColor: theme.colors.primary + '12', borderRadius: theme.radii.r12, padding: 14, alignItems: 'center', borderWidth: 1, borderColor: theme.colors.primary + '30', marginRight: 6 }}>
+                <Text style={{ color: theme.colors.primary, fontSize: 22, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>{`${stats.statusConfirmed}`}</Text>
+                <Text style={{ color: theme.colors.primary, fontSize: 10, fontFamily: 'Poppins_400Regular', marginTop: 2, textAlign: 'center' }}>{'Confirmés'}</Text>
+              </View>
+              <View style={{ flex: 1, backgroundColor: theme.colors.error + '12', borderRadius: theme.radii.r12, padding: 14, alignItems: 'center', borderWidth: 1, borderColor: theme.colors.error + '30' }}>
+                <Text style={{ color: theme.colors.error, fontSize: 22, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>{`${stats.statusCancelled}`}</Text>
+                <Text style={{ color: theme.colors.error, fontSize: 10, fontFamily: 'Poppins_400Regular', marginTop: 2, textAlign: 'center' }}>{'Annulés'}</Text>
+              </View>
+            </View>
+          </View>
+        )}
+
+        {/* ── Sales This Week (Line Chart) ── */}
         <View style={[styles.chartSection, { paddingHorizontal: theme.spacing.xl, marginTop: theme.spacing.xxl }]}>
-          <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, marginBottom: theme.spacing.md }]}>
-            {t('business.dashboard.salesChart')}
-          </Text>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: theme.spacing.md }}>
+            <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3 }]}>
+              {'Ventes cette semaine'}
+            </Text>
+            {weeklyRevenueTotal > 0 && (
+              <Text style={{ color: theme.colors.accentWarm, fontSize: 12, fontFamily: 'Poppins_600SemiBold' }}>
+                {`${weeklyRevenueTotal.toFixed(0)} TND`}
+              </Text>
+            )}
+          </View>
           <View style={[styles.chartCard, { backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, padding: theme.spacing.lg, ...theme.shadows.shadowSm }]}>
             <View style={styles.chartLegend}>
               <View style={styles.legendItem}>
                 <View style={[styles.legendDot, { backgroundColor: theme.colors.primary }]} />
-                <Text style={[{ color: theme.colors.muted, fontSize: 10, fontFamily: 'Poppins_400Regular' }]}>{t('business.dashboard.salesLegend')}</Text>
+                <Text style={[{ color: theme.colors.muted, fontSize: 10, fontFamily: 'Poppins_400Regular' }]}>{'Paniers vendus / jour'}</Text>
               </View>
             </View>
             <View style={{ alignItems: 'center' }}>
-              {stats.dailySales.length > 0 ? (
+              {stats.dailySales.length > 0 && stats.dailySales.some((v: number) => v > 0) ? (
                 <LineChart
                   data={stats.dailySales}
                   labels={stats.dailyLabels}
@@ -540,8 +602,9 @@ export default function BusinessDashboard() {
                 />
               ) : (
                 <View style={{ height: 150, justifyContent: 'center', alignItems: 'center' }}>
-                  <Text style={{ color: theme.colors.muted, fontSize: 12, fontFamily: 'Poppins_400Regular' }}>
-                    {t('business.dashboard.noData', { defaultValue: 'No data available yet' })}
+                  <ShoppingBag size={28} color={theme.colors.divider} />
+                  <Text style={{ color: theme.colors.muted, fontSize: 12, fontFamily: 'Poppins_400Regular', marginTop: 8 }}>
+                    {'Pas encore de ventes cette semaine'}
                   </Text>
                 </View>
               )}
@@ -549,33 +612,46 @@ export default function BusinessDashboard() {
           </View>
         </View>
 
+        {/* ── Monthly Performance (Bar Chart) ── */}
         <View style={[styles.chartSection, { paddingHorizontal: theme.spacing.xl, marginTop: theme.spacing.lg }]}>
-          <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, marginBottom: theme.spacing.md }]}>
-            {t('business.dashboard.avgSalesChart')}
-          </Text>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: theme.spacing.md }}>
+            <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3 }]}>
+              {'Performance mensuelle'}
+            </Text>
+            {stats.monthlyBaskets > 0 && (
+              <Text style={{ color: theme.colors.accentFresh, fontSize: 12, fontFamily: 'Poppins_600SemiBold' }}>
+                {`${stats.monthlyBaskets} paniers`}
+              </Text>
+            )}
+          </View>
           <View style={[styles.chartCard, { backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, padding: theme.spacing.lg, ...theme.shadows.shadowSm }]}>
             <View style={styles.chartLegend}>
               <View style={styles.legendItem}>
                 <View style={[styles.legendDot, { backgroundColor: theme.colors.primary }]} />
-                <Text style={[{ color: theme.colors.muted, fontSize: 10, fontFamily: 'Poppins_400Regular' }]}>{t('business.dashboard.basketsLegend')}</Text>
-              </View>
-              <View style={[styles.legendItem, { marginLeft: 12 }]}>
-                <View style={[styles.legendDot, { backgroundColor: theme.colors.secondary }]} />
-                <Text style={[{ color: theme.colors.muted, fontSize: 10, fontFamily: 'Poppins_400Regular' }]}>{t('business.dashboard.revenueLegend')}</Text>
+                <Text style={[{ color: theme.colors.muted, fontSize: 10, fontFamily: 'Poppins_400Regular' }]}>{'Paniers / mois'}</Text>
               </View>
             </View>
-            {stats.weeklySales.length > 0 ? (
+            {stats.monthlySales.length > 0 ? (
               <SimpleBarChart
-                data={stats.weeklySales}
-                labels={stats.weeklyLabels}
+                data={stats.monthlySales}
+                labels={stats.monthlyLabels}
                 color={theme.colors.primary}
-                stackData={stats.weeklyRevenue}
-                stackColor={theme.colors.secondary}
               />
             ) : (
               <View style={{ height: 120, justifyContent: 'center', alignItems: 'center' }}>
-                <Text style={{ color: theme.colors.muted, fontSize: 12, fontFamily: 'Poppins_400Regular' }}>
-                  {t('business.dashboard.noData', { defaultValue: 'No data available yet' })}
+                <TrendingUp size={28} color={theme.colors.divider} />
+                <Text style={{ color: theme.colors.muted, fontSize: 12, fontFamily: 'Poppins_400Regular', marginTop: 8 }}>
+                  {'Pas encore de données mensuelles'}
+                </Text>
+              </View>
+            )}
+            {stats.monthlySales.length > 0 && stats.monthlyRevenue > 0 && (
+              <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 10, borderTopWidth: 1, borderTopColor: theme.colors.divider, paddingTop: 8 }}>
+                <Text style={{ color: theme.colors.textSecondary, fontSize: 11, fontFamily: 'Poppins_400Regular' }}>
+                  {'Revenus ce mois:\u00A0'}
+                </Text>
+                <Text style={{ color: theme.colors.accentWarm, fontSize: 11, fontFamily: 'Poppins_600SemiBold' }}>
+                  {`${stats.monthlyRevenue.toFixed(0)} TND`}
                 </Text>
               </View>
             )}

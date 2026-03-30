@@ -30,8 +30,8 @@
     "seeMore": "...voir plus",
     "and": "et",
     "screenNotFound": "Cette page n'existe pas.",
-    "goHome": "Retour a l'accueil",
-    "errorOccurredDesc": "Une erreur inattendue s'est produite. Veuillez reessayer."
+    "goHome": "Retour à l'accueil",
+    "errorOccurredDesc": "Une erreur inattendue s'est produite. Veuillez réessayer."
   },
   "onboarding": {
     "slide1": {
@@ -98,17 +98,17 @@
     "or": "ou",
     "agreeToThe": "J'accepte les ",
     "termsOfService": "Conditions d'utilisation",
-    "privacyPolicy": "Politique de confidentialite"
+    "privacyPolicy": "Politique de confidentialité"
   },
   "address": {
     "addresses": "Adresses",
     "addNew": "Ajouter une adresse",
-    "saved": "Adresses enregistrees",
+    "saved": "Adresses enregistrées",
     "chooseLocation": "Choisir un emplacement",
-    "moveMapPin": "Deplacez la carte pour positionner le repere",
+    "moveMapPin": "Déplacez la carte pour positionner le repère",
     "confirmLocation": "Confirmer l'emplacement",
     "labelPlace": "Nommer cet endroit",
-    "customNamePlaceholder": "Ou entrez un nom personnalise...",
+    "customNamePlaceholder": "Ou entrez un nom personnalisé...",
     "save": "Enregistrer l'adresse"
   },
   "home": {
@@ -132,6 +132,10 @@
     "km": "km",
     "newPartner": "Nouveau Partenaire",
     "nearbySpots": "spots à proximité",
+    "allSpots": "{{count}} spots disponibles",
+    "noSpots": "Aucun endroit trouvé",
+    "locationDeniedHint": "Activez la localisation pour voir les résultats proches",
+    "expandRadiusHint": "Essayez d'augmenter le rayon de recherche",
     "otherSpots": "Autres spots",
     "locationUnknown": "Pas de localisation",
     "welcomePopup": {
@@ -245,7 +249,9 @@
     "maybeLater": "Plus tard",
     "nextPickup": "Prochain retrait",
     "pickupExpiring": "Retrait bientôt terminé !",
-    "surpriseBag": "Panier Surprise"
+    "surpriseBag": "Panier Surprise",
+    "noUpcoming": "Aucune commande à venir",
+    "noPast": "Aucune commande passée"
   },
   "review": {
     "title": "Laisser un avis",
@@ -396,9 +402,9 @@
     "notif_message_pickup_confirmed": "Votre retrait chez {{restaurant}} a été confirmé ! Évaluez votre expérience ?",
     "notif_message_review_received": "Un client vous a laissé un avis",
     "pickupStartsTitle": "C'est l'heure du retrait !",
-    "pickupStartsBody": "Votre commande est prete a etre recuperee.",
-    "pickupEndingSoonTitle": "Retrait bientot termine !",
-    "pickupEndingSoonBody": "Votre creneau de retrait se termine dans 30 minutes.",
+    "pickupStartsBody": "Votre commande est prête à être récupérée.",
+    "pickupEndingSoonTitle": "Retrait bientôt terminé !",
+    "pickupEndingSoonBody": "Votre créneau de retrait se termine dans 30 minutes.",
     "favoriteNewBasket": "Nouveau panier disponible !",
     "favoriteNewBasketBody": "Un de vos commerces favoris a un panier disponible aujourd'hui."
   },
@@ -741,7 +747,7 @@
     "you": "Vous",
     "showAll": "Voir le classement complet",
     "showLess": "Voir moins",
-    "levelUp": "Niveau superieur !",
+    "levelUp": "Niveau supérieur !",
     "levelUpDesc": "Vous avez atteint le niveau {{level}} !"
   },
   "streak": {

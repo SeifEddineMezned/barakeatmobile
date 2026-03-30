@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Animated, Image, ActivityIndicator, Linking } from 'react-native';
 import { useTranslation } from 'react-i18next';
-import { MapPin, Clock, Navigation, X as XIcon, QrCode, Star, ChevronDown, ChevronUp } from 'lucide-react-native';
+import { MapPin, Clock, Navigation, X as XIcon, QrCode, Star, ChevronDown, ChevronUp, ShoppingBag } from 'lucide-react-native';
 import { useRouter } from 'expo-router';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import type { ReservationFromAPI } from '@/src/services/reservations';
@@ -14,6 +14,86 @@ interface ReservationCardProps {
   overrideExpired?: boolean;
 }
 
+// ---------------------------------------------------------------------------
+// Data-mapping helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolve the merchant / business name from the raw reservation object.
+ * Priority: top-level restaurant_name → basket.merchantName → basket.merchant_name
+ *            → restaurant.name → org_name → 'Unknown'
+ */
+function resolveMerchantName(r: any): string {
+  return (
+    r.restaurant_name ??
+    r.basket?.merchantName ??
+    r.basket?.merchant_name ??
+    r.restaurant?.name ??
+    r.org_name ??
+    ''
+  );
+}
+
+/**
+ * Resolve the basket TYPE name (the value that identifies what kind of basket
+ * this reservation is for — e.g. "Panier Surprise Boulangerie").
+ *
+ * Priority: basket.name → basket.basket_type_name → basket.type_name
+ *           → basket.basket_name → top-level basket_name / name
+ *           → fallback to translation key
+ */
+function resolveBasketTypeName(r: any, t: (key: string) => string): string {
+  return (
+    r.basket?.name ??
+    r.basket?.basket_type_name ??
+    r.basket?.type_name ??
+    r.basket?.basket_name ??
+    r.basket_name ??
+    r.basket_type_name ??
+    r.name ??
+    t('orders.surpriseBag')
+  );
+}
+
+/**
+ * Resolve the pickup window from the raw reservation object.
+ */
+function resolvePickupWindow(
+  reservation: ReservationFromAPI
+): { start: string; end: string } | null {
+  const r = reservation as any;
+
+  if (reservation.pickupWindow?.start && reservation.pickupWindow?.end) {
+    return {
+      start: reservation.pickupWindow.start.substring(0, 5),
+      end: reservation.pickupWindow.end.substring(0, 5),
+    };
+  }
+  if (reservation.basket?.pickupWindow?.start && reservation.basket?.pickupWindow?.end) {
+    return {
+      start: reservation.basket.pickupWindow.start.substring(0, 5),
+      end: reservation.basket.pickupWindow.end.substring(0, 5),
+    };
+  }
+  if (r.pickup_start_time && r.pickup_end_time) {
+    return {
+      start: String(r.pickup_start_time).substring(0, 5),
+      end: String(r.pickup_end_time).substring(0, 5),
+    };
+  }
+  if (reservation.basket?.pickup_start_time && reservation.basket?.pickup_end_time) {
+    return {
+      start: String(reservation.basket.pickup_start_time).substring(0, 5),
+      end: String(reservation.basket.pickup_end_time).substring(0, 5),
+    };
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// Component
+// ---------------------------------------------------------------------------
+
 export function ReservationCard({ reservation, onCancel, onHide: _onHide, overrideExpired }: ReservationCardProps) {
   const { t } = useTranslation();
   const theme = useTheme();
@@ -24,19 +104,34 @@ export function ReservationCard({ reservation, onCancel, onHide: _onHide, overri
   const [qrLoading, setQrLoading] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
 
-  const basket = reservation.basket;
   const r = reservation as any;
-  const merchantName = r.restaurant_name ?? basket?.merchantName ?? (basket as any)?.merchant_name ?? 'Unknown';
-  const basketName = basket?.name ?? r.basket_name ?? r.name ?? t('orders.surpriseBag', { defaultValue: 'Panier Surprise' });
-  const address = r.restaurant_address ?? basket?.address ?? '';
-  const pickupWindow = reservation.pickupWindow ?? basket?.pickupWindow ?? (r.pickup_start_time && r.pickup_end_time ? { start: r.pickup_start_time.substring(0, 5), end: r.pickup_end_time.substring(0, 5) } : null);
-  const pickupCode = reservation.pickupCode ?? (reservation as any)?.pickup_code ?? reservation.id?.substring(0, 6)?.toUpperCase() ?? '';
+  const basket = reservation.basket;
+
+  // Resolved display values
+  const merchantName = resolveMerchantName(r);
+  const basketTypeName = resolveBasketTypeName(r, t);
+  const address = r.restaurant_address ?? basket?.address ?? r.restaurant?.address ?? '';
+  const pickupWindow = resolvePickupWindow(reservation);
+  const pickupCode =
+    reservation.pickupCode ??
+    r.pickup_code ??
+    (typeof reservation.id === 'string' ? reservation.id.substring(0, 6).toUpperCase() : '');
   const quantity = reservation.quantity ?? 1;
-  const total = reservation.total ?? (r.price_tier ? Number(r.price_tier) * (reservation.quantity ?? 1) : 0);
+  const total: number =
+    reservation.total ??
+    (r.total_price ? Number(r.total_price) : null) ??
+    (r.price_tier ? Number(r.price_tier) * quantity : 0);
   const rawStatus = (reservation.status ?? 'reserved').toLowerCase();
   const status = overrideExpired ? 'expired' : rawStatus;
   const latitude = basket?.latitude ?? (basket as any)?.lat ?? 0;
   const longitude = basket?.longitude ?? (basket as any)?.lng ?? 0;
+
+  // Order date
+  const orderDate: Date | null = r.pickup_date
+    ? new Date(r.pickup_date)
+    : r.created_at
+    ? new Date(r.created_at)
+    : null;
 
   const handlePress = () => {
     Animated.sequence([
@@ -97,6 +192,7 @@ export function ReservationCard({ reservation, onCancel, onHide: _onHide, overri
   const getStatusLabel = () => {
     const key = `orders.status.${status}`;
     const translated = t(key);
+    // If key is not found, i18next returns the key itself — fall back to capitalized status
     if (translated === key) {
       return status.charAt(0).toUpperCase() + status.slice(1);
     }
@@ -127,12 +223,12 @@ export function ReservationCard({ reservation, onCancel, onHide: _onHide, overri
       const diff = Math.round((startDate.getTime() - now.getTime()) / 60000);
       const h = Math.floor(diff / 60);
       const m = diff % 60;
-      return { label: t('orders.startsIn', { defaultValue: 'Starts in' }), time: h > 0 ? `${h}h ${m}m` : `${m}m`, color: theme.colors.primary };
+      return { label: t('orders.startsIn'), time: h > 0 ? `${h}h ${m}m` : `${m}m`, color: theme.colors.primary };
     } else if (now <= endDate) {
       const diff = Math.round((endDate.getTime() - now.getTime()) / 60000);
-      return { label: t('orders.endsIn', { defaultValue: 'Ends in' }), time: `${diff}m`, color: diff < 15 ? theme.colors.error : theme.colors.accentWarm };
+      return { label: t('orders.endsIn'), time: `${diff}m`, color: diff < 15 ? theme.colors.error : theme.colors.accentWarm };
     } else {
-      return { label: t('orders.pickupEnded', { defaultValue: 'Pickup ended' }), time: '', color: theme.colors.muted };
+      return { label: t('orders.pickupEnded'), time: '', color: theme.colors.muted };
     }
   })();
 
@@ -154,40 +250,74 @@ export function ReservationCard({ reservation, onCancel, onHide: _onHide, overri
       {/* Collapsed header — always visible */}
       <TouchableOpacity onPress={handlePress} activeOpacity={0.85}>
         <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-          <View style={{ flex: 1 }}>
-            <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.body, fontWeight: '600' as const }]} numberOfLines={1}>
-              {merchantName}
-            </Text>
-            {basketName ? (
-              <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, marginTop: 2 }]} numberOfLines={1}>
-                {basketName} × {quantity}{total > 0 ? ` · ${total} TND` : ''}
-              </Text>
-            ) : null}
-            {(r.created_at || r.pickup_date) && (
-              <Text style={[{ color: theme.colors.muted, ...theme.typography.caption, marginTop: 1, fontSize: 10 }]}>
-                {new Date(r.pickup_date ?? r.created_at).toLocaleDateString()}
-                {pickupWindow ? ` · ${pickupWindow.start?.substring(0, 5)} – ${pickupWindow.end?.substring(0, 5)}` : ''}
-              </Text>
-            )}
-            {pickupInfo && (
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 4 }}>
-                <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: pickupInfo.color }} />
-                <Text style={{ color: pickupInfo.color, ...theme.typography.caption, fontWeight: '600' }}>
-                  {pickupInfo.label} {pickupInfo.time}
-                </Text>
-              </View>
-            )}
-          </View>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          {/* Left: basket icon + text */}
+          <View style={{ flexDirection: 'row', alignItems: 'flex-start', flex: 1, gap: 10 }}>
+            {/* Basket type icon */}
             <View
-              style={[
-                {
-                  backgroundColor: getStatusColor() + '20',
-                  borderRadius: theme.radii.r8,
-                  paddingHorizontal: theme.spacing.sm,
-                  paddingVertical: 3,
-                },
-              ]}
+              style={{
+                width: 40,
+                height: 40,
+                borderRadius: 10,
+                backgroundColor: theme.colors.primary + '15',
+                alignItems: 'center',
+                justifyContent: 'center',
+                marginTop: 2,
+              }}
+            >
+              <ShoppingBag size={18} color={theme.colors.primary} />
+            </View>
+
+            <View style={{ flex: 1 }}>
+              {/* Basket type name — PRIMARY info */}
+              <Text
+                style={[{ color: theme.colors.textPrimary, ...theme.typography.body, fontWeight: '700' as const }]}
+                numberOfLines={1}
+              >
+                {basketTypeName}
+              </Text>
+
+              {/* Merchant name — SECONDARY info */}
+              {merchantName ? (
+                <Text
+                  style={[{ color: theme.colors.textSecondary, ...theme.typography.bodySm, marginTop: 1 }]}
+                  numberOfLines={1}
+                >
+                  {merchantName}
+                </Text>
+              ) : null}
+
+              {/* Quantity · Price */}
+              <Text style={[{ color: theme.colors.muted, ...theme.typography.caption, marginTop: 2 }]}>
+                ×{quantity}{total > 0 ? ` · ${total} TND` : ''}
+                {orderDate
+                  ? `  ·  ${orderDate.toLocaleDateString()}`
+                  : ''}
+                {pickupWindow
+                  ? `  ·  ${pickupWindow.start}–${pickupWindow.end}`
+                  : ''}
+              </Text>
+
+              {/* Live countdown pill */}
+              {pickupInfo ? (
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 4 }}>
+                  <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: pickupInfo.color }} />
+                  <Text style={{ color: pickupInfo.color, ...theme.typography.caption, fontWeight: '600' }}>
+                    {pickupInfo.label} {pickupInfo.time}
+                  </Text>
+                </View>
+              ) : null}
+            </View>
+          </View>
+
+          {/* Right: status badge + chevron */}
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginLeft: 8 }}>
+            <View
+              style={{
+                backgroundColor: getStatusColor() + '20',
+                borderRadius: theme.radii.r8,
+                paddingHorizontal: theme.spacing.sm,
+                paddingVertical: 3,
+              }}
             >
               <Text style={[{ color: getStatusColor(), ...theme.typography.caption, fontWeight: '600' as const }]}>
                 {getStatusLabel()}
@@ -210,7 +340,7 @@ export function ReservationCard({ reservation, onCancel, onHide: _onHide, overri
               <View style={[styles.row, { marginBottom: theme.spacing.md }]}>
                 <Clock size={16} color={theme.colors.textSecondary} />
                 <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.bodySm, marginLeft: theme.spacing.sm }]}>
-                  {pickupWindow.start} - {pickupWindow.end}
+                  {pickupWindow.start} – {pickupWindow.end}
                 </Text>
               </View>
             )}
@@ -341,16 +471,19 @@ export function ReservationCard({ reservation, onCancel, onHide: _onHide, overri
                     ]}
                     onPress={() => {
                       const lid = String(r.location_id ?? r.restaurant_id ?? basket?.merchantId ?? '');
-                      router.push({ pathname: '/review', params: {
-                        reservationId: String(reservation.id),
-                        locationId: lid,
-                        locationName: merchantName,
-                        locationLogo: r.restaurant?.image_url ?? r.restaurant_image ?? r.org_image_url ?? '',
-                        basketImage: basket?.image_url ?? (basket as any)?.imageUrl ?? (basket as any)?.cover_image_url ?? '',
-                        basketName,
-                        quantity: String(quantity),
-                        total: String(total),
-                      }} as never);
+                      router.push({
+                        pathname: '/review',
+                        params: {
+                          reservationId: String(reservation.id),
+                          locationId: lid,
+                          locationName: merchantName,
+                          locationLogo: r.restaurant?.image_url ?? r.restaurant_image ?? r.org_image_url ?? '',
+                          basketImage: basket?.image_url ?? (basket as any)?.imageUrl ?? (basket as any)?.cover_image_url ?? '',
+                          basketName: basketTypeName,
+                          quantity: String(quantity),
+                          total: String(total),
+                        },
+                      } as never);
                     }}
                   >
                     <Star size={14} color="#fff" fill="#fff" />
@@ -372,15 +505,6 @@ export function ReservationCard({ reservation, onCancel, onHide: _onHide, overri
 
 const styles = StyleSheet.create({
   card: {},
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-  },
-  headerLeft: {
-    flex: 1,
-  },
-  statusBadge: {},
   divider: {
     height: 1,
   },

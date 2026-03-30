@@ -58,6 +58,8 @@ export interface LocationFromAPI {
   latitude?: number | null;
   longitude?: number | null;
   organization_id?: number | null;
+  /** Organization (business) name — shared across all locations */
+  org_name?: string | null;
   reserved_today?: number;
   available_left?: number;
   pickup_expired?: boolean;
@@ -66,6 +68,7 @@ export interface LocationFromAPI {
   min_basket_price?: number | null;
   created_at?: string;
   updated_at?: string;
+  /** description comes from organizations table — shared across all locations of the same business */
 }
 
 export async function fetchLocations(): Promise<LocationFromAPI[]> {
@@ -73,8 +76,63 @@ export async function fetchLocations(): Promise<LocationFromAPI[]> {
   try {
     const res = await apiClient.get<LocationFromAPI[]>('/api/locations');
     const data = res.data;
-    const locations = Array.isArray(data) ? data : [];
-    console.log('[Locations] Fetched', locations.length, 'locations');
+    const raw = Array.isArray(data) ? data : [];
+
+    // Debug: print first location to verify coordinate field names from the API
+    if (raw.length > 0) {
+      const sample = raw[0] as any;
+      console.log('[Locations] Sample location fields:', JSON.stringify({
+        id: sample.id,
+        name: sample.name ?? sample.display_name,
+        latitude: sample.latitude,
+        longitude: sample.longitude,
+        lat: sample.lat,
+        lng: sample.lng,
+        gps_lat: sample.gps_lat,
+        gps_lng: sample.gps_lng,
+        location: sample.location,
+        coordinates: sample.coordinates,
+      }));
+    }
+
+    // Normalize: ensure latitude/longitude are present regardless of API field naming
+    const locations: LocationFromAPI[] = raw.map((loc: any) => {
+      // Try every common coordinate field naming convention
+      const rawLat =
+        loc.latitude ??
+        loc.lat ??
+        loc.gps_lat ??
+        loc.location?.latitude ??
+        loc.location?.lat ??
+        loc.coordinates?.latitude ??
+        loc.coordinates?.lat ??
+        loc.geo?.lat ??
+        null;
+
+      const rawLng =
+        loc.longitude ??
+        loc.lng ??
+        loc.gps_lng ??
+        loc.gps_long ??
+        loc.location?.longitude ??
+        loc.location?.lng ??
+        loc.coordinates?.longitude ??
+        loc.coordinates?.lng ??
+        loc.geo?.lng ??
+        null;
+
+      const lat = rawLat != null && rawLat !== '' ? Number(rawLat) : null;
+      const lng = rawLng != null && rawLng !== '' ? Number(rawLng) : null;
+
+      return {
+        ...loc,
+        latitude: lat,
+        longitude: lng,
+      } as LocationFromAPI;
+    });
+
+    const withCoords = locations.filter((l) => l.latitude != null && isFinite(l.latitude!));
+    console.log('[Locations] Fetched', locations.length, 'locations,', withCoords.length, 'have GPS coordinates');
     return locations;
   } catch (err: unknown) {
     const errObj = err as any;
@@ -82,6 +140,7 @@ export async function fetchLocations(): Promise<LocationFromAPI[]> {
     throw err;
   }
 }
+
 
 export async function fetchLocationById(id: string | number): Promise<LocationFromAPI> {
   console.log('[Locations] Fetching location:', id);

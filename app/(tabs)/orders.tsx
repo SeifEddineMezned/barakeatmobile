@@ -307,8 +307,28 @@ export default function OrdersScreen() {
 
   const moneySaved = useMemo(() => completedReservations.reduce((sum, r) => {
     const rr = r as any;
-    const orig = Number(r.basket?.originalPrice ?? rr.original_price ?? rr.basket?.original_price ?? 0);
-    const disc = Number(r.basket?.discountedPrice ?? rr.price_tier ?? rr.basket?.discounted_price ?? rr.basket?.selling_price ?? 0);
+
+    // Original (full) price — check basket, then restaurant sub-object, then reservation top level
+    const orig = Number(
+      r.basket?.originalPrice ??
+      rr.basket?.original_price ??
+      rr.restaurant?.original_price ??   // ← API stores original_price here
+      rr.original_price ??
+      0
+    );
+
+    // Discounted (paid) price — check basket, then restaurant sub-object, then reservation top level / total
+    const disc = Number(
+      r.basket?.discountedPrice ??
+      rr.basket?.price_tier ??
+      rr.basket?.discounted_price ??
+      rr.basket?.selling_price ??
+      rr.restaurant?.price_tier ??       // ← API stores selling price here
+      rr.price_tier ??
+      r.total ??                         // total paid is the discounted price
+      0
+    );
+
     const saving = orig > 0 && disc > 0 ? (orig - disc) : 0;
     return sum + saving * (r.quantity ?? 1);
   }, 0), [completedReservations]);
@@ -419,17 +439,17 @@ export default function OrdersScreen() {
         <View style={{ flex: 1, justifyContent: 'flex-start', alignItems: 'center', paddingTop: 100, paddingHorizontal: 32 }}>
           <ShoppingBag size={48} color={theme.colors.muted} />
           <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h2, marginTop: 24, textAlign: 'center' }}>
-            {t('orders.emptyTitle', { defaultValue: 'No orders yet' })}
+            {t('orders.emptyTitle')}
           </Text>
           <Text style={{ color: theme.colors.textSecondary, ...theme.typography.body, marginTop: 12, textAlign: 'center', lineHeight: 22 }}>
-            {t('orders.emptyDesc', { defaultValue: 'Start saving food and money by reserving a surprise bag!' })}
+            {t('orders.emptyDesc')}
           </Text>
           <TouchableOpacity
             onPress={() => router.push('/(tabs)' as never)}
             style={{ backgroundColor: theme.colors.primary, borderRadius: theme.radii.r16, paddingVertical: 16, paddingHorizontal: 40, marginTop: 32 }}
           >
             <Text style={{ color: '#fff', ...theme.typography.button }}>
-              {t('orders.findBasket', { defaultValue: 'Find a Surprise Bag' })}
+              {t('orders.findBasket')}
             </Text>
           </TouchableOpacity>
         </View>
@@ -557,13 +577,13 @@ export default function OrdersScreen() {
                 </View>
                 <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3, textAlign: 'center' }}>
                   {activeTab === 'upcoming'
-                    ? t('orders.emptyTitle', { defaultValue: 'No upcoming orders' })
-                    : t('orders.emptyState', { defaultValue: 'No past orders' })}
+                    ? t('orders.noUpcoming')
+                    : t('orders.noPast')}
                 </Text>
                 <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm, textAlign: 'center', marginTop: 8, lineHeight: 20 }}>
                   {activeTab === 'upcoming'
-                    ? t('orders.emptyDesc', { defaultValue: 'Reserve a surprise bag to save food and money!' })
-                    : t('orders.emptyPastDesc', { defaultValue: 'Your completed and cancelled orders will appear here.' })}
+                    ? t('orders.emptyDesc')
+                    : t('orders.emptyPastDesc')}
                 </Text>
                 <TouchableOpacity
                   onPress={() => router.push('/(tabs)' as never)}
@@ -576,7 +596,7 @@ export default function OrdersScreen() {
                   }}
                 >
                   <Text style={{ color: '#fff', ...theme.typography.button }}>
-                    {t('orders.findBasket', { defaultValue: 'Find a Surprise Bag' })}
+                    {t('orders.findBasket')}
                   </Text>
                 </TouchableOpacity>
               </View>

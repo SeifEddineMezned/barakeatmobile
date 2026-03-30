@@ -51,8 +51,27 @@ export interface CommunityDonation {
 export async function fetchGamificationStats(): Promise<GamificationStats> {
   console.log('[Gamification] Fetching stats');
   const res = await apiClient.get<GamificationStats | { data: GamificationStats }>('/api/gamification/stats');
-  const data = res.data;
-  if (data && typeof data === 'object' && 'data' in data && !('current_streak' in data)) return (data as any).data;
+  let data = res.data as any;
+
+  // Unwrap { data: ... } envelope if present
+  if (data && typeof data === 'object' && 'data' in data && !('current_streak' in data)) {
+    data = data.data;
+  }
+
+  // Normalize: API sometimes returns `level` as a nested object
+  // { level, xp, currentLevelXp, nextLevelXp } instead of a plain number.
+  // Flatten it so all consumers always receive plain numeric fields.
+  if (data && typeof data.level === 'object' && data.level !== null) {
+    const levelObj = data.level as any;
+    data = {
+      ...data,
+      level: Number(levelObj.level ?? 1),
+      xp: Number(levelObj.xp ?? data.xp ?? 0),
+      currentLevelXp: Number(levelObj.currentLevelXp ?? 0),
+      nextLevelXp: Number(levelObj.nextLevelXp ?? 0),
+    };
+  }
+
   return data as GamificationStats;
 }
 

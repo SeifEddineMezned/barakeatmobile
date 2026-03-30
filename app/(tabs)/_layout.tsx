@@ -201,8 +201,8 @@ export default function TabLayout() {
 
   const heroVisible = useHeroStore((s) => s.heroVisible);
   const isSearchTab = activeIndex === 0;
-  const headerIconColor = isSearchTab && heroVisible ? '#e3ff5c' : theme.colors.textPrimary;
-  const headerBrandColor = isSearchTab && heroVisible ? '#e3ff5c' : theme.colors.primary;
+  const headerIconColor = '#FFFFFF';
+  const headerBrandColor = '#FFFFFF';
 
   // Guard: business accounts must not see the customer flow
   React.useEffect(() => {
@@ -313,7 +313,7 @@ export default function TabLayout() {
         headerShown: true,
         headerTitle: '',
         headerShadowVisible: false,
-        headerStyle: { backgroundColor: theme.colors.bg },
+        headerStyle: { backgroundColor: theme.colors.primary },
         headerLeft: headerBrand,
         headerRight: headerRight,
       }}
@@ -374,7 +374,7 @@ export default function TabLayout() {
                 position: 'absolute',
                 width: tabWidth - 12,
                 height: 44,
-                backgroundColor: theme.colors.primary + '12',
+                backgroundColor: theme.colors.primary,
                 borderRadius: 22,
                 left: 6,
                 transform: [{ translateX: glassAnim }],
@@ -387,9 +387,9 @@ export default function TabLayout() {
               // Derive isFocused from route NAME, not from filtered array index,
               // so it's always correct regardless of how 'nearby' shifts raw indexes.
               const isFocused = route.name === focusedRouteName;
-              const color = isFocused ? theme.colors.primary : theme.colors.textSecondary;
+              const color = isFocused ? '#FFFFFF' : theme.colors.textSecondary;
               const iconStroke = isFocused ? '#FFFFFF' : theme.colors.textSecondary;
-              const iconFill = isFocused ? '#114b3c' : 'transparent';
+              const iconFill = 'transparent';
 
               const onPress = () => {
                 const event = navigation.emit({

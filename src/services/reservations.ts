@@ -10,9 +10,17 @@ export interface ReservationFromAPI {
   id: string;
   restaurant_id?: number;
   basketId?: string;
+  /** Name of the basket type (e.g. "Panier Surprise Boulangerie") */
+  basket_name?: string;
+  basket_type_name?: string;
   basket?: {
     id: string;
+    /** Basket type name — the primary label customers see */
     name?: string;
+    /** Alternative field names returned by some API versions */
+    basket_type_name?: string;
+    type_name?: string;
+    basket_name?: string;
     merchantName?: string;
     merchant_name?: string;
     merchantLogo?: string;
