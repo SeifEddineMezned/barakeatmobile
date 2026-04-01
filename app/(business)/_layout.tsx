@@ -180,11 +180,11 @@ export default function BusinessTabLayout() {
         style={{ flexDirection: 'row', alignItems: 'center' }}
         activeOpacity={0.7}
       >
-        <MapPin size={18} color={theme.colors.primary} style={{ marginRight: 6 }} />
+        <MapPin size={18} color={'#FFFFFF'} style={{ marginRight: 6 }} />
         <Text
           numberOfLines={1}
           style={{
-            color: theme.colors.textPrimary,
+            color: '#FFFFFF',
             fontSize: 16,
             fontWeight: '600',
             fontFamily: 'Poppins_700Bold',
@@ -193,7 +193,7 @@ export default function BusinessTabLayout() {
         >
           {selectedLocationName}
         </Text>
-        <ChevronDown size={18} color={theme.colors.textSecondary} style={{ marginLeft: 4 }} />
+        <ChevronDown size={18} color={'rgba(255,255,255,0.7)'} style={{ marginLeft: 4 }} />
       </TouchableOpacity>
     </Animated.View>
   );
@@ -204,14 +204,14 @@ export default function BusinessTabLayout() {
         onPress={() => router.push('/settings' as never)}
         style={{ marginRight: 12 }}
       >
-        <Settings size={20} color={theme.colors.textPrimary} />
+        <Settings size={20} color={'#FFFFFF'} />
       </TouchableOpacity>
       {isAuthenticated ? (
         <TouchableOpacity
           onPress={() => router.push('/notifications' as never)}
           style={{ marginRight: 16 }}
         >
-          <Bell size={20} color={theme.colors.textPrimary} />
+          <Bell size={20} color={'#FFFFFF'} />
           {unreadCount > 0 && (
             <View style={{
               position: 'absolute',
@@ -244,7 +244,7 @@ export default function BusinessTabLayout() {
         headerShown: true,
         headerTitle: '',
         headerShadowVisible: false,
-        headerStyle: { backgroundColor: theme.colors.bg },
+        headerStyle: { backgroundColor: theme.colors.primary },
         headerLeft: headerBrand,
         headerRight: headerRight,
       }}
@@ -276,7 +276,7 @@ export default function BusinessTabLayout() {
               left: 32,
               right: 32,
               height: 68,
-              backgroundColor: theme.colors.primary,
+              backgroundColor: theme.colors.surface,
               borderRadius: 30,
               borderTopWidth: 0,
               shadowColor: '#000',
@@ -297,7 +297,7 @@ export default function BusinessTabLayout() {
                 position: 'absolute',
                 width: tabWidth - 12,
                 height: 52,
-                backgroundColor: 'rgba(255,255,255,0.18)',
+                backgroundColor: theme.colors.primary,
                 borderRadius: 22,
                 left: 6,
                 transform: [{ translateX: glassAnim }],
@@ -307,8 +307,8 @@ export default function BusinessTabLayout() {
             {state.routes.map((route, index) => {
               const { options } = descriptors[route.key];
               const isFocused = state.index === index;
-              const color = isFocused ? '#FFFFFF' : 'rgba(255,255,255,0.65)';
-              const iconColor = isFocused ? '#FFFFFF' : 'rgba(255,255,255,0.65)';
+              const color = isFocused ? '#FFFFFF' : theme.colors.textSecondary;
+              const iconColor = isFocused ? '#FFFFFF' : theme.colors.textSecondary;
 
               const onPress = () => {
                 const event = navigation.emit({
