@@ -8,7 +8,7 @@ import { useTheme } from '@/src/theme/ThemeProvider';
 import { StatusBar } from 'expo-status-bar';
 import { PrimaryCTAButton } from '@/src/components/PrimaryCTAButton';
 import { fetchLocationById } from '@/src/services/restaurants';
-import { fetchBasketById, fetchBasketsByLocation } from '@/src/services/baskets';
+import { fetchBasketById } from '@/src/services/baskets';
 import { createReservation, fetchReservationQRCode } from '@/src/services/reservations';
 import { updateStreak, fetchGamificationStats, type StreakUpdateResult } from '@/src/services/gamification';
 // import { scheduleLocalNotification } from '@/src/services/pushNotifications';
@@ -71,19 +71,20 @@ export default function ReserveScreen() {
 
   const startBouncingAnimation = () => {
     letterAnims.forEach(a => a.setValue(0));
-    const animations = letterAnims.map((anim, i) =>
-      Animated.sequence([
-        Animated.delay(i * 100),
-        Animated.loop(
+    const runWave = () => {
+      letterAnims.forEach(a => a.setValue(0));
+      Animated.stagger(80,
+        letterAnims.map((anim) =>
           Animated.sequence([
-            Animated.timing(anim, { toValue: -15, duration: 200, useNativeDriver: true }),
-            Animated.timing(anim, { toValue: 0, duration: 200, useNativeDriver: true }),
-          ]),
-          { iterations: -1 }
-        ),
-      ])
-    );
-    Animated.parallel(animations).start();
+            Animated.timing(anim, { toValue: -15, duration: 160, useNativeDriver: true }),
+            Animated.timing(anim, { toValue: 0, duration: 160, useNativeDriver: true }),
+          ])
+        )
+      ).start(({ finished }) => {
+        if (finished) setTimeout(runWave, 600);
+      });
+    };
+    runWave();
   };
 
   // ── Step 1: Fetch the selected basket so we can derive its parent location id ──
@@ -111,13 +112,6 @@ export default function ReserveScreen() {
     enabled: !!resolvedLocationId,
   });
 
-  // ── Step 4: Fetch sibling baskets for quantity/price — same guard ──
-  const basketsQuery = useQuery({
-    queryKey: ['baskets-by-location', resolvedLocationId],
-    queryFn: () => fetchBasketsByLocation(String(resolvedLocationId)),
-    enabled: !!resolvedLocationId,
-  });
-
   const location = locationQuery.data;
   const locationName = location?.display_name ?? location?.name ?? rawBasketData?.restaurant_name ?? '';
   const address = location?.address ?? rawBasketData?.restaurant_address ?? rawBasketData?.location_address ?? '';
@@ -130,19 +124,12 @@ export default function ReserveScreen() {
     rawBasketData?.pickup_end_time?.substring(0, 5) ??
     location?.pickup_end_time?.substring(0, 5) ?? '';
 
-  // Compute quantity and price from sibling baskets; fall back to selected basket
-  const rawBaskets = basketsQuery.data ?? [];
-  const totalAvailable = rawBaskets.length > 0
-    ? rawBaskets.reduce((sum, b: any) => sum + (Number(b.quantity) || 0), 0)
-    : Number(rawBasketData?.quantity ?? 0);
-  const minPrice = rawBaskets.length > 0
-    ? Math.min(...rawBaskets.map((b: any) => Number(b.selling_price || 0)).filter(p => p > 0))
-    : Number(rawBasketData?.selling_price ?? location?.price_tier ?? location?.min_basket_price ?? 0);
-  const minOriginal = rawBaskets.length > 0
-    ? Math.min(...rawBaskets.map((b: any) => Number(b.original_price || 0)).filter(p => p > 0))
-    : Number(rawBasketData?.original_price ?? location?.original_price ?? 0);
-  const price = isFinite(minPrice) ? minPrice : 0;
-  const originalPrice = isFinite(minOriginal) ? minOriginal : 0;
+  // Use the SELECTED basket's quantity and price — not aggregated from all sibling baskets
+  const basketName = rawBasketData?.name ?? rawBasketData?.basket_name ?? t('orders.surpriseBag');
+  const basketImage = rawBasketData?.image_url ?? rawBasketData?.cover_image_url ?? null;
+  const totalAvailable = Number(rawBasketData?.quantity ?? 0);
+  const price = Number(rawBasketData?.selling_price ?? 0);
+  const originalPrice = Number(rawBasketData?.original_price ?? 0);
 
   const reserveMutation = useMutation({
     // Use the real resolved id, not the basket id
@@ -276,7 +263,22 @@ export default function ReserveScreen() {
     if (quantity > 1) setQuantity((prev) => prev - 1);
   };
 
+  // Check if current time is within the basket's pickup window
+  const isPickupWindowOpen = () => {
+    if (!pickupStart || !pickupEnd) return true; // No window set = always open
+    const now = new Date();
+    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    const startDate = new Date(`${today}T${pickupStart}:00`);
+    const endDate = new Date(`${today}T${pickupEnd}:00`);
+    return now <= endDate; // Allow reservation if pickup hasn't ended yet
+  };
+
   const handleConfirm = () => {
+    // Frontend validation: check basket pickup window
+    if (!isPickupWindowOpen()) {
+      setErrorMessage(t('errors.pickupExpired', { defaultValue: 'The pickup window has expired.' }));
+      return;
+    }
     if (paymentMethod === 'cash') {
       setShowConfirmModal(true);
     } else {
@@ -322,9 +324,24 @@ export default function ReserveScreen() {
       </View>
 
       <ScrollView style={styles.content} contentContainerStyle={[{ padding: theme.spacing.xl }]}>
-        <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, marginBottom: theme.spacing.lg }]}>
-          {locationName}
-        </Text>
+        {/* Basket info: image + name + location */}
+        <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: theme.spacing.lg }}>
+          {basketImage ? (
+            <Image source={{ uri: basketImage }} style={{ width: 64, height: 64, borderRadius: theme.radii.r12, marginRight: theme.spacing.md }} resizeMode="cover" />
+          ) : (
+            <View style={{ width: 64, height: 64, borderRadius: theme.radii.r12, marginRight: theme.spacing.md, backgroundColor: theme.colors.primary + '10', justifyContent: 'center', alignItems: 'center' }}>
+              <Zap size={24} color={theme.colors.primary} />
+            </View>
+          )}
+          <View style={{ flex: 1 }}>
+            <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h2, fontWeight: '700' }]} numberOfLines={2}>
+              {basketName}
+            </Text>
+            <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.bodySm, marginTop: 2 }]} numberOfLines={1}>
+              {locationName}
+            </Text>
+          </View>
+        </View>
 
         {/* Quantity selector */}
         <View style={[styles.section, { backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, padding: theme.spacing.xl, marginBottom: theme.spacing.lg, ...theme.shadows.shadowSm }]}>
@@ -362,7 +379,7 @@ export default function ReserveScreen() {
           </Text>
           <View style={styles.summaryRow}>
             <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.body }]}>
-              {locationName} x {quantity}
+              {basketName} <Text style={{ fontWeight: '700', color: theme.colors.textPrimary }}>(x {quantity})</Text>
             </Text>
             <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.body }]}>
               {price * quantity} TND
@@ -402,12 +419,13 @@ export default function ReserveScreen() {
                 borderWidth: paymentMethod === 'cash' ? 2 : 1,
                 borderColor: paymentMethod === 'cash' ? theme.colors.primary : theme.colors.divider,
                 alignItems: 'center',
+                justifyContent: 'center',
               }}
             >
               <View style={{ width: 48, height: 48, borderRadius: 24, backgroundColor: paymentMethod === 'cash' ? theme.colors.primary + '18' : theme.colors.divider + '60', justifyContent: 'center', alignItems: 'center' }}>
                 <Banknote size={24} color={paymentMethod === 'cash' ? theme.colors.primary : theme.colors.textSecondary} />
               </View>
-              <Text style={{ color: paymentMethod === 'cash' ? theme.colors.primary : theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '600', marginTop: 8 }}>
+              <Text style={{ color: paymentMethod === 'cash' ? theme.colors.primary : theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '600', marginTop: 8, textAlign: 'center' }}>
                 {t('reserve.payCash', { defaultValue: 'Pay in Cash' })}
               </Text>
               <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, marginTop: 4, textAlign: 'center' }}>
@@ -415,24 +433,28 @@ export default function ReserveScreen() {
               </Text>
             </TouchableOpacity>
             <TouchableOpacity
-              onPress={() => setPaymentMethod('card')}
+              disabled={!FeatureFlags.ENABLE_CARD_PAYMENT}
+              activeOpacity={FeatureFlags.ENABLE_CARD_PAYMENT ? 0.8 : 1}
+              onPress={() => { if (FeatureFlags.ENABLE_CARD_PAYMENT) setPaymentMethod('card'); }}
               style={{
                 flex: 1,
-                backgroundColor: paymentMethod === 'card' ? theme.colors.primary + '12' : theme.colors.bg,
+                backgroundColor: theme.colors.bg,
                 borderRadius: theme.radii.r16,
                 padding: 16,
-                borderWidth: paymentMethod === 'card' ? 2 : 1,
-                borderColor: paymentMethod === 'card' ? theme.colors.primary : theme.colors.divider,
+                borderWidth: 1,
+                borderColor: theme.colors.divider,
                 alignItems: 'center',
+                justifyContent: 'center',
+                opacity: FeatureFlags.ENABLE_CARD_PAYMENT ? 1 : 0.4,
               }}
             >
-              <View style={{ width: 48, height: 48, borderRadius: 24, backgroundColor: paymentMethod === 'card' ? theme.colors.primary + '18' : theme.colors.divider + '60', justifyContent: 'center', alignItems: 'center' }}>
-                <CreditCard size={24} color={paymentMethod === 'card' ? theme.colors.primary : theme.colors.textSecondary} />
+              <View style={{ width: 48, height: 48, borderRadius: 24, backgroundColor: theme.colors.divider + '60', justifyContent: 'center', alignItems: 'center' }}>
+                <CreditCard size={24} color={theme.colors.muted} />
               </View>
-              <Text style={{ color: paymentMethod === 'card' ? theme.colors.primary : theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '600', marginTop: 8 }}>
+              <Text style={{ color: theme.colors.muted, ...theme.typography.bodySm, fontWeight: '600', marginTop: 8, textAlign: 'center' }}>
                 {t('reserve.payCard', { defaultValue: 'Pay by Card' })}
               </Text>
-              <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, marginTop: 4, textAlign: 'center' }}>
+              <Text style={{ color: theme.colors.muted, ...theme.typography.caption, marginTop: 4, textAlign: 'center' }}>
                 {t('reserve.payCardDesc', { defaultValue: 'Coming soon' })}
               </Text>
             </TouchableOpacity>
@@ -441,7 +463,18 @@ export default function ReserveScreen() {
       </ScrollView>
 
       <View style={[styles.footer, { backgroundColor: theme.colors.surface, paddingHorizontal: theme.spacing.xl, paddingVertical: theme.spacing.lg, borderTopWidth: 1, borderTopColor: theme.colors.divider, ...theme.shadows.shadowLg }]}>
-        <PrimaryCTAButton onPress={handleConfirm} title={t('reserve.confirmReservation')} loading={reserveMutation.isPending} />
+        <PrimaryCTAButton
+          onPress={handleConfirm}
+          title={
+            totalAvailable <= 0
+              ? t('basket.soldOut')
+              : !isPickupWindowOpen()
+              ? t('orders.status.expired', { defaultValue: 'Expired' })
+              : t('reserve.confirmReservation')
+          }
+          disabled={totalAvailable <= 0 || !isPickupWindowOpen()}
+          loading={reserveMutation.isPending}
+        />
       </View>
 
       {/* Custom confirmation modal (replaces Alert.alert) */}
@@ -456,9 +489,14 @@ export default function ReserveScreen() {
             <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3, textAlign: 'center', marginBottom: 12 }}>
               {t('reserve.confirmTitle', { defaultValue: 'Confirm Reservation' })}
             </Text>
-            <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm, textAlign: 'center', lineHeight: 20, marginBottom: 24 }}>
-              {t('reserve.cashWarning', { defaultValue: 'Ready to pick up this basket?\n\nIf your plans change, please cancel early — it frees up the spot for someone else.\n\nHeads up: repeated no-shows without cancelling may lead to a temporary pause on your reservations.' })}
+            <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm, textAlign: 'center', lineHeight: 20, marginBottom: 8 }}>
+              {t('reserve.cashWarningIntro', { defaultValue: 'Ready to pick up this basket?\n\nIf your plans change, please cancel early, it frees up the spot for someone else.' })}
             </Text>
+            <View style={{ backgroundColor: theme.colors.error + '12', borderRadius: 12, padding: 12, marginBottom: 24, borderLeftWidth: 3, borderLeftColor: theme.colors.error }}>
+              <Text style={{ color: theme.colors.error, ...theme.typography.bodySm, fontWeight: '700', textAlign: 'center', lineHeight: 20 }}>
+                {t('reserve.cashWarningBan', { defaultValue: 'Repeated no shows without cancelling may lead to a temporary pause on your reservations.' })}
+              </Text>
+            </View>
             <View style={{ flexDirection: 'row', gap: 12 }}>
               <TouchableOpacity
                 onPress={() => setShowConfirmModal(false)}

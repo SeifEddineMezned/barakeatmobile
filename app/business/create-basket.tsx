@@ -199,6 +199,10 @@ export default function CreateBasketScreen() {
   const validatePrice = (orig: string, disc: string) => {
     const o = parseFloat(orig);
     const d = parseFloat(disc);
+    if (o > 0 && o < 10) {
+      setPriceError(t('business.createBasket.minOriginalPrice', { defaultValue: 'Original price must be at least 10 TND.' }));
+      return false;
+    }
     if (o > 0 && d > 0 && d > o * 0.5) {
       setPriceError(t('business.createBasket.priceError'));
       return false;
@@ -212,20 +216,38 @@ export default function CreateBasketScreen() {
     hhmm.includes(':') && hhmm.split(':').length === 2 ? `${hhmm}:00` : hhmm;
 
   // ── Mutations
+  // Location hours for clamping basket pickup times
+  const locationStartTime = profileQuery.data?.pickup_start_time?.substring(0, 5) ?? '00:00';
+  const locationEndTime = profileQuery.data?.pickup_end_time?.substring(0, 5) ?? '23:59';
+
+  const clampPickupTime = (start: string, end: string) => {
+    const toMin = (t: string) => { const [h, m] = t.split(':').map(Number); return (h || 0) * 60 + (m || 0); };
+    const lsMin = toMin(locationStartTime);
+    const leMin = toMin(locationEndTime);
+    let sMin = Math.max(lsMin, Math.min(leMin, toMin(start)));
+    let eMin = Math.max(lsMin, Math.min(leMin, toMin(end)));
+    if (eMin <= sMin) eMin = sMin + 5;
+    const fmt = (m: number) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+    return { start: fmt(sMin), end: fmt(eMin) };
+  };
+
   const createMutation = useMutation({
-    mutationFn: () =>
-      createBasketJSON({
+    mutationFn: () => {
+      const clamped = clampPickupTime(pickupStart, pickupEnd);
+      return createBasketJSON({
         name: name.trim(),
         description: description.trim() || undefined,
         original_price: originalPrice ? parseFloat(originalPrice) : undefined,
         selling_price: parseFloat(sellingPrice),
         quantity,
-        pickup_start_time: toTimeField(pickupStart),
-        pickup_end_time: toTimeField(pickupEnd),
+        pickup_start_time: toTimeField(clamped.start),
+        pickup_end_time: toTimeField(clamped.end),
         menu_item_ids: selectedMenuItemIds.length > 0 ? selectedMenuItemIds : undefined,
-      }),
+      });
+    },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['my-baskets'] });
+      void queryClient.invalidateQueries({ queryKey: ['locations'] });
       router.back();
     },
     onError: (err: any) => {
@@ -234,8 +256,9 @@ export default function CreateBasketScreen() {
   });
 
   const updateMutation = useMutation({
-    mutationFn: () =>
-      updateBasketAPI(editId!, {
+    mutationFn: () => {
+      const clamped = clampPickupTime(pickupStart, pickupEnd);
+      return updateBasketAPI(editId!, {
         name: name.trim(),
         description: description.trim() || null,
         original_price: originalPrice ? parseFloat(originalPrice) : undefined,
@@ -244,12 +267,14 @@ export default function CreateBasketScreen() {
         max_per_customer: maxPerCustomer,
         daily_reinitialization_quantity: quantity,
         ...(sameAllDays ? {} : { daily_reinit_schedule: JSON.stringify(daySchedule) }),
-        pickup_start_time: toTimeField(pickupStart),
-        pickup_end_time: toTimeField(pickupEnd),
+        pickup_start_time: toTimeField(clamped.start),
+        pickup_end_time: toTimeField(clamped.end),
         menu_item_ids: selectedMenuItemIds,
-      }),
+      });
+    },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['my-baskets'] });
+      void queryClient.invalidateQueries({ queryKey: ['locations'] });
       router.back();
     },
     onError: (err: any) => {
@@ -270,15 +295,25 @@ export default function CreateBasketScreen() {
       return;
     }
     if (!validatePrice(originalPrice, sellingPrice)) return;
-    if (quantity <= 0) {
-      Alert.alert(t('common.error'), t('business.createBasket.quantityRequired'));
+    const doSave = () => {
+      if (isEditing) {
+        updateMutation.mutate();
+      } else {
+        createMutation.mutate();
+      }
+    };
+    if (quantity === 0) {
+      Alert.alert(
+        t('business.createBasket.zeroQtyTitle', { defaultValue: 'Quantity is 0' }),
+        t('business.createBasket.zeroQtyMsg', { defaultValue: 'The daily quantity is set to 0. Are you sure?' }),
+        [
+          { text: t('common.cancel'), style: 'cancel' },
+          { text: t('common.confirm'), onPress: doSave },
+        ]
+      );
       return;
     }
-    if (isEditing) {
-      updateMutation.mutate();
-    } else {
-      createMutation.mutate();
-    }
+    doSave();
   };
 
   // ── Time picker helpers

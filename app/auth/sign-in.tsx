@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, ScrollView, Alert, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, ScrollView, Alert, ActivityIndicator, Image } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -324,100 +324,6 @@ export default function SignInScreen() {
               </TouchableOpacity>
             </View>
 
-            {role === 'customer' && (
-              <>
-                <TouchableOpacity
-                  onPress={handleGoogleSignIn}
-                  disabled={googleLoading || loading}
-                  activeOpacity={0.8}
-                  style={{
-                    flexDirection: 'row',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    height: 56,
-                    backgroundColor: '#ffffff',
-                    borderRadius: theme.radii.pill,
-                    paddingHorizontal: 24,
-                    shadowColor: '#000',
-                    shadowOffset: { width: 0, height: 2 },
-                    shadowOpacity: 0.12,
-                    shadowRadius: 6,
-                    elevation: 3,
-                    opacity: googleLoading || loading ? 0.6 : 1,
-                  }}
-                >
-                  <View
-                    style={{
-                      width: 28,
-                      height: 28,
-                      borderRadius: 14,
-                      backgroundColor: '#fff',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      marginRight: 12,
-                      borderWidth: 1,
-                      borderColor: '#e0e0e0',
-                    }}
-                  >
-                    {googleLoading ? (
-                      <ActivityIndicator size="small" color="#4285F4" />
-                    ) : (
-                      <Text
-                        style={{
-                          fontSize: 16,
-                          fontWeight: '700' as const,
-                          color: '#4285F4',
-                        }}
-                      >
-                        G
-                      </Text>
-                    )}
-                  </View>
-                  <Text
-                    style={{
-                      color: '#3c4043',
-                      ...theme.typography.button,
-                      fontWeight: '600' as const,
-                    }}
-                  >
-                    {t('auth.continueWithGoogle')}
-                  </Text>
-                </TouchableOpacity>
-
-                <View
-                  style={{
-                    flexDirection: 'row',
-                    alignItems: 'center',
-                    marginVertical: theme.spacing.xl,
-                  }}
-                >
-                  <View
-                    style={{
-                      flex: 1,
-                      height: 1,
-                      backgroundColor: 'rgba(255,255,255,0.25)',
-                    }}
-                  />
-                  <Text
-                    style={{
-                      color: 'rgba(255,255,255,0.5)',
-                      ...theme.typography.bodySm,
-                      marginHorizontal: theme.spacing.lg,
-                    }}
-                  >
-                    {t('auth.or')}
-                  </Text>
-                  <View
-                    style={{
-                      flex: 1,
-                      height: 1,
-                      backgroundColor: 'rgba(255,255,255,0.25)',
-                    }}
-                  />
-                </View>
-              </>
-            )}
-
             <View style={styles.form}>
               <View style={[styles.inputContainer, { marginBottom: theme.spacing.xl }]}>
                 <Text style={[styles.label, { color: '#fff', ...theme.typography.bodySm }]}>
@@ -507,6 +413,48 @@ export default function SignInScreen() {
                   </Text>
                 </TouchableOpacity>
               </View>
+
+              {/* Google sign-in — below sign up link */}
+              {role === 'customer' && (
+                <>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', marginVertical: theme.spacing.lg }}>
+                    <View style={{ flex: 1, height: 1, backgroundColor: 'rgba(255,255,255,0.25)' }} />
+                    <Text style={{ color: 'rgba(255,255,255,0.5)', ...theme.typography.bodySm, marginHorizontal: theme.spacing.lg }}>
+                      {t('auth.or')}
+                    </Text>
+                    <View style={{ flex: 1, height: 1, backgroundColor: 'rgba(255,255,255,0.25)' }} />
+                  </View>
+                  <TouchableOpacity
+                    onPress={handleGoogleSignIn}
+                    disabled={googleLoading || loading}
+                    activeOpacity={0.8}
+                    style={{
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      alignSelf: 'center',
+                      height: 48,
+                      backgroundColor: '#ffffff',
+                      borderRadius: theme.radii.r12,
+                      paddingHorizontal: 16,
+                      opacity: googleLoading || loading ? 0.6 : 1,
+                    }}
+                  >
+                    {googleLoading ? (
+                      <ActivityIndicator size="small" color="#4285F4" style={{ marginRight: 10 }} />
+                    ) : (
+                      <Image
+                        source={{ uri: 'https://developers.google.com/identity/images/g-logo.png' }}
+                        style={{ width: 20, height: 20, marginRight: 10 }}
+                        resizeMode="contain"
+                      />
+                    )}
+                    <Text style={{ color: '#3c4043', ...theme.typography.body, fontWeight: '600' }}>
+                      {t('auth.continueWithGoogle')}
+                    </Text>
+                  </TouchableOpacity>
+                </>
+              )}
             </View>
           </View>
         </ScrollView>

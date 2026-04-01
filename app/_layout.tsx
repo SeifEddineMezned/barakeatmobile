@@ -139,7 +139,9 @@ function RootLayoutInner() {
     staleTime: 60_000,
   });
 
+  const splashDone = useSplashStore((s) => s.splashDone);
   useEffect(() => {
+    if (!splashDone) return; // wait for splash animation to finish
     const gData = gamQuery.data as any;
     if (!gData?.newBadges?.length || !gData?.badges) return;
     for (const newBadgeId of gData.newBadges) {
@@ -154,7 +156,7 @@ function RootLayoutInner() {
         break;
       }
     }
-  }, [gamQuery.data]);
+  }, [gamQuery.data, splashDone]);
 
   // Check if user needs the post-login tutorial
   useEffect(() => {
@@ -216,6 +218,7 @@ function RootLayoutInner() {
           const wasLogin = wasLoginSplash;
           setInitialSplash(false);
           dismissLoginSplash();
+          useSplashStore.getState().markSplashDone();
           if (wasLogin) {
             setShowWelcomeModal(true);
             setTimeout(() => setShowWelcomeModal(false), 5000);

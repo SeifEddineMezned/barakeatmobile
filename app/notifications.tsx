@@ -24,14 +24,17 @@ import {
 import { useNotificationStore } from '@/src/stores/notificationStore';
 import { DelayedLoader } from '@/src/components/DelayedLoader';
 
-function timeAgo(dateStr: string): string {
+function timeAgo(dateStr: string, t: (key: string, opts?: Record<string, unknown>) => string): string {
   const now = Date.now();
   const then = new Date(dateStr).getTime();
   const diff = Math.floor((now - then) / 1000);
-  if (diff < 60) return `${diff}s`;
-  if (diff < 3600) return `${Math.floor(diff / 60)}m`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)}h`;
-  return `${Math.floor(diff / 86400)}d`;
+  if (diff < 60) return t('timeAgo.seconds', { count: diff });
+  if (diff < 3600) return t('timeAgo.minutes', { count: Math.floor(diff / 60) });
+  if (diff < 86400) return t('timeAgo.hours', { count: Math.floor(diff / 3600) });
+  const days = Math.floor(diff / 86400);
+  if (days < 7) return t('timeAgo.days', { count: days });
+  if (days < 30) return t('timeAgo.weeks', { count: Math.floor(days / 7) });
+  return t('timeAgo.months', { count: Math.floor(days / 30) });
 }
 
 /**
@@ -198,7 +201,7 @@ export default function NotificationsScreen() {
               },
             ]}
           >
-            {timeAgo(item.created_at)}
+            {timeAgo(item.created_at, t)}
           </Text>
         </View>
       </TouchableOpacity>
@@ -293,7 +296,7 @@ export default function NotificationsScreen() {
                         </Text>
                       ) : null}
                       <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, marginTop: 2 }}>
-                        {timeAgo(detailNotif.created_at)}
+                        {timeAgo(detailNotif.created_at, t)}
                       </Text>
                     </View>
                   </View>

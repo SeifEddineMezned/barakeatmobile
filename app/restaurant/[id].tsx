@@ -15,7 +15,7 @@ import {
 import type { NativeSyntheticEvent, TextLayoutEventData } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useQuery } from '@tanstack/react-query';
-import { ChevronLeft, MapPin, ShoppingBag, Clock, Star, Tag, Flag, X, ChevronRight, MoreVertical } from 'lucide-react-native';
+import { ChevronLeft, MapPin, ShoppingBag, Clock, Star, Tag, Flag, X, ChevronRight, MoreVertical, TimerOff } from 'lucide-react-native';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { useTranslation } from 'react-i18next';
 import { StatusBar } from 'expo-status-bar';
@@ -271,7 +271,7 @@ export default function RestaurantScreen() {
             <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 4 }}>
               <Tag size={12} color={theme.colors.textSecondary} />
               <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, marginLeft: 4 }]}>
-                {restaurant.category}
+                {t(`categories.${restaurant.category.toLowerCase()}`, { defaultValue: restaurant.category })}
               </Text>
             </View>
           ) : null}
@@ -393,27 +393,53 @@ export default function RestaurantScreen() {
               </Text>
             </View>
           ) : (
-            baskets.map((basket) => (
+            baskets.map((basket) => {
+              const soldOut = basket.quantityLeft <= 0;
+              const pickupExpired = (() => {
+                if (soldOut) return false;
+                const endStr = basket.pickupWindow?.end;
+                if (!endStr) return false;
+                const [eh, em] = endStr.split(':').map(Number);
+                if (isNaN(eh) || isNaN(em)) return false;
+                const now = new Date();
+                const endDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), eh, em);
+                return now > endDate;
+              })();
+              const unavailable = soldOut || pickupExpired;
+
+              return (
               <TouchableOpacity
                 key={basket.id}
                 onPress={() => router.push(`/basket/${basket.id}` as never)}
                 style={[
                   styles.basketCard,
                   {
-                    backgroundColor: theme.colors.surface,
+                    backgroundColor: unavailable ? '#f0f0f0' : theme.colors.surface,
                     borderRadius: theme.radii.r16,
                     ...theme.shadows.shadowSm,
                     flexDirection: 'row',
+                    opacity: unavailable ? 0.55 : 1,
                   },
                 ]}
                 activeOpacity={0.8}
               >
-                <View style={{ flex: 1, padding: 14, justifyContent: 'center' }}>
-                  <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.body, fontWeight: '600' as const }]} numberOfLines={1}>
+                {/* Basket quantity badge — top right */}
+              <View style={{ position: 'absolute', top: 8, right: 8, zIndex: 2, backgroundColor: soldOut ? theme.colors.error : pickupExpired ? '#888' : theme.colors.primary, borderRadius: 10, paddingHorizontal: 8, paddingVertical: 3, flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                {pickupExpired && !soldOut ? (
+                  <TimerOff size={12} color="#fff" />
+                ) : (
+                  <ShoppingBag size={12} color="#fff" />
+                )}
+                <Text style={{ color: '#fff', fontSize: 11, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
+                  {soldOut ? t('basket.soldOut') : pickupExpired ? t('orders.pickupEnded', { defaultValue: 'Expired' }) : basket.quantityLeft}
+                </Text>
+              </View>
+              <View style={{ flex: 1, padding: 14, justifyContent: 'center' }}>
+                  <Text style={[{ color: unavailable ? theme.colors.muted : theme.colors.textPrimary, ...theme.typography.body, fontWeight: '600' as const }]} numberOfLines={1}>
                     {basket.name}
                   </Text>
                   <View style={{ flexDirection: 'row', alignItems: 'baseline', marginTop: 4 }}>
-                    <Text style={[{ color: theme.colors.primary, ...theme.typography.body, fontWeight: '700' as const }]}>
+                    <Text style={[{ color: unavailable ? theme.colors.muted : theme.colors.primary, ...theme.typography.body, fontWeight: '700' as const }]}>
                       {basket.discountedPrice} TND
                     </Text>
                     {basket.originalPrice > 0 && (
@@ -431,20 +457,18 @@ export default function RestaurantScreen() {
                         </Text>
                       </View>
                     ) : null}
-                    <Text style={{ color: basket.quantityLeft > 0 ? theme.colors.primary : theme.colors.error, fontSize: 11, fontFamily: 'Poppins_600SemiBold' }}>
-                      {basket.quantityLeft > 0 ? `${basket.quantityLeft} left` : 'Sold out'}
-                    </Text>
                   </View>
                 </View>
                 {basket.imageUrl ? (
-                  <Image source={{ uri: basket.imageUrl }} style={{ width: 90, height: '100%', borderTopRightRadius: theme.radii.r16, borderBottomRightRadius: theme.radii.r16 }} resizeMode="cover" />
+                  <Image source={{ uri: basket.imageUrl }} style={{ width: 90, height: '100%', borderTopRightRadius: theme.radii.r16, borderBottomRightRadius: theme.radii.r16, opacity: unavailable ? 0.4 : 1 }} resizeMode="cover" />
                 ) : (
                   <View style={{ width: 90, backgroundColor: theme.colors.primary + '08', justifyContent: 'center', alignItems: 'center', borderTopRightRadius: theme.radii.r16, borderBottomRightRadius: theme.radii.r16 }}>
                     <ShoppingBag size={28} color={theme.colors.muted} />
                   </View>
                 )}
               </TouchableOpacity>
-            ))
+              );
+            })
           )}
         </View>
 

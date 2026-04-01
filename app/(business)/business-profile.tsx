@@ -110,6 +110,39 @@ export default function BusinessProfileScreen() {
         isSupermarket: (profileQuery.data.category ?? '').toLowerCase() === 'supermarket',
       }
     : store.profile;
+  // Location hours editor state
+  const [showHoursModal, setShowHoursModal] = useState(false);
+  const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  const DAY_LABELS: Record<string, string> = { Mon: t('business.dashboard.days.Mon'), Tue: t('business.dashboard.days.Tue'), Wed: t('business.dashboard.days.Wed'), Thu: t('business.dashboard.days.Thu'), Fri: t('business.dashboard.days.Fri'), Sat: t('business.dashboard.days.Sat'), Sun: t('business.dashboard.days.Sun') };
+  const defaultStart = profileQuery.data?.pickup_start_time?.substring(0, 5) ?? '09:00';
+  const defaultEnd = profileQuery.data?.pickup_end_time?.substring(0, 5) ?? '18:00';
+  const [hoursStart, setHoursStart] = useState(defaultStart);
+  const [hoursEnd, setHoursEnd] = useState(defaultEnd);
+  const [sameAllDays, setSameAllDays] = useState(true);
+  const [dayHours, setDayHours] = useState<Record<string, { start: string; end: string }>>(
+    Object.fromEntries(DAYS.map(d => [d, { start: defaultStart, end: defaultEnd }]))
+  );
+  const [hoursSaving, setHoursSaving] = useState(false);
+
+  const handleSaveHours = async () => {
+    setHoursSaving(true);
+    try {
+      const { updateMyProfile } = await import('@/src/services/business');
+      const userId = user?.id ? Number(user.id) : undefined;
+      const formData = new FormData();
+      const toTime = (hhmm: string) => hhmm.includes(':') && hhmm.split(':').length === 2 ? `${hhmm}:00` : hhmm;
+      formData.append('pickup_start_time', toTime(sameAllDays ? hoursStart : dayHours['Mon'].start));
+      formData.append('pickup_end_time', toTime(sameAllDays ? hoursEnd : dayHours['Mon'].end));
+      await updateMyProfile(formData, userId);
+      void queryClient.invalidateQueries({ queryKey: ['my-profile'] });
+      setShowHoursModal(false);
+    } catch (err: any) {
+      Alert.alert(t('common.error'), err?.message ?? t('common.errorOccurred'));
+    } finally {
+      setHoursSaving(false);
+    }
+  };
+
   const [showAddMemberModal, setShowAddMemberModal] = useState(false);
   const [showRoleModal, setShowRoleModal] = useState<string | null>(null);
   const [showPermissionsModal, setShowPermissionsModal] = useState<string | null>(null);
@@ -358,12 +391,15 @@ export default function BusinessProfileScreen() {
             { icon: Store, label: t('business.profile.name'), value: (!selectedLocationId && contextQuery.data?.organization_name) ? contextQuery.data.organization_name : (profile?.name ?? '-') },
             { icon: MapPin, label: t('business.profile.address'), value: profile?.address ?? '-' },
             { icon: Phone, label: t('business.profile.phone'), value: profile?.phone ?? '-' },
-            { icon: Clock, label: t('business.profile.hours'), value: profile?.hours ?? '-' },
+            { icon: Clock, label: t('business.profile.hours'), value: profile?.hours ?? '-', onPress: () => setShowHoursModal(true) },
           ].map((item, index) => {
             const IconComp = item.icon;
+            const Wrapper = item.onPress ? TouchableOpacity : View;
             return (
-              <View
+              <Wrapper
                 key={index}
+                onPress={item.onPress}
+                activeOpacity={0.7}
                 style={[styles.infoRow, {
                   paddingHorizontal: theme.spacing.lg,
                   paddingVertical: theme.spacing.md,
@@ -380,7 +416,8 @@ export default function BusinessProfileScreen() {
                 <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '500' as const, flex: 1, textAlign: 'right' as const }]} numberOfLines={2}>
                   {item.value}
                 </Text>
-              </View>
+                {item.onPress && <ChevronRight size={16} color={theme.colors.muted} style={{ marginLeft: 4 }} />}
+              </Wrapper>
             );
           })}
 
@@ -593,6 +630,75 @@ export default function BusinessProfileScreen() {
             >
               <Text style={[{ color: '#fff', ...theme.typography.button, textAlign: 'center' as const }]}>
                 {t('common.done')}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* Location Hours Editor Modal */}
+      <Modal visible={showHoursModal} transparent animationType="fade" onRequestClose={() => setShowHoursModal(false)}>
+        <TouchableOpacity style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' }} activeOpacity={1} onPress={() => setShowHoursModal(false)}>
+          <View style={{ backgroundColor: theme.colors.surface, borderTopLeftRadius: 24, borderTopRightRadius: 24, paddingTop: 12, paddingBottom: 40, paddingHorizontal: 20, maxHeight: '80%' }} onStartShouldSetResponder={() => true}>
+            <View style={{ alignSelf: 'center', width: 40, height: 4, borderRadius: 2, backgroundColor: theme.colors.divider, marginBottom: 16 }} />
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+              <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3 }}>
+                {t('business.profile.hours')}
+              </Text>
+              <TouchableOpacity onPress={() => setShowHoursModal(false)}>
+                <X size={20} color={theme.colors.textSecondary} />
+              </TouchableOpacity>
+            </View>
+
+            {/* Same for all days toggle */}
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+              <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm }}>
+                {t('business.baskets.sameAllDays')}
+              </Text>
+              <Switch
+                value={sameAllDays}
+                onValueChange={(v) => {
+                  setSameAllDays(v);
+                  if (v) setDayHours(Object.fromEntries(DAYS.map(d => [d, { start: hoursStart, end: hoursEnd }])));
+                }}
+                trackColor={{ false: theme.colors.divider, true: theme.colors.primary + '60' }}
+                thumbColor={sameAllDays ? theme.colors.primary : '#ccc'}
+              />
+            </View>
+
+            <ScrollView showsVerticalScrollIndicator={false}>
+              {sameAllDays ? (
+                <View style={{ backgroundColor: theme.colors.bg, borderRadius: 12, padding: 16, gap: 12 }}>
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm }}>{t('business.availability.startTime')}</Text>
+                    <TextInput value={hoursStart} onChangeText={setHoursStart} placeholder="HH:MM" style={{ color: theme.colors.textPrimary, ...theme.typography.h3, backgroundColor: theme.colors.surface, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 6, textAlign: 'center', minWidth: 80 }} />
+                  </View>
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm }}>{t('business.availability.endTime')}</Text>
+                    <TextInput value={hoursEnd} onChangeText={setHoursEnd} placeholder="HH:MM" style={{ color: theme.colors.textPrimary, ...theme.typography.h3, backgroundColor: theme.colors.surface, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 6, textAlign: 'center', minWidth: 80 }} />
+                  </View>
+                </View>
+              ) : (
+                DAYS.map(day => (
+                  <View key={day} style={{ backgroundColor: theme.colors.bg, borderRadius: 12, padding: 12, marginBottom: 8 }}>
+                    <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '600', marginBottom: 8 }}>{DAY_LABELS[day]}</Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                      <TextInput value={dayHours[day]?.start ?? '09:00'} onChangeText={(v) => setDayHours(prev => ({ ...prev, [day]: { ...prev[day], start: v } }))} placeholder="HH:MM" style={{ flex: 1, color: theme.colors.textPrimary, ...theme.typography.bodySm, backgroundColor: theme.colors.surface, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6, textAlign: 'center' }} />
+                      <Text style={{ color: theme.colors.muted }}>-</Text>
+                      <TextInput value={dayHours[day]?.end ?? '18:00'} onChangeText={(v) => setDayHours(prev => ({ ...prev, [day]: { ...prev[day], end: v } }))} placeholder="HH:MM" style={{ flex: 1, color: theme.colors.textPrimary, ...theme.typography.bodySm, backgroundColor: theme.colors.surface, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6, textAlign: 'center' }} />
+                    </View>
+                  </View>
+                ))
+              )}
+            </ScrollView>
+
+            <TouchableOpacity
+              onPress={handleSaveHours}
+              disabled={hoursSaving}
+              style={{ backgroundColor: theme.colors.primary, borderRadius: 14, paddingVertical: 14, alignItems: 'center', marginTop: 16, opacity: hoursSaving ? 0.5 : 1 }}
+            >
+              <Text style={{ color: '#fff', ...theme.typography.button }}>
+                {hoursSaving ? t('common.loading') : t('common.save')}
               </Text>
             </TouchableOpacity>
           </View>

@@ -66,6 +66,7 @@ export default function MyBasketsScreen() {
       });
       void queryClient.invalidateQueries({ queryKey: ['my-baskets'] });
       void queryClient.invalidateQueries({ queryKey: ['my-profile'] });
+      void queryClient.invalidateQueries({ queryKey: ['locations'] });
     },
     onError: (err: any) => {
       console.error('[MyBaskets] Save FAILED:', err?.status, err?.message, JSON.stringify(err?.data));
@@ -281,8 +282,29 @@ export default function MyBasketsScreen() {
                     setDetailBasket(basket);
                     setDetailTodayQty(basket.quantityLeft);
                     setShowFullDesc(false);
-                    setPickupStartTime(basket.pickupWindow.start);
-                    setPickupEndTime(basket.pickupWindow.end);
+                    // Clamp basket pickup times to location hours on open
+                    const locStartH = parseInt(pickupStart) || 0;
+                    const locStartM = parseInt(pickupStart.split(':')[1]) || 0;
+                    const locEndH = parseInt(pickupEnd) || 23;
+                    const locEndM = parseInt(pickupEnd.split(':')[1]) || 59;
+                    const locStartMin = locStartH * 60 + locStartM;
+                    const locEndMin = locEndH * 60 + locEndM;
+
+                    const bStartH = parseInt(basket.pickupWindow.start) || 0;
+                    const bStartM = parseInt(basket.pickupWindow.start.split(':')[1]) || 0;
+                    const bEndH = parseInt(basket.pickupWindow.end) || 23;
+                    const bEndM = parseInt(basket.pickupWindow.end.split(':')[1]) || 59;
+                    let bStartMin = bStartH * 60 + bStartM;
+                    let bEndMin = bEndH * 60 + bEndM;
+
+                    // Clamp to location hours
+                    if (bStartMin < locStartMin) bStartMin = locStartMin;
+                    if (bStartMin > locEndMin) bStartMin = locEndMin;
+                    if (bEndMin > locEndMin) bEndMin = locEndMin;
+                    if (bEndMin < locStartMin) bEndMin = locStartMin;
+
+                    setPickupStartTime(`${String(Math.floor(bStartMin / 60)).padStart(2, '0')}:${String(bStartMin % 60).padStart(2, '0')}`);
+                    setPickupEndTime(`${String(Math.floor(bEndMin / 60)).padStart(2, '0')}:${String(bEndMin % 60).padStart(2, '0')}`);
                     setShowPickupEditor(false);
                     setUseBusinessHours(false);
                     setDetailMaxPerCustomer((basket as any).maxPerCustomer ?? 5);
@@ -571,7 +593,12 @@ export default function MyBasketsScreen() {
                     padding: 16,
                     marginTop: 8,
                   }}>
-                    {/* Start Time */}
+                    {/* Business hours hint */}
+                    <Text style={{ color: theme.colors.muted, ...theme.typography.caption, marginBottom: 8 }}>
+                      {t('business.baskets.withinHours', { defaultValue: 'Must be within location hours' })} ({pickupStart} - {pickupEnd})
+                    </Text>
+
+                    {/* Start Time — clamped to location hours */}
                     <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
                       <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm }}>
                         {t('business.availability.startTime', { defaultValue: 'Start Time' })}
@@ -580,7 +607,10 @@ export default function MyBasketsScreen() {
                         <TouchableOpacity
                           onPress={() => {
                             const [h, m] = pickupStartTime.split(':').map(Number);
-                            const newH = h > 0 ? h - 1 : 23;
+                            const [minH, minM] = pickupStart.split(':').map(Number);
+                            let newH = h > 0 ? h - 1 : 23;
+                            // Clamp: don't go below location start hour
+                            if (newH < minH || (newH === minH && m < minM)) { newH = minH; }
                             setPickupStartTime(`${String(newH).padStart(2, '0')}:${String(m).padStart(2, '0')}`);
                           }}
                           style={{ backgroundColor: theme.colors.surface, borderRadius: 8, width: 32, height: 32, justifyContent: 'center', alignItems: 'center' }}
@@ -595,7 +625,10 @@ export default function MyBasketsScreen() {
                         <TouchableOpacity
                           onPress={() => {
                             const [h, m] = pickupStartTime.split(':').map(Number);
-                            const newH = h < 23 ? h + 1 : 0;
+                            const [maxH] = pickupEnd.split(':').map(Number);
+                            let newH = h < 23 ? h + 1 : 0;
+                            // Clamp: don't go above location end hour
+                            if (newH > maxH) { newH = maxH; }
                             setPickupStartTime(`${String(newH).padStart(2, '0')}:${String(m).padStart(2, '0')}`);
                           }}
                           style={{ backgroundColor: theme.colors.surface, borderRadius: 8, width: 32, height: 32, justifyContent: 'center', alignItems: 'center' }}
@@ -605,7 +638,7 @@ export default function MyBasketsScreen() {
                       </View>
                     </View>
 
-                    {/* End Time */}
+                    {/* End Time — clamped to location hours */}
                     <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
                       <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm }}>
                         {t('business.availability.endTime', { defaultValue: 'End Time' })}
@@ -614,7 +647,10 @@ export default function MyBasketsScreen() {
                         <TouchableOpacity
                           onPress={() => {
                             const [h, m] = pickupEndTime.split(':').map(Number);
-                            const newH = h > 0 ? h - 1 : 23;
+                            const [minH] = pickupStart.split(':').map(Number);
+                            let newH = h > 0 ? h - 1 : 23;
+                            // Clamp: don't go below location start hour
+                            if (newH < minH) { newH = minH; }
                             setPickupEndTime(`${String(newH).padStart(2, '0')}:${String(m).padStart(2, '0')}`);
                           }}
                           style={{ backgroundColor: theme.colors.surface, borderRadius: 8, width: 32, height: 32, justifyContent: 'center', alignItems: 'center' }}
@@ -629,7 +665,10 @@ export default function MyBasketsScreen() {
                         <TouchableOpacity
                           onPress={() => {
                             const [h, m] = pickupEndTime.split(':').map(Number);
-                            const newH = h < 23 ? h + 1 : 0;
+                            const [maxH, maxM] = pickupEnd.split(':').map(Number);
+                            let newH = h < 23 ? h + 1 : 0;
+                            // Clamp: don't go above location end hour
+                            if (newH > maxH || (newH === maxH && m > maxM)) { newH = maxH; }
                             setPickupEndTime(`${String(newH).padStart(2, '0')}:${String(m).padStart(2, '0')}`);
                           }}
                           style={{ backgroundColor: theme.colors.surface, borderRadius: 8, width: 32, height: 32, justifyContent: 'center', alignItems: 'center' }}
@@ -672,7 +711,40 @@ export default function MyBasketsScreen() {
               <TouchableOpacity
                 onPress={() => {
                   if (detailBasket) {
-                    // Update the basket's available_quantity (backend also syncs to location)
+                    // Validate price: original must be at least 10 TND
+                    if (detailBasket.originalPrice > 0 && detailBasket.originalPrice < 10) {
+                      Alert.alert(t('common.error'), t('business.createBasket.minOriginalPrice', { defaultValue: 'Original price must be at least 10 TND.' }));
+                      return;
+                    }
+                    // Validate price: selling price must be at most 50% of original
+                    if (detailBasket.originalPrice > 0 && detailBasket.discountedPrice > detailBasket.originalPrice * 0.5) {
+                      Alert.alert(t('common.error'), t('business.createBasket.priceError'));
+                      return;
+                    }
+                    // Validate pickup times are within location hours before saving
+                    const lsH = parseInt(pickupStart) || 0;
+                    const lsM = parseInt(pickupStart.split(':')[1]) || 0;
+                    const leH = parseInt(pickupEnd) || 23;
+                    const leM = parseInt(pickupEnd.split(':')[1]) || 59;
+                    const lsMin = lsH * 60 + lsM;
+                    const leMin = leH * 60 + leM;
+                    const psH = parseInt(pickupStartTime) || 0;
+                    const psM = parseInt(pickupStartTime.split(':')[1]) || 0;
+                    const peH = parseInt(pickupEndTime) || 0;
+                    const peM = parseInt(pickupEndTime.split(':')[1]) || 0;
+                    let psMin = psH * 60 + psM;
+                    let peMin = peH * 60 + peM;
+
+                    // Force clamp on save
+                    if (psMin < lsMin) psMin = lsMin;
+                    if (psMin > leMin) psMin = leMin;
+                    if (peMin > leMin) peMin = leMin;
+                    if (peMin < lsMin) peMin = lsMin;
+                    if (peMin <= psMin) peMin = psMin + 5; // ensure end > start
+
+                    const clampedStart = `${String(Math.floor(psMin / 60)).padStart(2, '0')}:${String(psMin % 60).padStart(2, '0')}`;
+                    const clampedEnd = `${String(Math.floor(peMin / 60)).padStart(2, '0')}:${String(peMin % 60).padStart(2, '0')}`;
+
                     basketUpdateMutation.mutate(
                       {
                         id: detailBasket.id,
@@ -681,8 +753,8 @@ export default function MyBasketsScreen() {
                           original_price: detailBasket.originalPrice,
                           selling_price: detailBasket.discountedPrice,
                           quantity: detailTodayQty,
-                          pickup_start_time: `${pickupStartTime}:00`,
-                          pickup_end_time: `${pickupEndTime}:00`,
+                          pickup_start_time: `${clampedStart}:00`,
+                          pickup_end_time: `${clampedEnd}:00`,
                         },
                       },
                       {

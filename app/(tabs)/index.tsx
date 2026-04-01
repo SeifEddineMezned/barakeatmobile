@@ -18,10 +18,10 @@ import { normalizeLocationToBasket } from '@/src/utils/normalizeRestaurant';
 import { useHeroStore } from '@/src/stores/heroStore';
 import { useAddressStore } from '@/src/stores/addressStore';
 import { useNotificationStore } from '@/src/stores/notificationStore';
+import { fetchHeroSlides, type HeroSlide } from '@/src/services/heroSlides';
 import { StatusBar } from 'expo-status-bar';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
-const CAROUSEL_PAGES = 2;
 
 let MapView: any = null;
 let MapMarker: any = null;
@@ -95,24 +95,36 @@ export default function HomeScreen() {
 
   // PanResponder on the entire content section (search + cards area)
   // Uses capture phase to intercept before ScrollView claims the gesture
+  // Track whether we've claimed the gesture to prevent stuck states
+  const gestureClaimedRef = useRef(false);
+
   const contentPanResponder = useMemo(() =>
     PanResponder.create({
       onStartShouldSetPanResponder: () => false,
-      onMoveShouldSetPanResponder: () => false,
+      onMoveShouldSetPanResponder: (_, g) => {
+        // Fallback: also claim on the non-capture phase for Android compatibility
+        if (gestureClaimedRef.current) return true;
+        if (Math.abs(g.dy) <= Math.abs(g.dx) || Math.abs(g.dy) < 8) return false;
+        if (heroRawRef.current > 0.05 && g.dy < -8) return true;
+        if (heroRawRef.current < 0.95 && g.dy > 8 && scrollOffsetRef.current <= 2) return true;
+        if (heroRawRef.current > 0.9 && g.dy > 8 && scrollOffsetRef.current <= 2) return true;
+        return false;
+      },
       onMoveShouldSetPanResponderCapture: (_, g) => {
-        // Only intercept clearly vertical gestures
-        if (Math.abs(g.dy) <= Math.abs(g.dx) || Math.abs(g.dy) < 12) return false;
-        // Swipe up while hero is visible → capture to hide hero
-        if (heroRawRef.current > 0.1 && g.dy < -12) return true;
-        // Swipe down while hero is hidden AND scroll is at top → capture to show hero
-        if (heroRawRef.current < 0.1 && g.dy > 12 && scrollOffsetRef.current <= 2) return true;
+        // Only intercept clearly vertical gestures (lower thresholds for reliability)
+        if (Math.abs(g.dy) <= Math.abs(g.dx) || Math.abs(g.dy) < 8) return false;
+        // Swipe up while hero is at least partially visible → capture to hide hero
+        if (heroRawRef.current > 0.05 && g.dy < -8) { gestureClaimedRef.current = true; return true; }
+        // Swipe down while hero is not fully visible AND scroll is at top → capture to show hero
+        if (heroRawRef.current < 0.95 && g.dy > 8 && scrollOffsetRef.current <= 2) { gestureClaimedRef.current = true; return true; }
         // Swipe down while hero is FULLY visible AND scroll at top → capture for pull-to-refresh
-        if (heroRawRef.current > 0.9 && g.dy > 12 && scrollOffsetRef.current <= 2) return true;
+        if (heroRawRef.current > 0.9 && g.dy > 8 && scrollOffsetRef.current <= 2) { gestureClaimedRef.current = true; return true; }
         return false;
       },
       onPanResponderGrant: () => {
         dragStartRef.current = heroRawRef.current;
         refreshTriggeredRef.current = false;
+        gestureClaimedRef.current = true;
       },
       onPanResponderMove: (_, g) => {
         // If hero is fully visible and pulling down → pull-to-refresh gesture
@@ -126,6 +138,7 @@ export default function HomeScreen() {
         heroHeight.setValue(Math.max(0, Math.min(1, newVal)));
       },
       onPanResponderRelease: (_, g) => {
+        gestureClaimedRef.current = false;
         // Pull-to-refresh: if hero was fully visible and user pulled down enough
         if (dragStartRef.current > 0.9 && g.dy > 40) {
           // Keep icon at fixed position, spin it, wait 1s, then refresh
@@ -158,12 +171,21 @@ export default function HomeScreen() {
           Animated.timing(pullDistance, { toValue: 0, duration: 200, useNativeDriver: false }).start(() => setPulling(false));
           return;
         }
+        // Always snap to a definitive end state (0 or 1) — never leave in between
         const currentVal = heroRawRef.current;
-        if (g.vy < -0.5 || currentVal < 0.4) {
+        if (g.vy < -0.3 || currentVal < 0.4) {
           snapHero(false);
-        } else if (g.vy > 0.5 || currentVal > 0.6) {
+        } else if (g.vy > 0.3 || currentVal > 0.6) {
           snapHero(true);
         } else {
+          snapHero(currentVal >= 0.5);
+        }
+      },
+      onPanResponderTerminate: () => {
+        // If gesture is terminated (e.g. by ScrollView on Android), snap to nearest end state
+        gestureClaimedRef.current = false;
+        const currentVal = heroRawRef.current;
+        if (currentVal > 0 && currentVal < 1) {
           snapHero(currentVal >= 0.5);
         }
       },
@@ -329,25 +351,32 @@ export default function HomeScreen() {
   }, [handleRefresh]);
 
   const firstName = user?.firstName ?? user?.name?.split(' ')[0] ?? '';
+  const userGender = (user as any)?.gender ?? null; // 'male', 'female', or null
 
-  const newestPartner = useMemo(() => {
-    if (!baskets.length) return '';
-    return baskets[baskets.length - 1]?.merchantName ?? '';
-  }, [baskets]);
+  // Fetch dynamic hero slides from API
+  const heroSlidesQuery = useQuery({
+    queryKey: ['hero-slides'],
+    queryFn: fetchHeroSlides,
+    staleTime: 5 * 60_000,
+  });
+  const dynamicSlides = heroSlidesQuery.data ?? [];
 
+  // Total pages = 1 (welcome) + dynamic slides
+  const totalCarouselPages = 1 + dynamicSlides.length;
   const carouselWidth = SCREEN_WIDTH - 40;
 
   // Auto-scroll carousel every 10s
   useEffect(() => {
+    if (totalCarouselPages <= 1) return;
     const timer = setInterval(() => {
       setCarouselPage((prev) => {
-        const next = (prev + 1) % CAROUSEL_PAGES;
+        const next = (prev + 1) % totalCarouselPages;
         carouselRef.current?.scrollTo({ x: next * carouselWidth, animated: true });
         return next;
       });
     }, 10000);
     return () => clearInterval(timer);
-  }, [carouselWidth]);
+  }, [carouselWidth, totalCarouselPages]);
 
   // Only place markers for restaurants that have real backend coordinates
   const mapMarkers = baskets
@@ -390,21 +419,8 @@ export default function HomeScreen() {
           <ChevronDown size={13} color={heroVisible ? 'rgba(255,255,255,0.7)' : theme.colors.textSecondary} />
         </TouchableOpacity>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-          {/* Map pin button — opens the SAME existing navbar map (nearby tab) */}
-          <TouchableOpacity
-            onPress={() => router.push('/map-view' as never)}
-            style={{
-              width: 34,
-              height: 34,
-              borderRadius: 17,
-              backgroundColor: heroVisible ? 'rgba(255,255,255,0.18)' : theme.colors.surface,
-              justifyContent: 'center',
-              alignItems: 'center',
-            }}
-            accessibilityLabel="Open map"
-          >
-            <MapPin size={17} color={heroVisible ? '#e3ff5c' : theme.colors.primary} />
-          </TouchableOpacity>
+          {/* Spacer — the map button is rendered by the tab layout overlay so it can animate between tabs */}
+          <View pointerEvents="none" style={{ width: 34, height: 34 }} />
           <TouchableOpacity onPress={() => router.push('/settings' as never)}>
             <Settings size={20} color={heroVisible ? '#e3ff5c' : theme.colors.textPrimary} />
           </TouchableOpacity>
@@ -445,7 +461,7 @@ export default function HomeScreen() {
           }}
           style={{ width: carouselWidth }}
         >
-          {/* Page 1: Welcome */}
+          {/* Page 1: Welcome — always present */}
           <View style={{ width: carouselWidth, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
             <View style={{ flex: 1 }}>
               <Text style={{
@@ -467,44 +483,60 @@ export default function HomeScreen() {
                 <Hand size={24} color="rgba(255,255,255,0.9)" />
               </View>
             </View>
-            {/* Hero image */}
+            {/* Hero image — gender-based */}
             <Image
-              source={require('@/assets/images/man_holding_basket-removebg-preview.png')}
+              source={userGender === 'female'
+                ? require('@/assets/images/woman_holding_basket-removebg-preview.png')
+                : require('@/assets/images/man_holding_basket-removebg-preview.png')}
               style={{ width: HERO_HEIGHT * 0.68, height: HERO_HEIGHT * 0.92, marginLeft: 4 }}
               resizeMode="contain"
             />
           </View>
-          {/* Page 2: New Partner */}
-          <View style={{ width: carouselWidth, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-            <View style={{ flex: 1 }}>
-              <Text style={{
-                color: 'rgba(255,255,255,0.7)',
-                fontSize: 12,
-                fontFamily: 'Poppins_400Regular',
-              }}>
-                {t('home.newPartner', { defaultValue: 'New Partner' })}
-              </Text>
-              <Text style={{
-                color: '#fff',
-                fontSize: 18,
-                fontWeight: '700',
-                fontFamily: 'Poppins_700Bold',
-                marginTop: 4,
-              }}>
-                {newestPartner || '...'}
-              </Text>
+          {/* Dynamic slides from API */}
+          {dynamicSlides.map((slide: HeroSlide) => (
+            <View key={slide.id} style={{ width: carouselWidth, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+              <View style={{ flex: 1 }}>
+                {slide.subtitle ? (
+                  <Text style={{
+                    color: 'rgba(255,255,255,0.7)',
+                    fontSize: 12,
+                    fontFamily: 'Poppins_400Regular',
+                  }}>
+                    {slide.subtitle}
+                  </Text>
+                ) : null}
+                <Text style={{
+                  color: '#fff',
+                  fontSize: 18,
+                  fontWeight: '700',
+                  fontFamily: 'Poppins_700Bold',
+                  marginTop: 4,
+                }}>
+                  {slide.title}
+                </Text>
+              </View>
+              {slide.image_url ? (
+                <Image
+                  source={{ uri: slide.image_url }}
+                  style={{ width: HERO_HEIGHT * 0.5, height: HERO_HEIGHT * 0.68, marginLeft: 8 }}
+                  resizeMode="contain"
+                />
+              ) : (
+                <Image
+                  source={userGender === 'female'
+                    ? require('@/assets/images/woman_holding_basket-removebg-preview.png')
+                    : require('@/assets/images/man_holding_basket-removebg-preview.png')}
+                  style={{ width: HERO_HEIGHT * 0.5, height: HERO_HEIGHT * 0.68, marginLeft: 8 }}
+                  resizeMode="contain"
+                />
+              )}
             </View>
-            <Image
-              source={require('@/assets/images/man_holding_basket-removebg-preview.png')}
-              style={{ width: HERO_HEIGHT * 0.5, height: HERO_HEIGHT * 0.68, marginLeft: 8 }}
-              resizeMode="contain"
-            />
-          </View>
+          ))}
         </ScrollView>
 
         {/* Dot indicators */}
         <View style={{ flexDirection: 'row', justifyContent: 'center', marginTop: 6, marginBottom: 24 }}>
-          {[0, 1].map((i) => (
+          {Array.from({ length: totalCarouselPages }, (_, i) => (
             <View
               key={i}
               style={{

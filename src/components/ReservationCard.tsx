@@ -249,68 +249,71 @@ export function ReservationCard({ reservation, onCancel, onHide: _onHide, overri
     >
       {/* Collapsed header — always visible */}
       <TouchableOpacity onPress={handlePress} activeOpacity={0.85}>
-        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-          {/* Left: basket icon + text */}
-          <View style={{ flexDirection: 'row', alignItems: 'flex-start', flex: 1, gap: 10 }}>
-            {/* Basket type icon */}
-            <View
-              style={{
-                width: 40,
-                height: 40,
-                borderRadius: 10,
-                backgroundColor: theme.colors.primary + '15',
-                alignItems: 'center',
-                justifyContent: 'center',
-                marginTop: 2,
-              }}
-            >
-              <ShoppingBag size={18} color={theme.colors.primary} />
-            </View>
+        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+          {/* Left: basket icon */}
+          <View
+            style={{
+              width: 44,
+              height: 44,
+              borderRadius: 12,
+              backgroundColor: theme.colors.primary + '12',
+              alignItems: 'center',
+              justifyContent: 'center',
+              marginRight: 12,
+            }}
+          >
+            <ShoppingBag size={20} color={theme.colors.primary} />
+          </View>
 
-            <View style={{ flex: 1 }}>
-              {/* Basket type name — PRIMARY info */}
+          {/* Center: text info */}
+          <View style={{ flex: 1 }}>
+            <Text
+              style={[{ color: theme.colors.textPrimary, ...theme.typography.body, fontWeight: '700' as const }]}
+              numberOfLines={1}
+            >
+              {basketTypeName}
+            </Text>
+
+            {merchantName ? (
               <Text
-                style={[{ color: theme.colors.textPrimary, ...theme.typography.body, fontWeight: '700' as const }]}
+                style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, marginTop: 2 }]}
                 numberOfLines={1}
               >
-                {basketTypeName}
+                {merchantName}
               </Text>
+            ) : null}
 
-              {/* Merchant name — SECONDARY info */}
-              {merchantName ? (
-                <Text
-                  style={[{ color: theme.colors.textSecondary, ...theme.typography.bodySm, marginTop: 1 }]}
-                  numberOfLines={1}
-                >
-                  {merchantName}
+            <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 4, gap: 8 }}>
+              {total > 0 && (
+                <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '600' as const }]}>
+                  {total} TND
                 </Text>
-              ) : null}
-
-              {/* Quantity · Price */}
-              <Text style={[{ color: theme.colors.muted, ...theme.typography.caption, marginTop: 2 }]}>
-                ×{quantity}{total > 0 ? ` · ${total} TND` : ''}
-                {orderDate
-                  ? `  ·  ${orderDate.toLocaleDateString()}`
-                  : ''}
-                {pickupWindow
-                  ? `  ·  ${pickupWindow.start}–${pickupWindow.end}`
-                  : ''}
-              </Text>
-
-              {/* Live countdown pill */}
-              {pickupInfo ? (
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 4 }}>
-                  <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: pickupInfo.color }} />
-                  <Text style={{ color: pickupInfo.color, ...theme.typography.caption, fontWeight: '600' }}>
-                    {pickupInfo.label} {pickupInfo.time}
-                  </Text>
-                </View>
-              ) : null}
+              )}
+              {quantity > 1 && (
+                <Text style={[{ color: theme.colors.muted, ...theme.typography.caption }]}>
+                  x{quantity}
+                </Text>
+              )}
+              {orderDate && (
+                <Text style={[{ color: theme.colors.muted, ...theme.typography.caption }]}>
+                  {orderDate.toLocaleDateString()}
+                </Text>
+              )}
             </View>
+
+            {/* Live countdown pill */}
+            {pickupInfo ? (
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 4 }}>
+                <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: pickupInfo.color }} />
+                <Text style={{ color: pickupInfo.color, ...theme.typography.caption, fontWeight: '600' }}>
+                  {pickupInfo.label} {pickupInfo.time}
+                </Text>
+              </View>
+            ) : null}
           </View>
 
           {/* Right: status badge + chevron */}
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginLeft: 8 }}>
+          <View style={{ flexDirection: 'column', alignItems: 'flex-end', gap: 4, marginLeft: 8 }}>
             <View
               style={{
                 backgroundColor: getStatusColor() + '20',
@@ -357,7 +360,8 @@ export function ReservationCard({ reservation, onCancel, onHide: _onHide, overri
               </View>
             ) : null}
 
-            {pickupCode ? (
+            {/* Show pickup code only for upcoming orders */}
+            {isUpcoming && pickupCode ? (
               <View
                 style={[
                   styles.pickupCodeContainer,
@@ -380,25 +384,23 @@ export function ReservationCard({ reservation, onCancel, onHide: _onHide, overri
                       {pickupCode}
                     </Text>
                   </View>
-                  {isUpcoming && (
-                    <TouchableOpacity
-                      onPress={handleToggleQR}
-                      style={[
-                        styles.qrButton,
-                        {
-                          backgroundColor: 'rgba(255,255,255,0.2)',
-                          borderRadius: theme.radii.r12,
-                          padding: theme.spacing.md,
-                        },
-                      ]}
-                    >
-                      {qrLoading ? (
-                        <ActivityIndicator size="small" color="#fff" />
-                      ) : (
-                        <QrCode size={22} color="#fff" />
-                      )}
-                    </TouchableOpacity>
-                  )}
+                  <TouchableOpacity
+                    onPress={handleToggleQR}
+                    style={[
+                      styles.qrButton,
+                      {
+                        backgroundColor: 'rgba(255,255,255,0.2)',
+                        borderRadius: theme.radii.r12,
+                        padding: theme.spacing.md,
+                      },
+                    ]}
+                  >
+                    {qrLoading ? (
+                      <ActivityIndicator size="small" color="#fff" />
+                    ) : (
+                      <QrCode size={22} color="#fff" />
+                    )}
+                  </TouchableOpacity>
                 </View>
                 {qrExpanded && qrDataUrl ? (
                   <View style={[styles.qrContainer, { marginTop: theme.spacing.lg, alignItems: 'center' }]}>

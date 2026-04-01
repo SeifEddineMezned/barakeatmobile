@@ -161,6 +161,7 @@
     "directions": "Itinéraire",
     "reserveBasket": "Réserver Panier",
     "soldOut": "Épuisé",
+    "from": "À partir de",
     "notifyMe": "Me Notifier",
     "partnerBadge": "Partenaire engagé contre le gaspillage alimentaire",
     "overallExperience": "Expérience Générale",
@@ -206,7 +207,9 @@
     "payCashDesc": "Payez le commerçant au retrait",
     "payCard": "Payer par carte",
     "payCardDesc": "Bientôt disponible",
-    "cashWarning": "Prêt à récupérer ce panier ?\n\nSi vos plans changent, annulez tôt — cela libère la place pour quelqu'un d'autre.\n\nAttention : des absences répétées sans annulation peuvent entraîner une pause temporaire de vos réservations.",
+    "cashWarning": "Prêt à récupérer ce panier ?\n\nSi vos plans changent, annulez tôt, cela libère la place pour quelqu'un d'autre.\n\nAttention : des absences répétées sans annulation peuvent entraîner une pause temporaire de vos réservations.",
+    "cashWarningIntro": "Prêt à récupérer ce panier ?\n\nSi vos plans changent, annulez tôt, cela libère la place pour quelqu'un d'autre.",
+    "cashWarningBan": "Des absences répétées sans annulation peuvent entraîner une pause temporaire de vos réservations.",
     "shareCode": "Partager les infos de retrait"
   },
   "orders": {
@@ -324,6 +327,10 @@
     "confirmPasswordLabel": "Confirmer le mot de passe",
     "profileUpdated": "Profil mis \u00e0 jour.",
     "editProfile": "Modifier",
+    "gender": "Genre",
+    "genderMale": "Homme",
+    "genderFemale": "Femme",
+    "genderNotSet": "Non défini",
     "businessesTried": "Commerces essayés",
     "deleteAccount": "Supprimer le compte",
     "deleteAccountConfirm": "Êtes-vous sûr de vouloir supprimer définitivement votre compte ? Cette action est irréversible.",
@@ -383,14 +390,42 @@
     "dragToMove": "Déplacez la carte pour repositionner le repère"
   },
   "map": {
-    "title": "À Proximité",
-    "viewDetails": "Voir Détails"
+    "title": "A Proximite",
+    "viewDetails": "Voir Details",
+    "noSpotsRadius": "Aucun endroit dans un rayon de {{radius}} km",
+    "availableLocations": "Emplacements disponibles"
+  },
+  "categories": {
+    "bakery": "Boulangerie",
+    "boulangerie": "Boulangerie",
+    "patisserie": "Pâtisserie",
+    "restaurant": "Restaurant",
+    "restaurants": "Restaurant",
+    "meals": "Repas",
+    "supermarket": "Supermarché",
+    "grocery": "Épicerie",
+    "cafe": "Café",
+    "café": "Café",
+    "coffee": "Café",
+    "fast_food": "Restauration rapide",
+    "fast food": "Restauration rapide",
+    "snack": "Snack",
+    "fresh": "Produits frais",
+    "traiteur": "Traiteur"
+  },
+  "timeAgo": {
+    "seconds": "{{count}}s",
+    "minutes": "{{count}}m",
+    "hours": "{{count}}h",
+    "days": "{{count}}j",
+    "weeks": "{{count}}sem",
+    "months": "{{count}}mo"
   },
   "notifications": {
     "title": "Notifications",
     "markAllRead": "Tout marquer lu",
     "empty": "Aucune notification",
-    "justNow": "À l'instant",
+    "justNow": "A l'instant",
     "notif_title_new_reservation": "Nouvelle réservation",
     "notif_title_reservation_cancelled": "Réservation annulée",
     "notif_title_pickup_confirmed": "Retrait confirmé",
@@ -478,7 +513,8 @@
       "defaultQty": "Réinit. journalière",
       "addPhoto": "Ajouter une photo",
       "maxPerCustomer": "Max paniers par client",
-      "sameAllDays": "Même pour tous les jours"
+      "sameAllDays": "Meme pour tous les jours",
+      "withinHours": "Doit être dans les horaires du commerce"
     },
     "orders": {
       "title": "Commandes",
@@ -599,6 +635,7 @@
       "originalPrice": "Prix original (TND)",
       "discountedPrice": "Prix réduit (TND)",
       "priceError": "Le prix réduit doit être au moins 50% inférieur au prix original.",
+      "minOriginalPrice": "Le prix original doit être d'au moins 10 TND.",
       "save": "Enregistrer",
       "create": "Créer le panier",
       "basketContents": "Contenu du panier",
@@ -607,6 +644,8 @@
       "nameRequired": "Le nom est requis.",
       "sellingPriceRequired": "Le prix de vente est requis.",
       "quantityRequired": "La quantité doit être d'au moins 1.",
+      "zeroQtyTitle": "Quantité à 0",
+      "zeroQtyMsg": "La quantité quotidienne est à 0. Êtes-vous sûr ?",
       "goToMenuItems": "Aller aux articles du menu",
       "menuItems": "Articles du menu",
       "menuItemsDesc": "Sélectionnez les articles du menu dans ce panier (optionnel)",
@@ -655,6 +694,8 @@
       "pickupEnd": "Fin du retrait",
       "startTime": "Heure de début",
       "endTime": "Heure de fin",
+      "editPickupTime": "Modifier l'heure de retrait",
+      "hidePickupEditor": "Masquer l'éditeur d'horaire",
       "useBusinessHours": "Utiliser les horaires du commerce pour le retrait",
       "paused": "Restaurant en pause",
       "active": "Restaurant actif",
@@ -757,7 +798,23 @@
     "warningDesc": "Commandez bientôt pour garder votre série active. Elle expire après 7 jours d'inactivité.",
     "days": "jours de série",
     "orderNow": "Commander",
-    "later": "Plus tard"
+    "later": "Plus tard",
+    "current": "Série actuelle",
+    "longest": "Plus longue série",
+    "lastOrder": "Dernière commande",
+    "expiresLabel": "Expire dans",
+    "expiresIn": "Expire dans {{days}} jour(s)",
+    "expiresSoon": "Expire bientôt !",
+    "description": "Votre série compte les semaines consécutives avec au moins une commande. Elle se réinitialise après 7 jours d'inactivité.",
+    "daysUnit": "jours"
+  },
+  "level": {
+    "description": "Gagnez de l'XP en sauvant de la nourriture. La barre se remplit et vous montez de niveau en atteignant 100 XP.",
+    "toNext": "pour le prochain niveau",
+    "howItWorks": "Comment ça marche",
+    "rule1": "Chaque panier sauvé = +10 XP",
+    "rule2": "Tous les 100 XP = 1 niveau",
+    "rule3": "Total XP gagné jusqu'ici :"
   },
   "badges": {
     "newBadge": "Nouveau badge débloqué !",
@@ -786,7 +843,9 @@
     "badge_ramadan_saver": "Esprit Ramadan",
     "badge_ramadan_saver_desc": "Nourriture sauvée pendant le Ramadan",
     "badge_early_bird": "Lève-tôt",
-    "badge_early_bird_desc": "3 repas sauvés dans votre première semaine"
+    "badge_early_bird_desc": "3 repas sauvés dans votre première semaine",
+    "unlockedOn": "Débloqué le",
+    "lockedDesc": "Continuez à sauver de la nourriture pour débloquer ce badge !"
   },
   "tutorial": {
     "getStarted": "C'est parti !",

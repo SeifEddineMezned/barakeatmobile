@@ -104,6 +104,9 @@ export const FeatureFlags = {
   // Toggle the view with the grid/chart button in the team screen header.
   ENABLE_TEAM_ORG_CHART: true,
 
+  // ── Payment ──────────────────────────────────────────────────────────────
+  ENABLE_CARD_PAYMENT: false,  // Card payment at checkout — enable when payment provider is integrated
+
   // ── Previously disabled ──────────────────────────────────────────────────
   ENABLE_MAX_PER_CUSTOMER: false,  // Per-basket cap on how many a single customer can reserve
   ENABLE_GROWING_TREE: false,

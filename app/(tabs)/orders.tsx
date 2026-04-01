@@ -415,7 +415,7 @@ export default function OrdersScreen() {
   if (!isAuthenticated) {
     return (
       <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]} edges={['top']}>
-        <View style={[styles.header, { paddingHorizontal: theme.spacing.xl, paddingTop: theme.spacing.xs }]}>
+        <View style={[styles.header, { paddingHorizontal: theme.spacing.xl, paddingTop: 50 }]}>
           <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h1 }]}>{t('orders.title')}</Text>
         </View>
         <View style={styles.emptyState}>
@@ -433,7 +433,7 @@ export default function OrdersScreen() {
   if (hasNoOrders) {
     return (
       <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]} edges={['top']}>
-        <View style={[styles.header, { paddingHorizontal: theme.spacing.xl, paddingTop: theme.spacing.xs }]}>
+        <View style={[styles.header, { paddingHorizontal: theme.spacing.xl, paddingTop: 50 }]}>
           <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h1 }]}>{t('orders.title')}</Text>
         </View>
         <View style={{ flex: 1, justifyContent: 'flex-start', alignItems: 'center', paddingTop: 100, paddingHorizontal: 32 }}>
@@ -459,11 +459,8 @@ export default function OrdersScreen() {
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]} edges={['top']}>
-      <View style={[styles.header, { paddingHorizontal: theme.spacing.xl, paddingTop: theme.spacing.xs }]}>
-        <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h1 }]}>{t('orders.title')}</Text>
-      </View>
-
-      <ScrollView style={styles.content} contentContainerStyle={[{ padding: theme.spacing.xl, paddingBottom: 100 }]}>
+      <ScrollView style={styles.content} contentContainerStyle={[{ padding: theme.spacing.xl, paddingTop: 50, paddingBottom: 100 }]}>
+        <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h1, marginBottom: theme.spacing.sm }]}>{t('orders.title')}</Text>
         {reservationsQuery.isLoading ? (
           <DelayedLoader />
         ) : reservationsQuery.isError ? (
@@ -550,7 +547,7 @@ export default function OrdersScreen() {
 
             {/* Order History */}
             {displayedOrders.length === 0 ? (
-              <View style={{ alignItems: 'center', paddingTop: 40, paddingHorizontal: 20 }}>
+              <View style={{ alignItems: 'center', paddingTop: 50, paddingHorizontal: 20 }}>
                 {/* Illustration — mock order card with a bag icon */}
                 <View style={{ marginBottom: 24, alignItems: 'center' }}>
                   <View style={{

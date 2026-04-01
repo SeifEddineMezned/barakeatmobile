@@ -60,18 +60,18 @@ export default function FavoritesScreen() {
     <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]} edges={['top']}>
       {favoriteBaskets.length > 0 ? (
         <>
-          <View style={[styles.header, { paddingHorizontal: theme.spacing.xl, paddingTop: theme.spacing.xs, paddingBottom: theme.spacing.sm, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }]}>
-            <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h1 }]}>{t('favorites.title')}</Text>
-            <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: theme.colors.primary + '14', borderRadius: 20, paddingHorizontal: 12, paddingVertical: 6, gap: 5 }}>
-              <Text style={{ color: theme.colors.primary, fontSize: 14, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>{favoriteBaskets.length}</Text>
-              <Heart size={14} color={theme.colors.primary} fill={theme.colors.primary} />
-            </View>
-          </View>
           <ScrollView
             style={styles.content}
-            contentContainerStyle={{ padding: theme.spacing.xl, paddingBottom: 100 }}
+            contentContainerStyle={{ padding: theme.spacing.xl, paddingTop: 50, paddingBottom: 100 }}
             showsVerticalScrollIndicator={false}
           >
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: theme.spacing.sm }}>
+              <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h1 }]}>{t('favorites.title')}</Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: theme.colors.primary + '14', borderRadius: 20, paddingHorizontal: 12, paddingVertical: 6, gap: 5 }}>
+                <Text style={{ color: theme.colors.primary, fontSize: 14, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>{favoriteBaskets.length}</Text>
+                <Heart size={14} color={theme.colors.primary} fill={theme.colors.primary} />
+              </View>
+            </View>
             {favoriteBaskets.map((basket) => (
               <BasketCard
                 key={basket.id}
@@ -84,7 +84,7 @@ export default function FavoritesScreen() {
         </>
       ) : (
         <>
-        <View style={[styles.header, { paddingHorizontal: theme.spacing.xl, paddingTop: theme.spacing.xs, paddingBottom: theme.spacing.sm }]}>
+        <View style={[styles.header, { paddingHorizontal: theme.spacing.xl, paddingTop: 50, paddingBottom: theme.spacing.sm }]}>
           <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h1 }]}>{t('favorites.title')}</Text>
         </View>
         <View style={styles.emptyContainer}>

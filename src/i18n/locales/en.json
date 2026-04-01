@@ -161,6 +161,7 @@
     "directions": "Directions",
     "reserveBasket": "Reserve Basket",
     "soldOut": "Sold Out",
+    "from": "from",
     "notifyMe": "Notify Me",
     "partnerBadge": "Engaged partner against food waste",
     "overallExperience": "Overall Experience",
@@ -206,7 +207,9 @@
     "payCashDesc": "Pay the merchant at pickup",
     "payCard": "Pay by Card",
     "payCardDesc": "Coming soon",
-    "cashWarning": "Ready to pick up this basket?\n\nIf your plans change, please cancel early — it frees up the spot for someone else.\n\nHeads up: repeated no-shows without cancelling may lead to a temporary pause on your reservations.",
+    "cashWarning": "Ready to pick up this basket?\n\nIf your plans change, please cancel early, it frees up the spot for someone else.\n\nHeads up: repeated no shows without cancelling may lead to a temporary pause on your reservations.",
+    "cashWarningIntro": "Ready to pick up this basket?\n\nIf your plans change, please cancel early, it frees up the spot for someone else.",
+    "cashWarningBan": "Repeated no shows without cancelling may lead to a temporary pause on your reservations.",
     "shareCode": "Share pickup info"
   },
   "orders": {
@@ -324,6 +327,10 @@
     "confirmPasswordLabel": "Confirm Password",
     "profileUpdated": "Profile updated.",
     "editProfile": "Edit",
+    "gender": "Gender",
+    "genderMale": "Male",
+    "genderFemale": "Female",
+    "genderNotSet": "Not set",
     "businessesTried": "Places Tried",
     "deleteAccount": "Delete Account",
     "deleteAccountConfirm": "Are you sure you want to permanently delete your account? This action cannot be undone.",
@@ -342,9 +349,9 @@
       "vegetarian": "Vegetarian",
       "vegan": "Vegan",
       "halal": "Halal",
-      "gluten_free": "Gluten-Free",
+      "gluten_free": "Gluten Free",
       "nut_allergy": "Nut Allergy",
-      "lactose_free": "Lactose-Free",
+      "lactose_free": "Lactose Free",
       "shellfish_allergy": "Shellfish Allergy",
       "no_pork": "No Pork"
     }
@@ -382,7 +389,35 @@
   },
   "map": {
     "title": "Nearby",
-    "viewDetails": "View Details"
+    "viewDetails": "View Details",
+    "noSpotsRadius": "No spots within {{radius}} km",
+    "availableLocations": "Available locations"
+  },
+  "categories": {
+    "bakery": "Bakery",
+    "boulangerie": "Bakery",
+    "patisserie": "Pastry Shop",
+    "restaurant": "Restaurant",
+    "restaurants": "Restaurant",
+    "meals": "Meals",
+    "supermarket": "Supermarket",
+    "grocery": "Grocery",
+    "cafe": "Café",
+    "café": "Café",
+    "coffee": "Coffee Shop",
+    "fast_food": "Fast Food",
+    "fast food": "Fast Food",
+    "snack": "Snack",
+    "fresh": "Fresh Produce",
+    "traiteur": "Catering"
+  },
+  "timeAgo": {
+    "seconds": "{{count}}s",
+    "minutes": "{{count}}m",
+    "hours": "{{count}}h",
+    "days": "{{count}}d",
+    "weeks": "{{count}}w",
+    "months": "{{count}}mo"
   },
   "notifications": {
     "title": "Notifications",
@@ -476,7 +511,8 @@
       "defaultQty": "Daily Reset",
       "addPhoto": "Add Photo",
       "maxPerCustomer": "Max bags per customer",
-      "sameAllDays": "Same for all days"
+      "sameAllDays": "Same for all days",
+      "withinHours": "Must be within location hours"
     },
     "orders": {
       "title": "Orders",
@@ -596,6 +632,7 @@
       "originalPrice": "Original Price (TND)",
       "discountedPrice": "Discounted Price (TND)",
       "priceError": "Discounted price must be at least 50% lower than original price.",
+      "minOriginalPrice": "Original price must be at least 10 TND.",
       "save": "Save",
       "create": "Create Basket",
       "basketContents": "Basket contents",
@@ -604,6 +641,8 @@
       "nameRequired": "Name is required.",
       "sellingPriceRequired": "Selling price is required.",
       "quantityRequired": "Quantity must be at least 1.",
+      "zeroQtyTitle": "Quantity is 0",
+      "zeroQtyMsg": "The daily quantity is set to 0. Are you sure?",
       "goToMenuItems": "Go to Menu Items",
       "menuItems": "Menu Items",
       "menuItemsDesc": "Select which menu items are in this basket (optional)",
@@ -652,6 +691,8 @@
       "pickupEnd": "Pickup End",
       "startTime": "Start Time",
       "endTime": "End Time",
+      "editPickupTime": "Edit pickup time",
+      "hidePickupEditor": "Hide pickup time editor",
       "useBusinessHours": "Use business hours for pickup",
       "paused": "Restaurant Paused",
       "active": "Restaurant Active",
@@ -749,12 +790,28 @@
     "levelUp": "Level Up!",
     "levelUpDesc": "You reached level {{level}}!"
   },
+  "level": {
+    "description": "Earn XP by saving food. The bar fills up and you level up when it reaches 100 XP.",
+    "toNext": "to next level",
+    "howItWorks": "How it works",
+    "rule1": "Each basket saved = +10 XP",
+    "rule2": "Every 100 XP = 1 level up",
+    "rule3": "Total XP earned so far:"
+  },
   "streak": {
     "warningTitle": "Your streak is about to expire!",
     "warningDesc": "Order soon to keep your streak alive. It expires after 7 days of inactivity.",
     "days": "day streak",
     "orderNow": "Order Now",
-    "later": "Later"
+    "later": "Later",
+    "current": "Current streak",
+    "longest": "Longest streak",
+    "lastOrder": "Last order",
+    "expiresLabel": "Expires in",
+    "expiresIn": "Expires in {{days}} day(s)",
+    "expiresSoon": "Expires soon!",
+    "description": "Your streak counts consecutive weeks with at least one order. It resets after 7 days of inactivity.",
+    "daysUnit": "days"
   },
   "badges": {
     "newBadge": "New Badge Unlocked!",
@@ -783,7 +840,9 @@
     "badge_ramadan_saver": "Ramadan Spirit",
     "badge_ramadan_saver_desc": "Saved food during Ramadan",
     "badge_early_bird": "Early Bird",
-    "badge_early_bird_desc": "Rescued 3 meals in your first week"
+    "badge_early_bird_desc": "Rescued 3 meals in your first week",
+    "unlockedOn": "Unlocked on",
+    "lockedDesc": "Keep saving food to unlock this badge!"
   },
   "tutorial": {
     "getStarted": "Get Started",

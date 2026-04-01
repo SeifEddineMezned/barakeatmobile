@@ -245,12 +245,12 @@ export default function BasketDetailsScreen() {
                 {basket.pickupWindow.start} - {basket.pickupWindow.end}
               </Text>
             </View>
-            <View style={[styles.infoChip, { backgroundColor: theme.colors.surface, borderRadius: theme.radii.pill, ...theme.shadows.shadowSm }]}>
+            <TouchableOpacity onPress={handleDirections} activeOpacity={0.7} style={[styles.infoChip, { backgroundColor: theme.colors.surface, borderRadius: theme.radii.pill, ...theme.shadows.shadowSm }]}>
               <MapPin size={13} color={theme.colors.primary} />
               <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.caption, fontWeight: '500' as const, marginLeft: 4 }]}>
                 {basket.distance}km
               </Text>
-            </View>
+            </TouchableOpacity>
             <View style={[styles.infoChip, { backgroundColor: theme.colors.bagsLeftBg, borderRadius: theme.radii.pill }]}>
               <Text style={[{ color: theme.colors.primary, ...theme.typography.caption, fontWeight: '600' as const }]}>
                 {t('basket.payOnPickup')}
@@ -288,24 +288,6 @@ export default function BasketDetailsScreen() {
                 </Text>
               </View>
             </View>
-          </View>
-
-          {/* Quick action buttons — Call & Directions (above content) */}
-          <View style={{ flexDirection: 'row', gap: 10, marginTop: theme.spacing.md }}>
-            <TouchableOpacity
-              style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.surface, borderRadius: theme.radii.r12, paddingVertical: 12, gap: 6, ...theme.shadows.shadowSm }}
-              onPress={handleCall}
-            >
-              <Phone size={16} color={theme.colors.primary} />
-              <Text style={{ color: theme.colors.primary, ...theme.typography.bodySm, fontWeight: '600' }}>{t('basket.call')}</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: theme.colors.surface, borderRadius: theme.radii.r12, paddingVertical: 12, gap: 6, ...theme.shadows.shadowSm }}
-              onPress={handleDirections}
-            >
-              <Navigation size={16} color={theme.colors.primary} />
-              <Text style={{ color: theme.colors.primary, ...theme.typography.bodySm, fontWeight: '600' }}>{t('basket.directions')}</Text>
-            </TouchableOpacity>
           </View>
 
           {/* Description */}
@@ -440,8 +422,34 @@ export default function BasketDetailsScreen() {
       >
         <PrimaryCTAButton
           onPress={handleReserve}
-          title={t('basket.reserveBasket')}
-          disabled={basket.quantityLeft === 0}
+          title={
+            basket.quantityLeft <= 0
+              ? t('basket.soldOut')
+              : (() => {
+                  const endStr = basket.pickupWindow?.end;
+                  if (endStr) {
+                    const [eh, em] = endStr.split(':').map(Number);
+                    if (!isNaN(eh) && !isNaN(em)) {
+                      const now = new Date();
+                      const endDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), eh, em);
+                      if (now > endDate) return t('orders.status.expired', { defaultValue: 'Expired' });
+                    }
+                  }
+                  return t('basket.reserveBasket');
+                })()
+          }
+          disabled={
+            basket.quantityLeft <= 0 ||
+            (() => {
+              const endStr = basket.pickupWindow?.end;
+              if (!endStr) return false;
+              const [eh, em] = endStr.split(':').map(Number);
+              if (isNaN(eh) || isNaN(em)) return false;
+              const now = new Date();
+              const endDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), eh, em);
+              return now > endDate;
+            })()
+          }
         />
       </View>
 

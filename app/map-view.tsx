@@ -510,7 +510,7 @@ export default function MapViewScreen() {
               <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3 }}>
                 {nearbyBaskets.length > 0
                   ? `${nearbyBaskets.length} ${t('home.nearbySpots', { defaultValue: 'spots nearby' })}`
-                  : t('home.noSpots', { defaultValue: 'No spots in this area' })}
+                  : t('map.noSpotsRadius', { radius, defaultValue: `No spots within ${radius} km` })}
               </Text>
               {nearbyBaskets.length === 0 && (
                 <Text style={{ color: theme.colors.muted, fontSize: 11, fontFamily: 'Poppins_400Regular', marginTop: 1 }}>
@@ -552,20 +552,63 @@ export default function MapViewScreen() {
               </View>
             </TouchableOpacity>
           ) : nearbyBaskets.length === 0 ? (
-            // Proper empty state — do NOT show restaurants that are outside the radius
-            <View style={{ alignItems: 'center', paddingVertical: 24, paddingHorizontal: 16 }}>
-              <MapPin size={32} color={theme.colors.muted} />
-              <Text style={{ color: theme.colors.textSecondary, ...theme.typography.body, fontWeight: '600', marginTop: 12, textAlign: 'center' }}>
-                {locationsQuery.isLoading
-                  ? t('common.loading')
-                  : t('home.noSpots', { defaultValue: 'No spots in this area' })}
-              </Text>
-              <Text style={{ color: theme.colors.muted, ...theme.typography.caption, marginTop: 6, textAlign: 'center' }}>
-                {locationStatus === 'denied'
-                  ? t('home.locationDeniedHint', { defaultValue: 'Enable location to find spots near you' })
-                  : t('home.expandRadiusHint', { defaultValue: 'Try increasing the radius slider above' })}
-              </Text>
-            </View>
+            <>
+              {/* No spots within radius message */}
+              <View style={{ alignItems: 'center', paddingVertical: 16, paddingHorizontal: 16 }}>
+                <MapPin size={28} color={theme.colors.muted} />
+                <Text style={{ color: theme.colors.textSecondary, ...theme.typography.body, fontWeight: '600', marginTop: 10, textAlign: 'center' }}>
+                  {locationsQuery.isLoading
+                    ? t('common.loading')
+                    : t('map.noSpotsRadius', { radius, defaultValue: `No spots within ${radius} km` })}
+                </Text>
+                <Text style={{ color: theme.colors.muted, ...theme.typography.caption, marginTop: 4, textAlign: 'center' }}>
+                  {locationStatus === 'denied'
+                    ? t('home.locationDeniedHint', { defaultValue: 'Enable location to find spots near you' })
+                    : t('home.expandRadiusHint', { defaultValue: 'Try increasing the radius slider above' })}
+                </Text>
+              </View>
+              {/* Divider + all available locations section */}
+              {filteredBaskets.filter(b => b.hasCoords && b.isActive && b.quantityLeft > 0).length > 0 && (
+                <>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 8, marginBottom: 12 }}>
+                    <View style={{ flex: 1, height: 1, backgroundColor: theme.colors.divider }} />
+                    <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, fontWeight: '600', marginHorizontal: 12 }}>
+                      {t('map.availableLocations', { defaultValue: 'Available locations' })}
+                    </Text>
+                    <View style={{ flex: 1, height: 1, backgroundColor: theme.colors.divider }} />
+                  </View>
+                  {filteredBaskets
+                    .filter(b => b.hasCoords && b.isActive && b.quantityLeft > 0)
+                    .map(b => ({ ...b, dist: getDistance(center.latitude, center.longitude, b.latitude as number, b.longitude as number) }))
+                    .sort((a, b) => a.dist - b.dist)
+                    .map((basket) => (
+                      <TouchableOpacity key={basket.id} onPress={() => router.push(`/basket/${basket.id}` as never)} activeOpacity={0.9} style={{ flexDirection: 'row', padding: 12, backgroundColor: theme.colors.bg, borderRadius: 12, marginBottom: 8 }}>
+                        {basket.imageUrl ? (
+                          <Image source={{ uri: basket.imageUrl }} style={{ width: 60, height: 60, borderRadius: 10 }} />
+                        ) : (
+                          <View style={{ width: 60, height: 60, borderRadius: 10, backgroundColor: theme.colors.primary + '10', justifyContent: 'center', alignItems: 'center' }}>
+                            <ShoppingBag size={24} color={theme.colors.primary} />
+                          </View>
+                        )}
+                        <View style={{ flex: 1, marginLeft: 12, justifyContent: 'center' }}>
+                          <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '600' }} numberOfLines={1}>{basket.merchantName}</Text>
+                          <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 4, gap: 8 }}>
+                            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                              <Clock size={12} color={theme.colors.muted} />
+                              <Text style={{ color: theme.colors.muted, fontSize: 11, marginLeft: 3 }}>{basket.pickupWindow.start}-{basket.pickupWindow.end}</Text>
+                            </View>
+                            <Text style={{ color: theme.colors.primary, fontSize: 11, fontWeight: '600' }}>{basket.dist.toFixed(1)} km</Text>
+                          </View>
+                          <View style={{ flexDirection: 'row', alignItems: 'baseline', marginTop: 4 }}>
+                            <Text style={{ color: theme.colors.muted, fontSize: 11, textDecorationLine: 'line-through' }}>{basket.originalPrice} TND</Text>
+                            <Text style={{ color: theme.colors.primary, ...theme.typography.bodySm, fontWeight: '700', marginLeft: 6 }}>{basket.discountedPrice} TND</Text>
+                          </View>
+                        </View>
+                      </TouchableOpacity>
+                    ))}
+                </>
+              )}
+            </>
           ) : (
             nearbyBaskets.map((basket) => (
               <TouchableOpacity key={basket.id} onPress={() => router.push(`/basket/${basket.id}` as never)} activeOpacity={0.9} style={{ flexDirection: 'row', padding: 12, backgroundColor: theme.colors.bg, borderRadius: 12, marginBottom: 8 }}>

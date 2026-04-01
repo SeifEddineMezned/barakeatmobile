@@ -75,7 +75,7 @@ export async function fetchUserProfile(): Promise<{ food_preferences?: string[];
   return data as any;
 }
 
-export async function updateUserProfile(data: { name?: string; phone?: string }): Promise<void> {
+export async function updateUserProfile(data: { name?: string; phone?: string; gender?: string }): Promise<void> {
   console.log('[Profile] Updating user profile');
   await apiClient.put('/api/users/profile', data);
 }

@@ -76,6 +76,7 @@ export default function ProfileScreen() {
   const [isEditing, setIsEditing] = useState(false);
   const [editName, setEditName] = useState(user?.name ?? '');
   const [editPhone, setEditPhone] = useState(user?.phone ?? '');
+  const [editGender, setEditGender] = useState<string | null>((user as any)?.gender ?? null);
   const [saveLoading, setSaveLoading] = useState(false);
 
 
@@ -114,29 +115,21 @@ export default function ProfileScreen() {
     const basketsBought = gStatsInner?.meals_saved ?? completedReservations.length;
     const mealsSaved = gStatsInner?.meals_saved ?? completedReservations.length;
 
+    // Use backend stat if available; fallback uses total_price recorded at reservation time
+    // (not current basket prices, which may have changed since the order was placed)
     const moneySaved = gStatsInner?.money_saved != null
       ? Math.max(0, parseFloat(gStatsInner.money_saved) || 0)
       : completedReservations.reduce((sum, r) => {
           const rAny = r as any;
-          // Check basket, then restaurant sub-object, then reservation top-level
-          const orig = Number(
-            rAny.original_price ??
-            r.basket?.originalPrice ??
-            (r.basket as any)?.original_price ??
-            rAny.restaurant?.original_price ??    // ← API stores original price here
-            0
-          );
-          const disc = Number(
-            rAny.price_tier ??
-            rAny.selling_price ??
-            r.basket?.discountedPrice ??
-            (r.basket as any)?.discounted_price ??
-            (r.basket as any)?.price_tier ??
-            rAny.restaurant?.price_tier ??        // ← API stores discounted price here
-            (r as any).total ??
-            0
-          );
-          return sum + Math.max(0, (orig - disc) * (r.quantity ?? 1));
+          // Use prices that were recorded AT reservation time
+          const totalPaid = Number(rAny.total_price ?? rAny.total ?? 0);
+          const orig = Number(rAny.original_price_at_reservation ?? rAny.original_price ?? r.basket?.originalPrice ?? (r.basket as any)?.original_price ?? 0);
+          const qty = r.quantity ?? 1;
+          // If we have total_price (recorded at purchase), use it directly
+          if (totalPaid > 0 && orig > 0) {
+            return sum + Math.max(0, (orig * qty) - totalPaid);
+          }
+          return sum;
         }, 0);
 
     const co2Saved = mealsSaved * 2.5;
@@ -217,14 +210,14 @@ export default function ProfileScreen() {
     return entries.slice(0, 5);
   }, [leaderboardQuery.data, showAllLeaderboard, myLeaderboardIndex]);
 
-  const FOOD_PREFS = ['Vegetarian', 'Vegan', 'Halal', 'Gluten-Free', 'Nut Allergy', 'Lactose-Free', 'Shellfish Allergy', 'No Pork'];
+  const FOOD_PREFS = ['Vegetarian', 'Vegan', 'Halal', 'Gluten Free', 'Nut Allergy', 'Lactose Free', 'Shellfish Allergy', 'No Pork'];
   const FOOD_PREF_KEY_MAP: Record<string, string> = {
     'Vegetarian': 'profile.pref.vegetarian',
     'Vegan': 'profile.pref.vegan',
     'Halal': 'profile.pref.halal',
-    'Gluten-Free': 'profile.pref.gluten_free',
+    'Gluten Free': 'profile.pref.gluten_free',
     'Nut Allergy': 'profile.pref.nut_allergy',
-    'Lactose-Free': 'profile.pref.lactose_free',
+    'Lactose Free': 'profile.pref.lactose_free',
     'Shellfish Allergy': 'profile.pref.shellfish_allergy',
     'No Pork': 'profile.pref.no_pork',
   };
@@ -242,8 +235,8 @@ export default function ProfileScreen() {
   const handleSaveProfile = async () => {
     setSaveLoading(true);
     try {
-      await updateUserProfile({ name: editName.trim(), phone: editPhone.trim() });
-      setUser({ ...user!, name: editName.trim(), phone: editPhone.trim() });
+      await updateUserProfile({ name: editName.trim(), phone: editPhone.trim(), gender: editGender ?? undefined });
+      setUser({ ...user!, name: editName.trim(), phone: editPhone.trim(), gender: editGender });
       Alert.alert(t('common.success'), t('profile.profileUpdated'));
       setIsEditing(false);
     } catch (err: any) {
@@ -257,12 +250,9 @@ export default function ProfileScreen() {
     <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]} edges={['top']}>
       <StatusBar style="dark" />
 
-      {/* Profile title — below the tab header bar */}
-      <View style={{ paddingHorizontal: theme.spacing.xl, paddingTop: theme.spacing.sm, paddingBottom: theme.spacing.sm }}>
-        <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h1 }]}>{t('profile.title')}</Text>
-      </View>
-
-      <ScrollView style={styles.content} contentContainerStyle={[{ padding: theme.spacing.xl, paddingBottom: 120 }]} showsVerticalScrollIndicator={false}>
+      <ScrollView style={styles.content} contentContainerStyle={[{ padding: theme.spacing.xl, paddingTop: 50, paddingBottom: 120 }]} showsVerticalScrollIndicator={false}>
+        {/* Profile title — scrolls with content */}
+        <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h1, marginBottom: theme.spacing.sm }]}>{t('profile.title')}</Text>
         {/* User Card with XP bar, level badge, streak */}
         {/* Fix 8: User card — consistent spacing, shadow, avatar alignment */}
         <View
@@ -361,52 +351,54 @@ export default function ProfileScreen() {
         </View>
 
         {/* Stats Row */}
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: theme.spacing.lg }} contentContainerStyle={{ gap: 10, paddingRight: theme.spacing.xl }}>
-          <TouchableOpacity onPress={() => setStatModal('money')} style={{ width: 100, backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, padding: theme.spacing.lg, alignItems: 'center', ...theme.shadows.shadowSm }}>
+        <View style={{ marginBottom: theme.spacing.lg }}>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 10, paddingRight: theme.spacing.xl, paddingHorizontal: 2 }}>
+          <TouchableOpacity onPress={() => setStatModal('money')} style={{ width: 110, backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, padding: theme.spacing.md, alignItems: 'center', ...theme.shadows.shadowSm }}>
             <View style={[styles.statIcon, { backgroundColor: theme.colors.primary + '15', borderRadius: theme.radii.r12, width: 36, height: 36 }]}>
               <Banknote size={18} color={theme.colors.primary} />
             </View>
-            <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, marginTop: 8, textAlign: 'center' }]}>
+            <Text numberOfLines={2} style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, marginTop: 8, textAlign: 'center' }]}>
               {stats.moneySaved.toFixed(0)} TND
             </Text>
-            <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, textAlign: 'center' }]}>
+            <Text adjustsFontSizeToFit minimumFontScale={0.75} numberOfLines={2} style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, textAlign: 'center' }]}>
               {t('profile.moneySaved')}
             </Text>
           </TouchableOpacity>
-          <TouchableOpacity onPress={() => setStatModal('co2')} style={{ width: 100, backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, padding: theme.spacing.lg, alignItems: 'center', ...theme.shadows.shadowSm }}>
+          <TouchableOpacity onPress={() => setStatModal('co2')} style={{ width: 110, backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, padding: theme.spacing.md, alignItems: 'center', ...theme.shadows.shadowSm }}>
             <View style={[styles.statIcon, { backgroundColor: theme.colors.accentFresh + '15', borderRadius: theme.radii.r12, width: 36, height: 36 }]}>
               <Leaf size={18} color={theme.colors.accentFresh} />
             </View>
-            <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, marginTop: 8, textAlign: 'center' }]}>
+            <Text numberOfLines={2} style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, marginTop: 8, textAlign: 'center' }]}>
               {stats.co2Saved.toFixed(1)} kg
             </Text>
-            <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, textAlign: 'center' }]}>
+            <Text adjustsFontSizeToFit minimumFontScale={0.75} numberOfLines={2} style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, textAlign: 'center' }]}>
               {t('profile.co2Saved')}
             </Text>
           </TouchableOpacity>
-          <TouchableOpacity onPress={() => setStatModal('baskets')} style={{ width: 100, backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, padding: theme.spacing.lg, alignItems: 'center', ...theme.shadows.shadowSm }}>
+          <TouchableOpacity onPress={() => setStatModal('baskets')} style={{ width: 110, backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, padding: theme.spacing.md, alignItems: 'center', ...theme.shadows.shadowSm }}>
             <View style={[styles.statIcon, { backgroundColor: theme.colors.secondary + '30', borderRadius: theme.radii.r12, width: 36, height: 36 }]}>
               <ShoppingBag size={18} color={theme.colors.primaryDark} />
             </View>
-            <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, marginTop: 8, textAlign: 'center' }]}>
+            <Text numberOfLines={2} style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, marginTop: 8, textAlign: 'center' }]}>
               {stats.basketsBought}
             </Text>
-            <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, textAlign: 'center' }]}>
+            <Text adjustsFontSizeToFit minimumFontScale={0.75} numberOfLines={2} style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, textAlign: 'center' }]}>
               {t('profile.basketsBought')}
             </Text>
           </TouchableOpacity>
-          <TouchableOpacity onPress={() => setStatModal('spots')} style={{ width: 100, backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, padding: theme.spacing.lg, alignItems: 'center', ...theme.shadows.shadowSm }}>
+          <TouchableOpacity onPress={() => setStatModal('spots')} style={{ width: 110, backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, padding: theme.spacing.md, alignItems: 'center', ...theme.shadows.shadowSm }}>
             <View style={[styles.statIcon, { backgroundColor: theme.colors.primary + '15', borderRadius: theme.radii.r12, width: 36, height: 36 }]}>
               <Store size={18} color={theme.colors.primary} />
             </View>
-            <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, marginTop: 8, textAlign: 'center' }]}>
+            <Text numberOfLines={2} style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, marginTop: 8, textAlign: 'center' }]}>
               {stats.businessesTried}
             </Text>
-            <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, textAlign: 'center' }]}>
+            <Text adjustsFontSizeToFit minimumFontScale={0.75} numberOfLines={2} style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, textAlign: 'center' }]}>
               {t('profile.businessesTried', { defaultValue: 'Places Tried' })}
             </Text>
           </TouchableOpacity>
         </ScrollView>
+        </View>
 
         {/* Badges Section */}
         <View style={{ marginBottom: theme.spacing.lg }}>
@@ -416,7 +408,7 @@ export default function ProfileScreen() {
           <ScrollView
             horizontal
             showsHorizontalScrollIndicator={false}
-            contentContainerStyle={{ gap: theme.spacing.md }}
+            contentContainerStyle={{ gap: theme.spacing.md, paddingHorizontal: 2 }}
           >
             {stats.badges.map((badge) => {
               const bid = badge.badge_id ?? badge.id;
@@ -727,6 +719,58 @@ export default function ProfileScreen() {
             ) : (
               <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '500' as const }]}>
                 {user?.phone ?? '-'}
+              </Text>
+            )}
+          </View>
+          {/* Gender row — optional */}
+          <View
+            style={[styles.infoRow, {
+              paddingHorizontal: theme.spacing.lg,
+              paddingVertical: theme.spacing.md,
+              borderTopWidth: 1,
+              borderTopColor: theme.colors.divider,
+            }]}
+          >
+            <View style={styles.infoRowLeft}>
+              <User size={18} color={theme.colors.textSecondary} />
+              <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.bodySm, marginLeft: 10 }]}>
+                {t('profile.gender', { defaultValue: 'Gender' })}
+              </Text>
+            </View>
+            {isEditing ? (
+              <View style={{ flexDirection: 'row', gap: 6 }}>
+                {[
+                  { key: null, label: '-' },
+                  { key: 'male', label: t('profile.genderMale', { defaultValue: 'Male' }) },
+                  { key: 'female', label: t('profile.genderFemale', { defaultValue: 'Female' }) },
+                ].map((opt) => (
+                  <TouchableOpacity
+                    key={opt.key ?? 'none'}
+                    onPress={() => setEditGender(opt.key)}
+                    style={{
+                      paddingHorizontal: 12,
+                      paddingVertical: 6,
+                      borderRadius: theme.radii.pill,
+                      backgroundColor: editGender === opt.key ? theme.colors.primary + '18' : theme.colors.bg,
+                      borderWidth: editGender === opt.key ? 1.5 : 1,
+                      borderColor: editGender === opt.key ? theme.colors.primary : theme.colors.divider,
+                    }}
+                  >
+                    <Text style={{
+                      color: editGender === opt.key ? theme.colors.primary : theme.colors.textPrimary,
+                      ...theme.typography.caption,
+                      fontWeight: editGender === opt.key ? '600' : '400',
+                    }}>
+                      {opt.label}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            ) : (
+              <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '500' as const }]}>
+                {(user as any)?.gender === 'male' ? t('profile.genderMale', { defaultValue: 'Male' })
+                  : (user as any)?.gender === 'female' ? t('profile.genderFemale', { defaultValue: 'Female' })
+                  : t('profile.genderNotSet', { defaultValue: 'Not set' })}
               </Text>
             )}
           </View>

@@ -212,9 +212,15 @@ export function normalizeRestaurantToBasket(r: RestaurantFromAPI): Basket {
  * Locations join with organizations so brand data (name, image, cover) comes from org.
  */
 export function normalizeLocationToBasket(loc: LocationFromAPI): Basket {
-  // Prices come from baskets table (min values), via the API
-  const minPrice = loc.min_basket_price != null ? Number(loc.min_basket_price) : Number(loc.price_tier ?? 0);
-  const originalPrice = Number(loc.original_price ?? 0);
+  // Prices: prefer basket-level min price, fall back to location-level price_tier
+  const minBasketPrice = loc.min_basket_price != null ? Number(loc.min_basket_price) : 0;
+  const priceTier = Number(loc.price_tier ?? 0);
+  // Use whichever is available and > 0; basket-level takes priority
+  const minPrice = minBasketPrice > 0 ? minBasketPrice : priceTier;
+  // For original price: use max_original_price from baskets if available, else location-level
+  const maxOriginal = (loc as any).max_original_price != null ? Number((loc as any).max_original_price) : 0;
+  const locOriginal = Number(loc.original_price ?? 0);
+  const originalPrice = maxOriginal > 0 ? maxOriginal : locOriginal;
   const discountedPrice = minPrice;
   const discountPercentage = originalPrice > 0
     ? Math.round(((originalPrice - discountedPrice) / originalPrice) * 100)
@@ -225,6 +231,8 @@ export function normalizeLocationToBasket(loc: LocationFromAPI): Basket {
   // For the card display, always use the raw basket quantity — don't zero out for pickup expiry
   const availableLeft = totalBasketQty;
 
+  // Don't use loc.pickup_expired here — individual baskets may have different
+  // pickup windows than the location. BasketCard handles per-card expiry checks.
   const isActive = !loc.is_paused
     && loc.availability_status !== 'paused'
     && totalBasketQty > 0;

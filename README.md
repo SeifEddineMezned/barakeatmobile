@@ -5,6 +5,7 @@
 ```bash
 npm install (to install the dep) 
 npx expo run ( u need expo installed)
+npx expo start (alternative)
 ```
 ## to update the version that uses the link
 u need to use my expo account i sent u the credentials on msngr so we have the same app not two seperate apps

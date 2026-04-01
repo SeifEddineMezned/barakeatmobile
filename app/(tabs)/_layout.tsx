@@ -1,14 +1,17 @@
 import { Tabs } from "expo-router";
-import { Search, ShoppingBag, Heart, User, Star, Flag } from "lucide-react-native";
+import { Search, ShoppingBag, Heart, User, Star, Flag, Map, Bell, Settings } from "lucide-react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import React, { useState, useEffect, useMemo } from "react";
 import { useTranslation } from "react-i18next";
-import { View, Text, TouchableOpacity, Animated, Dimensions, PanResponder, Modal, Image } from "react-native";
+import { View, Text, TouchableOpacity, Animated, Dimensions, PanResponder, Modal, Image, AppState } from "react-native";
 import { useRouter } from "expo-router";
 import { useQuery } from "@tanstack/react-query";
 import { useTheme } from "@/src/theme/ThemeProvider";
 import { getUnreadCount } from "@/src/services/notifications";
 import { useNotificationStore } from "@/src/stores/notificationStore";
 import { useAuthStore } from "@/src/stores/authStore";
+import { useHeroStore } from "@/src/stores/heroStore";
+import { useSplashStore } from "@/src/stores/splashStore";
 import { fetchMyReservations } from "@/src/services/reservations";
 import { fetchGamificationStats } from "@/src/services/gamification";
 import { Flame } from "lucide-react-native";
@@ -54,7 +57,7 @@ export default function TabLayout() {
 
 
   const tabCount = 4;
-  const navWidth = Dimensions.get('window').width - 64;
+  const navWidth = Dimensions.get('window').width - 40;
   const tabWidth = navWidth / tabCount;
   const glassAnim = React.useRef(new Animated.Value(0)).current;
   const [activeIndex, setActiveIndex] = React.useState(0);
@@ -70,10 +73,13 @@ export default function TabLayout() {
   const navStateRef = React.useRef<any>(null);
   const navRef = React.useRef<any>(null);
 
+  // Visible route names (excluding hidden 'nearby') for correct swipe navigation
+  const visibleRouteNames = ['index', 'orders', 'favorites', 'profile'];
+
   const swipePanResponder = React.useMemo(() => PanResponder.create({
     // Only capture clearly horizontal swipes
     onMoveShouldSetPanResponder: (_, g) =>
-      Math.abs(g.dx) > 10 && Math.abs(g.dx) > Math.abs(g.dy) * 1.8,
+      Math.abs(g.dx) > 12 && Math.abs(g.dx) > Math.abs(g.dy) * 2,
     onPanResponderGrant: () => {
       glassAnim.stopAnimation();
       glassAnim.setOffset(glassX.current);
@@ -87,26 +93,38 @@ export default function TabLayout() {
     onPanResponderRelease: (_, g) => {
       glassAnim.flattenOffset();
       const raw = glassX.current;
-      // Flick: velocity > 0.4 nudges to next/prev tab
+      // Flick: velocity threshold for tab switching
       let targetIdx = Math.round(raw / tabWidth);
-      if (g.vx > 0.4) targetIdx = Math.min(tabCount - 1, Math.floor(raw / tabWidth) + 1);
-      else if (g.vx < -0.4) targetIdx = Math.max(0, Math.ceil(raw / tabWidth) - 1);
+      if (g.vx > 0.5) targetIdx = Math.min(tabCount - 1, Math.floor(raw / tabWidth) + 1);
+      else if (g.vx < -0.5) targetIdx = Math.max(0, Math.ceil(raw / tabWidth) - 1);
       targetIdx = Math.max(0, Math.min(tabCount - 1, targetIdx));
 
       Animated.spring(glassAnim, {
         toValue: targetIdx * tabWidth,
         useNativeDriver: true,
-        friction: 10,
-        tension: 100,
+        friction: 12,
+        tension: 80,
       }).start();
       setActiveIndex(targetIdx);
-      const routes = navStateRef.current?.routes ?? [];
-      if (routes[targetIdx]) navRef.current?.navigate(routes[targetIdx].name);
+      // Navigate using visible route names (skips hidden 'nearby' tab)
+      const routeName = visibleRouteNames[targetIdx];
+      if (routeName) navRef.current?.navigate(routeName);
     },
     onPanResponderTerminate: () => {
       glassAnim.flattenOffset();
     },
   }), [glassAnim, tabWidth, tabCount]);
+
+  // Snap glass pill to correct position when returning from app switcher (iOS swipe away/back)
+  React.useEffect(() => {
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') {
+        glassAnim.stopAnimation();
+        glassAnim.setValue(activeIndex * tabWidth);
+      }
+    });
+    return () => sub.remove();
+  }, [activeIndex, tabWidth, glassAnim]);
 
   // ── Review popup on app open (persisted so it only shows once per reservation) ──
   const [reviewPrompt, setReviewPrompt] = useState<{ reservationId: string; locationName: string; locationId: string; locationLogo?: string; basketImage?: string; basketName?: string; quantity?: number; total?: number } | null>(null);
@@ -144,9 +162,10 @@ export default function TabLayout() {
 
   const reservations = useMemo(() => reservationsQuery.data ?? [], [reservationsQuery.data]);
 
-  // Show review popup only ONCE per reservation — persist immediately when shown
+  // Show review popup only ONCE per reservation — persist immediately when shown, wait for splash
   const reviewShownRef = React.useRef(false);
   useEffect(() => {
+    if (!splashDone) return; // wait for splash animation to finish
     if (!reviewDismissedLoaded.current || !reservations.length || reviewShownRef.current) return;
     const needsReview = reservations.find((r) => {
       const status = ((r as any).status ?? '').toLowerCase();
@@ -176,9 +195,10 @@ export default function TabLayout() {
         total: rr.total_price ?? rr.total ?? rr.basket?.price ?? 0,
       });
     }
-  }, [reservations, reviewDismissed, reviewPrompt]);
+  }, [reservations, reviewDismissed, reviewPrompt, splashDone]);
 
-  // ── Streak expiry warning ──
+  // ── Streak expiry warning — only after splash animation ends ──
+  const splashDone = useSplashStore((s) => s.splashDone);
   const [streakWarningShown, setStreakWarningShown] = useState(false);
   const [showStreakWarning, setShowStreakWarning] = useState(false);
 
@@ -190,13 +210,14 @@ export default function TabLayout() {
   });
 
   useEffect(() => {
+    if (!splashDone) return; // wait for splash animation to finish
     const gData = gamificationQuery.data as any;
     if (!gData || streakWarningShown) return;
     if (gData.streak_expires_soon && (gData.stats?.current_streak ?? gData.current_streak ?? 0) > 0) {
       setShowStreakWarning(true);
       setStreakWarningShown(true);
     }
-  }, [gamificationQuery.data, streakWarningShown]);
+  }, [gamificationQuery.data, streakWarningShown, splashDone]);
 
 
 
@@ -225,6 +246,43 @@ export default function TabLayout() {
   }, [unreadQuery.data, setUnreadCount]);
 
 
+
+  // Animated map button that lives in the layout and morphs between:
+  //   search tab (anim=0): small circle at top-right (where the map button placeholder is)
+  //   other tabs (anim=1): expanded pill at top-left
+  const insets = useSafeAreaInsets();
+  const isSearchTab = activeIndex === 0;
+  const heroVisible = useHeroStore((s) => s.heroVisible);
+  const isOnDarkBg = isSearchTab && heroVisible;
+  const mapBtnAnim = React.useRef(new Animated.Value(isSearchTab ? 0 : 1)).current;
+  // We need a non-native-driver anim for width/padding changes
+  const mapBtnStyleAnim = React.useRef(new Animated.Value(isSearchTab ? 0 : 1)).current;
+
+  React.useEffect(() => {
+    Animated.parallel([
+      Animated.spring(mapBtnAnim, {
+        toValue: isSearchTab ? 0 : 1,
+        useNativeDriver: true,
+        friction: 10,
+        tension: 80,
+      }),
+      Animated.spring(mapBtnStyleAnim, {
+        toValue: isSearchTab ? 0 : 1,
+        useNativeDriver: false,
+        friction: 10,
+        tension: 80,
+      }),
+    ]).start();
+  }, [isSearchTab]);
+
+  // Calculate the X offset so the map icon center aligns with the spacer center in the search tab.
+  // Search tab right group: [spacer(34)] [gap:10] [settings(20)] [gap:10] [bell(20)] | 16px right pad
+  // Spacer center from right edge = 16 + 20 + 10 + 20 + 10 + 17 = 93
+  // Spacer center from left = screenW - 93
+  // Overlay icon (20px) at left:16 + translateX → center at 16 + translateX + 10
+  // 16 + translateX + 10 = screenW - 93 → translateX = screenW - 119
+  const screenW = Dimensions.get('window').width;
+  const mapBtnStartX = screenW - 119;
 
   return (
     <>
@@ -267,11 +325,11 @@ export default function TabLayout() {
             style={{
               position: 'absolute',
               bottom: 20,
-              left: 32,
-              right: 32,
+              left: 20,
+              right: 20,
               height: 60,
               backgroundColor: theme.colors.surface,
-              borderRadius: 30,
+              borderRadius: 20,
               borderTopWidth: 0,
               shadowColor: '#000',
               shadowOffset: { width: 0, height: 4 },
@@ -292,7 +350,7 @@ export default function TabLayout() {
                 width: tabWidth - 12,
                 height: 44,
                 backgroundColor: theme.colors.primary,
-                borderRadius: 22,
+                borderRadius: 14,
                 left: 6,
                 transform: [{ translateX: glassAnim }],
               }}
@@ -401,6 +459,135 @@ export default function TabLayout() {
         }}
       />
     </Tabs>
+
+      {/* Single map button that morphs between circle (search tab) and pill (other tabs).
+          Always visible — no fading in/out of screen. Slides between positions. */}
+      <Animated.View
+        style={{
+          position: 'absolute',
+          top: insets.top + 7,
+          left: 16,
+          zIndex: 999,
+          elevation: 999,
+          transform: [{
+            translateX: mapBtnAnim.interpolate({
+              inputRange: [0, 1],
+              outputRange: [mapBtnStartX, 0],
+            }),
+          }],
+        }}
+      >
+        <TouchableOpacity
+          onPress={() => router.push('/map-view' as never)}
+          activeOpacity={0.7}
+        >
+          <Animated.View
+            style={{
+              flexDirection: 'row',
+              alignItems: 'center',
+              justifyContent: 'center',
+              backgroundColor: mapBtnStyleAnim.interpolate({
+                inputRange: [0, 0.15, 1],
+                // Transparent at search tab position → surface bg when expanding
+                outputRange: ['transparent', theme.colors.surface, theme.colors.surface],
+              }),
+              borderRadius: 17,
+              paddingHorizontal: mapBtnStyleAnim.interpolate({
+                inputRange: [0, 1],
+                outputRange: [0, 12],
+              }),
+              paddingVertical: mapBtnStyleAnim.interpolate({
+                inputRange: [0, 1],
+                outputRange: [0, 6],
+              }),
+              // Shadow only when expanded (not on bare icon)
+              shadowColor: '#000',
+              shadowOffset: { width: 0, height: 2 },
+              shadowOpacity: mapBtnStyleAnim.interpolate({
+                inputRange: [0, 0.3, 1],
+                outputRange: [0, 0.04, 0.08],
+              }),
+              shadowRadius: 4,
+              elevation: mapBtnStyleAnim.interpolate({
+                inputRange: [0, 0.3, 1],
+                outputRange: [0, 1, 3],
+              }),
+              overflow: 'hidden',
+              minHeight: 20,
+            }}
+          >
+            <Map size={20} color={isOnDarkBg ? '#e3ff5c' : (isSearchTab ? theme.colors.textPrimary : theme.colors.primary)} />
+            {/* Text label — only rendered on non-search tabs, expands with animation */}
+            <Animated.View style={{
+              overflow: 'hidden',
+              maxWidth: mapBtnStyleAnim.interpolate({
+                inputRange: [0, 0.4, 1],
+                outputRange: [0, 0, 120],
+              }),
+              opacity: mapBtnStyleAnim.interpolate({
+                inputRange: [0, 0.6, 1],
+                outputRange: [0, 0, 1],
+              }),
+            }}>
+              <Text
+                numberOfLines={1}
+                style={{
+                  color: theme.colors.textPrimary,
+                  fontSize: 13,
+                  fontWeight: '600',
+                  fontFamily: 'Poppins_600SemiBold',
+                  marginLeft: 5,
+                }}
+              >
+                {t('home.search')}
+              </Text>
+            </Animated.View>
+          </Animated.View>
+        </TouchableOpacity>
+      </Animated.View>
+
+      {/* Settings + notifications overlay for non-search tabs (right side) */}
+      <Animated.View
+        pointerEvents={isSearchTab ? 'none' : 'auto'}
+        style={{
+          position: 'absolute',
+          top: insets.top + 7,
+          right: 16,
+          zIndex: 100,
+          flexDirection: 'row',
+          alignItems: 'center',
+          gap: 10,
+          opacity: mapBtnAnim.interpolate({
+            inputRange: [0, 0.3, 1],
+            outputRange: [0, 0.5, 1],
+          }),
+        }}
+      >
+        <TouchableOpacity onPress={() => router.push('/settings' as never)}>
+          <Settings size={20} color={theme.colors.textPrimary} />
+        </TouchableOpacity>
+        <TouchableOpacity onPress={() => router.push('/notifications' as never)}>
+          <Bell size={20} color={theme.colors.textPrimary} />
+          {unreadCount > 0 && (
+            <View style={{
+              position: 'absolute',
+              top: -4,
+              right: -6,
+              backgroundColor: theme.colors.error,
+              borderRadius: 8,
+              minWidth: 16,
+              height: 16,
+              justifyContent: 'center',
+              alignItems: 'center',
+              paddingHorizontal: 4,
+            }}>
+              <Text style={{ color: '#fff', fontSize: 10, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
+                {unreadCount > 99 ? '99+' : unreadCount}
+              </Text>
+            </View>
+          )}
+        </TouchableOpacity>
+      </Animated.View>
 
       {/* Streak expiry warning popup */}
       <Modal visible={showStreakWarning} transparent animationType="fade" onRequestClose={() => setShowStreakWarning(false)}>

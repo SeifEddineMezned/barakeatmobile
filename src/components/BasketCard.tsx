@@ -1,7 +1,8 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Animated, Image, Modal, ScrollView } from 'react-native';
 import { useRouter } from 'expo-router';
-import { Heart, Clock, MapPin, Star, ShoppingBag, Tag, Layers, Info, X } from 'lucide-react-native';
+import { useTranslation } from 'react-i18next';
+import { Heart, Clock, MapPin, Star, ShoppingBag, Tag, Layers, Info, X, TimerOff } from 'lucide-react-native';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { Basket } from '@/src/types';
 
@@ -12,6 +13,7 @@ interface BasketCardProps {
 }
 
 export function BasketCard({ basket, onFavoritePress, isFavorite = false }: BasketCardProps) {
+  const { t } = useTranslation();
   const theme = useTheme();
   const router = useRouter();
   const scaleAnim = React.useRef(new Animated.Value(1)).current;
@@ -21,6 +23,22 @@ export function BasketCard({ basket, onFavoritePress, isFavorite = false }: Bask
   const [infoVisible, setInfoVisible] = useState(false);
 
   const isSoldOut = basket.quantityLeft <= 0;
+
+  // Check if pickup window has expired for today
+  const isPickupExpired = (() => {
+    if (isSoldOut) return false; // sold out takes priority
+    const endStr = basket.pickupWindow?.end;
+    if (!endStr) return false;
+    const [eh, em] = endStr.split(':').map(Number);
+    if (isNaN(eh) || isNaN(em)) return false;
+    const now = new Date();
+    const endDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), eh, em);
+    return now > endDate;
+  })();
+
+  // Also treat as expired if the backend flagged isActive = false (e.g. all baskets expired)
+  const isInactive = basket.isActive === false && !isSoldOut;
+  const isUnavailable = isSoldOut || isPickupExpired || isInactive;
 
   useEffect(() => {
     Animated.parallel([
@@ -38,27 +56,25 @@ export function BasketCard({ basket, onFavoritePress, isFavorite = false }: Bask
   }, []);
 
   const handlePressIn = useCallback(() => {
-    if (isSoldOut) return;
     Animated.spring(scaleAnim, {
       toValue: 0.97,
       useNativeDriver: true,
     }).start();
-  }, [scaleAnim, isSoldOut]);
+  }, [scaleAnim]);
 
   const handlePressOut = useCallback(() => {
-    if (isSoldOut) return;
     Animated.spring(scaleAnim, {
       toValue: 1,
       friction: 3,
       tension: 40,
       useNativeDriver: true,
     }).start();
-  }, [scaleAnim, isSoldOut]);
+  }, [scaleAnim]);
 
   const handlePress = useCallback(() => {
-    if (isSoldOut) return;
+    // Always allow opening the location — reserve button inside will be disabled
     router.push(`/restaurant/${basket.merchantId}` as never);
-  }, [basket.merchantId, router, isSoldOut]);
+  }, [basket.merchantId, router]);
 
   const handleFavoritePress = useCallback(() => {
     Animated.sequence([
@@ -84,18 +100,17 @@ export function BasketCard({ basket, onFavoritePress, isFavorite = false }: Bask
     <>
       <Animated.View style={[
         { opacity: entranceOpacity, transform: [{ translateY: entranceTranslateY }, { scale: scaleAnim }] },
-        isSoldOut && styles.soldOutCard,
+        isUnavailable && styles.soldOutCard,
       ]}>
         <TouchableOpacity
           onPress={handlePress}
           onPressIn={handlePressIn}
           onPressOut={handlePressOut}
-          activeOpacity={isSoldOut ? 1 : 0.95}
-          disabled={isSoldOut}
+          activeOpacity={0.95}
           style={[
             styles.card,
             {
-              backgroundColor: isSoldOut ? '#f0f0f0' : theme.colors.surface,
+              backgroundColor: isUnavailable ? '#f0f0f0' : theme.colors.surface,
               borderRadius: theme.radii.r16,
               ...theme.shadows.shadowMd,
             },
@@ -109,14 +124,14 @@ export function BasketCard({ basket, onFavoritePress, isFavorite = false }: Bask
                 style={[
                   styles.image,
                   { borderTopLeftRadius: theme.radii.r16, borderTopRightRadius: theme.radii.r16 },
-                  isSoldOut && styles.soldOutImage,
+                  isUnavailable && styles.soldOutImage,
                 ]}
               />
             ) : (
               <View
                 style={[
                   styles.imagePlaceholder,
-                  { backgroundColor: isSoldOut ? '#d0d0d0' : theme.colors.bagsLeftBg, borderTopLeftRadius: theme.radii.r16, borderTopRightRadius: theme.radii.r16 },
+                  { backgroundColor: isUnavailable ? '#d0d0d0' : theme.colors.bagsLeftBg, borderTopLeftRadius: theme.radii.r16, borderTopRightRadius: theme.radii.r16 },
                 ]}
               />
             )}
@@ -134,7 +149,7 @@ export function BasketCard({ basket, onFavoritePress, isFavorite = false }: Bask
                 </Text>
               </View>
               {/* Basket types badge — only shown if > 1 type and not sold out */}
-              {!isSoldOut && basket.basketTypeCount != null && basket.basketTypeCount > 1 && (
+              {!isUnavailable && basket.basketTypeCount != null && basket.basketTypeCount > 1 && (
                 <View style={{
                   flexDirection: 'row',
                   alignItems: 'center',
@@ -151,21 +166,8 @@ export function BasketCard({ basket, onFavoritePress, isFavorite = false }: Bask
               )}
             </View>
 
-            {/* Top-right buttons row: info + heart */}
+            {/* Top-right buttons row: heart */}
             <View style={{ position: 'absolute', top: 10, right: 10, flexDirection: 'row', gap: 6 }}>
-              {/* Info button — only shown if description exists */}
-              {hasDescription && (
-                <TouchableOpacity
-                  onPress={(e) => { e.stopPropagation(); setInfoVisible(true); }}
-                  style={[
-                    styles.iconButton,
-                    { backgroundColor: 'rgba(255,255,255,0.92)', ...theme.shadows.shadowSm },
-                  ]}
-                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                >
-                  <Info size={16} color={theme.colors.primary} />
-                </TouchableOpacity>
-              )}
               {/* Heart (favorite) button */}
               <TouchableOpacity
                 onPress={handleFavoritePress}
@@ -184,12 +186,23 @@ export function BasketCard({ basket, onFavoritePress, isFavorite = false }: Bask
               </TouchableOpacity>
             </View>
 
-            {/* Sold-out overlay label */}
+            {/* Sold-out overlay label — pointerEvents none so heart button stays tappable */}
             {isSoldOut && (
-              <View style={styles.soldOutOverlay}>
+              <View pointerEvents="none" style={styles.soldOutOverlay}>
                 <View style={styles.soldOutLabel}>
                   <Text style={{ color: '#fff', fontSize: 12, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
-                    Sold Out
+                    {t('basket.soldOut')}
+                  </Text>
+                </View>
+              </View>
+            )}
+            {/* Pickup expired overlay */}
+            {(isPickupExpired || isInactive) && !isSoldOut && (
+              <View pointerEvents="none" style={styles.soldOutOverlay}>
+                <View style={[styles.soldOutLabel, { backgroundColor: 'rgba(100,100,100,0.85)' }]}>
+                  <TimerOff size={14} color="#fff" style={{ marginRight: 4 }} />
+                  <Text style={{ color: '#fff', fontSize: 12, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
+                    {t('orders.status.expired', { defaultValue: 'Expired' })}
                   </Text>
                 </View>
               </View>
@@ -201,13 +214,13 @@ export function BasketCard({ basket, onFavoritePress, isFavorite = false }: Bask
             {/* Merchant row: logo + name + rating */}
             <View style={styles.merchantRow}>
               {basket.merchantLogo ? (
-                <Image source={{ uri: basket.merchantLogo }} style={[styles.merchantLogo, isSoldOut && { opacity: 0.5 }]} />
+                <Image source={{ uri: basket.merchantLogo }} style={[styles.merchantLogo, isUnavailable && { opacity: 0.5 }]} />
               ) : (
                 <View style={[styles.merchantLogo, { backgroundColor: theme.colors.divider }]} />
               )}
               <View style={styles.merchantInfo}>
                 <Text
-                  style={[{ color: isSoldOut ? theme.colors.muted : theme.colors.textPrimary, ...theme.typography.body, fontWeight: '600' as const }]}
+                  style={[{ color: isUnavailable ? theme.colors.muted : theme.colors.textPrimary, ...theme.typography.body, fontWeight: '600' as const }]}
                   numberOfLines={1}
                 >
                   {basket.merchantName}
@@ -262,10 +275,10 @@ export function BasketCard({ basket, onFavoritePress, isFavorite = false }: Bask
                 <View style={{ flexDirection: 'row', alignItems: 'baseline' }}>
                   {basket.basketTypeCount != null && basket.basketTypeCount > 1 && (
                     <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, marginRight: 3 }]}>
-                      from
+                      {t('basket.from', { defaultValue: 'from' })}
                     </Text>
                   )}
-                  <Text style={[{ color: isSoldOut ? theme.colors.muted : theme.colors.primary, ...theme.typography.h2, fontWeight: '700' as const }]}>
+                  <Text style={[{ color: isUnavailable ? theme.colors.muted : theme.colors.primary, ...theme.typography.h2, fontWeight: '700' as const }]}>
                     {basket.discountedPrice} TND
                   </Text>
                 </View>
@@ -351,6 +364,8 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     paddingHorizontal: 14,
     paddingVertical: 6,
+    flexDirection: 'row',
+    alignItems: 'center',
   },
   imageContainer: {
     position: 'relative',

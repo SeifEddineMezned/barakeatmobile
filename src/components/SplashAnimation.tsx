@@ -59,19 +59,21 @@ export function SplashAnimation({ onFinish }: SplashAnimationProps) {
       useNativeDriver: true,
     });
 
-    // Dot travels left → right at perfectly constant speed
+    // Number of actual bounces = letters - 1 (dot hops BETWEEN letters, lands on final position)
+    const BOUNCE_COUNT = HOP_COUNT - 1;
+    const TRAVEL_TIME = BOUNCE_COUNT * HOP_DURATION;
+
+    // Dot travels left → right — duration matches the Y bounces exactly
     const dotXAnim = Animated.timing(dotX, {
       toValue: 0,
-      duration: HOP_COUNT * HOP_DURATION,
+      duration: TRAVEL_TIME,
       delay: DOT_DELAY,
       useNativeDriver: true,
       easing: Easing.linear,
     });
 
-    // Dot Y: smooth parabolic arc per hop
-    //   Rise: decelerate (fast launch → slow at peak)  — Easing.out(Easing.quad)
-    //   Fall: accelerate (slow at peak → fast landing) — Easing.in(Easing.quad)
-    const hopAnims = Array.from({ length: HOP_COUNT }, () =>
+    // Dot Y: one bounce per letter gap, then lands flat at final position
+    const travelHops = Array.from({ length: BOUNCE_COUNT }, () =>
       Animated.sequence([
         Animated.timing(dotY, {
           toValue: HOP_HEIGHT,
@@ -90,11 +92,11 @@ export function SplashAnimation({ onFinish }: SplashAnimationProps) {
 
     const dotYAnim = Animated.sequence([
       Animated.delay(DOT_DELAY),
-      ...hopAnims,
+      ...travelHops,
     ]);
 
     // Fade-out overlay after dot has fully landed
-    const TOTAL_DOT_TIME = HOP_COUNT * HOP_DURATION;
+    const TOTAL_DOT_TIME = TRAVEL_TIME;
     const fadeOut = Animated.timing(overlayOpacity, {
       toValue: 0,
       duration: 420,
