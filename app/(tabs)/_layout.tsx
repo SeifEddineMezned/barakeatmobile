@@ -1,5 +1,5 @@
 import { Tabs } from "expo-router";
-import { Search, ShoppingBag, Heart, User, Bell, Settings, Star, Flag } from "lucide-react-native";
+import { Search, ShoppingBag, Heart, User, Star, Flag } from "lucide-react-native";
 import React, { useState, useEffect, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { View, Text, TouchableOpacity, Animated, Dimensions, PanResponder, Modal, Image } from "react-native";
@@ -9,7 +9,6 @@ import { useTheme } from "@/src/theme/ThemeProvider";
 import { getUnreadCount } from "@/src/services/notifications";
 import { useNotificationStore } from "@/src/stores/notificationStore";
 import { useAuthStore } from "@/src/stores/authStore";
-import { useHeroStore } from "@/src/stores/heroStore";
 import { fetchMyReservations } from "@/src/services/reservations";
 import { fetchGamificationStats } from "@/src/services/gamification";
 import { Flame } from "lucide-react-native";
@@ -52,7 +51,7 @@ export default function TabLayout() {
   const router = useRouter();
   const setUnreadCount = useNotificationStore((s) => s.setUnreadCount);
   const unreadCount = useNotificationStore((s) => s.unreadCount);
-  const brandAnim = React.useRef(new Animated.Value(0)).current;
+
 
   const tabCount = 4;
   const navWidth = Dimensions.get('window').width - 64;
@@ -199,10 +198,7 @@ export default function TabLayout() {
     }
   }, [gamificationQuery.data, streakWarningShown]);
 
-  const heroVisible = useHeroStore((s) => s.heroVisible);
-  const isSearchTab = activeIndex === 0;
-  const headerIconColor = '#FFFFFF';
-  const headerBrandColor = '#FFFFFF';
+
 
   // Guard: business accounts must not see the customer flow
   React.useEffect(() => {
@@ -228,81 +224,7 @@ export default function TabLayout() {
     }
   }, [unreadQuery.data, setUnreadCount]);
 
-  React.useEffect(() => {
-    Animated.spring(brandAnim, {
-      toValue: 1,
-      friction: 6,
-      tension: 40,
-      useNativeDriver: true,
-    }).start();
-  }, []);
 
-  const headerBrand = () => (
-    <Animated.View style={{
-      marginLeft: 16,
-      flexDirection: 'row',
-      alignItems: 'baseline',
-      opacity: brandAnim,
-      transform: [
-        { translateX: brandAnim.interpolate({ inputRange: [0, 1], outputRange: [-40, 0] }) },
-        { scale: brandAnim.interpolate({ inputRange: [0, 0.5, 1], outputRange: [0.8, 1.05, 1] }) },
-      ],
-    }}>
-      <Text style={{
-        color: headerBrandColor,
-        fontSize: 20,
-        fontWeight: '700',
-        fontFamily: 'Poppins_700Bold',
-      }}>
-        Barakeat
-      </Text>
-      <Text style={{
-        color: '#e3ff5c',
-        fontSize: 20,
-        fontWeight: '700',
-        fontFamily: 'Poppins_700Bold',
-      }}>
-        .
-      </Text>
-    </Animated.View>
-  );
-
-  const headerRight = () => (
-    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-      <TouchableOpacity
-        onPress={() => router.push('/settings' as never)}
-        style={{ marginRight: 12 }}
-      >
-        <Settings size={20} color={headerIconColor} />
-      </TouchableOpacity>
-      {isAuthenticated ? (
-        <TouchableOpacity
-          onPress={() => router.push('/notifications' as never)}
-          style={{ marginRight: 16 }}
-        >
-          <Bell size={20} color={headerIconColor} />
-          {unreadCount > 0 && (
-            <View style={{
-              position: 'absolute',
-              top: -4,
-              right: -6,
-              backgroundColor: theme.colors.error,
-              borderRadius: 8,
-              minWidth: 16,
-              height: 16,
-              justifyContent: 'center',
-              alignItems: 'center',
-              paddingHorizontal: 4,
-            }}>
-              <Text style={{ color: '#fff', fontSize: 10, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
-                {unreadCount > 99 ? '99+' : unreadCount}
-              </Text>
-            </View>
-          )}
-        </TouchableOpacity>
-      ) : null}
-    </View>
-  );
 
   return (
     <>
@@ -310,12 +232,7 @@ export default function TabLayout() {
       screenOptions={{
         tabBarActiveTintColor: theme.colors.primary,
         tabBarInactiveTintColor: theme.colors.textSecondary,
-        headerShown: true,
-        headerTitle: '',
-        headerShadowVisible: false,
-        headerStyle: { backgroundColor: theme.colors.primary },
-        headerLeft: headerBrand,
-        headerRight: headerRight,
+        headerShown: false,
       }}
       tabBar={(props) => {
         const { state, descriptors, navigation } = props;

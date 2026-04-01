@@ -254,7 +254,7 @@ export default function ProfileScreen() {
   };
 
   return (
-    <View style={[styles.container, { backgroundColor: theme.colors.bg }]}>
+    <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]} edges={['top']}>
       <StatusBar style="dark" />
 
       {/* Profile title — below the tab header bar */}
@@ -1322,7 +1322,7 @@ export default function ProfileScreen() {
           </TouchableOpacity>
         </Modal>
       )}
-    </View>
+    </SafeAreaView>
   );
 }
 
