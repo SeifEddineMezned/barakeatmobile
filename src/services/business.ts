@@ -262,18 +262,55 @@ export interface BusinessAnalyticsFromAPI {
 export async function fetchStats(locationId?: number | string | null): Promise<BusinessStatsFromAPI> {
   const params = locationId ? `?location_id=${locationId}` : '';
   console.log('[Business] Fetching stats', params);
-  const res = await apiClient.get<BusinessStatsFromAPI | { data: BusinessStatsFromAPI }>(`/api/reservations/location/stats${params}`);
-  const data = res.data;
-  if (data && typeof data === 'object' && 'data' in data && !('total_reservations' in data)) return (data as any).data;
+  const res = await apiClient.get<any>(`/api/reservations/location/stats${params}`);
+  let data: any = res.data;
+  // Unwrap common API envelope shapes: { stats: {...} } or { data: {...} }
+  if (data && typeof data === 'object') {
+    if ('stats' in data && data.stats && typeof data.stats === 'object') {
+      data = data.stats;
+    } else if ('data' in data && data.data && typeof data.data === 'object' && !('total_reservations' in data)) {
+      data = data.data;
+    }
+  }
   return data as BusinessStatsFromAPI;
 }
 
 export async function fetchAnalytics(locationId?: number | string | null): Promise<BusinessAnalyticsFromAPI> {
   const params = locationId ? `?location_id=${locationId}` : '';
   console.log('[Business] Fetching analytics', params);
-  const res = await apiClient.get<BusinessAnalyticsFromAPI | { data: BusinessAnalyticsFromAPI }>(`/api/reservations/location/analytics${params}`);
-  const data = res.data;
-  if (data && typeof data === 'object' && 'data' in data && !('daily_sales' in data)) return (data as any).data;
+  const res = await apiClient.get<any>(`/api/reservations/location/analytics${params}`);
+  let data: any = res.data;
+  // Unwrap common API envelope shapes: { analytics: {...} } or { data: {...} }
+  if (data && typeof data === 'object') {
+    if ('analytics' in data && data.analytics && typeof data.analytics === 'object') {
+      data = data.analytics;
+    } else if (
+      'data' in data &&
+      data.data &&
+      typeof data.data === 'object' &&
+      !('weekly' in data) &&
+      !('daily_sales' in data) &&
+      !('summary' in data)
+    ) {
+      data = data.data;
+    }
+  }
+  // Normalize snake_case → camelCase field names so the dashboard doesn't need to branch
+  if (data && typeof data === 'object') {
+    // status_breakdown → statusBreakdown
+    if ('status_breakdown' in data && !('statusBreakdown' in data)) {
+      data = { ...data, statusBreakdown: data.status_breakdown };
+    }
+    // weekly: day_name → dayName
+    if (Array.isArray(data.weekly) && data.weekly.length > 0 && 'day_name' in data.weekly[0] && !('dayName' in data.weekly[0])) {
+      data = { ...data, weekly: data.weekly.map((d: any) => ({ ...d, dayName: d.day_name })) };
+    }
+    // monthly: month_name → monthName
+    if (Array.isArray(data.monthly) && data.monthly.length > 0 && 'month_name' in data.monthly[0] && !('monthName' in data.monthly[0])) {
+      data = { ...data, monthly: data.monthly.map((m: any) => ({ ...m, monthName: m.month_name })) };
+    }
+  }
+  console.log('[Business] Analytics normalized:', JSON.stringify({ weekly: data?.weekly?.length, monthly: data?.monthly?.length, statusBreakdown: data?.statusBreakdown }));
   return data as BusinessAnalyticsFromAPI;
 }
 

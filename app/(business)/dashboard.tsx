@@ -15,6 +15,8 @@ import { fetchMyContext, fetchOrganizationDetails } from '@/src/services/teams';
 import { apiClient } from '@/src/lib/api';
 import { LineChart } from '@/src/components/LineChart';
 import { DelayedLoader } from '@/src/components/DelayedLoader';
+import { LinearGradient } from 'expo-linear-gradient';
+import * as Haptics from 'expo-haptics';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
 
@@ -42,7 +44,7 @@ function AnimatedNumber({ value, suffix, duration = 800 }: { value: number; suff
 function SimpleBarChart({ data, labels, color, stackData, stackColor }: { data: number[]; labels: string[]; color: string; stackData?: number[]; stackColor?: string }) {
   const theme = useTheme();
   const allMax = Math.max(...data.map((v, i) => v + (stackData?.[i] ?? 0)), 1);
-  const barWidth = Math.min(28, (SCREEN_WIDTH - 140) / data.length - 10);
+  const barWidth = Math.min(26, (SCREEN_WIDTH - 140) / data.length - 10);
 
   return (
     <View style={chartStyles.container}>
@@ -50,19 +52,30 @@ function SimpleBarChart({ data, labels, color, stackData, stackColor }: { data: 
         {data.map((val, i) => {
           const stackVal = stackData?.[i] ?? 0;
           const total = val + stackVal;
-          const height = Math.max(6, (total / allMax) * 110);
+          const height = Math.max(4, (total / allMax) * 100);
           const mainH = total > 0 ? (val / total) * height : 0;
           const stackH = total > 0 ? (stackVal / total) * height : 0;
+          const isLast = i === data.length - 1;
           return (
             <View key={i} style={chartStyles.barCol}>
-              <View style={[chartStyles.barBg, { height: 120, width: barWidth, borderRadius: 6, backgroundColor: 'transparent' }]}>
+              {/* Value label above bar */}
+              <Text style={{ color: total > 0 ? theme.colors.textSecondary : 'transparent', fontSize: 9, fontFamily: 'Poppins_600SemiBold', marginBottom: 3 }}>
+                {total > 0 ? total : ''}
+              </Text>
+              <View style={[chartStyles.barBg, { height: 104, width: barWidth, borderRadius: 4, backgroundColor: theme.colors.primary + '08' }]}>
                 <View style={{ flex: 1 }} />
                 {stackData && (
-                  <View style={{ height: stackH, backgroundColor: stackColor ?? theme.colors.secondary, borderTopLeftRadius: 6, borderTopRightRadius: 6, width: barWidth }} />
+                  <View style={{ height: stackH, backgroundColor: stackColor ?? theme.colors.secondary, borderTopLeftRadius: 4, borderTopRightRadius: 4, width: barWidth }} />
                 )}
-                <View style={{ height: mainH, backgroundColor: color, borderBottomLeftRadius: 6, borderBottomRightRadius: 6, borderTopLeftRadius: stackData ? 0 : 6, borderTopRightRadius: stackData ? 0 : 6, width: barWidth }} />
+                <View style={{
+                  height: mainH,
+                  backgroundColor: color,
+                  borderRadius: 4,
+                  width: barWidth,
+                  opacity: 0.85 + 0.15 * (val / allMax),
+                }} />
               </View>
-              <Text style={[{ color: theme.colors.muted, fontSize: 10, marginTop: 6, fontFamily: 'Poppins_400Regular' }]}>
+              <Text style={[{ color: theme.colors.muted, fontSize: 9, marginTop: 6, fontFamily: 'Poppins_400Regular', letterSpacing: 0.1 }]}>
                 {labels[i] ?? ''}
               </Text>
             </View>
@@ -75,7 +88,7 @@ function SimpleBarChart({ data, labels, color, stackData, stackColor }: { data: 
 
 const chartStyles = StyleSheet.create({
   container: {
-    paddingTop: 8,
+    paddingTop: 4,
   },
   barsRow: {
     flexDirection: 'row',
@@ -95,13 +108,13 @@ function ReviewBar({ label, value, color }: { label: string; value: number; colo
   const theme = useTheme();
   const pct = (value / 5) * 100;
   return (
-    <View style={{ marginBottom: 12 }}>
-      <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
-        <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.bodySm }]}>{label}</Text>
-        <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '600' as const }]}>{value.toFixed(1)}</Text>
+    <View style={{ marginBottom: 14 }}>
+      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 7 }}>
+        <Text style={{ color: theme.colors.textSecondary, fontSize: 12, fontFamily: 'Poppins_400Regular', letterSpacing: 0.1 }}>{label}</Text>
+        <Text style={{ color: theme.colors.textPrimary, fontSize: 13, fontFamily: 'Poppins_600SemiBold' }}>{value.toFixed(1)}</Text>
       </View>
-      <View style={{ height: 8, backgroundColor: theme.colors.divider, borderRadius: 4 }}>
-        <View style={{ height: 8, width: `${pct}%`, backgroundColor: color, borderRadius: 4 }} />
+      <View style={{ height: 5, backgroundColor: theme.colors.divider, borderRadius: 3 }}>
+        <View style={{ height: 5, width: `${pct}%`, backgroundColor: color, borderRadius: 3 }} />
       </View>
     </View>
   );
@@ -109,14 +122,18 @@ function ReviewBar({ label, value, color }: { label: string; value: number; colo
 
 function StatMiniCard({ icon: Icon, value, label, suffix, color, theme }: any) {
   return (
-    <View style={[miniStyles.card, { backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, ...theme.shadows.shadowSm }]}>
-      <View style={[miniStyles.iconWrap, { backgroundColor: color + '14', borderRadius: 10 }]}>
-        <Icon size={16} color={color} />
+    <View style={[miniStyles.card, { backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16 }]}>
+      {/* Subtle top-edge rule for visual framing */}
+      <View style={{ height: 3, width: 24, backgroundColor: color, borderRadius: 2, marginBottom: 14 }} />
+      <View style={[miniStyles.iconWrap, { backgroundColor: color + '12' }]}>
+        <Icon size={15} color={color} strokeWidth={2.2} />
       </View>
-      <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, marginTop: 8 }]}>
+      <Text style={[
+        { color: theme.colors.textPrimary, fontSize: 22, fontFamily: 'Poppins_700Bold', marginTop: 12, letterSpacing: -0.5 },
+      ]} numberOfLines={1} adjustsFontSizeToFit>
         {value}{suffix ? ` ${suffix}` : ''}
       </Text>
-      <Text style={[{ color: theme.colors.muted, fontSize: 10, marginTop: 2, fontFamily: 'Poppins_400Regular' }]} numberOfLines={1}>
+      <Text style={{ color: theme.colors.muted, fontSize: 10, marginTop: 3, fontFamily: 'Poppins_400Regular', letterSpacing: 0.1 }} numberOfLines={2}>
         {label}
       </Text>
     </View>
@@ -126,11 +143,20 @@ function StatMiniCard({ icon: Icon, value, label, suffix, color, theme }: any) {
 const miniStyles = StyleSheet.create({
   card: {
     flex: 1,
-    padding: 14,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(0,0,0,0.045)',
+    // soft consistent shadow
+    shadowColor: '#114b3c',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
+    elevation: 2,
   },
   iconWrap: {
-    width: 32,
-    height: 32,
+    width: 30,
+    height: 30,
+    borderRadius: 8,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -223,7 +249,13 @@ export default function BusinessDashboard() {
   const statsData = statsQuery.data;
   const todayOrders = todayQuery.data ?? [];
 
-  const isLoading = statsQuery.isLoading && analyticsQuery.isLoading && todayQuery.isLoading && profileQuery.isLoading;
+  // Show loader until ALL primary queries have either resolved or errored.
+  // Using || (not &&) so one fast query resolving doesn't prematurely dismiss
+  // the loader and fire animations with still-empty analytics/chart data.
+  const hasAnyData = !!(statsQuery.data || analyticsQuery.data || profileQuery.data);
+  const isLoading =
+    !hasAnyData &&
+    (statsQuery.isLoading || analyticsQuery.isLoading || todayQuery.isLoading || profileQuery.isLoading);
 
   // Compute average rating from all sources — fall back to reviewsQuery averages
   // so even a single user review shows the real score instead of '--'
@@ -231,12 +263,21 @@ export default function BusinessDashboard() {
     ? ((reviewsQuery.data.service + reviewsQuery.data.quantite + reviewsQuery.data.qualite + reviewsQuery.data.variete) / 4)
     : null;
 
+  // Defensive raw access — handles both camelCase and snake_case API responses.
+  // The service layer already normalizes where possible; these local aliases
+  // act as a second safety net in case of unexpected response shapes.
+  const analyticsRaw = analytics as any;
+  const statusBreakdown = analyticsRaw?.statusBreakdown ?? analyticsRaw?.status_breakdown ?? {};
+  const weeklySeries: any[] = analyticsRaw?.weekly ?? [];
+  const monthlySeries: any[] = analyticsRaw?.monthly ?? [];
+  const summaryData = analyticsRaw?.summary ?? {};
+
   const stats = {
     // ─ Today ─────────────────────────────────────────────
-    totalRevenue: analytics?.summary?.revenue_today ?? statsData?.today_revenue ?? 0,
-    totalBasketsSold: analytics?.summary?.baskets_sold_today ?? statsData?.today_baskets ?? 0,
+    totalRevenue: summaryData?.revenue_today ?? statsData?.today_revenue ?? 0,
+    totalBasketsSold: summaryData?.baskets_sold_today ?? statsData?.today_baskets ?? 0,
     pendingOrders: todayOrders.filter((o: any) => ['confirmed', 'reserved', 'pending'].includes(o.status ?? '')).length,
-    mealsRescued: analytics?.summary?.pickups_today ?? 0,
+    mealsRescued: summaryData?.pickups_today ?? 0,
     // ─ Overview ──────────────────────────────────────────
     activeBaskets: profileQuery.data?.available_quantity ?? 0,
     averageRating: (statsData?.average_rating && statsData.average_rating > 0)
@@ -251,21 +292,24 @@ export default function BusinessDashboard() {
     totalCompleted: statsData?.total_completed ?? 0,
     totalCancelled: statsData?.total_cancelled ?? 0,
     // ─ Weekly chart (baskets + revenue per weekday) ───────
-    dailySales: (analytics?.weekly ?? []).map((d: any) => d.baskets_sold ?? 0),
-    dailyRevenue: (analytics?.weekly ?? []).map((d: any) => d.revenue ?? 0),
-    dailyLabels: (analytics?.weekly ?? []).map((d: any) =>
-      d.dayName ? d.dayName.substring(0, 3) : (d.day ?? '')
+    dailySales: weeklySeries.map((d: any) => d.baskets_sold ?? 0),
+    dailyRevenue: weeklySeries.map((d: any) => d.revenue ?? 0),
+    // dayName may come as 'dayName' (camelCase) or 'day_name' (snake_case);
+    // service normalizes but we guard here too.
+    dailyLabels: weeklySeries.map((d: any) =>
+      (d.dayName ?? d.day_name ?? d.day ?? '').toString().substring(0, 3)
     ),
     // ─ Monthly chart (baskets per month) ─────────────────
-    monthlySales: (analytics?.monthly ?? []).map((m: any) => m.baskets_sold ?? 0),
-    monthlyLabels: (analytics?.monthly ?? []).map((m: any) =>
-      m.monthName ? m.monthName.substring(0, 3) : (m.month ?? '')
+    monthlySales: monthlySeries.map((m: any) => m.baskets_sold ?? 0),
+    monthlyLabels: monthlySeries.map((m: any) =>
+      (m.monthName ?? m.month_name ?? m.month ?? '').toString().substring(0, 3)
     ),
-    monthlyRevenueArr: (analytics?.monthly ?? []).map((m: any) => m.revenue ?? 0),
+    monthlyRevenueArr: monthlySeries.map((m: any) => m.revenue ?? 0),
     // ─ Status breakdown ───────────────────────────────────
-    statusConfirmed: analytics?.statusBreakdown?.confirmed ?? 0,
-    statusPickedUp: analytics?.statusBreakdown?.picked_up ?? 0,
-    statusCancelled: analytics?.statusBreakdown?.cancelled ?? 0,
+    // API may send 'statusBreakdown' (camelCase) or 'status_breakdown' (snake_case).
+    statusConfirmed: statusBreakdown?.confirmed ?? 0,
+    statusPickedUp: statusBreakdown?.picked_up ?? 0,
+    statusCancelled: statusBreakdown?.cancelled ?? 0,
   };
 
   const weeklyRevenueTotal = stats.dailyRevenue.reduce((a: number, b: number) => a + b, 0);
@@ -298,22 +342,31 @@ export default function BusinessDashboard() {
   const reviews = reviewsQuery.data ?? { service: 0, quantite: 0, qualite: 0, variete: 0 };
 
   const handleRatingPress = useCallback(() => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setShowRatingModal(true);
   }, []);
 
   const chartWidth = Math.min(SCREEN_WIDTH - 80, 320);
 
-  // Staggered fade-in animations for dashboard sections
+  // Staggered fade-in animations — 5 groups for fine-grained entrance rhythm
   const fadeAnim1 = React.useRef(new RNAnimated.Value(0)).current;
   const fadeAnim2 = React.useRef(new RNAnimated.Value(0)).current;
   const fadeAnim3 = React.useRef(new RNAnimated.Value(0)).current;
+  const fadeAnim4 = React.useRef(new RNAnimated.Value(0)).current;
+  const fadeAnim5 = React.useRef(new RNAnimated.Value(0)).current;
+  // Ensures the entrance animation fires exactly once — when data is ready —
+  // and never re-fires on subsequent refetches or location switches.
+  const animFired = React.useRef(false);
 
   React.useEffect(() => {
-    if (!isLoading) {
-      RNAnimated.stagger(150, [
-        RNAnimated.timing(fadeAnim1, { toValue: 1, duration: 400, useNativeDriver: true }),
-        RNAnimated.timing(fadeAnim2, { toValue: 1, duration: 400, useNativeDriver: true }),
-        RNAnimated.timing(fadeAnim3, { toValue: 1, duration: 400, useNativeDriver: true }),
+    if (!isLoading && !animFired.current) {
+      animFired.current = true;
+      RNAnimated.stagger(110, [
+        RNAnimated.timing(fadeAnim1, { toValue: 1, duration: 450, useNativeDriver: true }),
+        RNAnimated.timing(fadeAnim2, { toValue: 1, duration: 450, useNativeDriver: true }),
+        RNAnimated.timing(fadeAnim3, { toValue: 1, duration: 450, useNativeDriver: true }),
+        RNAnimated.timing(fadeAnim4, { toValue: 1, duration: 450, useNativeDriver: true }),
+        RNAnimated.timing(fadeAnim5, { toValue: 1, duration: 450, useNativeDriver: true }),
       ]).start();
     }
   }, [isLoading]);
@@ -412,7 +465,12 @@ export default function BusinessDashboard() {
           {profileQuery.data?.cover_image_url ? (
             <Image source={{ uri: profileQuery.data.cover_image_url }} style={{ width: '100%', height: '100%' }} resizeMode="cover" />
           ) : (
-            <View style={{ width: '100%', height: '100%', backgroundColor: theme.colors.primary + '15' }} />
+            <LinearGradient
+              colors={['#1a6b54', '#0d3d30']}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={{ width: '100%', height: '100%' }}
+            />
           )}
         </View>
 
@@ -454,143 +512,281 @@ export default function BusinessDashboard() {
           </View>
         </View>
 
-        <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h1, paddingHorizontal: theme.spacing.xl, marginTop: theme.spacing.sm }]}>
+        <Text style={{ color: theme.colors.textPrimary, fontSize: 26, fontFamily: 'Poppins_700Bold', letterSpacing: -0.4, paddingHorizontal: theme.spacing.xl, marginTop: 14 }}>
           {t('business.dashboard.title')}
         </Text>
 
         <RNAnimated.View style={{ opacity: fadeAnim1, transform: [{ translateY: fadeAnim1.interpolate({ inputRange: [0, 1], outputRange: [20, 0] }) }] }}>
-          <View style={[styles.summaryBanner, {
-            backgroundColor: theme.colors.primary,
-            marginHorizontal: theme.spacing.xl,
-            marginTop: theme.spacing.xl,
-            borderRadius: theme.radii.r20,
-            padding: theme.spacing.lg,
-          }]}>
-            <Text style={[{ color: 'rgba(255,255,255,0.7)', fontSize: 12, fontFamily: 'Poppins_400Regular' }]}>
+          <LinearGradient
+            colors={['#16604a', '#0c3829']}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={{
+              marginHorizontal: theme.spacing.xl,
+              marginTop: theme.spacing.xl,
+              borderRadius: theme.radii.r20,
+              padding: theme.spacing.xl,
+              overflow: 'hidden',
+            }}
+          >
+            {/* Decorative background circle */}
+            <View style={{ position: 'absolute', right: -24, top: -24, width: 110, height: 110, borderRadius: 55, backgroundColor: 'rgba(227,255,92,0.07)' }} />
+            {/* Label */}
+            <Text style={{ color: 'rgba(255,255,255,0.5)', fontSize: 10, fontFamily: 'Poppins_400Regular', letterSpacing: 0.8, textTransform: 'uppercase' }}>
               {t('business.dashboard.daySummary')}
             </Text>
-            <View style={styles.summaryRow}>
-              <View style={styles.summaryItem}>
-                <Banknote size={14} color={theme.colors.secondary} />
-                <Text style={[styles.summaryVal, { color: '#fff' }]}><AnimatedNumber value={stats.totalRevenue} suffix=" TND" /></Text>
+            {/* Hero: Revenue */}
+            <View style={{ flexDirection: 'row', alignItems: 'flex-end', marginTop: 10, marginBottom: 16 }}>
+              <Text style={{ color: '#fff', fontSize: 38, fontFamily: 'Poppins_700Bold', letterSpacing: -1.5, lineHeight: 42 }}>
+                <AnimatedNumber value={stats.totalRevenue} />
+              </Text>
+              <Text style={{ color: 'rgba(255,255,255,0.5)', fontSize: 15, fontFamily: 'Poppins_400Regular', marginLeft: 6, marginBottom: 4 }}>TND</Text>
+            </View>
+            {/* Separator */}
+            <View style={{ height: 1, backgroundColor: 'rgba(255,255,255,0.1)', marginBottom: 14 }} />
+            {/* 3 subsidiary metrics */}
+            <View style={{ flexDirection: 'row' }}>
+              <View style={{ flex: 1, alignItems: 'center' }}>
+                <ShoppingBag size={13} color={theme.colors.secondary} />
+                <Text style={{ color: '#fff', fontSize: 18, fontFamily: 'Poppins_700Bold', marginTop: 4, letterSpacing: -0.4 }}>
+                  <AnimatedNumber value={stats.totalBasketsSold} />
+                </Text>
+                <Text style={{ color: 'rgba(255,255,255,0.5)', fontSize: 10, fontFamily: 'Poppins_400Regular', marginTop: 1 }}>{t('business.dashboard.sold')}</Text>
               </View>
-              <View style={[styles.summaryDivider, { backgroundColor: 'rgba(255,255,255,0.2)' }]} />
-              <View style={styles.summaryItem}>
-                <ShoppingBag size={14} color={theme.colors.secondary} />
-                <Text style={[styles.summaryVal, { color: '#fff' }]}><AnimatedNumber value={stats.totalBasketsSold} /></Text>
-                <Text style={[styles.summarySuffix, { color: 'rgba(255,255,255,0.7)' }]}>{t('business.dashboard.sold')}</Text>
+              <View style={{ width: 1, backgroundColor: 'rgba(255,255,255,0.12)' }} />
+              <View style={{ flex: 1, alignItems: 'center' }}>
+                <Clock size={13} color={theme.colors.secondary} />
+                <Text style={{ color: '#fff', fontSize: 18, fontFamily: 'Poppins_700Bold', marginTop: 4, letterSpacing: -0.4 }}>
+                  <AnimatedNumber value={stats.pendingOrders} />
+                </Text>
+                <Text style={{ color: 'rgba(255,255,255,0.5)', fontSize: 10, fontFamily: 'Poppins_400Regular', marginTop: 1 }}>{t('business.dashboard.pending')}</Text>
               </View>
-              <View style={[styles.summaryDivider, { backgroundColor: 'rgba(255,255,255,0.2)' }]} />
-              <View style={styles.summaryItem}>
-                <Clock size={14} color={theme.colors.secondary} />
-                <Text style={[styles.summaryVal, { color: '#fff' }]}><AnimatedNumber value={stats.pendingOrders} /></Text>
-                <Text style={[styles.summarySuffix, { color: 'rgba(255,255,255,0.7)' }]}>{t('business.dashboard.pending')}</Text>
-              </View>
-              <View style={[styles.summaryDivider, { backgroundColor: 'rgba(255,255,255,0.2)' }]} />
-              <View style={styles.summaryItem}>
-                <Package size={14} color={theme.colors.secondary} />
-                <Text style={[styles.summaryVal, { color: '#fff' }]}><AnimatedNumber value={stats.mealsRescued} /></Text>
-                <Text style={[styles.summarySuffix, { color: 'rgba(255,255,255,0.7)' }]}>{t('business.dashboard.rescued')}</Text>
+              <View style={{ width: 1, backgroundColor: 'rgba(255,255,255,0.12)' }} />
+              <View style={{ flex: 1, alignItems: 'center' }}>
+                <Package size={13} color={theme.colors.secondary} />
+                <Text style={{ color: '#fff', fontSize: 18, fontFamily: 'Poppins_700Bold', marginTop: 4, letterSpacing: -0.4 }}>
+                  <AnimatedNumber value={stats.mealsRescued} />
+                </Text>
+                <Text style={{ color: 'rgba(255,255,255,0.5)', fontSize: 10, fontFamily: 'Poppins_400Regular', marginTop: 1 }}>{t('business.dashboard.rescued')}</Text>
               </View>
             </View>
-          </View>
+          </LinearGradient>
         </RNAnimated.View>
 
         <RNAnimated.View style={{ opacity: fadeAnim2, transform: [{ translateY: fadeAnim2.interpolate({ inputRange: [0, 1], outputRange: [20, 0] }) }] }}>
           <TouchableOpacity
             onPress={handleRatingPress}
-            activeOpacity={0.8}
-            style={[styles.ratingCard, {
+            activeOpacity={0.85}
+            style={{
               backgroundColor: theme.colors.surface,
               marginHorizontal: theme.spacing.xl,
               marginTop: theme.spacing.lg,
               borderRadius: theme.radii.r16,
-              padding: theme.spacing.lg,
-              ...theme.shadows.shadowSm,
-            }]}
+              overflow: 'hidden',
+              borderWidth: 1,
+              borderColor: 'rgba(0,0,0,0.045)',
+              shadowColor: '#114b3c',
+              shadowOffset: { width: 0, height: 2 },
+              shadowOpacity: 0.07,
+              shadowRadius: 8,
+              elevation: 2,
+            }}
           >
-            <View style={styles.ratingRow}>
-              <View style={styles.ratingLeft}>
-                <View style={[styles.ratingStarBg, { backgroundColor: theme.colors.starYellow + '18' }]}>
-                  <Star size={20} color={theme.colors.starYellow} fill={theme.colors.starYellow} />
+            {/* Accent stripe along the top*/}
+            <View style={{ height: 3, backgroundColor: theme.colors.starYellow, borderTopLeftRadius: theme.radii.r16, borderTopRightRadius: theme.radii.r16 }} />
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16 }}>
+              {/* Left: star icon + score */}
+              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                <View style={{
+                  width: 44,
+                  height: 44,
+                  borderRadius: 12,
+                  backgroundColor: theme.colors.starYellow + '15',
+                  justifyContent: 'center',
+                  alignItems: 'center',
+                }}>
+                  <Star size={20} color={theme.colors.starYellow} fill={theme.colors.starYellow} strokeWidth={1.5} />
                 </View>
-                <View style={{ marginLeft: 12 }}>
-                  <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h2 }]}>
+                <View style={{ marginLeft: 14 }}>
+                  <Text style={{ color: theme.colors.textPrimary, fontSize: 26, fontFamily: 'Poppins_700Bold', letterSpacing: -0.5 }}>
                     {stats.averageRating > 0 ? stats.averageRating.toFixed(1) : '--'}
                   </Text>
-                  <Text style={[{ color: theme.colors.muted, fontSize: 11, fontFamily: 'Poppins_400Regular' }]}>
-                    {t('business.dashboard.avgRating')}
+                  <Text style={{ color: theme.colors.muted, fontSize: 10, fontFamily: 'Poppins_400Regular', letterSpacing: 0.2, marginTop: -2 }}>
+                    {t('business.dashboard.avgRating').toUpperCase()}
                   </Text>
                 </View>
               </View>
-              <View style={[styles.ratingArrow, { backgroundColor: theme.colors.bg }]}>
-                <Text style={[{ color: theme.colors.primary, fontSize: 12, fontFamily: 'Poppins_600SemiBold' }]}>{t('business.dashboard.details')} →</Text>
+              {/* Right: details pill */}
+              <View style={{
+                flexDirection: 'row',
+                alignItems: 'center',
+                backgroundColor: theme.colors.primary,
+                borderRadius: 20,
+                paddingHorizontal: 14,
+                paddingVertical: 7,
+                gap: 4,
+              }}>
+                <Text style={{ color: '#fff', fontSize: 11, fontFamily: 'Poppins_600SemiBold', letterSpacing: 0.2 }}>{t('business.dashboard.details')}</Text>
               </View>
             </View>
           </TouchableOpacity>
         </RNAnimated.View>
 
-        <RNAnimated.View style={{ opacity: fadeAnim3, transform: [{ translateY: fadeAnim3.interpolate({ inputRange: [0, 1], outputRange: [20, 0] }) }] }}>
-          <View style={[styles.statsGrid, { paddingHorizontal: theme.spacing.xl, marginTop: theme.spacing.xl }]}>
-            <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, marginBottom: theme.spacing.md }]}>
-              {t('business.dashboard.performance')}
-            </Text>
+        <View style={{ paddingHorizontal: theme.spacing.xl, marginTop: theme.spacing.xl }}>
+          {/* Section header */}
+          <RNAnimated.View style={{ opacity: fadeAnim3, transform: [{ translateY: fadeAnim3.interpolate({ inputRange: [0, 1], outputRange: [14, 0] }) }] }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 14 }}>
+              <View style={{ width: 3, height: 16, backgroundColor: theme.colors.primary, borderRadius: 2, marginRight: 8 }} />
+              <Text style={{ color: theme.colors.textPrimary, fontSize: 13, fontFamily: 'Poppins_600SemiBold', letterSpacing: 0.3, textTransform: 'uppercase' as const }}>
+                {t('business.dashboard.performance')}
+              </Text>
+            </View>
             <View style={styles.statsRow}>
               <StatMiniCard icon={TrendingUp} value={stats.activeBaskets} label={t('business.dashboard.activeBaskets')} color={theme.colors.primary} theme={theme} />
               <View style={{ width: 10 }} />
-              <StatMiniCard icon={Banknote} value={`${stats.monthlyRevenue} TND`} label="Revenus ce mois" color={theme.colors.accentWarm} theme={theme} />
+              <StatMiniCard icon={Banknote} value={`${stats.monthlyRevenue}`} suffix="TND" label="Revenus ce mois" color={theme.colors.accentWarm} theme={theme} />
             </View>
-            <View style={[styles.statsRow, { marginTop: 10 }]}>
+          </RNAnimated.View>
+          {/* Row 2 — delayed via fadeAnim4 */}
+          <RNAnimated.View style={{ opacity: fadeAnim4, transform: [{ translateY: fadeAnim4.interpolate({ inputRange: [0, 1], outputRange: [14, 0] }) }], marginTop: 10 }}>
+            <View style={styles.statsRow}>
               <StatMiniCard icon={ShoppingBag} value={stats.monthlyBaskets} label="Paniers ce mois" color={theme.colors.accentFresh} theme={theme} />
               <View style={{ width: 10 }} />
               <StatMiniCard icon={AlertCircle} value={stats.pendingOrders} label={t('business.dashboard.pendingOrders')} color={theme.colors.error} theme={theme} />
             </View>
-          </View>
-        </RNAnimated.View>
+          </RNAnimated.View>
+        </View>
 
         {/* ── Order Status Breakdown ── */}
         {(stats.statusPickedUp > 0 || stats.statusConfirmed > 0 || stats.statusCancelled > 0) && (
-          <View style={{ paddingHorizontal: theme.spacing.xl, marginTop: theme.spacing.lg }}>
-            <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, marginBottom: theme.spacing.md }]}>
-              {'Statut des commandes'}
-            </Text>
-            <View style={{ flexDirection: 'row' }}>
-              <View style={{ flex: 1, backgroundColor: '#16a34a12', borderRadius: theme.radii.r12, padding: 14, alignItems: 'center', borderWidth: 1, borderColor: '#16a34a30', marginRight: 6 }}>
-                <Text style={{ color: '#16a34a', fontSize: 22, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>{`${stats.statusPickedUp}`}</Text>
-                <Text style={{ color: '#16a34a', fontSize: 10, fontFamily: 'Poppins_400Regular', marginTop: 2, textAlign: 'center' }}>{'Récupérés'}</Text>
+          <RNAnimated.View style={{ opacity: fadeAnim5, transform: [{ translateY: fadeAnim5.interpolate({ inputRange: [0, 1], outputRange: [14, 0] }) }] }}>
+          <View style={{ paddingHorizontal: theme.spacing.xl, marginTop: theme.spacing.xxl }}>
+            {/* Section header */}
+            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 14 }}>
+              <View style={{ width: 3, height: 16, backgroundColor: theme.colors.accentFresh, borderRadius: 2, marginRight: 8 }} />
+              <Text style={{ color: theme.colors.textPrimary, fontSize: 13, fontFamily: 'Poppins_600SemiBold', letterSpacing: 0.3, textTransform: 'uppercase' as const }}>
+                {'Statut des commandes'}
+              </Text>
+            </View>
+            <View style={{ flexDirection: 'row', gap: 8 }}>
+              {/* Récupérés */}
+              <View style={{
+                flex: 1,
+                backgroundColor: theme.colors.surface,
+                borderRadius: theme.radii.r16,
+                padding: 16,
+                alignItems: 'flex-start',
+                borderWidth: 1,
+                borderColor: 'rgba(0,0,0,0.045)',
+                shadowColor: '#16a34a',
+                shadowOffset: { width: 0, height: 2 },
+                shadowOpacity: 0.08,
+                shadowRadius: 6,
+                elevation: 2,
+                overflow: 'hidden',
+              }}>
+                <View style={{ height: 3, width: '100%', position: 'absolute', top: 0, left: 0, right: 0, backgroundColor: '#16a34a', borderTopLeftRadius: theme.radii.r16, borderTopRightRadius: theme.radii.r16 }} />
+                <View style={{ width: 26, height: 26, borderRadius: 8, backgroundColor: '#16a34a15', justifyContent: 'center', alignItems: 'center', marginBottom: 10 }}>
+                  <Check size={13} color="#16a34a" strokeWidth={2.5} />
+                </View>
+                <Text style={{ color: '#16a34a', fontSize: 26, fontFamily: 'Poppins_700Bold', letterSpacing: -0.5, lineHeight: 30 }}>{`${stats.statusPickedUp}`}</Text>
+                <Text style={{ color: theme.colors.textSecondary, fontSize: 10, fontFamily: 'Poppins_400Regular', marginTop: 3, letterSpacing: 0.2 }}>{'Récupérés'}</Text>
               </View>
-              <View style={{ flex: 1, backgroundColor: theme.colors.primary + '12', borderRadius: theme.radii.r12, padding: 14, alignItems: 'center', borderWidth: 1, borderColor: theme.colors.primary + '30', marginRight: 6 }}>
-                <Text style={{ color: theme.colors.primary, fontSize: 22, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>{`${stats.statusConfirmed}`}</Text>
-                <Text style={{ color: theme.colors.primary, fontSize: 10, fontFamily: 'Poppins_400Regular', marginTop: 2, textAlign: 'center' }}>{'Confirmés'}</Text>
+              {/* Confirmés */}
+              <View style={{
+                flex: 1,
+                backgroundColor: theme.colors.surface,
+                borderRadius: theme.radii.r16,
+                padding: 16,
+                alignItems: 'flex-start',
+                borderWidth: 1,
+                borderColor: 'rgba(0,0,0,0.045)',
+                shadowColor: theme.colors.primary,
+                shadowOffset: { width: 0, height: 2 },
+                shadowOpacity: 0.08,
+                shadowRadius: 6,
+                elevation: 2,
+                overflow: 'hidden',
+              }}>
+                <View style={{ height: 3, width: '100%', position: 'absolute', top: 0, left: 0, right: 0, backgroundColor: theme.colors.primary, borderTopLeftRadius: theme.radii.r16, borderTopRightRadius: theme.radii.r16 }} />
+                <View style={{ width: 26, height: 26, borderRadius: 8, backgroundColor: theme.colors.primary + '14', justifyContent: 'center', alignItems: 'center', marginBottom: 10 }}>
+                  <Clock size={13} color={theme.colors.primary} strokeWidth={2.5} />
+                </View>
+                <Text style={{ color: theme.colors.primary, fontSize: 26, fontFamily: 'Poppins_700Bold', letterSpacing: -0.5, lineHeight: 30 }}>{`${stats.statusConfirmed}`}</Text>
+                <Text style={{ color: theme.colors.textSecondary, fontSize: 10, fontFamily: 'Poppins_400Regular', marginTop: 3, letterSpacing: 0.2 }}>{'Confirmés'}</Text>
               </View>
-              <View style={{ flex: 1, backgroundColor: theme.colors.error + '12', borderRadius: theme.radii.r12, padding: 14, alignItems: 'center', borderWidth: 1, borderColor: theme.colors.error + '30' }}>
-                <Text style={{ color: theme.colors.error, fontSize: 22, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>{`${stats.statusCancelled}`}</Text>
-                <Text style={{ color: theme.colors.error, fontSize: 10, fontFamily: 'Poppins_400Regular', marginTop: 2, textAlign: 'center' }}>{'Annulés'}</Text>
+              {/* Annulés */}
+              <View style={{
+                flex: 1,
+                backgroundColor: theme.colors.surface,
+                borderRadius: theme.radii.r16,
+                padding: 16,
+                alignItems: 'flex-start',
+                borderWidth: 1,
+                borderColor: 'rgba(0,0,0,0.045)',
+                shadowColor: theme.colors.error,
+                shadowOffset: { width: 0, height: 2 },
+                shadowOpacity: 0.08,
+                shadowRadius: 6,
+                elevation: 2,
+                overflow: 'hidden',
+              }}>
+                <View style={{ height: 3, width: '100%', position: 'absolute', top: 0, left: 0, right: 0, backgroundColor: theme.colors.error, borderTopLeftRadius: theme.radii.r16, borderTopRightRadius: theme.radii.r16 }} />
+                <View style={{ width: 26, height: 26, borderRadius: 8, backgroundColor: theme.colors.error + '12', justifyContent: 'center', alignItems: 'center', marginBottom: 10 }}>
+                  <X size={13} color={theme.colors.error} strokeWidth={2.5} />
+                </View>
+                <Text style={{ color: theme.colors.error, fontSize: 26, fontFamily: 'Poppins_700Bold', letterSpacing: -0.5, lineHeight: 30 }}>{`${stats.statusCancelled}`}</Text>
+                <Text style={{ color: theme.colors.textSecondary, fontSize: 10, fontFamily: 'Poppins_400Regular', marginTop: 3, letterSpacing: 0.2 }}>{'Annulés'}</Text>
               </View>
             </View>
           </View>
+          </RNAnimated.View>
         )}
 
+        {/* ── Sales This Week + Monthly Performance — animated as group 5 ── */}
+        <RNAnimated.View style={{ opacity: fadeAnim5, transform: [{ translateY: fadeAnim5.interpolate({ inputRange: [0, 1], outputRange: [14, 0] }) }] }}>
         {/* ── Sales This Week (Line Chart) ── */}
-        <View style={[styles.chartSection, { paddingHorizontal: theme.spacing.xl, marginTop: theme.spacing.xxl }]}>
-          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: theme.spacing.md }}>
-            <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3 }]}>
-              {'Ventes cette semaine'}
-            </Text>
-            {weeklyRevenueTotal > 0 && (
-              <Text style={{ color: theme.colors.accentWarm, fontSize: 12, fontFamily: 'Poppins_600SemiBold' }}>
-                {`${weeklyRevenueTotal.toFixed(0)} TND`}
+        <View style={{ paddingHorizontal: theme.spacing.xl, marginTop: theme.spacing.xxl }}>
+          {/* Section header */}
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              <View style={{ width: 3, height: 16, backgroundColor: theme.colors.primary, borderRadius: 2, marginRight: 8 }} />
+              <Text style={{ color: theme.colors.textPrimary, fontSize: 13, fontFamily: 'Poppins_600SemiBold', letterSpacing: 0.3, textTransform: 'uppercase' as const }}>
+                {'Ventes cette semaine'}
               </Text>
+            </View>
+            {weeklyRevenueTotal > 0 && (
+              <View style={{ backgroundColor: theme.colors.accentWarm + '15', borderRadius: 20, paddingHorizontal: 10, paddingVertical: 4 }}>
+                <Text style={{ color: theme.colors.accentWarm, fontSize: 11, fontFamily: 'Poppins_600SemiBold' }}>
+                  {`${weeklyRevenueTotal.toFixed(0)} TND`}
+                </Text>
+              </View>
             )}
           </View>
-          <View style={[styles.chartCard, { backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, padding: theme.spacing.lg, ...theme.shadows.shadowSm }]}>
-            <View style={styles.chartLegend}>
-              <View style={styles.legendItem}>
-                <View style={[styles.legendDot, { backgroundColor: theme.colors.primary }]} />
-                <Text style={[{ color: theme.colors.muted, fontSize: 10, fontFamily: 'Poppins_400Regular' }]}>{'Paniers vendus / jour'}</Text>
-              </View>
+          {/* Chart panel */}
+          <View style={{
+            backgroundColor: theme.colors.surface,
+            borderRadius: theme.radii.r20,
+            borderWidth: 1,
+            borderColor: 'rgba(0,0,0,0.04)',
+            shadowColor: '#114b3c',
+            shadowOffset: { width: 0, height: 3 },
+            shadowOpacity: 0.07,
+            shadowRadius: 10,
+            elevation: 3,
+            overflow: 'hidden',
+          }}>
+            {/* Panel header strip — LinearGradient accent */}
+            <View style={{ paddingHorizontal: 16, paddingTop: 14, paddingBottom: 8, flexDirection: 'row', alignItems: 'center' }}>
+              <LinearGradient
+                colors={[theme.colors.primary, theme.colors.accentFresh]}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+                style={{ width: 3, height: 14, borderRadius: 2, marginRight: 8 }}
+              />
+              <Text style={{ color: theme.colors.textSecondary, fontSize: 10, fontFamily: 'Poppins_400Regular', letterSpacing: 0.3 }}>{'Paniers vendus / jour'}</Text>
             </View>
-            <View style={{ alignItems: 'center' }}>
+            <View style={{ paddingHorizontal: 12, paddingBottom: 16, alignItems: 'center' }}>
               {stats.dailySales.length > 0 && stats.dailySales.some((v: number) => v > 0) ? (
                 <LineChart
                   data={stats.dailySales}
@@ -602,8 +798,8 @@ export default function BusinessDashboard() {
                 />
               ) : (
                 <View style={{ height: 150, justifyContent: 'center', alignItems: 'center' }}>
-                  <ShoppingBag size={28} color={theme.colors.divider} />
-                  <Text style={{ color: theme.colors.muted, fontSize: 12, fontFamily: 'Poppins_400Regular', marginTop: 8 }}>
+                  <ShoppingBag size={26} color={theme.colors.divider} />
+                  <Text style={{ color: theme.colors.muted, fontSize: 12, fontFamily: 'Poppins_400Regular', marginTop: 10 }}>
                     {'Pas encore de ventes cette semaine'}
                   </Text>
                 </View>
@@ -613,50 +809,75 @@ export default function BusinessDashboard() {
         </View>
 
         {/* ── Monthly Performance (Bar Chart) ── */}
-        <View style={[styles.chartSection, { paddingHorizontal: theme.spacing.xl, marginTop: theme.spacing.lg }]}>
-          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: theme.spacing.md }}>
-            <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3 }]}>
-              {'Performance mensuelle'}
-            </Text>
-            {stats.monthlyBaskets > 0 && (
-              <Text style={{ color: theme.colors.accentFresh, fontSize: 12, fontFamily: 'Poppins_600SemiBold' }}>
-                {`${stats.monthlyBaskets} paniers`}
+        <View style={{ paddingHorizontal: theme.spacing.xl, marginTop: theme.spacing.xl }}>
+          {/* Section header */}
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              <View style={{ width: 3, height: 16, backgroundColor: theme.colors.accentWarm, borderRadius: 2, marginRight: 8 }} />
+              <Text style={{ color: theme.colors.textPrimary, fontSize: 13, fontFamily: 'Poppins_600SemiBold', letterSpacing: 0.3, textTransform: 'uppercase' as const }}>
+                {'Performance mensuelle'}
               </Text>
+            </View>
+            {stats.monthlyBaskets > 0 && (
+              <View style={{ backgroundColor: theme.colors.accentFresh + '15', borderRadius: 20, paddingHorizontal: 10, paddingVertical: 4 }}>
+                <Text style={{ color: theme.colors.accentFresh, fontSize: 11, fontFamily: 'Poppins_600SemiBold' }}>
+                  {`${stats.monthlyBaskets} paniers`}
+                </Text>
+              </View>
             )}
           </View>
-          <View style={[styles.chartCard, { backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, padding: theme.spacing.lg, ...theme.shadows.shadowSm }]}>
-            <View style={styles.chartLegend}>
-              <View style={styles.legendItem}>
-                <View style={[styles.legendDot, { backgroundColor: theme.colors.primary }]} />
-                <Text style={[{ color: theme.colors.muted, fontSize: 10, fontFamily: 'Poppins_400Regular' }]}>{'Paniers / mois'}</Text>
-              </View>
-            </View>
-            {stats.monthlySales.length > 0 ? (
-              <SimpleBarChart
-                data={stats.monthlySales}
-                labels={stats.monthlyLabels}
-                color={theme.colors.primary}
+          {/* Chart panel */}
+          <View style={{
+            backgroundColor: theme.colors.surface,
+            borderRadius: theme.radii.r20,
+            borderWidth: 1,
+            borderColor: 'rgba(0,0,0,0.04)',
+            shadowColor: '#114b3c',
+            shadowOffset: { width: 0, height: 3 },
+            shadowOpacity: 0.07,
+            shadowRadius: 10,
+            elevation: 3,
+            overflow: 'hidden',
+          }}>
+            {/* Panel header strip — LinearGradient accent */}
+            <View style={{ paddingHorizontal: 16, paddingTop: 14, paddingBottom: 8, flexDirection: 'row', alignItems: 'center' }}>
+              <LinearGradient
+                colors={[theme.colors.accentWarm, '#f5c842']}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+                style={{ width: 3, height: 14, borderRadius: 2, marginRight: 8 }}
               />
-            ) : (
-              <View style={{ height: 120, justifyContent: 'center', alignItems: 'center' }}>
-                <TrendingUp size={28} color={theme.colors.divider} />
-                <Text style={{ color: theme.colors.muted, fontSize: 12, fontFamily: 'Poppins_400Regular', marginTop: 8 }}>
-                  {'Pas encore de données mensuelles'}
-                </Text>
-              </View>
-            )}
-            {stats.monthlySales.length > 0 && stats.monthlyRevenue > 0 && (
-              <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 10, borderTopWidth: 1, borderTopColor: theme.colors.divider, paddingTop: 8 }}>
-                <Text style={{ color: theme.colors.textSecondary, fontSize: 11, fontFamily: 'Poppins_400Regular' }}>
-                  {'Revenus ce mois:\u00A0'}
-                </Text>
-                <Text style={{ color: theme.colors.accentWarm, fontSize: 11, fontFamily: 'Poppins_600SemiBold' }}>
-                  {`${stats.monthlyRevenue.toFixed(0)} TND`}
-                </Text>
-              </View>
-            )}
+              <Text style={{ color: theme.colors.textSecondary, fontSize: 10, fontFamily: 'Poppins_400Regular', letterSpacing: 0.3 }}>{'Paniers / mois'}</Text>
+            </View>
+            <View style={{ paddingHorizontal: 12, paddingBottom: 16 }}>
+              {stats.monthlySales.length > 0 ? (
+                <SimpleBarChart
+                  data={stats.monthlySales}
+                  labels={stats.monthlyLabels}
+                  color={theme.colors.primary}
+                />
+              ) : (
+                <View style={{ height: 120, justifyContent: 'center', alignItems: 'center' }}>
+                  <TrendingUp size={26} color={theme.colors.divider} />
+                  <Text style={{ color: theme.colors.muted, fontSize: 12, fontFamily: 'Poppins_400Regular', marginTop: 10 }}>
+                    {'Pas encore de données mensuelles'}
+                  </Text>
+                </View>
+              )}
+              {stats.monthlySales.length > 0 && stats.monthlyRevenue > 0 && (
+                <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 10, borderTopWidth: 1, borderTopColor: theme.colors.divider, paddingTop: 10 }}>
+                  <Text style={{ color: theme.colors.textSecondary, fontSize: 11, fontFamily: 'Poppins_400Regular' }}>
+                    {'Revenus ce mois:\u00A0'}
+                  </Text>
+                  <Text style={{ color: theme.colors.accentWarm, fontSize: 11, fontFamily: 'Poppins_600SemiBold' }}>
+                    {`${stats.monthlyRevenue.toFixed(0)} TND`}
+                  </Text>
+                </View>
+              )}
+            </View>
           </View>
         </View>
+        </RNAnimated.View>
 
         <View style={{ height: 40 }} />
       </ScrollView>
