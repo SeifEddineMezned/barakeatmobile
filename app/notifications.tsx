@@ -39,6 +39,12 @@ function timeAgo(dateStr: string): string {
  * e.g. "notif_title_new_reservation"
  * and message as a JSON string: {"key":"notif_message_...","params":{...}}
  * This helper resolves both to human-readable text.
+ *
+ * Safe parsing rules:
+ *  1. If the field is a JSON string → parse it, extract { key, params }, translate.
+ *  2. If parsing fails or field is a plain string → treat it as an i18n key.
+ *  3. If the key is unknown (i18next returns the dotted path itself) → return `fallback`
+ *     so raw keys / raw JSON are NEVER shown to the user.
  */
 function resolveNotifText(
   raw: string | null | undefined,
@@ -46,22 +52,25 @@ function resolveNotifText(
   fallback = ''
 ): string {
   if (!raw) return fallback;
-  // Try parsing as JSON first (for message field)
+
+  // 1. Try parsing as JSON (backend stores message as serialised {key, params})
   try {
     const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed === 'object' && parsed.key) {
+    if (parsed && typeof parsed === 'object' && typeof parsed.key === 'string') {
       const i18nKey = `notifications.${parsed.key}`;
       const translated = t(i18nKey, parsed.params ?? {});
-      // If the key wasn't found, i18next returns the key itself – fall back to raw
-      return translated !== i18nKey ? translated : raw;
+      // i18next returns the key string itself when missing → treat as unknown
+      return translated !== i18nKey ? translated : fallback;
     }
   } catch {
-    // Not JSON – treat as plain i18n key
+    // Not JSON – fall through to plain-key lookup
   }
-  // Try as a plain i18n key (for title field)
+
+  // 2. Treat as a plain i18n key (backend stores title as bare key string)
   const i18nKey = `notifications.${raw}`;
   const translated = t(i18nKey, {});
-  return translated !== i18nKey ? translated : raw;
+  // If no translation found, return fallback (never expose raw key or raw JSON)
+  return translated !== i18nKey ? translated : fallback;
 }
 
 function getNotifIcon(type?: string | null, title?: string | null): { Icon: any; color: string; bg: string } {
@@ -177,7 +186,7 @@ export default function NotificationsScreen() {
               ]}
               numberOfLines={2}
             >
-              {resolveNotifText(item.message, t, item.message)}
+              {resolveNotifText(item.message, t)}
             </Text>
           </View>
           <Text
@@ -289,7 +298,7 @@ export default function NotificationsScreen() {
                     </View>
                   </View>
                   <Text style={{ color: theme.colors.textPrimary, ...theme.typography.body, lineHeight: 22, marginBottom: 20 }}>
-                    {resolveNotifText(detailNotif.message, t, detailNotif.message)}
+                    {resolveNotifText(detailNotif.message, t)}
                   </Text>
                   <TouchableOpacity
                     onPress={() => setDetailNotif(null)}
