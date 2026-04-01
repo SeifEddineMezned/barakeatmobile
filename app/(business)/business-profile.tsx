@@ -11,7 +11,7 @@ import { useTheme } from '@/src/theme/ThemeProvider';
 import { useAuthStore } from '@/src/stores/authStore';
 import { useBusinessStore, DEFAULT_PERMISSIONS } from '@/src/stores/businessStore';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { fetchMyProfile } from '@/src/services/business';
+import { fetchMyProfile, fetchMyBaskets } from '@/src/services/business';
 import { fetchMyContext, fetchOrganizationDetails, addMember as addMemberAPI, updateMember, removeMember as removeMemberAPI } from '@/src/services/teams';
 import * as ImagePicker from 'expo-image-picker';
 import type { TeamMember, TeamRole, TeamPermission } from '@/src/types';
@@ -44,6 +44,14 @@ export default function BusinessProfileScreen() {
     queryFn: () => fetchOrganizationDetails(contextQuery.data!.organization_id!),
     enabled: !!contextQuery.data?.organization_id,
     staleTime: 60_000,
+  });
+
+  // Baskets hold the EFFECTIVE pickup times (updatable via PUT /api/baskets/:id)
+  // The locations table pickup_start_time cannot be updated on this backend.
+  const basketsQuery = useQuery({
+    queryKey: ['my-baskets', selectedLocationId],
+    queryFn: () => fetchMyBaskets(selectedLocationId),
+    staleTime: 30_000,
   });
 
   const teamMembers = orgDetailsQuery.data?.members ?? team.map((m: TeamMember) => ({
@@ -102,9 +110,17 @@ export default function BusinessProfileScreen() {
         description: profileQuery.data.description ?? undefined,
         logo: profileQuery.data.image_url ?? undefined,
         coverPhoto: profileQuery.data.cover_image_url ?? undefined,
-        hours: profileQuery.data.pickup_start_time && profileQuery.data.pickup_end_time
-          ? `${profileQuery.data.pickup_start_time.substring(0, 5)} - ${profileQuery.data.pickup_end_time.substring(0, 5)}`
-          : undefined,
+        hours: (() => {
+          // Prefer basket pickup times — baskets are updatable via PUT /api/baskets/:id.
+          // The locations table times can't be updated (backend bug), so we fall back
+          // to location data only when no basket times exist.
+          const firstBasket = basketsQuery.data?.[0];
+          const start = firstBasket?.pickup_start_time ?? profileQuery.data.pickup_start_time;
+          const end = firstBasket?.pickup_end_time ?? profileQuery.data.pickup_end_time;
+          return start && end
+            ? `${start.substring(0, 5)} - ${end.substring(0, 5)}`
+            : undefined;
+        })(),
         latitude: profileQuery.data.latitude ?? 0,
         longitude: profileQuery.data.longitude ?? 0,
         isSupermarket: (profileQuery.data.category ?? '').toLowerCase() === 'supermarket',
@@ -114,8 +130,14 @@ export default function BusinessProfileScreen() {
   const [showHoursModal, setShowHoursModal] = useState(false);
   const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
   const DAY_LABELS: Record<string, string> = { Mon: t('business.dashboard.days.Mon'), Tue: t('business.dashboard.days.Tue'), Wed: t('business.dashboard.days.Wed'), Thu: t('business.dashboard.days.Thu'), Fri: t('business.dashboard.days.Fri'), Sat: t('business.dashboard.days.Sat'), Sun: t('business.dashboard.days.Sun') };
-  const defaultStart = profileQuery.data?.pickup_start_time?.substring(0, 5) ?? '09:00';
-  const defaultEnd = profileQuery.data?.pickup_end_time?.substring(0, 5) ?? '18:00';
+  // Seed modal from basket times (those are what we actually save)
+  const firstBasket = basketsQuery.data?.[0];
+  const defaultStart = firstBasket?.pickup_start_time?.substring(0, 5)
+    ?? profileQuery.data?.pickup_start_time?.substring(0, 5)
+    ?? '09:00';
+  const defaultEnd = firstBasket?.pickup_end_time?.substring(0, 5)
+    ?? profileQuery.data?.pickup_end_time?.substring(0, 5)
+    ?? '18:00';
   const [hoursStart, setHoursStart] = useState(defaultStart);
   const [hoursEnd, setHoursEnd] = useState(defaultEnd);
   const [sameAllDays, setSameAllDays] = useState(true);
@@ -127,13 +149,21 @@ export default function BusinessProfileScreen() {
   const handleSaveHours = async () => {
     setHoursSaving(true);
     try {
-      const { updateMyProfile } = await import('@/src/services/business');
+      const { updateLocationById } = await import('@/src/services/business');
       const userId = user?.id ? Number(user.id) : undefined;
-      const formData = new FormData();
+      const locationId = profileQuery.data?.id;
+      if (!locationId) throw new Error('Profil non chargé');
       const toTime = (hhmm: string) => hhmm.includes(':') && hhmm.split(':').length === 2 ? `${hhmm}:00` : hhmm;
-      formData.append('pickup_start_time', toTime(sameAllDays ? hoursStart : dayHours['Mon'].start));
-      formData.append('pickup_end_time', toTime(sameAllDays ? hoursEnd : dayHours['Mon'].end));
-      await updateMyProfile(formData, userId);
+      // PUT /api/locations/:id — same pattern as confirmed-working PUT /api/baskets/:id
+      await updateLocationById(
+        locationId,
+        {
+          pickup_start_time: toTime(sameAllDays ? hoursStart : dayHours['Mon'].start),
+          pickup_end_time: toTime(sameAllDays ? hoursEnd : dayHours['Mon'].end),
+        },
+        userId,
+        profileQuery.data?.organization_id ?? undefined
+      );
       void queryClient.invalidateQueries({ queryKey: ['my-profile'] });
       setShowHoursModal(false);
     } catch (err: any) {

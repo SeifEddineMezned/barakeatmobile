@@ -1,13 +1,14 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Switch, Alert } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
-import { X, Minus, Plus } from 'lucide-react-native';
+import { X } from 'lucide-react-native';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { PrimaryCTAButton } from '@/src/components/PrimaryCTAButton';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { fetchMyProfile, updateQuantity, updateAvailability } from '@/src/services/business';
+import { fetchMyProfile, fetchMyBaskets, updateLocationById } from '@/src/services/business';
+import { useBusinessStore } from '@/src/stores/businessStore';
 import { useAuthStore } from '@/src/stores/authStore';
 import { DelayedLoader } from '@/src/components/DelayedLoader';
 
@@ -15,45 +16,53 @@ export default function AvailabilityScreen() {
   const { t } = useTranslation();
   const theme = useTheme();
   const router = useRouter();
-  const { user } = useAuthStore();
   const queryClient = useQueryClient();
-  const hasInitializedRef = React.useRef(false);
+  const selectedLocationId = useBusinessStore((s) => s.selectedLocationId);
+  const { user } = useAuthStore();
 
-  const [quantity, setQuantity] = useState(0);
-  const [pickupStart, setPickupStart] = useState('18:00');
-  const [pickupEnd, setPickupEnd] = useState('19:00');
-  const [isPaused, setIsPaused] = useState(false);
+  const [pickupStart, setPickupStart] = useState('');
+  const [pickupEnd, setPickupEnd] = useState('');
 
   const profileQuery = useQuery({
-    queryKey: ['my-profile'],
-    queryFn: fetchMyProfile,
+    queryKey: ['my-profile', selectedLocationId],
+    queryFn: () => fetchMyProfile(selectedLocationId),
     staleTime: 30_000,
   });
 
-  React.useEffect(() => {
-    if (profileQuery.data && !hasInitializedRef.current) {
-      hasInitializedRef.current = true;
-      setQuantity(profileQuery.data.available_quantity ?? profileQuery.data.default_daily_quantity ?? 0);
-      setPickupStart(profileQuery.data.pickup_start_time?.substring(0, 5) ?? '18:00');
-      setPickupEnd(profileQuery.data.pickup_end_time?.substring(0, 5) ?? '19:00');
-      setIsPaused(profileQuery.data.is_paused ?? false);
-    }
-  }, [profileQuery.data]);
+  // Baskets hold the EFFECTIVE pickup times (these are what we update successfully)
+  const basketsQuery = useQuery({
+    queryKey: ['my-baskets', selectedLocationId],
+    queryFn: () => fetchMyBaskets(selectedLocationId),
+    staleTime: 30_000,
+  });
 
-  // Ensure time is HH:MM:SS for the PostgreSQL time field
-  const toTimeField = (hhmm: string) =>
+  // Seed form: prefer basket times > location times
+  React.useEffect(() => {
+    const basket = basketsQuery.data?.[0];
+    const start = basket?.pickup_start_time ?? profileQuery.data?.pickup_start_time;
+    const end = basket?.pickup_end_time ?? profileQuery.data?.pickup_end_time;
+    if (start) setPickupStart(start.substring(0, 5));
+    if (end) setPickupEnd(end.substring(0, 5));
+  }, [basketsQuery.data, profileQuery.data, selectedLocationId]);
+
+  const toTimeField = (hhmm: string): string =>
     hhmm.includes(':') && hhmm.split(':').length === 2 ? `${hhmm}:00` : hhmm;
 
   const saveMutation = useMutation({
     mutationFn: async () => {
       const userId = (user as any)?.id as number | undefined;
-      await updateQuantity(quantity);
-      await updateAvailability({
-        is_paused: isPaused,
-        availability_status: isPaused ? 'paused' : 'available',
-        pickup_start_time: toTimeField(pickupStart),
-        pickup_end_time: toTimeField(pickupEnd),
-      }, userId);
+      const locationId = selectedLocationId ?? profileQuery.data?.id;
+      if (!locationId) throw new Error('Profil non chargé. Veuillez réessayer.');
+      // PUT /api/locations/:id — same confirmed pattern as PUT /api/baskets/:id
+      await updateLocationById(
+        locationId,
+        {
+          pickup_start_time: toTimeField(pickupStart),
+          pickup_end_time: toTimeField(pickupEnd),
+        },
+        userId,
+        profileQuery.data?.organization_id ?? undefined
+      );
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['my-profile'] });
@@ -67,19 +76,7 @@ export default function AvailabilityScreen() {
     },
   });
 
-  const handleDecrement = () => {
-    setQuantity((prev) => Math.max(0, prev - 1));
-  };
-
-  const handleIncrement = () => {
-    setQuantity((prev) => prev + 1);
-  };
-
-  const handleSave = () => {
-    saveMutation.mutate();
-  };
-
-  if (profileQuery.isLoading) {
+  if (profileQuery.isLoading || basketsQuery.isLoading) {
     return (
       <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]}>
         <DelayedLoader />
@@ -89,11 +86,15 @@ export default function AvailabilityScreen() {
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]} edges={['top', 'bottom']}>
-      <View style={[styles.header, { paddingHorizontal: theme.spacing.xl, paddingTop: theme.spacing.lg, paddingBottom: theme.spacing.md }]}>
+      <View style={[styles.header, {
+        paddingHorizontal: theme.spacing.xl,
+        paddingTop: theme.spacing.lg,
+        paddingBottom: theme.spacing.md,
+      }]}>
         <TouchableOpacity onPress={() => router.back()} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
           <X size={24} color={theme.colors.textPrimary} />
         </TouchableOpacity>
-        <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h2, flex: 1, textAlign: 'center' as const }]}>
+        <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h2, flex: 1, textAlign: 'center' as const }}>
           {t('business.availability.title')}
         </Text>
         <View style={{ width: 24 }} />
@@ -104,33 +105,14 @@ export default function AvailabilityScreen() {
         contentContainerStyle={{ paddingHorizontal: theme.spacing.xl, paddingBottom: 40 }}
         showsVerticalScrollIndicator={false}
       >
-        {/* Quantity Section */}
-        <View style={[styles.section, { backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, padding: theme.spacing.xl, marginTop: theme.spacing.lg, ...theme.shadows.shadowSm }]}>
-          <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, marginBottom: theme.spacing.lg }]}>
-            {t('business.availability.quantity just ')} 
-          </Text>
-          <View style={styles.quantitySelector}>
-            <TouchableOpacity
-              onPress={handleDecrement}
-              style={[styles.qtyBtn, { backgroundColor: theme.colors.bg, borderRadius: theme.radii.r12, width: 48, height: 48 }]}
-            >
-              <Minus size={20} color={theme.colors.textPrimary} />
-            </TouchableOpacity>
-            <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.display, marginHorizontal: theme.spacing.xxl }]}>
-              {quantity}
-            </Text>
-            <TouchableOpacity
-              onPress={handleIncrement}
-              style={[styles.qtyBtn, { backgroundColor: theme.colors.bg, borderRadius: theme.radii.r12, width: 48, height: 48 }]}
-            >
-              <Plus size={20} color={theme.colors.textPrimary} />
-            </TouchableOpacity>
-          </View>
-        </View>
-
-        {/* Pickup Time Section */}
-        <View style={[styles.section, { backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, padding: theme.spacing.xl, marginTop: theme.spacing.lg, ...theme.shadows.shadowSm }]}>
-          <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, marginBottom: theme.spacing.lg }]}>
+        <View style={{
+          backgroundColor: theme.colors.surface,
+          borderRadius: theme.radii.r16,
+          padding: theme.spacing.xl,
+          marginTop: theme.spacing.lg,
+          ...theme.shadows.shadowSm,
+        }}>
+          <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, marginBottom: 6 }}>
             {t('business.availability.pickupStart')}
           </Text>
           <TextInput
@@ -138,7 +120,7 @@ export default function AvailabilityScreen() {
               backgroundColor: theme.colors.bg,
               borderRadius: theme.radii.r12,
               color: theme.colors.textPrimary,
-              ...theme.typography.body,
+              ...theme.typography.h3,
             }]}
             value={pickupStart}
             onChangeText={setPickupStart}
@@ -147,7 +129,9 @@ export default function AvailabilityScreen() {
             keyboardType="numbers-and-punctuation"
           />
 
-          <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, marginBottom: theme.spacing.lg, marginTop: theme.spacing.xl }]}>
+          <View style={{ height: 1, backgroundColor: theme.colors.divider, marginVertical: theme.spacing.lg }} />
+
+          <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, marginBottom: 6 }}>
             {t('business.availability.pickupEnd')}
           </Text>
           <TextInput
@@ -155,7 +139,7 @@ export default function AvailabilityScreen() {
               backgroundColor: theme.colors.bg,
               borderRadius: theme.radii.r12,
               color: theme.colors.textPrimary,
-              ...theme.typography.body,
+              ...theme.typography.h3,
             }]}
             value={pickupEnd}
             onChangeText={setPickupEnd}
@@ -165,27 +149,9 @@ export default function AvailabilityScreen() {
           />
         </View>
 
-        {/* Pause Toggle Section */}
-        <View style={[styles.section, { backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, padding: theme.spacing.xl, marginTop: theme.spacing.lg, ...theme.shadows.shadowSm }]}>
-          <View style={styles.pauseRow}>
-            <Text style={[{ color: isPaused ? theme.colors.error : theme.colors.success, ...theme.typography.body, fontWeight: '600' as const, flex: 1 }]}>
-              {isPaused ? t('business.availability.paused') : t('business.availability.active')}
-            </Text>
-            <Switch
-              value={isPaused}
-              onValueChange={(val) => {
-                setIsPaused(val);
-              }}
-              trackColor={{ false: theme.colors.divider, true: theme.colors.error + '50' }}
-              thumbColor={isPaused ? theme.colors.error : theme.colors.success}
-            />
-          </View>
-        </View>
-
-        {/* Save Button */}
         <View style={{ marginTop: theme.spacing.xxl }}>
           <PrimaryCTAButton
-            onPress={handleSave}
+            onPress={() => saveMutation.mutate()}
             title={t('business.availability.save')}
             loading={saveMutation.isPending}
             disabled={saveMutation.isPending}
@@ -197,38 +163,8 @@ export default function AvailabilityScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-  },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  content: {
-    flex: 1,
-  },
-  loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  section: {},
-  quantitySelector: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  qtyBtn: {
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  timeInput: {
-    height: 48,
-    paddingHorizontal: 16,
-  },
-  pauseRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
+  container: { flex: 1 },
+  header: { flexDirection: 'row', alignItems: 'center' },
+  content: { flex: 1 },
+  timeInput: { height: 52, paddingHorizontal: 16 },
 });

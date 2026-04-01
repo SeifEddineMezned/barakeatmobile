@@ -172,6 +172,92 @@ export async function updateAvailability(data: {
   await apiClient.put('/api/locations/my/availability', data, { headers });
 }
 
+// Cascading location hours update — tries every known backend variant in order.
+// Stops at first success; throws the last error if all fail.
+export async function updatePickupHours(
+  locationId: number | string,
+  orgId: number | string | undefined,
+  data: { pickup_start_time: string; pickup_end_time: string },
+  userId?: number
+): Promise<void> {
+  const adminHeaders: Record<string, string> = {};
+  if (userId) {
+    adminHeaders['x-admin-token'] = getAdminToken(userId);
+  }
+  const attempts: Array<() => Promise<unknown>> = [
+    // 1. Teams PUT (org-scoped)
+    ...(orgId
+      ? [() => apiClient.put(`/api/teams/organizations/${orgId}/locations/${locationId}`, data, { headers: adminHeaders })]
+      : []
+    ),
+    // 2. PATCH availability (with admin token)
+    () => apiClient.patch('/api/locations/my/availability', data, { headers: adminHeaders }),
+    // 3. PATCH availability (no admin token)
+    () => apiClient.patch('/api/locations/my/availability', data),
+    // 4. PUT availability (no admin token)
+    () => apiClient.put('/api/locations/my/availability', data),
+    // 4a. PUT availability WITH location_id+organization_id in body
+    //     — server's WHERE clause may need these to find the right row
+    () => apiClient.put('/api/locations/my/availability', {
+      ...data,
+      location_id: locationId,
+      organization_id: orgId,
+    }, { headers: adminHeaders }),
+    // 4b. PUT availability with location_id as query param
+    () => apiClient.put(`/api/locations/my/availability?location_id=${locationId}`, data, { headers: adminHeaders }),
+    // 4c. POST variant — some backends use POST for upsert-style updates
+    () => apiClient.post('/api/locations/my/availability', data, { headers: adminHeaders }),
+    // 5. Basket update fallback — profile.available_quantity is joined from baskets,
+    //    so pickup_start_time is likely also sourced from baskets. Updating all
+    //    baskets' pickup times should update the profile display.
+    async () => {
+      console.log('[Business] Attempting basket pickup_time update fallback…');
+      const res = await apiClient.get<any>('/api/baskets/my/baskets');
+      const baskets: any[] = Array.isArray(res.data)
+        ? res.data
+        : (res.data?.baskets ?? res.data?.data ?? []);
+      if (baskets.length === 0) throw new Error('No baskets found for location');
+      await Promise.all(
+        baskets.map((b: any) =>
+          apiClient.put(`/api/baskets/${b.id}`, {
+            pickup_start_time: data.pickup_start_time,
+            pickup_end_time: data.pickup_end_time,
+          })
+        )
+      );
+    },
+  ];
+
+  let lastError: unknown;
+  for (const attempt of attempts) {
+    try {
+      console.log('[Business] updatePickupHours attempt…');
+      await attempt();
+      console.log('[Business] updatePickupHours succeeded');
+      return; // ← stop on first success
+    } catch (err: any) {
+      console.log('[Business] updatePickupHours attempt failed:', err?.status, err?.message);
+      lastError = err;
+      // Continue to next attempt on 404 or 500
+      if (err?.status !== 404 && err?.status !== 500) throw err; // auth errors etc: fail fast
+    }
+  }
+  throw lastError;
+}
+
+// Keep for backwards-compat — delegates to the cascade
+export async function updateLocationById(
+  locationId: number | string,
+  data: { pickup_start_time?: string; pickup_end_time?: string },
+  userId?: number,
+  orgId?: number | string
+): Promise<void> {
+  await updatePickupHours(locationId, orgId, {
+    pickup_start_time: data.pickup_start_time ?? '',
+    pickup_end_time: data.pickup_end_time ?? '',
+  }, userId);
+}
+
 // ─── Today's Orders ─────────────────────────────────────────────────────────
 
 export interface TodayReservationFromAPI {

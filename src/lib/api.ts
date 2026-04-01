@@ -19,7 +19,7 @@ export function getAdminToken(userId: number): string {
     _cachedAdminTokenUserId !== userId ||
     now - _cachedAdminTokenTs > ADMIN_TOKEN_TTL_MS;
   if (stale) {
-    _cachedAdminToken = Buffer.from(`${userId}:${now}`).toString('base64');
+    _cachedAdminToken = btoa(`${userId}:${now}`);
     _cachedAdminTokenTs = now;
     _cachedAdminTokenUserId = userId;
     console.log('[API] Generated new admin token for userId:', userId);
