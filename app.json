@@ -45,6 +45,7 @@
       "expo-font",
       "expo-web-browser",
       "expo-localization",
+      "expo-navigation-bar",
       "expo-secure-store",
       [
         "expo-image-picker",

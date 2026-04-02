@@ -5,7 +5,7 @@ import React, { useEffect, useState, useRef } from "react";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { ThemeProvider, useTheme } from "@/src/theme/ThemeProvider";
 import "@/src/i18n";
-import { StyleSheet, View, ActivityIndicator, Text, Modal, ScrollView, Dimensions, TouchableOpacity, Animated } from "react-native";
+import { StyleSheet, View, ActivityIndicator, Text, Modal, ScrollView, Dimensions, TouchableOpacity, Animated, Platform } from "react-native";
 import {
   useFonts,
   Poppins_400Regular,
@@ -25,6 +25,7 @@ import { fetchGamificationStats } from "@/src/services/gamification";
 import { apiClient } from "@/src/lib/api";
 import { Search, ShoppingBag, Trophy, LayoutDashboard, Package, BarChart3 } from "lucide-react-native";
 // import { registerForPushNotifications } from "@/src/services/pushNotifications";
+import * as NavigationBar from "expo-navigation-bar";
 
 SplashScreen.preventAutoHideAsync().catch(() => {});
 
@@ -460,6 +461,19 @@ export default function RootLayout() {
   useEffect(() => {
     void restoreSession();
   }, [restoreSession]);
+
+  // ── Android navigation bar: hide globally on app open ─────────────────────
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    (async () => {
+      try {
+        await NavigationBar.setVisibilityAsync('hidden');
+        await NavigationBar.setBehaviorAsync('overlay-swipe');
+      } catch (e) {
+        console.warn('[RootLayout] Failed to hide Android navigation bar:', e);
+      }
+    })();
+  }, []);
 
   if (!fontsLoaded || isRestoringSession) {
     return (
