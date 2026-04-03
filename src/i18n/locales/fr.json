@@ -143,6 +143,15 @@
       "whatsNew": "Quoi de neuf",
       "newPartners": "Nouveaux partenaires près de chez vous !",
       "newPartnersDesc": "Découvrez des paniers surprise de restaurants dans votre quartier"
+    },
+    "categories": {
+      "all": "Tous",
+      "bakery": "Pâtisseries / Boulangeries",
+      "restaurant": "Restaurants",
+      "supermarket": "Supermarché",
+      "fresh": "Produits frais",
+      "cafe": "Café",
+      "fastfood": "Fast Food"
     }
   },
   "basket": {
@@ -649,7 +658,9 @@
       "goToMenuItems": "Aller aux articles du menu",
       "menuItems": "Articles du menu",
       "menuItemsDesc": "Sélectionnez les articles du menu dans ce panier (optionnel)",
-      "noMenuItems": "Aucun article — ajoutez-en dans Articles du menu"
+      "noMenuItems": "Aucun article — ajoutez-en dans Articles du menu",
+      "aiSuggestionTitle": "Suggestion IA",
+      "aiSuggestionFilled": "Contenu suggéré rempli ! Ajustez-le selon vos besoins."
     },
     "auth": {
       "businessSignIn": "Connexion Commerce",

@@ -143,6 +143,15 @@
       "whatsNew": "What's new",
       "newPartners": "New partners near you!",
       "newPartnersDesc": "Discover surprise bags from restaurants in your area"
+    },
+    "categories": {
+      "all": "All",
+      "bakery": "Bakeries / Pastries",
+      "restaurant": "Restaurants",
+      "supermarket": "Supermarket",
+      "fresh": "Fresh Produce",
+      "cafe": "Café",
+      "fastfood": "Fast Food"
     }
   },
   "basket": {
@@ -646,7 +655,9 @@
       "goToMenuItems": "Go to Menu Items",
       "menuItems": "Menu Items",
       "menuItemsDesc": "Select which menu items are in this basket (optional)",
-      "noMenuItems": "No menu items yet — add some in Menu Items"
+      "noMenuItems": "No menu items yet — add some in Menu Items",
+      "aiSuggestionTitle": "AI Suggestion",
+      "aiSuggestionFilled": "AI suggested content filled in! Adjust as needed."
     },
     "auth": {
       "businessSignIn": "Business Sign In",

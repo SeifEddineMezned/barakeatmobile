@@ -100,7 +100,6 @@ export function BasketCard({ basket, onFavoritePress, isFavorite = false }: Bask
     <>
       <Animated.View style={[
         { opacity: entranceOpacity, transform: [{ translateY: entranceTranslateY }, { scale: scaleAnim }] },
-        isUnavailable && styles.soldOutCard,
       ]}>
         <TouchableOpacity
           onPress={handlePress}
@@ -124,7 +123,6 @@ export function BasketCard({ basket, onFavoritePress, isFavorite = false }: Bask
                 style={[
                   styles.image,
                   { borderTopLeftRadius: theme.radii.r16, borderTopRightRadius: theme.radii.r16 },
-                  isUnavailable && styles.soldOutImage,
                 ]}
               />
             ) : (
@@ -196,13 +194,13 @@ export function BasketCard({ basket, onFavoritePress, isFavorite = false }: Bask
                 </View>
               </View>
             )}
-            {/* Pickup expired overlay */}
+            {/* Pickup expired overlay — scoped only to image area, single semi-transparent layer */}
             {(isPickupExpired || isInactive) && !isSoldOut && (
-              <View pointerEvents="none" style={styles.soldOutOverlay}>
-                <View style={[styles.soldOutLabel, { backgroundColor: 'rgba(100,100,100,0.85)' }]}>
+              <View pointerEvents="none" style={styles.expiredImageOverlay}>
+                <View style={styles.expiredLabel}>
                   <TimerOff size={14} color="#fff" style={{ marginRight: 4 }} />
                   <Text style={{ color: '#fff', fontSize: 12, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
-                    {t('orders.status.expired', { defaultValue: 'Expired' })}
+                    {t('orders.status.expired', { defaultValue: 'Expiré' })}
                   </Text>
                 </View>
               </View>
@@ -214,7 +212,7 @@ export function BasketCard({ basket, onFavoritePress, isFavorite = false }: Bask
             {/* Merchant row: logo + name + rating */}
             <View style={styles.merchantRow}>
               {basket.merchantLogo ? (
-                <Image source={{ uri: basket.merchantLogo }} style={[styles.merchantLogo, isUnavailable && { opacity: 0.5 }]} />
+                <Image source={{ uri: basket.merchantLogo }} style={[styles.merchantLogo, isUnavailable && { opacity: 0.65 }]} />
               ) : (
                 <View style={[styles.merchantLogo, { backgroundColor: theme.colors.divider }]} />
               )}
@@ -348,16 +346,34 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   soldOutCard: {
-    opacity: 0.6,
+    // Removed: whole-card opacity was triple-dimming expired cards.
+    // Expired state is now communicated via imageContainer overlay only.
   },
   soldOutImage: {
-    opacity: 0.5,
+    // Removed: separate image opacity was compounding with soldOutCard opacity.
+    // Single expiredImageOverlay handles the image area dimming.
   },
+  // Legacy overlay kept for sold-out state only
   soldOutOverlay: {
     ...StyleSheet.absoluteFillObject,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: 'rgba(255,255,255,0.25)',
+    backgroundColor: 'rgba(0,0,0,0.30)',
+  },
+  // Scoped overlay for the expired/inactive state — applied inside imageContainer only
+  expiredImageOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.38)',
+  },
+  expiredLabel: {
+    backgroundColor: 'rgba(60,60,60,0.90)',
+    borderRadius: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+    flexDirection: 'row',
+    alignItems: 'center',
   },
   soldOutLabel: {
     backgroundColor: 'rgba(217,79,79,0.88)',

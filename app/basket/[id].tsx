@@ -310,7 +310,7 @@ export default function BasketDetailsScreen() {
           {/* Articles du menu — horizontal scroll */}
           <View style={[styles.section, { marginTop: theme.spacing.lg }]}>
             <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, marginBottom: theme.spacing.sm }]}>
-              {t('basket.menuItems', { defaultValue: 'Articles du menu' })}
+              {t('basket.menuItems')}
             </Text>
             {menuItems.length > 0 ? (
               <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginHorizontal: -4 }}>
@@ -368,7 +368,7 @@ export default function BasketDetailsScreen() {
             )}
             {menuItems.length === 0 && (
               <Text style={{ color: theme.colors.muted, ...theme.typography.caption, textAlign: 'center', marginTop: 8 }}>
-                {t('basket.noMenuItems', { defaultValue: 'No items to show yet' })}
+                {t('basket.noMenuItems')}
               </Text>
             )}
           </View>

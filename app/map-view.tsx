@@ -281,6 +281,27 @@ export default function MapViewScreen() {
     }
   }, [userLocation, radius]);
 
+  // Auto-center on first location fix — mirrors the arrow-button behavior exactly.
+  // Fires once when userLocation first resolves from the async permission+GPS fetch.
+  // The `initialRegion` prop is static (read only at mount), so without this the map
+  // stays on DEFAULT_CENTER (Tunis) until the user manually taps the arrow.
+  const hasAutocentered = useRef(false);
+  useEffect(() => {
+    if (userLocation && mapRef.current && !hasAutocentered.current) {
+      hasAutocentered.current = true;
+      // Small delay to ensure the map ref is fully mounted and ready to animate
+      const timer = setTimeout(() => {
+        if (mapRef.current && userLocation) {
+          mapRef.current.animateToRegion(
+            { ...userLocation, latitudeDelta: Math.max(0.02, radius * 0.015), longitudeDelta: Math.max(0.02, radius * 0.015) },
+            600,
+          );
+        }
+      }, 350);
+      return () => clearTimeout(timer);
+    }
+  }, [userLocation, radius]);
+
   const center = userLocation ?? DEFAULT_CENTER;
 
   const sheetHeight = useRef(new Animated.Value(COLLAPSED_HEIGHT)).current;

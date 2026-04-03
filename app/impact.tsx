@@ -240,7 +240,7 @@ export default function ImpactScreen() {
               </View>
               <View style={styles.heroInfo}>
                 <Text style={[{ color: '#fff', ...theme.typography.h2 }]}>
-                  {user?.name ?? 'User'}
+                  {user?.name ?? t('impact.you')}
                 </Text>
                 <View
                   style={[

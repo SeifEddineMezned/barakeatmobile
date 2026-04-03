@@ -38,7 +38,7 @@ export default function SignUpScreen() {
 
   const handleCustomerSignUp = async () => {
     if (!tosAccepted) {
-      Alert.alert('Required', t('auth.tosRequired'));
+      Alert.alert(t('common.error'), t('auth.tosRequired'));
       return;
     }
     if (!name.trim() || !email.trim() || !phone.trim() || !password.trim()) {

@@ -143,6 +143,15 @@
       "whatsNew": "ما الجديد",
       "newPartners": "شركاء جدد بالقرب منك!",
       "newPartnersDesc": "اكتشف سلال مفاجأة من المطاعم في منطقتك"
+    },
+    "categories": {
+      "all": "الكل",
+      "bakery": "مخابز / حلويات",
+      "restaurant": "مطاعم",
+      "supermarket": "سوبرماركت",
+      "fresh": "منتجات طازجة",
+      "cafe": "مقهى",
+      "fastfood": "وجبات سريعة"
     }
   },
   "basket": {

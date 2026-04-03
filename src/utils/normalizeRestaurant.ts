@@ -290,25 +290,38 @@ export function normalizeLocationToBasket(loc: LocationFromAPI): Basket {
   };
 }
 
-function mapCategory(cat: string | null | undefined): string {
-  if (!cat || typeof cat !== 'string') return 'Tous';
+/**
+ * Maps any backend category string to a locale-neutral enum key.
+ * These keys MUST exist in all three locale files under home.categories.*
+ * UI components call t(`home.categories.${basket.category}`) to render the label.
+ *
+ * Returned keys: 'all' | 'bakery' | 'restaurant' | 'supermarket' | 'fresh' | 'cafe' | 'fastfood'
+ *
+ * IMPORTANT: this function is exported so the home screen can use it for
+ * the "all" sentinel without hardcoding French.
+ */
+export function mapCategory(cat: string | null | undefined): string {
+  if (!cat || typeof cat !== 'string') return 'all';
   switch (cat.toLowerCase().trim()) {
-    // Bakery
+    // Bakery / pastry
     case 'bakery':
     case 'boulangerie':
     case 'patisserie':
+    case 'patisseries/boulangeries': // guard already-mapped legacy French
     case 'pastry':
     case 'baked_goods':
     case 'baked goods':
-      return 'Patisseries/Boulangeries';
-    // Restaurants / meals
+      return 'bakery';
+    // Restaurants / meals (includes French backend values like "Plats Préparés")
     case 'meals':
     case 'restaurant':
     case 'restaurants':
     case 'meal':
     case 'food':
     case 'traiteur':
-      return 'Restaurants';
+    case 'plats préparés':  // French backend label → enum key
+    case 'plats prepares':
+      return 'restaurant';
     // Supermarket / grocery
     case 'supermarket':
     case 'grocery':
@@ -317,7 +330,7 @@ function mapCategory(cat: string | null | undefined): string {
     case 'supermarché':
     case 'epicerie':
     case 'épicerie':
-      return 'Supermarché';
+      return 'supermarket';
     // Fresh produce
     case 'fresh':
     case 'produits frais':
@@ -325,24 +338,24 @@ function mapCategory(cat: string | null | undefined): string {
     case 'fruits':
     case 'legumes':
     case 'légumes':
-      return 'Produits frais';
+      return 'fresh';
     // Café / drinks
     case 'cafe':
     case 'café':
     case 'coffee':
     case 'drinks':
     case 'beverages':
-      return 'Café';
+      return 'cafe';
     // Fast food
     case 'fast_food':
     case 'fast food':
     case 'fastfood':
     case 'snack':
     case 'sandwich':
-      return 'Fast Food';
+      return 'fastfood';
     default:
-      // Capitalize first letter for any unrecognized backend value
-      return cat.charAt(0).toUpperCase() + cat.slice(1);
+      // Unknown backend category — treat as restaurant (safe, visible)
+      return 'restaurant';
   }
 }
 

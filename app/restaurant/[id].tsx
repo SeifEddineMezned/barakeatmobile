@@ -22,7 +22,7 @@ import { StatusBar } from 'expo-status-bar';
 import { fetchLocationById } from '@/src/services/restaurants';
 import { fetchBasketsByLocation } from '@/src/services/baskets';
 import { fetchReviewsByRestaurant, ReviewFromAPI } from '@/src/services/reviews';
-import { normalizeRawBasketToBasket } from '@/src/utils/normalizeRestaurant';
+import { normalizeRawBasketToBasket, mapCategory } from '@/src/utils/normalizeRestaurant';
 import { DelayedLoader } from '@/src/components/DelayedLoader';
 
 const DESC_COLLAPSED_LINES = 3;
@@ -271,7 +271,7 @@ export default function RestaurantScreen() {
             <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 4 }}>
               <Tag size={12} color={theme.colors.textSecondary} />
               <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, marginLeft: 4 }]}>
-                {t(`categories.${restaurant.category.toLowerCase()}`, { defaultValue: restaurant.category })}
+                {t(`home.categories.${mapCategory(restaurant.category)}`, { defaultValue: restaurant.category })}
               </Text>
             </View>
           ) : null}
@@ -597,7 +597,7 @@ export default function RestaurantScreen() {
                     letterSpacing: -0.3,
                   }}
                 >
-                  Signaler ce restaurant
+                  {t('report.title')}
                 </Text>
                 {!report.submitted && (
                   <Text
@@ -608,7 +608,7 @@ export default function RestaurantScreen() {
                       marginTop: 4,
                     }}
                   >
-                    Dites-nous ce qui ne va pas. Votre retour nous aide à améliorer l’expérience.
+                    {t('report.cta')}
                   </Text>
                 )}
               </View>
@@ -619,7 +619,7 @@ export default function RestaurantScreen() {
                   styles.sheetClosePill,
                   { backgroundColor: theme.colors.bg },
                 ]}
-                accessibilityLabel="Fermer"
+                accessibilityLabel={t('common.close')}
               >
                 <X size={16} color={theme.colors.textSecondary} />
               </TouchableOpacity>
@@ -647,7 +647,7 @@ export default function RestaurantScreen() {
                     letterSpacing: -0.2,
                   }}
                 >
-                  Merci pour votre signalement
+                  {t('report.localConfirmTitle')}
                 </Text>
                 <Text
                   style={{
@@ -659,7 +659,7 @@ export default function RestaurantScreen() {
                     paddingHorizontal: 12,
                   }}
                 >
-                  Votre message a bien été enregistré. Notre équipe en prendra connaissance.
+                  {t('report.localConfirmMsg')}
                 </Text>
                 <TouchableOpacity
                   onPress={closeReport}
@@ -673,7 +673,7 @@ export default function RestaurantScreen() {
                   ]}
                 >
                   <Text style={{ color: '#fff', fontSize: 15, fontWeight: '600', textAlign: 'center' }}>
-                    Fermer
+                    {t('common.close')}
                   </Text>
                 </TouchableOpacity>
               </View>
@@ -687,16 +687,10 @@ export default function RestaurantScreen() {
                 >
                   {/* ── Motif section ── */}
                   <Text style={[styles.sectionLabel, { color: theme.colors.textSecondary }]}>
-                    MOTIF
+                    {t('report.reasonLabel').toUpperCase()}
                   </Text>
 
-                  {([
-                    { key: 'food_quality' as ReportReason, label: 'Mauvaise qualité de nourriture' },
-                    { key: 'wrong_info' as ReportReason, label: 'Informations incorrectes' },
-                    { key: 'hygiene' as ReportReason, label: "Problème d’hygiène" },
-                    { key: 'behavior' as ReportReason, label: 'Comportement inapproprié' },
-                    { key: 'other' as ReportReason, label: 'Autre' },
-                  ] as { key: ReportReason; label: string }[]).map(({ key, label }, index, arr) => {
+                  {(REPORT_REASONS as { key: ReportReason; label: string }[]).map(({ key, label }, index, arr) => {
                     const selected = report.reason === key;
                     return (
                       <TouchableOpacity
@@ -762,7 +756,7 @@ export default function RestaurantScreen() {
                       { color: theme.colors.textSecondary, marginTop: 24 },
                     ]}
                   >
-                    DÉTAILS SUPPLÉMENTAIRES
+                    {t('report.detailsLabel').toUpperCase()}
                   </Text>
                   <TextInput
                     style={[
@@ -776,7 +770,7 @@ export default function RestaurantScreen() {
                         borderColor: theme.colors.divider,
                       },
                     ]}
-                    placeholder="Ajoutez des détails (optionnel)"
+                    placeholder={t('report.detailsPlaceholder')}
                     placeholderTextColor={theme.colors.muted}
                     multiline
                     numberOfLines={4}
@@ -793,7 +787,7 @@ export default function RestaurantScreen() {
                       lineHeight: 16,
                     }}
                   >
-                    Votre message restera confidentiel.
+                    {t('report.localConfirmMsg', { defaultValue: '' })}
                   </Text>
                 </ScrollView>
 
@@ -828,7 +822,7 @@ export default function RestaurantScreen() {
                         letterSpacing: 0.1,
                       }}
                     >
-                      Envoyer le signalement
+                      {t('report.submit')}
                     </Text>
                   </TouchableOpacity>
                 </View>

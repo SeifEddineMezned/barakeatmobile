@@ -40,7 +40,7 @@ export default function HomeScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const [searchQuery, setSearchQuery] = useState('');
-  const [activeCategory, setActiveCategory] = useState('Tous');
+  const [activeCategory, setActiveCategory] = useState('all');
   const { toggleBasketFavorite, isBasketFavorite } = useFavoritesStore();
   const { user } = useAuthStore();
   const [refreshing, setRefreshing] = useState(false);
@@ -272,9 +272,9 @@ export default function HomeScreen() {
   const availableCategories = useMemo(() => {
     const cats = new Set<string>();
     baskets.forEach((b) => {
-      if (b.category && b.category !== 'Tous') cats.add(b.category);
+      if (b.category && b.category !== 'all') cats.add(b.category);
     });
-    return ['Tous', ...Array.from(cats)];
+    return ['all', ...Array.from(cats)];
   }, [baskets]);
 
   // Simple Euclidean distance approximation (sufficient for sorting nearby locations)
@@ -283,7 +283,7 @@ export default function HomeScreen() {
 
   const filteredBaskets = useMemo(() => {
     let result = baskets;
-    if (activeCategory !== 'Tous') {
+    if (activeCategory !== 'all') {
       result = result.filter((b) => b.category === activeCategory);
     }
     if (searchQuery.trim()) {
@@ -414,7 +414,7 @@ export default function HomeScreen() {
             style={{ color: heroVisible ? '#fff' : theme.colors.textPrimary, fontSize: 13, fontWeight: '600', fontFamily: 'Poppins_600SemiBold', maxWidth: 130 }}
             numberOfLines={1}
           >
-            {selectedAddress?.label ?? 'Choose location'}
+            {selectedAddress?.label ?? t('home.chooseLocation')}
           </Text>
           <ChevronDown size={13} color={heroVisible ? 'rgba(255,255,255,0.7)' : theme.colors.textSecondary} />
         </TouchableOpacity>
@@ -677,7 +677,7 @@ export default function HomeScreen() {
                         },
                       ]}
                     >
-                      {cat}
+                      {t(`home.categories.${cat}`, { defaultValue: cat })}
                     </Text>
                   </TouchableOpacity>
                 );

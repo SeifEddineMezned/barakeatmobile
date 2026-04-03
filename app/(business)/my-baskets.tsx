@@ -70,7 +70,7 @@ export default function MyBasketsScreen() {
     },
     onError: (err: any) => {
       console.error('[MyBaskets] Save FAILED:', err?.status, err?.message, JSON.stringify(err?.data));
-      Alert.alert('Error', err?.data?.error ?? err?.message ?? 'Failed to save');
+      Alert.alert(t('common.error'), err?.data?.error ?? err?.message ?? t('errors.serverError'));
     },
   });
 
@@ -111,7 +111,7 @@ export default function MyBasketsScreen() {
       void queryClient.invalidateQueries({ queryKey: ['my-baskets'] });
     },
     onError: (err) => {
-      Alert.alert('Error', getErrorMessage(err));
+      Alert.alert(t('common.error'), getErrorMessage(err));
     },
   });
   const [menuOpenId, setMenuOpenId] = useState<string | null>(null);
@@ -200,7 +200,7 @@ export default function MyBasketsScreen() {
   const handleChangePhoto = useCallback(async (basketId: string) => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== 'granted') {
-      Alert.alert('Permission needed', 'Please allow photo library access to change the basket photo.');
+      Alert.alert(t('common.error'), t('business.menuItems.photoPermRequired'));
       return;
     }
     const result = await ImagePicker.launchImageLibraryAsync({
@@ -222,7 +222,7 @@ export default function MyBasketsScreen() {
       void queryClient.invalidateQueries({ queryKey: ['my-baskets'] });
       setDetailBasket(prev => prev ? { ...prev, imageUrl: asset.uri } : prev);
     } catch (err: any) {
-      Alert.alert('Error', err?.message ?? 'Failed to upload photo');
+      Alert.alert(t('common.error'), err?.message ?? t('errors.serverError'));
     }
   }, [queryClient]);
 
