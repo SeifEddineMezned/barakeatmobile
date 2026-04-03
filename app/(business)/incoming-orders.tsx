@@ -87,7 +87,7 @@ export default function IncomingOrdersScreen() {
       pickupCode: o.pickup_code ?? '',
       status: normalizeStatus(o.status),
       createdAt: o.created_at ?? new Date().toISOString(),
-      customerName: o.buyer_name ?? 'Client',
+      customerName: o.buyer_name ?? t('business.orders.customer'),
       customerPhone: o.buyer_phone ?? undefined,
     };
   });

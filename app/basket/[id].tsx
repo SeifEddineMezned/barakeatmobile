@@ -232,7 +232,7 @@ export default function BasketDetailsScreen() {
             </View>
 
             {/* Bottom overlay: pickup time + location + category */}
-            <View style={{ position: 'absolute', bottom: 0, left: 0, right: 0, paddingHorizontal: theme.spacing.xl, paddingBottom: 12, paddingTop: 30, background: 'transparent' }}>
+            <View style={{ position: 'absolute', bottom: 0, left: 0, right: 0, paddingHorizontal: theme.spacing.xl, paddingBottom: 12, paddingTop: 30, backgroundColor: 'transparent' }}>
               <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
                 <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.5)', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4 }}>
                   <Clock size={12} color="#fff" />

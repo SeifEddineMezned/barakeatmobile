@@ -147,9 +147,9 @@ export default function CreateBasketScreen() {
       if (data.name) setName(data.name);
       if (data.description) setDescription(data.description);
       if (data.price != null) setSellingPrice(String(data.price));
-      Alert.alert('AI Suggestion', 'AI suggested content filled in! Adjust as needed.');
+      Alert.alert(t('business.createBasket.aiSuggestionTitle', { defaultValue: 'Suggestion IA' }), t('business.createBasket.aiSuggestionFilled', { defaultValue: 'Contenu suggéré rempli ! Ajustez-le selon vos besoins.' }));
     } catch (err) {
-      Alert.alert('Error', getErrorMessage(err));
+      Alert.alert(t('common.error'), getErrorMessage(err));
     } finally {
       setAiLoading(false);
     }

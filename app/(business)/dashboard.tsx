@@ -336,8 +336,8 @@ export default function BusinessDashboard() {
   const orgLocations = orgDetailsQuery.data?.locations ?? [];
   const isAdmin = (teamContextQuery.data?.role ?? '') === 'admin' || (teamContextQuery.data?.role ?? '') === 'owner';
   const selectedLocationName = selectedLocationId
-    ? (orgLocations.find((l) => l.id === selectedLocationId)?.name ?? `Location ${selectedLocationId}`)
-    : (isAdmin ? (teamContextQuery.data?.organization_name ?? 'All locations') : (teamContextQuery.data?.location_name ?? 'My location'));
+    ? (orgLocations.find((l) => l.id === selectedLocationId)?.name ?? `${t('business.location')} ${selectedLocationId}`)
+    : (isAdmin ? (teamContextQuery.data?.organization_name ?? t('business.allLocations')) : (teamContextQuery.data?.location_name ?? t('business.team.locationLabel')));
 
   const reviews = reviewsQuery.data ?? { service: 0, quantite: 0, qualite: 0, variete: 0 };
 
@@ -848,7 +848,7 @@ export default function BusinessDashboard() {
             <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: theme.spacing.lg }}>
               <Building2 size={18} color={theme.colors.primary} />
               <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h2, marginLeft: 10, flex: 1 }]}>
-                {teamContextQuery.data?.organization_name ?? 'My Organization'}
+                {teamContextQuery.data?.organization_name ?? t('business.profile.allLocationsLabel')}
               </Text>
               <TouchableOpacity onPress={() => setShowLocationModal(false)}>
                 <X size={22} color={theme.colors.textPrimary} />
