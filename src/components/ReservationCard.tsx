@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { MapPin, Clock, Navigation, X as XIcon, QrCode, Star, ChevronDown, ChevronUp, ShoppingBag } from 'lucide-react-native';
 import { useRouter } from 'expo-router';
 import { useTheme } from '@/src/theme/ThemeProvider';
+import { getNowInBusinessTz } from '@/src/utils/timezone';
 import type { ReservationFromAPI } from '@/src/services/reservations';
 import { fetchReservationQRCode } from '@/src/services/reservations';
 
@@ -202,30 +203,31 @@ export function ReservationCard({ reservation, onCancel, onHide: _onHide, overri
   const isUpcoming = status === 'reserved' || status === 'ready' || status === 'pending' || status === 'confirmed';
   const isPast = status === 'collected' || status === 'completed' || status === 'picked_up';
 
-  // Live pickup countdown for upcoming orders
-  const [now, setNow] = useState(new Date());
+  // Live pickup countdown for upcoming orders (business timezone aware)
+  const [tick, setTick] = useState(0);
   useEffect(() => {
     if (!isUpcoming || !pickupWindow) return;
-    const timer = setInterval(() => setNow(new Date()), 60000);
+    const timer = setInterval(() => setTick(p => p + 1), 60000);
     return () => clearInterval(timer);
   }, [isUpcoming, pickupWindow]);
 
   const pickupInfo = (() => {
     if (!isUpcoming || !pickupWindow) return null;
-    const today = new Date();
     const [sh, sm] = (pickupWindow.start ?? '').split(':').map(Number);
     const [eh, em] = (pickupWindow.end ?? '').split(':').map(Number);
     if (isNaN(sh) || isNaN(eh)) return null;
-    const startDate = new Date(today.getFullYear(), today.getMonth(), today.getDate(), sh, sm);
-    const endDate = new Date(today.getFullYear(), today.getMonth(), today.getDate(), eh, em);
+    const bizNow = getNowInBusinessTz();
+    const nowMin = bizNow.hours * 60 + bizNow.minutes;
+    const startMin = sh * 60 + sm;
+    const endMin = eh * 60 + em;
 
-    if (now < startDate) {
-      const diff = Math.round((startDate.getTime() - now.getTime()) / 60000);
+    if (nowMin < startMin) {
+      const diff = startMin - nowMin;
       const h = Math.floor(diff / 60);
       const m = diff % 60;
       return { label: t('orders.startsIn'), time: h > 0 ? `${h}h ${m}m` : `${m}m`, color: theme.colors.primary };
-    } else if (now <= endDate) {
-      const diff = Math.round((endDate.getTime() - now.getTime()) / 60000);
+    } else if (nowMin <= endMin) {
+      const diff = endMin - nowMin;
       return { label: t('orders.endsIn'), time: `${diff}m`, color: diff < 15 ? theme.colors.error : theme.colors.accentWarm };
     } else {
       return { label: t('orders.pickupEnded'), time: '', color: theme.colors.muted };

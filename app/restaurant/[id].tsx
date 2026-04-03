@@ -16,6 +16,7 @@ import type { NativeSyntheticEvent, TextLayoutEventData } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useQuery } from '@tanstack/react-query';
 import { ChevronLeft, MapPin, ShoppingBag, Clock, Star, Tag, Flag, X, ChevronRight, MoreVertical, TimerOff } from 'lucide-react-native';
+import { isPickupExpiredInTz } from '@/src/utils/timezone';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { useTranslation } from 'react-i18next';
 import { StatusBar } from 'expo-status-bar';
@@ -395,16 +396,7 @@ export default function RestaurantScreen() {
           ) : (
             baskets.map((basket) => {
               const soldOut = basket.quantityLeft <= 0;
-              const pickupExpired = (() => {
-                if (soldOut) return false;
-                const endStr = basket.pickupWindow?.end;
-                if (!endStr) return false;
-                const [eh, em] = endStr.split(':').map(Number);
-                if (isNaN(eh) || isNaN(em)) return false;
-                const now = new Date();
-                const endDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), eh, em);
-                return now > endDate;
-              })();
+              const pickupExpired = !soldOut && isPickupExpiredInTz(basket.pickupWindow?.end);
               const unavailable = soldOut || pickupExpired;
 
               return (

@@ -532,20 +532,19 @@ export default function BusinessDashboard() {
             {/* Decorative background circle */}
             <View style={{ position: 'absolute', right: -24, top: -24, width: 110, height: 110, borderRadius: 55, backgroundColor: 'rgba(227,255,92,0.07)' }} />
             {/* Label */}
-            <Text style={{ color: 'rgba(255,255,255,0.5)', fontSize: 10, fontFamily: 'Poppins_400Regular', letterSpacing: 0.8, textTransform: 'uppercase' }}>
+            <Text style={{ color: 'rgba(255,255,255,0.5)', fontSize: 10, fontFamily: 'Poppins_400Regular', letterSpacing: 0.8, textTransform: 'uppercase', marginBottom: 14 }}>
               {t('business.dashboard.daySummary')}
             </Text>
-            {/* Hero: Revenue */}
-            <View style={{ flexDirection: 'row', alignItems: 'flex-end', marginTop: 10, marginBottom: 16 }}>
-              <Text style={{ color: '#fff', fontSize: 38, fontFamily: 'Poppins_700Bold', letterSpacing: -1.5, lineHeight: 42 }}>
-                <AnimatedNumber value={stats.totalRevenue} />
-              </Text>
-              <Text style={{ color: 'rgba(255,255,255,0.5)', fontSize: 15, fontFamily: 'Poppins_400Regular', marginLeft: 6, marginBottom: 4 }}>TND</Text>
-            </View>
-            {/* Separator */}
-            <View style={{ height: 1, backgroundColor: 'rgba(255,255,255,0.1)', marginBottom: 14 }} />
-            {/* 3 subsidiary metrics */}
+            {/* 4 metrics on same line */}
             <View style={{ flexDirection: 'row' }}>
+              <View style={{ flex: 1, alignItems: 'center' }}>
+                <Banknote size={13} color={theme.colors.secondary} />
+                <Text style={{ color: '#fff', fontSize: 18, fontFamily: 'Poppins_700Bold', marginTop: 4, letterSpacing: -0.4 }}>
+                  <AnimatedNumber value={stats.totalRevenue} />
+                </Text>
+                <Text style={{ color: 'rgba(255,255,255,0.5)', fontSize: 10, fontFamily: 'Poppins_400Regular', marginTop: 1 }}>TND</Text>
+              </View>
+              <View style={{ width: 1, backgroundColor: 'rgba(255,255,255,0.12)' }} />
               <View style={{ flex: 1, alignItems: 'center' }}>
                 <ShoppingBag size={13} color={theme.colors.secondary} />
                 <Text style={{ color: '#fff', fontSize: 18, fontFamily: 'Poppins_700Bold', marginTop: 4, letterSpacing: -0.4 }}>
@@ -657,91 +656,7 @@ export default function BusinessDashboard() {
           </RNAnimated.View>
         </View>
 
-        {/* ── Order Status Breakdown ── */}
-        {(stats.statusPickedUp > 0 || stats.statusConfirmed > 0 || stats.statusCancelled > 0) && (
-          <RNAnimated.View style={{ opacity: fadeAnim5, transform: [{ translateY: fadeAnim5.interpolate({ inputRange: [0, 1], outputRange: [14, 0] }) }] }}>
-          <View style={{ paddingHorizontal: theme.spacing.xl, marginTop: theme.spacing.xxl }}>
-            {/* Section header */}
-            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 14 }}>
-              <View style={{ width: 3, height: 16, backgroundColor: theme.colors.accentFresh, borderRadius: 2, marginRight: 8 }} />
-              <Text style={{ color: theme.colors.textPrimary, fontSize: 13, fontFamily: 'Poppins_600SemiBold', letterSpacing: 0.3, textTransform: 'uppercase' as const }}>
-                {'Statut des commandes'}
-              </Text>
-            </View>
-            <View style={{ flexDirection: 'row', gap: 8 }}>
-              {/* Récupérés */}
-              <View style={{
-                flex: 1,
-                backgroundColor: theme.colors.surface,
-                borderRadius: theme.radii.r16,
-                padding: 16,
-                alignItems: 'flex-start',
-                borderWidth: 1,
-                borderColor: 'rgba(0,0,0,0.045)',
-                shadowColor: '#16a34a',
-                shadowOffset: { width: 0, height: 2 },
-                shadowOpacity: 0.08,
-                shadowRadius: 6,
-                elevation: 2,
-                overflow: 'hidden',
-              }}>
-                <View style={{ height: 3, width: '100%', position: 'absolute', top: 0, left: 0, right: 0, backgroundColor: '#16a34a', borderTopLeftRadius: theme.radii.r16, borderTopRightRadius: theme.radii.r16 }} />
-                <View style={{ width: 26, height: 26, borderRadius: 8, backgroundColor: '#16a34a15', justifyContent: 'center', alignItems: 'center', marginBottom: 10 }}>
-                  <Check size={13} color="#16a34a" strokeWidth={2.5} />
-                </View>
-                <Text style={{ color: '#16a34a', fontSize: 26, fontFamily: 'Poppins_700Bold', letterSpacing: -0.5, lineHeight: 30 }}>{`${stats.statusPickedUp}`}</Text>
-                <Text style={{ color: theme.colors.textSecondary, fontSize: 10, fontFamily: 'Poppins_400Regular', marginTop: 3, letterSpacing: 0.2 }}>{'Récupérés'}</Text>
-              </View>
-              {/* Confirmés */}
-              <View style={{
-                flex: 1,
-                backgroundColor: theme.colors.surface,
-                borderRadius: theme.radii.r16,
-                padding: 16,
-                alignItems: 'flex-start',
-                borderWidth: 1,
-                borderColor: 'rgba(0,0,0,0.045)',
-                shadowColor: theme.colors.primary,
-                shadowOffset: { width: 0, height: 2 },
-                shadowOpacity: 0.08,
-                shadowRadius: 6,
-                elevation: 2,
-                overflow: 'hidden',
-              }}>
-                <View style={{ height: 3, width: '100%', position: 'absolute', top: 0, left: 0, right: 0, backgroundColor: theme.colors.primary, borderTopLeftRadius: theme.radii.r16, borderTopRightRadius: theme.radii.r16 }} />
-                <View style={{ width: 26, height: 26, borderRadius: 8, backgroundColor: theme.colors.primary + '14', justifyContent: 'center', alignItems: 'center', marginBottom: 10 }}>
-                  <Clock size={13} color={theme.colors.primary} strokeWidth={2.5} />
-                </View>
-                <Text style={{ color: theme.colors.primary, fontSize: 26, fontFamily: 'Poppins_700Bold', letterSpacing: -0.5, lineHeight: 30 }}>{`${stats.statusConfirmed}`}</Text>
-                <Text style={{ color: theme.colors.textSecondary, fontSize: 10, fontFamily: 'Poppins_400Regular', marginTop: 3, letterSpacing: 0.2 }}>{'Confirmés'}</Text>
-              </View>
-              {/* Annulés */}
-              <View style={{
-                flex: 1,
-                backgroundColor: theme.colors.surface,
-                borderRadius: theme.radii.r16,
-                padding: 16,
-                alignItems: 'flex-start',
-                borderWidth: 1,
-                borderColor: 'rgba(0,0,0,0.045)',
-                shadowColor: theme.colors.error,
-                shadowOffset: { width: 0, height: 2 },
-                shadowOpacity: 0.08,
-                shadowRadius: 6,
-                elevation: 2,
-                overflow: 'hidden',
-              }}>
-                <View style={{ height: 3, width: '100%', position: 'absolute', top: 0, left: 0, right: 0, backgroundColor: theme.colors.error, borderTopLeftRadius: theme.radii.r16, borderTopRightRadius: theme.radii.r16 }} />
-                <View style={{ width: 26, height: 26, borderRadius: 8, backgroundColor: theme.colors.error + '12', justifyContent: 'center', alignItems: 'center', marginBottom: 10 }}>
-                  <X size={13} color={theme.colors.error} strokeWidth={2.5} />
-                </View>
-                <Text style={{ color: theme.colors.error, fontSize: 26, fontFamily: 'Poppins_700Bold', letterSpacing: -0.5, lineHeight: 30 }}>{`${stats.statusCancelled}`}</Text>
-                <Text style={{ color: theme.colors.textSecondary, fontSize: 10, fontFamily: 'Poppins_400Regular', marginTop: 3, letterSpacing: 0.2 }}>{'Annulés'}</Text>
-              </View>
-            </View>
-          </View>
-          </RNAnimated.View>
-        )}
+        {/* Order Status Breakdown moved to incoming-orders screen */}
 
         {/* ── Sales This Week + Monthly Performance — animated as group 5 ── */}
         <RNAnimated.View style={{ opacity: fadeAnim5, transform: [{ translateY: fadeAnim5.interpolate({ inputRange: [0, 1], outputRange: [14, 0] }) }] }}>

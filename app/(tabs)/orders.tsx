@@ -6,6 +6,7 @@ import { useRouter } from 'expo-router';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { RefreshCw, ShoppingBag, AlertTriangle, Clock } from 'lucide-react-native';
 import { useTheme } from '@/src/theme/ThemeProvider';
+import { isPickupExpiredInTz, getNowInBusinessTz } from '@/src/utils/timezone';
 import { useAuthStore } from '@/src/stores/authStore';
 import { fetchMyReservations, cancelReservation, hideReservation, type ReservationFromAPI } from '@/src/services/reservations';
 import { getErrorMessage } from '@/src/lib/api';
@@ -13,36 +14,37 @@ import { ReservationCard } from '@/src/components/ReservationCard';
 import { DelayedLoader } from '@/src/components/DelayedLoader';
 
 function PickupCountdown({ startTime, endTime, theme, t }: { startTime: string; endTime: string; theme: any; t: any }) {
-  const [now, setNow] = useState(new Date());
+  const [tick, setTick] = useState(0);
 
   useEffect(() => {
-    const timer = setInterval(() => setNow(new Date()), 60000);
+    const timer = setInterval(() => setTick(p => p + 1), 60000);
     return () => clearInterval(timer);
   }, []);
 
-  const today = new Date();
+  // Use business timezone for countdown
+  const bizNow = getNowInBusinessTz();
+  const nowMinutes = bizNow.hours * 60 + bizNow.minutes;
   const [sh, sm] = startTime.split(':').map(Number);
   const [eh, em] = endTime.split(':').map(Number);
-  const startDate = new Date(today.getFullYear(), today.getMonth(), today.getDate(), sh, sm);
-  const endDate = new Date(today.getFullYear(), today.getMonth(), today.getDate(), eh, em);
+  const startMinutes = sh * 60 + sm;
+  const endMinutes = eh * 60 + em;
 
-  const isBeforePickup = now < startDate;
-  const isDuringPickup = now >= startDate && now <= endDate;
+  const isBeforePickup = nowMinutes < startMinutes;
+  const isDuringPickup = nowMinutes >= startMinutes && nowMinutes <= endMinutes;
 
   let label = '';
   let color = theme.colors.muted;
   let timeLeft = '';
 
   if (isBeforePickup) {
-    const diff = Math.round((startDate.getTime() - now.getTime()) / 60000);
+    const diff = startMinutes - nowMinutes;
     const hours = Math.floor(diff / 60);
     const mins = diff % 60;
     label = t('orders.startsIn', { defaultValue: 'Starts in' });
     timeLeft = hours > 0 ? `${hours}h ${mins}m` : `${mins}m`;
     color = theme.colors.primary;
   } else if (isDuringPickup) {
-    const diff = Math.round((endDate.getTime() - now.getTime()) / 60000);
-    const mins = diff;
+    const mins = endMinutes - nowMinutes;
     label = t('orders.endsIn', { defaultValue: 'Ends in' });
     timeLeft = `${mins}m`;
     color = mins < 15 ? theme.colors.error : theme.colors.accentWarm;
@@ -249,27 +251,25 @@ export default function OrdersScreen() {
 
   const reservations = reservationsQuery.data ?? [];
 
-  // Helper: check if reservation's pickup time has ended
-  const isPickupExpired = useCallback((r: any) => {
-    const now = new Date();
+  // Helper: check if reservation's pickup time has ended (business timezone aware)
+  const isPickupExpiredCheck = useCallback((r: any) => {
     const rr = r as any;
     // Determine the reservation's date
     const dateStr = rr.pickup_date ?? rr.reservation_date ?? rr.created_at ?? rr.createdAt;
     if (!dateStr) return false;
     const reservationDate = new Date(dateStr);
-    const todayStr = now.toISOString().split('T')[0];
+    // Use business timezone for "today" comparison
+    const bizNow = getNowInBusinessTz();
+    const now = new Date();
+    const todayStr = new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Tunis' }).format(now); // YYYY-MM-DD
     const resDateStr = reservationDate.toISOString().split('T')[0];
     // Past date = expired
     if (resDateStr < todayStr) return true;
-    // Same date: check if pickup end time has passed
+    // Same date: check if pickup end time has passed in business timezone
     if (resDateStr === todayStr) {
       const end = rr.pickup_end_time ?? rr.basket?.pickup_end_time ?? rr.restaurant?.pickup_end_time ?? rr.basket?.pickupWindow?.end ?? rr.pickupWindow?.end;
       if (end) {
-        const [eh, em] = String(end).split(':').map(Number);
-        if (!isNaN(eh) && !isNaN(em)) {
-          const endDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), eh, em);
-          if (now > endDate) return true;
-        }
+        return isPickupExpiredInTz(String(end).substring(0, 5));
       }
     }
     return false;
@@ -280,9 +280,9 @@ export default function OrdersScreen() {
       const status = (r.status ?? '').toLowerCase();
       if (status !== 'reserved' && status !== 'ready' && status !== 'pending' && status !== 'confirmed') return false;
       // Move to past if pickup time has expired
-      return !isPickupExpired(r);
+      return !isPickupExpiredCheck(r);
     }),
-    [reservations, isPickupExpired]
+    [reservations, isPickupExpiredCheck]
   );
 
   const pastOrders = useMemo(
@@ -291,10 +291,10 @@ export default function OrdersScreen() {
       // Explicitly past statuses
       if (status === 'collected' || status === 'cancelled' || status === 'completed' || status === 'expired' || status === 'picked_up') return true;
       // Upcoming status but pickup expired = show in past
-      if ((status === 'reserved' || status === 'ready' || status === 'pending' || status === 'confirmed') && isPickupExpired(r)) return true;
+      if ((status === 'reserved' || status === 'ready' || status === 'pending' || status === 'confirmed') && isPickupExpiredCheck(r)) return true;
       return false;
     }),
-    [reservations, isPickupExpired]
+    [reservations, isPickupExpiredCheck]
   );
 
   const completedReservations = useMemo(

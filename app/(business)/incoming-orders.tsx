@@ -2,7 +2,7 @@ import React, { useState, useMemo, useCallback } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Linking, Modal, TextInput, KeyboardAvoidingView, Platform, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
-import { Phone, CheckCircle, XCircle, Clock, QrCode, ClipboardList } from 'lucide-react-native';
+import { Phone, CheckCircle, XCircle, Clock, QrCode, ClipboardList, Check, X as XIcon } from 'lucide-react-native';
 import { useRouter } from 'expo-router';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { StatusBar } from 'expo-status-bar';
@@ -235,6 +235,41 @@ export default function IncomingOrdersScreen() {
           {t('business.orders.title')}
         </Text>
       </View>
+
+      {/* Order Status Breakdown */}
+      {orders.length > 0 && (
+        <View style={{ paddingHorizontal: theme.spacing.xl, marginTop: theme.spacing.md, marginBottom: theme.spacing.sm }}>
+          <View style={{ flexDirection: 'row', gap: 8 }}>
+            <View style={{ flex: 1, backgroundColor: '#16a34a12', borderRadius: theme.radii.r12, padding: 12, alignItems: 'center' }}>
+              <Check size={14} color="#16a34a" />
+              <Text style={{ color: '#16a34a', fontSize: 20, fontFamily: 'Poppins_700Bold', marginTop: 4 }}>
+                {orders.filter(o => o.status === 'picked_up').length}
+              </Text>
+              <Text style={{ color: theme.colors.textSecondary, fontSize: 10, fontFamily: 'Poppins_400Regular' }}>
+                {t('business.orders.statusPickedUp', { defaultValue: 'Picked up' })}
+              </Text>
+            </View>
+            <View style={{ flex: 1, backgroundColor: theme.colors.primary + '12', borderRadius: theme.radii.r12, padding: 12, alignItems: 'center' }}>
+              <Clock size={14} color={theme.colors.primary} />
+              <Text style={{ color: theme.colors.primary, fontSize: 20, fontFamily: 'Poppins_700Bold', marginTop: 4 }}>
+                {incomingOrders.length}
+              </Text>
+              <Text style={{ color: theme.colors.textSecondary, fontSize: 10, fontFamily: 'Poppins_400Regular' }}>
+                {t('orders.status.confirmed', { defaultValue: 'Confirmed' })}
+              </Text>
+            </View>
+            <View style={{ flex: 1, backgroundColor: theme.colors.error + '12', borderRadius: theme.radii.r12, padding: 12, alignItems: 'center' }}>
+              <XIcon size={14} color={theme.colors.error} />
+              <Text style={{ color: theme.colors.error, fontSize: 20, fontFamily: 'Poppins_700Bold', marginTop: 4 }}>
+                {orders.filter(o => o.status === 'cancelled').length}
+              </Text>
+              <Text style={{ color: theme.colors.textSecondary, fontSize: 10, fontFamily: 'Poppins_400Regular' }}>
+                {t('orders.status.cancelled', { defaultValue: 'Cancelled' })}
+              </Text>
+            </View>
+          </View>
+        </View>
+      )}
 
       <View style={[styles.tabs, { paddingHorizontal: theme.spacing.xl, marginTop: theme.spacing.sm }]}>
         {(['incoming', 'completed'] as const).map((tab) => (

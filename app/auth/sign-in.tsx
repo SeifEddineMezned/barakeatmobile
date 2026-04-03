@@ -3,7 +3,7 @@ import { View, Text, StyleSheet, TextInput, TouchableOpacity, KeyboardAvoidingVi
 import { useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Store, User } from 'lucide-react-native';
+import { Store, User, ChevronLeft } from 'lucide-react-native';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { useAuthStore } from '@/src/stores/authStore';
 import { useSplashStore } from '@/src/stores/splashStore';
@@ -120,6 +120,7 @@ export default function SignInScreen() {
   const [loading, setLoading] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
   const [role, setRole] = useState<UserRole>('customer');
+  const [step, setStep] = useState<'choose' | 'login'>('choose');
 
   // ── Google OAuth ─────────────────────────────────────────────────────────
 
@@ -248,81 +249,105 @@ export default function SignInScreen() {
       >
         <ScrollView contentContainerStyle={styles.scrollContent}>
           <View style={[styles.content, { padding: theme.spacing.xxl }]}>
-            <Text
-              style={[
-                styles.title,
-                { color: '#fff', ...theme.typography.h1, marginBottom: theme.spacing.sm },
-              ]}
-            >
-              {t('auth.welcomeBack')}
-            </Text>
-            <Text
-              style={[
-                styles.subtitle,
-                { color: 'rgba(255,255,255,0.7)', ...theme.typography.body, marginBottom: theme.spacing.xxl },
-              ]}
-            >
-              {t('auth.welcome')}
-            </Text>
+            {step === 'choose' ? (
+              <>
+                <Text
+                  style={[
+                    styles.title,
+                    { color: '#fff', ...theme.typography.h1, marginBottom: theme.spacing.sm },
+                  ]}
+                >
+                  {t('auth.welcome')}
+                </Text>
+                <Text
+                  style={[
+                    styles.subtitle,
+                    { color: 'rgba(255,255,255,0.7)', ...theme.typography.body, marginBottom: theme.spacing.xxxl },
+                  ]}
+                >
+                  {t('auth.chooseAccountType')}
+                </Text>
 
-            <View style={[styles.roleSelector, { marginBottom: theme.spacing.xxl }]}>
-              <TouchableOpacity
-                style={[
-                  styles.roleOption,
-                  {
-                    flex: 1,
-                    paddingVertical: theme.spacing.lg,
-                    borderRadius: theme.radii.r12,
-                    backgroundColor: role === 'customer' ? '#e3ff5c' : 'rgba(255,255,255,0.12)',
-                    marginRight: theme.spacing.sm,
-                  },
-                ]}
-                onPress={() => setRole('customer')}
-                activeOpacity={0.8}
-              >
-                <User size={22} color={role === 'customer' ? '#114b3c' : '#fff'} />
+                <View style={{ flexDirection: 'row', gap: 12 }}>
+                  <TouchableOpacity
+                    style={{
+                      flex: 1,
+                      backgroundColor: '#e3ff5c',
+                      borderRadius: theme.radii.r16,
+                      padding: 16,
+                      alignItems: 'center',
+                    }}
+                    onPress={() => { setRole('customer'); setStep('login'); }}
+                    activeOpacity={0.8}
+                  >
+                    <View style={{ width: 52, height: 52, borderRadius: 26, backgroundColor: '#114b3c20', justifyContent: 'center', alignItems: 'center', marginBottom: 10 }}>
+                      <User size={26} color="#114b3c" />
+                    </View>
+                    <Text style={{ color: '#114b3c', ...theme.typography.body, fontWeight: '700', textAlign: 'center' }}>
+                      {t('auth.customerRole')}
+                    </Text>
+                    <Text style={{ color: '#114b3c90', ...theme.typography.caption, marginTop: 4, textAlign: 'center' }}>
+                      {t('auth.customerRoleDesc')}
+                    </Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={{
+                      flex: 1,
+                      backgroundColor: 'rgba(255,255,255,0.12)',
+                      borderRadius: theme.radii.r16,
+                      padding: 16,
+                      alignItems: 'center',
+                      borderWidth: 1,
+                      borderColor: 'rgba(255,255,255,0.2)',
+                    }}
+                    onPress={() => { setRole('business'); setStep('login'); }}
+                    activeOpacity={0.8}
+                  >
+                    <View style={{ width: 52, height: 52, borderRadius: 26, backgroundColor: 'rgba(255,255,255,0.15)', justifyContent: 'center', alignItems: 'center', marginBottom: 10 }}>
+                      <Store size={26} color="#fff" />
+                    </View>
+                    <Text style={{ color: '#fff', ...theme.typography.body, fontWeight: '700', textAlign: 'center' }}>
+                      {t('business.auth.switchToBusiness')}
+                    </Text>
+                    <Text style={{ color: 'rgba(255,255,255,0.6)', ...theme.typography.caption, marginTop: 4, textAlign: 'center' }}>
+                      {t('auth.businessRoleDesc')}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              </>
+            ) : (
+              <>
+                <TouchableOpacity
+                  onPress={() => setStep('choose')}
+                  style={{
+                    width: 44,
+                    height: 44,
+                    borderRadius: 22,
+                    backgroundColor: 'rgba(255,255,255,0.12)',
+                    justifyContent: 'center',
+                    alignItems: 'center',
+                    marginBottom: theme.spacing.xl,
+                  }}
+                >
+                  <ChevronLeft size={28} color="#fff" />
+                </TouchableOpacity>
                 <Text
                   style={[
-                    {
-                      color: role === 'customer' ? '#114b3c' : '#fff',
-                      ...theme.typography.bodySm,
-                      fontWeight: '600' as const,
-                      marginTop: 6,
-                    },
+                    styles.title,
+                    { color: '#fff', ...theme.typography.h1, marginBottom: theme.spacing.sm },
                   ]}
                 >
-                  {t('business.auth.switchToCustomer')}
+                  {role === 'customer' ? t('auth.signIn') : t('business.auth.businessSignIn')}
                 </Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[
-                  styles.roleOption,
-                  {
-                    flex: 1,
-                    paddingVertical: theme.spacing.lg,
-                    borderRadius: theme.radii.r12,
-                    backgroundColor: role === 'business' ? '#e3ff5c' : 'rgba(255,255,255,0.12)',
-                    marginLeft: theme.spacing.sm,
-                  },
-                ]}
-                onPress={() => setRole('business')}
-                activeOpacity={0.8}
-              >
-                <Store size={22} color={role === 'business' ? '#114b3c' : '#fff'} />
                 <Text
                   style={[
-                    {
-                      color: role === 'business' ? '#114b3c' : '#fff',
-                      ...theme.typography.bodySm,
-                      fontWeight: '600' as const,
-                      marginTop: 6,
-                    },
+                    styles.subtitle,
+                    { color: 'rgba(255,255,255,0.7)', ...theme.typography.body, marginBottom: theme.spacing.xxl },
                   ]}
                 >
-                  {t('business.auth.switchToBusiness')}
+                  {role === 'customer' ? t('auth.customerRoleDesc') : t('auth.businessRoleDesc')}
                 </Text>
-              </TouchableOpacity>
-            </View>
 
             <View style={styles.form}>
               <View style={[styles.inputContainer, { marginBottom: theme.spacing.xl }]}>
@@ -403,18 +428,7 @@ export default function SignInScreen() {
                 </TouchableOpacity>
               </View>
 
-              <View style={[styles.footer, { marginTop: theme.spacing.xxl }]}>
-                <Text style={[{ color: 'rgba(255,255,255,0.7)', ...theme.typography.body }]}>
-                  {t('auth.noAccount')}{' '}
-                </Text>
-                <TouchableOpacity onPress={() => router.push('/auth/sign-up' as never)}>
-                  <Text style={[{ color: '#e3ff5c', ...theme.typography.body, fontWeight: '600' as const }]}>
-                    {t('auth.signUp')}
-                  </Text>
-                </TouchableOpacity>
-              </View>
-
-              {/* Google sign-in — below sign up link */}
+              {/* Google sign-in — only for customer, under sign-in button with divider */}
               {role === 'customer' && (
                 <>
                   <View style={{ flexDirection: 'row', alignItems: 'center', marginVertical: theme.spacing.lg }}>
@@ -455,7 +469,20 @@ export default function SignInScreen() {
                   </TouchableOpacity>
                 </>
               )}
+
+              <View style={[styles.footer, { marginTop: theme.spacing.xxl }]}>
+                <Text style={[{ color: 'rgba(255,255,255,0.7)', ...theme.typography.body }]}>
+                  {t('auth.noAccount')}{' '}
+                </Text>
+                <TouchableOpacity onPress={() => router.push('/auth/sign-up' as never)}>
+                  <Text style={[{ color: '#e3ff5c', ...theme.typography.body, fontWeight: '600' as const }]}>
+                    {t('auth.signUp')}
+                  </Text>
+                </TouchableOpacity>
+              </View>
             </View>
+              </>
+            )}
           </View>
         </ScrollView>
       </KeyboardAvoidingView>

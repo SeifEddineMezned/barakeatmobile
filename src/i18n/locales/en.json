@@ -173,7 +173,16 @@
     "availableBaskets": "Available Baskets",
     "noBaskets": "No baskets available right now",
     "menuItems": "Menu Items",
-    "noMenuItems": "No items to show yet"
+    "noMenuItems": "No items to show yet",
+    "starred": "Starred",
+    "starBasket": "Star this basket",
+    "unstarBasket": "Remove star",
+    "pickupInstructions": "Pickup Instructions",
+    "noPickupInstructions": "No specific instructions",
+    "packaging": "Packaging",
+    "containerBag": "Container",
+    "carrierBag": "Carrier Bag",
+    "getDirections": "Get Directions"
   },
   "reserve": {
     "title": "Reserve Basket",

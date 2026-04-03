@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next';
 import { Heart, Clock, MapPin, Star, ShoppingBag, Tag, Layers, Info, X, TimerOff } from 'lucide-react-native';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { Basket } from '@/src/types';
+import { isPickupExpiredInTz } from '@/src/utils/timezone';
 
 interface BasketCardProps {
   basket: Basket;
@@ -24,17 +25,8 @@ export function BasketCard({ basket, onFavoritePress, isFavorite = false }: Bask
 
   const isSoldOut = basket.quantityLeft <= 0;
 
-  // Check if pickup window has expired for today
-  const isPickupExpired = (() => {
-    if (isSoldOut) return false; // sold out takes priority
-    const endStr = basket.pickupWindow?.end;
-    if (!endStr) return false;
-    const [eh, em] = endStr.split(':').map(Number);
-    if (isNaN(eh) || isNaN(em)) return false;
-    const now = new Date();
-    const endDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), eh, em);
-    return now > endDate;
-  })();
+  // Check if pickup window has expired (using business timezone)
+  const isPickupExpired = !isSoldOut && isPickupExpiredInTz(basket.pickupWindow?.end);
 
   // Also treat as expired if the backend flagged isActive = false (e.g. all baskets expired)
   const isInactive = basket.isActive === false && !isSoldOut;

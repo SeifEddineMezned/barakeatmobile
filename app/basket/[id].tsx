@@ -3,7 +3,9 @@ import { View, Text, StyleSheet, ScrollView, Image, TouchableOpacity, Linking, A
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import { useQuery } from '@tanstack/react-query';
-import { MapPin, Clock, Phone, Navigation, ChevronLeft, Star, ShoppingBag, RefreshCw, Flag, X } from 'lucide-react-native';
+import { isPickupExpiredInTz } from '@/src/utils/timezone';
+import { MapPin, Clock, Phone, Navigation, ChevronLeft, Star, ShoppingBag, RefreshCw, Flag, X, Tag, Package, Bookmark } from 'lucide-react-native';
+import { useFavoritesStore } from '@/src/stores/favoritesStore';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { StatusBar } from 'expo-status-bar';
 import { PrimaryCTAButton } from '@/src/components/PrimaryCTAButton';
@@ -155,6 +157,12 @@ export default function BasketDetailsScreen() {
     );
   }
 
+  const { isBasketTypeStarred, toggleStarredBasketType } = useFavoritesStore();
+  const isStarred = isBasketTypeStarred(String(id));
+  const rawData = restaurantQuery.data as any;
+  const pickupInstructions = rawData?.pickup_instructions ?? null;
+  const showMenuItems = rawData?.show_menu_items !== false; // default true unless explicitly false
+
   const handleReserve = () => {
     router.push({ pathname: '/reserve', params: { basketId: basket.id } } as any);
   };
@@ -189,39 +197,70 @@ export default function BasketDetailsScreen() {
   return (
     <View style={[styles.container, { backgroundColor: theme.colors.bg }]}>
       <StatusBar style="dark" />
-      <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
-        <View style={styles.heroContainer}>
-          {basket.imageUrl ? (
-            <Image source={{ uri: basket.imageUrl }} style={styles.heroImage} />
-          ) : (
-            <View style={[styles.heroPlaceholder, { backgroundColor: theme.colors.bagsLeftBg }]} />
-          )}
-          <View style={styles.heroOverlay} />
-          <TouchableOpacity
-            style={[styles.backButton, { backgroundColor: 'rgba(255,255,255,0.9)', ...theme.shadows.shadowMd }]}
-            onPress={() => router.back()}
-          >
-            <ChevronLeft size={22} color={theme.colors.textPrimary} />
-          </TouchableOpacity>
+      <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false} stickyHeaderIndices={[0]}>
+        {/* Sticky hero header with photo, pickup time, location, category */}
+        <View>
+          <View style={styles.heroContainer}>
+            {basket.imageUrl ? (
+              <Image source={{ uri: basket.imageUrl }} style={styles.heroImage} />
+            ) : (
+              <View style={[styles.heroPlaceholder, { backgroundColor: theme.colors.bagsLeftBg }]} />
+            )}
+            <View style={styles.heroOverlay} />
+            {/* Back button */}
+            <TouchableOpacity
+              style={[styles.backButton, { backgroundColor: 'rgba(255,255,255,0.9)', ...theme.shadows.shadowMd }]}
+              onPress={() => router.back()}
+            >
+              <ChevronLeft size={22} color={theme.colors.textPrimary} />
+            </TouchableOpacity>
 
-          <TouchableOpacity
-            onPress={() => setShowReportModal(true)}
-            style={{ position: 'absolute', top: 52, right: 16, width: 36, height: 36, borderRadius: 18, backgroundColor: 'rgba(0,0,0,0.3)', justifyContent: 'center', alignItems: 'center' }}
-          >
-            <Flag size={18} color="#fff" />
-          </TouchableOpacity>
+            {/* Star + Report buttons top right */}
+            <View style={{ position: 'absolute', top: 52, right: 16, flexDirection: 'row', gap: 8 }}>
+              <TouchableOpacity
+                onPress={() => toggleStarredBasketType(String(id))}
+                style={{ width: 36, height: 36, borderRadius: 18, backgroundColor: 'rgba(0,0,0,0.3)', justifyContent: 'center', alignItems: 'center' }}
+              >
+                <Bookmark size={18} color={isStarred ? '#e3ff5c' : '#fff'} fill={isStarred ? '#e3ff5c' : 'transparent'} />
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => setShowReportModal(true)}
+                style={{ width: 36, height: 36, borderRadius: 18, backgroundColor: 'rgba(0,0,0,0.3)', justifyContent: 'center', alignItems: 'center' }}
+              >
+                <Flag size={18} color="#fff" />
+              </TouchableOpacity>
+            </View>
 
-          <View style={[styles.heroBottomInfo, { paddingHorizontal: theme.spacing.xl }]}>
-            <View style={[styles.bagsChip, { backgroundColor: basket.quantityLeft <= 0 ? theme.colors.error : theme.colors.primary, borderRadius: theme.radii.r8 }]}>
-              <ShoppingBag size={13} color="#fff" />
-              <Text style={[{ color: '#fff', ...theme.typography.caption, fontWeight: '700' as const, marginLeft: 4 }]}>
-                {basket.quantityLeft} {t('basket.quantity', { count: basket.quantityLeft })}
-              </Text>
+            {/* Bottom overlay: pickup time + location + category */}
+            <View style={{ position: 'absolute', bottom: 0, left: 0, right: 0, paddingHorizontal: theme.spacing.xl, paddingBottom: 12, paddingTop: 30, background: 'transparent' }}>
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.5)', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4 }}>
+                  <Clock size={12} color="#fff" />
+                  <Text style={{ color: '#fff', fontSize: 11, fontWeight: '600', marginLeft: 4 }}>
+                    {basket.pickupWindow.start} - {basket.pickupWindow.end}
+                  </Text>
+                </View>
+                <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.5)', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4 }}>
+                  <ShoppingBag size={12} color="#fff" />
+                  <Text style={{ color: '#fff', fontSize: 11, fontWeight: '600', marginLeft: 4 }}>
+                    {basket.quantityLeft} {t('basket.quantity')}
+                  </Text>
+                </View>
+                {basket.category && basket.category !== 'Tous' && (
+                  <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.5)', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4 }}>
+                    <Tag size={12} color="#fff" />
+                    <Text style={{ color: '#fff', fontSize: 11, fontWeight: '600', marginLeft: 4 }}>
+                      {t(`categories.${basket.category.toLowerCase()}`, { defaultValue: basket.category })}
+                    </Text>
+                  </View>
+                )}
+              </View>
             </View>
           </View>
         </View>
 
         <View style={[styles.content, { paddingHorizontal: theme.spacing.xl, paddingTop: theme.spacing.lg }]}>
+          {/* Name + merchant */}
           <View style={styles.merchantRow}>
             {basket.merchantLogo ? (
               <Image source={{ uri: basket.merchantLogo }} style={styles.merchantLogo} />
@@ -238,59 +277,33 @@ export default function BasketDetailsScreen() {
             </View>
           </View>
 
-          <View style={[styles.quickInfoRow, { marginTop: theme.spacing.md }]}>
-            <View style={[styles.infoChip, { backgroundColor: theme.colors.surface, borderRadius: theme.radii.pill, ...theme.shadows.shadowSm }]}>
-              <Clock size={13} color={theme.colors.primary} />
-              <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.caption, fontWeight: '500' as const, marginLeft: 4 }]}>
-                {basket.pickupWindow.start} - {basket.pickupWindow.end}
-              </Text>
-            </View>
-            <TouchableOpacity onPress={handleDirections} activeOpacity={0.7} style={[styles.infoChip, { backgroundColor: theme.colors.surface, borderRadius: theme.radii.pill, ...theme.shadows.shadowSm }]}>
-              <MapPin size={13} color={theme.colors.primary} />
-              <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.caption, fontWeight: '500' as const, marginLeft: 4 }]}>
-                {basket.distance}km
-              </Text>
-            </TouchableOpacity>
-            <View style={[styles.infoChip, { backgroundColor: theme.colors.bagsLeftBg, borderRadius: theme.radii.pill }]}>
-              <Text style={[{ color: theme.colors.primary, ...theme.typography.caption, fontWeight: '600' as const }]}>
-                {t('basket.payOnPickup')}
-              </Text>
-            </View>
-          </View>
-
-          <View
-            style={[
-              styles.priceBlock,
-              {
+          {/* Address with directions button */}
+          {basket.address ? (
+            <TouchableOpacity
+              onPress={handleDirections}
+              activeOpacity={0.7}
+              style={{
+                flexDirection: 'row',
+                alignItems: 'center',
                 backgroundColor: theme.colors.surface,
-                borderRadius: theme.radii.r16,
-                padding: theme.spacing.lg,
-                marginTop: theme.spacing.lg,
+                borderRadius: theme.radii.r12,
+                padding: theme.spacing.md,
+                marginTop: theme.spacing.md,
                 ...theme.shadows.shadowSm,
-              },
-            ]}
-          >
-            <View style={styles.priceRow}>
-              <View>
-                <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption }]}>
-                  {t('basket.pickupWindow')}
-                </Text>
-                <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.body, fontWeight: '600' as const, marginTop: 2 }]}>
-                  {basket.pickupWindow.start} - {basket.pickupWindow.end}
-                </Text>
+              }}
+            >
+              <MapPin size={16} color={theme.colors.primary} />
+              <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm, flex: 1, marginLeft: 8 }} numberOfLines={1}>
+                {basket.address}
+              </Text>
+              <View style={{ backgroundColor: theme.colors.primary, borderRadius: theme.radii.r8, paddingHorizontal: 10, paddingVertical: 5, flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                <Navigation size={12} color="#fff" />
+                <Text style={{ color: '#fff', fontSize: 11, fontWeight: '600' }}>{t('basket.getDirections')}</Text>
               </View>
-              <View style={styles.priceRight}>
-                <Text style={[{ color: theme.colors.muted, ...theme.typography.bodySm, textDecorationLine: 'line-through', textAlign: 'right' }]}>
-                  {basket.originalPrice} TND
-                </Text>
-                <Text style={[{ color: theme.colors.primary, ...theme.typography.h1, fontWeight: '700' as const, textAlign: 'right' }]}>
-                  {basket.discountedPrice} TND
-                </Text>
-              </View>
-            </View>
-          </View>
+            </TouchableOpacity>
+          ) : null}
 
-          {/* Description */}
+          {/* Description + category */}
           {basket.description ? (
             <View style={[styles.section, { marginTop: theme.spacing.lg }]}>
               <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, marginBottom: theme.spacing.sm }]}>
@@ -299,34 +312,53 @@ export default function BasketDetailsScreen() {
               <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.body, lineHeight: 22 }]}>
                 {basket.description}
               </Text>
-              <Text
-                style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, marginTop: theme.spacing.sm, fontStyle: 'italic' }]}
-              >
+              <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, marginTop: theme.spacing.sm, fontStyle: 'italic' }]}>
                 {t('basket.surpriseNote')}
               </Text>
             </View>
           ) : null}
 
-          {/* Articles du menu — horizontal scroll */}
-          <View style={[styles.section, { marginTop: theme.spacing.lg }]}>
-            <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, marginBottom: theme.spacing.sm }]}>
-              {t('basket.menuItems', { defaultValue: 'Articles du menu' })}
-            </Text>
-            {menuItems.length > 0 ? (
+          {/* Pickup Instructions */}
+          {pickupInstructions ? (
+            <View style={[styles.section, { marginTop: theme.spacing.lg }]}>
+              <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, marginBottom: theme.spacing.sm }]}>
+                {t('basket.pickupInstructions')}
+              </Text>
+              <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.body, lineHeight: 22 }]}>
+                {pickupInstructions}
+              </Text>
+            </View>
+          ) : null}
+
+          {/* Packaging info */}
+          <View style={{ flexDirection: 'row', gap: 10, marginTop: theme.spacing.lg }}>
+            <View style={{ flex: 1, backgroundColor: theme.colors.surface, borderRadius: theme.radii.r12, padding: theme.spacing.md, alignItems: 'center', ...theme.shadows.shadowSm }}>
+              <Package size={20} color={theme.colors.primary} />
+              <Text style={{ color: theme.colors.textPrimary, ...theme.typography.caption, fontWeight: '600', marginTop: 6 }}>
+                {t('basket.containerBag')}
+              </Text>
+            </View>
+            <View style={{ flex: 1, backgroundColor: theme.colors.surface, borderRadius: theme.radii.r12, padding: theme.spacing.md, alignItems: 'center', ...theme.shadows.shadowSm }}>
+              <ShoppingBag size={20} color={theme.colors.primary} />
+              <Text style={{ color: theme.colors.textPrimary, ...theme.typography.caption, fontWeight: '600', marginTop: 6 }}>
+                {t('basket.carrierBag')}
+              </Text>
+            </View>
+          </View>
+
+          {/* Menu Items — only if business enabled it */}
+          {showMenuItems && menuItems.length > 0 && (
+            <View style={[styles.section, { marginTop: theme.spacing.lg }]}>
+              <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, marginBottom: theme.spacing.sm }]}>
+                {t('basket.menuItems')}
+              </Text>
               <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginHorizontal: -4 }}>
                 {menuItems.map((item) => (
                   <TouchableOpacity
                     key={item.id}
                     onPress={() => item.description ? setSelectedMenuItem({ name: item.name, description: item.description }) : undefined}
                     activeOpacity={item.description ? 0.7 : 1}
-                    style={{
-                      width: 130,
-                      marginHorizontal: 4,
-                      backgroundColor: theme.colors.surface,
-                      borderRadius: theme.radii.r12,
-                      overflow: 'hidden',
-                      ...theme.shadows.shadowSm,
-                    }}
+                    style={{ width: 130, marginHorizontal: 4, backgroundColor: theme.colors.surface, borderRadius: theme.radii.r12, overflow: 'hidden', ...theme.shadows.shadowSm }}
                   >
                     {item.image_url ? (
                       <Image source={{ uri: item.image_url }} style={{ width: 130, height: 90 }} />
@@ -335,44 +367,16 @@ export default function BasketDetailsScreen() {
                         <ShoppingBag size={24} color={theme.colors.muted} />
                       </View>
                     )}
-                    <Text
-                      numberOfLines={2}
-                      style={{ color: theme.colors.textPrimary, ...theme.typography.caption, fontWeight: '600' as const, padding: 8, textAlign: 'center' }}
-                    >
+                    <Text numberOfLines={2} style={{ color: theme.colors.textPrimary, ...theme.typography.caption, fontWeight: '600', padding: 8, textAlign: 'center' }}>
                       {item.name}
                     </Text>
                   </TouchableOpacity>
                 ))}
               </ScrollView>
-            ) : (
-              <ScrollView horizontal scrollEnabled={false} style={{ marginHorizontal: -4 }}>
-                {[0, 1, 2].map((i) => (
-                  <View
-                    key={i}
-                    style={{
-                      width: 130,
-                      marginHorizontal: 4,
-                      backgroundColor: theme.colors.surface,
-                      borderRadius: theme.radii.r12,
-                      overflow: 'hidden',
-                      opacity: 0.5,
-                    }}
-                  >
-                    <View style={{ width: 130, height: 90, backgroundColor: theme.colors.divider }} />
-                    <View style={{ padding: 8, alignItems: 'center' }}>
-                      <View style={{ width: 60, height: 8, borderRadius: 4, backgroundColor: theme.colors.divider }} />
-                    </View>
-                  </View>
-                ))}
-              </ScrollView>
-            )}
-            {menuItems.length === 0 && (
-              <Text style={{ color: theme.colors.muted, ...theme.typography.caption, textAlign: 'center', marginTop: 8 }}>
-                {t('basket.noMenuItems', { defaultValue: 'No items to show yet' })}
-              </Text>
-            )}
-          </View>
+            </View>
+          )}
 
+          {/* Reviews */}
           {basket.reviews && (
             <View style={[styles.section, { marginTop: theme.spacing.lg }]}>
               <View style={styles.reviewHeader}>
@@ -388,12 +392,11 @@ export default function BasketDetailsScreen() {
                 </View>
                 <View style={[styles.overallBadge, { backgroundColor: theme.colors.primary, borderRadius: theme.radii.r12 }]}>
                   <Star size={16} color="#fff" fill="#fff" />
-                  <Text style={[{ color: '#fff', ...theme.typography.h3, fontWeight: '700' as const, marginLeft: 4 }]}>
+                  <Text style={[{ color: '#fff', ...theme.typography.h3, fontWeight: '700', marginLeft: 4 }]}>
                     {overallRating}
                   </Text>
                 </View>
               </View>
-
               <View style={[styles.reviewBarsContainer, { backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, padding: theme.spacing.lg, marginTop: theme.spacing.md, ...theme.shadows.shadowSm }]}>
                 <ReviewBar label={t('basket.reviewService')} value={basket.reviews.service} color={theme.colors.primary} />
                 <ReviewBar label={t('basket.reviewQualite')} value={basket.reviews.qualite} color={theme.colors.primary} />
@@ -403,54 +406,51 @@ export default function BasketDetailsScreen() {
             </View>
           )}
 
-          <View style={{ height: theme.spacing.xxl }} />
+          <View style={{ height: 100 }} />
         </View>
       </ScrollView>
 
+      {/* Sticky bottom bar: price + reserve button */}
       <View
-        style={[
-          styles.footer,
-          {
-            backgroundColor: theme.colors.surface,
-            paddingHorizontal: theme.spacing.xl,
-            paddingVertical: theme.spacing.md,
-            borderTopWidth: 1,
-            borderTopColor: theme.colors.divider,
-            ...theme.shadows.shadowLg,
-          },
-        ]}
+        style={{
+          position: 'absolute',
+          bottom: 0,
+          left: 0,
+          right: 0,
+          backgroundColor: theme.colors.surface,
+          paddingHorizontal: theme.spacing.xl,
+          paddingVertical: theme.spacing.md,
+          paddingBottom: theme.spacing.lg,
+          borderTopWidth: 1,
+          borderTopColor: theme.colors.divider,
+          ...theme.shadows.shadowLg,
+          flexDirection: 'row',
+          alignItems: 'center',
+        }}
       >
-        <PrimaryCTAButton
-          onPress={handleReserve}
-          title={
-            basket.quantityLeft <= 0
-              ? t('basket.soldOut')
-              : (() => {
-                  const endStr = basket.pickupWindow?.end;
-                  if (endStr) {
-                    const [eh, em] = endStr.split(':').map(Number);
-                    if (!isNaN(eh) && !isNaN(em)) {
-                      const now = new Date();
-                      const endDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), eh, em);
-                      if (now > endDate) return t('orders.status.expired', { defaultValue: 'Expired' });
-                    }
-                  }
-                  return t('basket.reserveBasket');
-                })()
-          }
-          disabled={
-            basket.quantityLeft <= 0 ||
-            (() => {
-              const endStr = basket.pickupWindow?.end;
-              if (!endStr) return false;
-              const [eh, em] = endStr.split(':').map(Number);
-              if (isNaN(eh) || isNaN(em)) return false;
-              const now = new Date();
-              const endDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), eh, em);
-              return now > endDate;
-            })()
-          }
-        />
+        <View style={{ flex: 1, marginRight: theme.spacing.md }}>
+          {basket.originalPrice > 0 && basket.originalPrice > basket.discountedPrice && (
+            <Text style={{ color: theme.colors.muted, ...theme.typography.caption, textDecorationLine: 'line-through' }}>
+              {basket.originalPrice} TND
+            </Text>
+          )}
+          <Text style={{ color: theme.colors.primary, ...theme.typography.h2, fontWeight: '700' }}>
+            {basket.discountedPrice} TND
+          </Text>
+        </View>
+        <View style={{ flex: 1 }}>
+          <PrimaryCTAButton
+            onPress={handleReserve}
+            title={
+              basket.quantityLeft <= 0
+                ? t('basket.soldOut')
+                : isPickupExpiredInTz(basket.pickupWindow?.end)
+                ? t('orders.status.expired')
+                : t('basket.reserveBasket')
+            }
+            disabled={basket.quantityLeft <= 0 || isPickupExpiredInTz(basket.pickupWindow?.end)}
+          />
+        </View>
       </View>
 
       {/* Menu item description popup */}

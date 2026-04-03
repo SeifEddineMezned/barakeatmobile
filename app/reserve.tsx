@@ -14,6 +14,7 @@ import { updateStreak, fetchGamificationStats, type StreakUpdateResult } from '@
 // import { scheduleLocalNotification } from '@/src/services/pushNotifications';
 import { getErrorMessage } from '@/src/lib/api';
 import { FeatureFlags } from '@/src/lib/featureFlags';
+import { isPickupWindowOpenInTz } from '@/src/utils/timezone';
 
 export default function ReserveScreen() {
   const { basketId } = useLocalSearchParams();
@@ -263,15 +264,8 @@ export default function ReserveScreen() {
     if (quantity > 1) setQuantity((prev) => prev - 1);
   };
 
-  // Check if current time is within the basket's pickup window
-  const isPickupWindowOpen = () => {
-    if (!pickupStart || !pickupEnd) return true; // No window set = always open
-    const now = new Date();
-    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-    const startDate = new Date(`${today}T${pickupStart}:00`);
-    const endDate = new Date(`${today}T${pickupEnd}:00`);
-    return now <= endDate; // Allow reservation if pickup hasn't ended yet
-  };
+  // Check if current time is within the basket's pickup window (business timezone)
+  const isPickupWindowOpen = () => isPickupWindowOpenInTz(pickupStart, pickupEnd);
 
   const handleConfirm = () => {
     // Frontend validation: check basket pickup window

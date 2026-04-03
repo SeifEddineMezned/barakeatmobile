@@ -173,7 +173,16 @@
     "availableBaskets": "Paniers disponibles",
     "noBaskets": "Aucun panier disponible pour le moment",
     "menuItems": "Articles du menu",
-    "noMenuItems": "Aucun article à afficher"
+    "noMenuItems": "Aucun article à afficher",
+    "starred": "Favoris",
+    "starBasket": "Ajouter aux favoris",
+    "unstarBasket": "Retirer des favoris",
+    "pickupInstructions": "Instructions de retrait",
+    "noPickupInstructions": "Pas d'instructions spécifiques",
+    "packaging": "Emballage",
+    "containerBag": "Contenant",
+    "carrierBag": "Sac de transport",
+    "getDirections": "Itinéraire"
   },
   "reserve": {
     "title": "Réserver Panier",

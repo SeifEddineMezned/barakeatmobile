@@ -19,6 +19,7 @@ import { useHeroStore } from '@/src/stores/heroStore';
 import { useAddressStore } from '@/src/stores/addressStore';
 import { useNotificationStore } from '@/src/stores/notificationStore';
 import { fetchHeroSlides, type HeroSlide } from '@/src/services/heroSlides';
+import { isPickupExpiredInTz } from '@/src/utils/timezone';
 import { StatusBar } from 'expo-status-bar';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
@@ -302,15 +303,7 @@ export default function HomeScreen() {
     const hasUserLoc = userLat != null && userLng != null && isFinite(userLat) && isFinite(userLng);
 
     // Sort: open & available first, then closed-for-today, then sold-out/unavailable
-    const now = new Date();
-    const isPickupClosed = (b: typeof result[0]) => {
-      const endStr = b.pickupWindow?.end;
-      if (!endStr) return false;
-      const [eh, em] = endStr.split(':').map(Number);
-      if (isNaN(eh) || isNaN(em)) return false;
-      const endDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), eh, em);
-      return now > endDate;
-    };
+    const isPickupClosed = (b: typeof result[0]) => isPickupExpiredInTz(b.pickupWindow?.end);
     result = [...result].sort((a, b) => {
       const aAvail = a.isActive && a.quantityLeft > 0;
       const bAvail = b.isActive && b.quantityLeft > 0;
