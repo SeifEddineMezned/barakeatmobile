@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Animated, ActivityIndicator, Image, Modal, Share, Easing } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Animated, ActivityIndicator, Image, Modal, Share } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
-import { X, Minus, Plus, Banknote, CreditCard, Check, AlertTriangle, Copy, Download, Zap, Flame, Trophy } from 'lucide-react-native';
+import { X, Minus, Plus, Banknote, CreditCard, Check, AlertTriangle, Copy, Download, Zap, ShoppingBag } from 'lucide-react-native';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { StatusBar } from 'expo-status-bar';
@@ -13,8 +14,10 @@ import { createReservation, fetchReservationQRCode } from '@/src/services/reserv
 import { updateStreak, fetchGamificationStats, type StreakUpdateResult } from '@/src/services/gamification';
 // import { scheduleLocalNotification } from '@/src/services/pushNotifications';
 import { getErrorMessage } from '@/src/lib/api';
+import { calcLevelProgress } from '@/src/lib/impactCalculations';
 import { FeatureFlags } from '@/src/lib/featureFlags';
 import { isPickupWindowOpenInTz } from '@/src/utils/timezone';
+import { useCelebrationStore } from '@/src/stores/celebrationStore';
 
 export default function ReserveScreen() {
   const { basketId } = useLocalSearchParams();
@@ -29,13 +32,24 @@ export default function ReserveScreen() {
 
   // Confirmation animation state
   const [showConfirmation, setShowConfirmation] = useState(false);
-  const [confirmPhase, setConfirmPhase] = useState<'bouncing' | 'confirmed'>('bouncing');
-  const [confirmData, setConfirmData] = useState<{ pickupCode: string; pickupStart: string; pickupEnd: string; address: string; qrCodeUrl?: string } | null>(null);
+  const [confirmPhase, setConfirmPhase] = useState<'bouncing' | 'success' | 'details'>('bouncing');
+  const [confirmData, setConfirmData] = useState<{ pickupCode: string; pickupStart: string; pickupEnd: string; address: string; qrCodeUrl?: string; basketImageUrl?: string; locationName?: string } | null>(null);
   const [codeCopied, setCodeCopied] = useState(false);
   const [streakData, setStreakData] = useState<StreakUpdateResult | null>(null);
-  const [showLevelUp, setShowLevelUp] = useState(false);
-  const xpBarAnim = React.useRef(new Animated.Value(0)).current;
-  const levelUpScale = React.useRef(new Animated.Value(0)).current;
+  const setCelebration = useCelebrationStore((s) => s.setPending);
+  const pendingCelebrationRef = React.useRef<any>(null);
+
+  const dismissConfirmAndNavigate = () => {
+    setShowConfirmation(false);
+    // Fire celebration AFTER modal is fully gone (small delay to avoid modal collision)
+    setTimeout(() => {
+      if (pendingCelebrationRef.current) {
+        setCelebration(pendingCelebrationRef.current);
+        pendingCelebrationRef.current = null;
+      }
+    }, 400);
+    router.replace('/(tabs)/orders' as never);
+  };
 
   // Gamification stats query
   const gamificationQuery = useQuery({
@@ -139,7 +153,7 @@ export default function ReserveScreen() {
       console.log('[Reserve] Reservation created:', data.id);
       const pickupCode = data.pickup_code ?? data.pickupCode ?? '';
 
-      setConfirmData({ pickupCode, pickupStart, pickupEnd, address });
+      setConfirmData({ pickupCode, pickupStart, pickupEnd, address, basketImageUrl: basketImage ?? undefined, locationName });
       setShowConfirmation(true);
       setConfirmPhase('bouncing');
       startBouncingAnimation();
@@ -150,9 +164,40 @@ export default function ReserveScreen() {
       void queryClient.invalidateQueries({ queryKey: ['location', resolvedLocationId] });
       void queryClient.invalidateQueries({ queryKey: ['baskets-by-location', resolvedLocationId] });
       void queryClient.invalidateQueries({ queryKey: ['basket', basketId] });
-      void queryClient.invalidateQueries({ queryKey: ['gamification-stats'] });
 
-      // Update streak
+      // Capture pre-reservation XP before optimistic update (used for celebration levelBefore calc)
+      const xpGained = (quantity ?? 1) * 10;
+      const preReservationGamData = gamificationQuery.data as any;
+      const preRawLevel = preReservationGamData?.level;
+      const preIsLevelObject = preRawLevel !== null && typeof preRawLevel === 'object';
+      const preReservationXp: number = preIsLevelObject
+        ? Number(preRawLevel?.xp ?? 0)
+        : Number(preReservationGamData?.xp ?? 0);
+
+      // Cancel any in-flight gamification refetch so it doesn't overwrite our optimistic update
+      await queryClient.cancelQueries({ queryKey: ['gamification-stats'] });
+
+      // Optimistically update gamification cache so profile shows new level immediately
+      queryClient.setQueryData<any>(['gamification-stats'], (old: any) => {
+        if (!old) return old;
+        const inner = old?.stats ?? old;
+        const currentXp = Number(inner?.xp ?? 0);
+        const newXp = currentXp + xpGained;
+        const { level } = calcLevelProgress(newXp);
+        const mealsSaved = (inner?.meals_saved ?? 0) + (quantity ?? 1);
+        const updates = { xp: newXp, level, meals_saved: mealsSaved };
+        if (old?.stats) return { ...old, stats: { ...old.stats, ...updates } };
+        return { ...old, ...updates };
+      });
+
+      // Prevent background refetch from overwriting optimistic XP for 2 minutes
+      // (backend only counts picked_up reservations, so a refetch would reset XP to the old value)
+      queryClient.setQueryDefaults(['gamification-stats'], { staleTime: 10 * 60_000 });
+      // Reset stale timer by re-setting the data with fresh updatedAt
+      const currentGamData = queryClient.getQueryData(['gamification-stats']);
+      if (currentGamData) queryClient.setQueryData(['gamification-stats'], currentGamData);
+
+      // Update streak only — do NOT invalidate gamification-stats here
       try {
         const streakResult = await updateStreak();
         if (streakResult.streak_changed) {
@@ -206,46 +251,26 @@ export default function ReserveScreen() {
         }
       }
 
-      // Transition to confirmed after 3 seconds
+      // Phase 1 (bouncing) → Phase 2 (success) after 3s
       setTimeout(() => {
-        setConfirmPhase('confirmed');
-
-        // Animate XP bar after confirmed phase renders
-        setTimeout(() => {
-          const gamData = gamificationQuery.data as any;
-          const rawLevel = gamData?.level;
-          const isLevelObject = rawLevel !== null && typeof rawLevel === 'object';
-          const currentLevel: number = isLevelObject ? Number(rawLevel?.level ?? 1) : Number(rawLevel ?? 1);
-          const currentXp: number = isLevelObject ? Number(rawLevel?.xp ?? 0) : Number(gamData?.xp ?? 0);
-          const xpGained = (quantity ?? 1) * 10;
-          const XP_THRESHOLDS = [0, 50, 120, 210, 320, 450, 600, 800, 1050, 1350, 1700, 2100, 2600, 3200, 3900, 4700, 5600, 6600, 7700, 9000];
-          const currentLevelThreshold = XP_THRESHOLDS[currentLevel - 1] ?? 0;
-          const nextLevelThreshold = XP_THRESHOLDS[currentLevel] ?? (currentLevelThreshold + 500);
-          const xpInLevel = currentXp - currentLevelThreshold;
-          const xpNeeded = nextLevelThreshold - currentLevelThreshold;
-          const pAfter = Math.max(0, Math.min(1, xpInLevel / xpNeeded));
-
-          Animated.timing(xpBarAnim, {
-            toValue: pAfter,
-            duration: 800,
-            useNativeDriver: false,
-            easing: Easing.out(Easing.cubic),
-          }).start();
-
-          // Check if level up
-          if (pAfter >= 1) {
-            setTimeout(() => {
-              setShowLevelUp(true);
-              Animated.spring(levelUpScale, {
-                toValue: 1,
-                useNativeDriver: true,
-                speed: 8,
-                bounciness: 12,
-              }).start();
-            }, 900);
-          }
-        }, 500);
+        setConfirmPhase('success');
+        // Phase 2 (success) → Phase 3 (details) after another 4s (or user taps)
+        setTimeout(() => setConfirmPhase('details'), 4000);
       }, 3000);
+
+      // Pre-compute celebration data but DON'T fire it yet — store it for later
+      const { level: levelBefore } = calcLevelProgress(preReservationXp);
+      const { level: levelAfter, xpProgress: pAfter, xpInLevel, xpBandSize } = calcLevelProgress(preReservationXp + xpGained);
+      pendingCelebrationRef.current = {
+        xpGained,
+        levelBefore,
+        levelAfter,
+        xpProgress: pAfter,
+        xpInLevel,
+        xpBandSize,
+        streakChanged: !!(streakData?.streak_changed && (streakData?.current_streak ?? 0) > 0),
+        newStreak: streakData?.current_streak ?? 0,
+      };
     },
     onError: (err) => {
       const msg = getErrorMessage(err);
@@ -288,29 +313,29 @@ export default function ReserveScreen() {
   // Show loading while the basket or location are loading
   if (basketQuery.isLoading || (!!resolvedLocationId && locationQuery.isLoading)) {
     return (
-      <View style={[styles.container, { backgroundColor: theme.colors.bg, justifyContent: 'center', alignItems: 'center' }]}>
+      <SafeAreaView edges={['top']} style={[styles.container, { backgroundColor: theme.colors.bg, justifyContent: 'center', alignItems: 'center' }]}>
         <ActivityIndicator size="large" color={theme.colors.primary} />
-      </View>
+      </SafeAreaView>
     );
   }
 
   // If basket fetch failed or returned no location id we cannot proceed
   if (basketQuery.isError || !resolvedLocationId || !location) {
     return (
-      <View style={[styles.container, { backgroundColor: theme.colors.bg, justifyContent: 'center', alignItems: 'center' }]}>
+      <SafeAreaView edges={['top']} style={[styles.container, { backgroundColor: theme.colors.bg, justifyContent: 'center', alignItems: 'center' }]}>
         <Text style={[{ color: theme.colors.error, ...theme.typography.body }]}>{t('common.errorOccurred')}</Text>
-        <TouchableOpacity onPress={() => router.back()} style={{ marginTop: 16 }}>
+        <TouchableOpacity onPress={() => router.back()} style={{ marginTop: 16 }} accessibilityLabel={t('common.goBack')} accessibilityRole="button">
           <Text style={[{ color: theme.colors.primary, ...theme.typography.body }]}>{t('common.goBack')}</Text>
         </TouchableOpacity>
-      </View>
+      </SafeAreaView>
     );
   }
 
   return (
-    <View style={[styles.container, { backgroundColor: theme.colors.bg }]}>
+    <SafeAreaView edges={['top']} style={[styles.container, { backgroundColor: theme.colors.bg }]}>
       <StatusBar style="dark" />
       <View style={[styles.header, { padding: theme.spacing.xl }]}>
-        <TouchableOpacity onPress={() => router.back()}>
+        <TouchableOpacity onPress={() => router.back()} accessibilityLabel={t('common.close', { defaultValue: 'Close' })} accessibilityRole="button">
           <X size={24} color={theme.colors.textPrimary} />
         </TouchableOpacity>
         <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h2 }]}>{t('reserve.title')}</Text>
@@ -321,7 +346,7 @@ export default function ReserveScreen() {
         {/* Basket info: image + name + location */}
         <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: theme.spacing.lg }}>
           {basketImage ? (
-            <Image source={{ uri: basketImage }} style={{ width: 64, height: 64, borderRadius: theme.radii.r12, marginRight: theme.spacing.md }} resizeMode="cover" />
+            <Image source={{ uri: basketImage }} style={{ width: 64, height: 64, borderRadius: theme.radii.r12, marginRight: theme.spacing.md }} resizeMode="cover" accessibilityLabel={basketName} />
           ) : (
             <View style={{ width: 64, height: 64, borderRadius: theme.radii.r12, marginRight: theme.spacing.md, backgroundColor: theme.colors.primary + '10', justifyContent: 'center', alignItems: 'center' }}>
               <Zap size={24} color={theme.colors.primary} />
@@ -347,6 +372,8 @@ export default function ReserveScreen() {
               style={[styles.quantityButton, { backgroundColor: theme.colors.bg, borderRadius: theme.radii.r12, width: 48, height: 48, justifyContent: 'center', alignItems: 'center' }]}
               onPress={handleDecrement}
               disabled={quantity <= 1}
+              accessibilityLabel={t('reserve.decreaseQuantity', { defaultValue: 'Decrease quantity' })}
+              accessibilityRole="button"
             >
               <Minus size={20} color={quantity <= 1 ? theme.colors.muted : theme.colors.textPrimary} />
             </TouchableOpacity>
@@ -357,6 +384,8 @@ export default function ReserveScreen() {
               style={[styles.quantityButton, { backgroundColor: theme.colors.bg, borderRadius: theme.radii.r12, width: 48, height: 48, justifyContent: 'center', alignItems: 'center' }]}
               onPress={handleIncrement}
               disabled={quantity >= maxQuantity}
+              accessibilityLabel={t('reserve.increaseQuantity', { defaultValue: 'Increase quantity' })}
+              accessibilityRole="button"
             >
               <Plus size={20} color={quantity >= maxQuantity ? theme.colors.muted : theme.colors.textPrimary} />
             </TouchableOpacity>
@@ -372,10 +401,10 @@ export default function ReserveScreen() {
             {t('reserve.summary')}
           </Text>
           <View style={styles.summaryRow}>
-            <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.body }]}>
+            <Text style={[{ flex: 1, color: theme.colors.textSecondary, ...theme.typography.body }]} numberOfLines={2}>
               {basketName} <Text style={{ fontWeight: '700', color: theme.colors.textPrimary }}>(x {quantity})</Text>
             </Text>
-            <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.body }]}>
+            <Text style={[{ flexShrink: 0, marginLeft: 8, color: theme.colors.textPrimary, ...theme.typography.body }]}>
               {price * quantity} TND
             </Text>
           </View>
@@ -415,6 +444,9 @@ export default function ReserveScreen() {
                 alignItems: 'center',
                 justifyContent: 'center',
               }}
+              accessibilityLabel={t('reserve.payCash', { defaultValue: 'Pay in Cash' })}
+              accessibilityRole="radio"
+              accessibilityState={{ selected: paymentMethod === 'cash' }}
             >
               <View style={{ width: 48, height: 48, borderRadius: 24, backgroundColor: paymentMethod === 'cash' ? theme.colors.primary + '18' : theme.colors.divider + '60', justifyContent: 'center', alignItems: 'center' }}>
                 <Banknote size={24} color={paymentMethod === 'cash' ? theme.colors.primary : theme.colors.textSecondary} />
@@ -426,38 +458,41 @@ export default function ReserveScreen() {
                 {t('reserve.payCashDesc', { defaultValue: 'Pay the merchant at pickup' })}
               </Text>
             </TouchableOpacity>
-            <TouchableOpacity
-              disabled={!FeatureFlags.ENABLE_CARD_PAYMENT}
-              activeOpacity={FeatureFlags.ENABLE_CARD_PAYMENT ? 0.8 : 1}
-              onPress={() => { if (FeatureFlags.ENABLE_CARD_PAYMENT) setPaymentMethod('card'); }}
-              style={{
-                flex: 1,
-                backgroundColor: theme.colors.bg,
-                borderRadius: theme.radii.r16,
-                padding: 16,
-                borderWidth: 1,
-                borderColor: theme.colors.divider,
-                alignItems: 'center',
-                justifyContent: 'center',
-                opacity: FeatureFlags.ENABLE_CARD_PAYMENT ? 1 : 0.4,
-              }}
-            >
-              <View style={{ width: 48, height: 48, borderRadius: 24, backgroundColor: theme.colors.divider + '60', justifyContent: 'center', alignItems: 'center' }}>
-                <CreditCard size={24} color={theme.colors.muted} />
-              </View>
-              <Text style={{ color: theme.colors.muted, ...theme.typography.bodySm, fontWeight: '600', marginTop: 8, textAlign: 'center' }}>
-                {t('reserve.payCard', { defaultValue: 'Pay by Card' })}
-              </Text>
-              <Text style={{ color: theme.colors.muted, ...theme.typography.caption, marginTop: 4, textAlign: 'center' }}>
-                {t('reserve.payCardDesc', { defaultValue: 'Coming soon' })}
-              </Text>
-            </TouchableOpacity>
+            {FeatureFlags.ENABLE_CARD_PAYMENT && (
+              <TouchableOpacity
+                onPress={() => setPaymentMethod('card')}
+                style={{
+                  flex: 1,
+                  backgroundColor: paymentMethod === 'card' ? theme.colors.primary + '12' : theme.colors.bg,
+                  borderRadius: theme.radii.r16,
+                  padding: 16,
+                  borderWidth: paymentMethod === 'card' ? 2 : 1,
+                  borderColor: paymentMethod === 'card' ? theme.colors.primary : theme.colors.divider,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+                accessibilityLabel={t('reserve.payCard', { defaultValue: 'Pay by Card' })}
+                accessibilityRole="radio"
+                accessibilityState={{ selected: paymentMethod === 'card' }}
+              >
+                <View style={{ width: 48, height: 48, borderRadius: 24, backgroundColor: paymentMethod === 'card' ? theme.colors.primary + '18' : theme.colors.divider + '60', justifyContent: 'center', alignItems: 'center' }}>
+                  <CreditCard size={24} color={paymentMethod === 'card' ? theme.colors.primary : theme.colors.textSecondary} />
+                </View>
+                <Text style={{ color: paymentMethod === 'card' ? theme.colors.primary : theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '600', marginTop: 8, textAlign: 'center' }}>
+                  {t('reserve.payCard', { defaultValue: 'Pay by Card' })}
+                </Text>
+                <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, marginTop: 4, textAlign: 'center' }}>
+                  {t('reserve.payCardDesc', { defaultValue: 'Secure card payment' })}
+                </Text>
+              </TouchableOpacity>
+            )}
           </View>
         </View>
       </ScrollView>
 
       <View style={[styles.footer, { backgroundColor: theme.colors.surface, paddingHorizontal: theme.spacing.xl, paddingVertical: theme.spacing.lg, borderTopWidth: 1, borderTopColor: theme.colors.divider, ...theme.shadows.shadowLg }]}>
         <PrimaryCTAButton
+          compact
           onPress={handleConfirm}
           title={
             totalAvailable <= 0
@@ -495,6 +530,8 @@ export default function ReserveScreen() {
               <TouchableOpacity
                 onPress={() => setShowConfirmModal(false)}
                 style={{ flex: 1, paddingVertical: 14, borderRadius: 14, borderWidth: 1, borderColor: theme.colors.divider, alignItems: 'center' }}
+                accessibilityLabel={t('reserve.notYet', { defaultValue: 'Not Yet' })}
+                accessibilityRole="button"
               >
                 <Text style={{ color: theme.colors.textSecondary, ...theme.typography.body, fontWeight: '600' }}>
                   {t('reserve.notYet', { defaultValue: 'Not Yet' })}
@@ -503,6 +540,8 @@ export default function ReserveScreen() {
               <TouchableOpacity
                 onPress={confirmAndReserve}
                 style={{ flex: 1, paddingVertical: 14, borderRadius: 14, backgroundColor: theme.colors.primary, alignItems: 'center' }}
+                accessibilityLabel={t('reserve.yesReserve', { defaultValue: 'Reserve!' })}
+                accessibilityRole="button"
               >
                 <Text style={{ color: '#fff', ...theme.typography.body, fontWeight: '600' }}>
                   {t('reserve.yesReserve', { defaultValue: 'Reserve!' })}
@@ -529,6 +568,8 @@ export default function ReserveScreen() {
             <TouchableOpacity
               onPress={() => setErrorMessage(null)}
               style={{ paddingVertical: 14, paddingHorizontal: 40, borderRadius: 14, backgroundColor: theme.colors.primary }}
+              accessibilityLabel="OK"
+              accessibilityRole="button"
             >
               <Text style={{ color: '#fff', ...theme.typography.body, fontWeight: '600' }}>OK</Text>
             </TouchableOpacity>
@@ -536,42 +577,86 @@ export default function ReserveScreen() {
         </View>
       </Modal>
 
-      {/* Full-screen confirmation overlay with Barakeat bouncing animation */}
-      {showConfirmation && (
-        <View style={StyleSheet.absoluteFillObject}>
-          <View style={{ flex: 1, backgroundColor: '#114b3c', justifyContent: 'center', alignItems: 'center' }}>
-            {confirmPhase === 'bouncing' ? (
-              <>
-                <View style={{ flexDirection: 'row' }}>
-                  {BARAKEAT.map((letter, i) => (
-                    <Animated.Text
-                      key={i}
-                      style={{
-                        color: '#fff',
-                        fontSize: 36,
-                        fontWeight: '700',
-                        fontFamily: 'Poppins_700Bold',
-                        transform: [{ translateY: letterAnims[i] }],
-                      }}
-                    >
-                      {letter}
-                    </Animated.Text>
-                  ))}
-                  <Text style={{ color: '#e3ff5c', fontSize: 36, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>.</Text>
-                </View>
-                <Text style={{ color: 'rgba(255,255,255,0.6)', ...theme.typography.body, marginTop: 16 }}>
-                  {t('reserve.processing', { defaultValue: 'Processing your reservation...' })}
+      {/* Full-screen confirmation Modal with Barakeat bouncing animation */}
+      <Modal
+        visible={showConfirmation}
+        animationType="fade"
+        statusBarTranslucent
+        onRequestClose={() => { dismissConfirmAndNavigate(); }}
+      >
+        <View style={{ flex: 1, backgroundColor: '#114b3c', justifyContent: 'center', alignItems: 'center' }}>
+          {/* Phase 1: Processing animation */}
+          {confirmPhase === 'bouncing' ? (
+            <View style={{ alignItems: 'center', justifyContent: 'center', flex: 1 }}>
+              <View style={{ flexDirection: 'row' }}>
+                {BARAKEAT.map((letter, i) => (
+                  <Animated.Text
+                    key={i}
+                    style={{
+                      color: '#fff',
+                      fontSize: 36,
+                      fontWeight: '700',
+                      fontFamily: 'Poppins_700Bold',
+                      transform: [{ translateY: letterAnims[i] }],
+                    }}
+                  >
+                    {letter}
+                  </Animated.Text>
+                ))}
+                <Text style={{ color: '#e3ff5c', fontSize: 36, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>.</Text>
+              </View>
+              <Text style={{ color: 'rgba(255,255,255,0.6)', ...theme.typography.body, marginTop: 16 }}>
+                {t('reserve.processing', { defaultValue: 'Traitement de votre réservation...' })}
+              </Text>
+            </View>
+
+          ) : confirmPhase === 'success' ? (
+            /* Phase 2: Confirmed with paper bag */
+            <TouchableOpacity
+              activeOpacity={1}
+              onPress={() => setConfirmPhase('details')}
+              style={{ alignItems: 'center', justifyContent: 'center', flex: 1 }}
+            >
+              <Image
+                source={require('@/assets/images/barakeat_paper_bag.png')}
+                style={{ width: 140, height: 140, borderRadius: 28, marginBottom: 24, borderWidth: 3, borderColor: '#e3ff5c' }}
+                resizeMode="cover"
+              />
+              <View style={{ backgroundColor: '#e3ff5c', width: 48, height: 48, borderRadius: 24, justifyContent: 'center', alignItems: 'center', marginBottom: 20 }}>
+                <Check size={28} color="#114b3c" />
+              </View>
+              <Text style={{ color: '#e3ff5c', fontSize: 22, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
+                {t('reserve.confirmed', { defaultValue: 'Réservation confirmée !' })}
+              </Text>
+              {confirmData?.locationName ? (
+                <Text style={{ color: 'rgba(255,255,255,0.6)', fontSize: 14, fontFamily: 'Poppins_400Regular', marginTop: 8 }}>
+                  {confirmData.locationName}
                 </Text>
-              </>
-            ) : (
-              <>
-              <ScrollView contentContainerStyle={{ alignItems: 'center', paddingHorizontal: 24, paddingBottom: 40 }} showsVerticalScrollIndicator={false}>
-                <View style={{ backgroundColor: '#e3ff5c', width: 72, height: 72, borderRadius: 36, justifyContent: 'center', alignItems: 'center', marginBottom: 20 }}>
-                  <Check size={36} color="#114b3c" />
-                </View>
+              ) : null}
+              <Text style={{ color: 'rgba(255,255,255,0.4)', ...theme.typography.caption, marginTop: 16 }}>
+                {t('reserve.tapToContinue', { defaultValue: 'Appuyez pour voir les détails' })}
+              </Text>
+            </TouchableOpacity>
+
+          ) : (
+            /* Phase 3: Details with code, QR, pickup info */
+            <>
+              <ScrollView contentContainerStyle={{ alignItems: 'center', paddingHorizontal: 24, paddingTop: 60, paddingBottom: 40 }} showsVerticalScrollIndicator={false}>
+                {confirmData?.basketImageUrl ? (
+                  <Image source={{ uri: confirmData.basketImageUrl }} style={{ width: 64, height: 64, borderRadius: 16, marginBottom: 16, borderWidth: 2, borderColor: '#e3ff5c' }} resizeMode="cover" />
+                ) : (
+                  <View style={{ backgroundColor: '#e3ff5c', width: 56, height: 56, borderRadius: 28, justifyContent: 'center', alignItems: 'center', marginBottom: 16 }}>
+                    <ShoppingBag size={28} color="#114b3c" />
+                  </View>
+                )}
                 <Text style={{ color: '#fff', fontSize: 26, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
                   {t('reserve.success.title', { defaultValue: 'Order Confirmed!' })}
                 </Text>
+                {confirmData?.locationName ? (
+                  <Text style={{ color: 'rgba(255,255,255,0.65)', fontSize: 14, fontFamily: 'Poppins_400Regular', marginTop: 4 }}>
+                    {confirmData.locationName}
+                  </Text>
+                ) : null}
 
                 {/* Pickup code card */}
                 <View style={{ backgroundColor: 'rgba(255,255,255,0.12)', borderRadius: 24, padding: 24, marginTop: 28, width: '100%', alignItems: 'center' }}>
@@ -589,6 +674,8 @@ export default function ReserveScreen() {
                     <TouchableOpacity
                       onPress={handleCopyCode}
                       style={{ backgroundColor: codeCopied ? 'rgba(227,255,92,0.3)' : 'rgba(255,255,255,0.15)', borderRadius: 14, padding: 12 }}
+                      accessibilityLabel={codeCopied ? t('reserve.success.copied', { defaultValue: 'Copied' }) : t('reserve.success.copyCode', { defaultValue: 'Copy pickup code' })}
+                      accessibilityRole="button"
                     >
                       {codeCopied ? <Check size={20} color="#e3ff5c" /> : <Copy size={20} color="#fff" />}
                     </TouchableOpacity>
@@ -630,141 +717,23 @@ export default function ReserveScreen() {
                   </View>
                 </View>
 
-                {/* Level Progress Card */}
-                {(() => {
-                  const gamData = gamificationQuery.data as any;
-
-                  // The API can return `level` as a plain number OR as a nested object
-                  // {level, xp, currentLevelXp, nextLevelXp}. Handle both shapes.
-                  const rawLevel = gamData?.level;
-                  const isLevelObject = rawLevel !== null && typeof rawLevel === 'object';
-                  const currentLevel: number = isLevelObject
-                    ? Number(rawLevel?.level ?? 1)
-                    : Number(rawLevel ?? 1);
-                  const currentXp: number = isLevelObject
-                    ? Number(rawLevel?.xp ?? 0)
-                    : Number(gamData?.xp ?? 0);
-                  const xpGained = (quantity ?? 1) * 10;
-                  const XP_THRESHOLDS = [0, 50, 120, 210, 320, 450, 600, 800, 1050, 1350, 1700, 2100, 2600, 3200, 3900, 4700, 5600, 6600, 7700, 9000];
-                  const currentLevelThreshold = XP_THRESHOLDS[currentLevel - 1] ?? 0;
-                  const nextLevelThreshold = XP_THRESHOLDS[currentLevel] ?? (currentLevelThreshold + 500);
-                  const xpInLevel = currentXp - currentLevelThreshold;
-                  const xpNeeded = nextLevelThreshold - currentLevelThreshold;
-
-                  return (
-                    <View style={{
-                      backgroundColor: 'rgba(255,255,255,0.08)',
-                      borderRadius: 16,
-                      padding: 20,
-                      marginHorizontal: 24,
-                      marginTop: 20,
-                      width: '100%',
-                    }}>
-                      {/* Level header */}
-                      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                          <Trophy size={18} color="#e3ff5c" />
-                          <Text style={{ color: '#fff', fontSize: 16, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
-                            Level {currentLevel}
-                          </Text>
-                        </View>
-                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: 'rgba(227,255,92,0.15)', borderRadius: 12, paddingHorizontal: 10, paddingVertical: 4 }}>
-                          <Zap size={14} color="#e3ff5c" />
-                          <Text style={{ color: '#e3ff5c', fontSize: 14, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
-                            +{xpGained} XP
-                          </Text>
-                        </View>
-                      </View>
-
-                      {/* XP Progress Bar */}
-                      <View style={{ backgroundColor: 'rgba(255,255,255,0.1)', borderRadius: 6, height: 12, overflow: 'hidden' }}>
-                        <Animated.View style={{
-                          height: '100%',
-                          backgroundColor: '#e3ff5c',
-                          borderRadius: 6,
-                          width: xpBarAnim.interpolate({
-                            inputRange: [0, 1],
-                            outputRange: ['0%', '100%'],
-                          }),
-                        }} />
-                      </View>
-
-                      {/* XP text */}
-                      <Text style={{ color: 'rgba(255,255,255,0.6)', fontSize: 12, fontFamily: 'Poppins_400Regular', marginTop: 6, textAlign: 'right' }}>
-                        {xpInLevel}/{xpNeeded} XP
-                      </Text>
-
-                      {/* Streak display */}
-                      {streakData && streakData.current_streak > 0 && (
-                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 12, backgroundColor: 'rgba(255,107,53,0.15)', borderRadius: 12, paddingHorizontal: 10, paddingVertical: 6, alignSelf: 'flex-start' }}>
-                          <Flame size={14} color="#FF6B35" />
-                          <Text style={{ color: '#FF6B35', fontSize: 13, fontWeight: '600', fontFamily: 'Poppins_600SemiBold' }}>
-                            {streakData.current_streak > (streakData as any).previous_streak
-                              ? `Streak ${streakData.current_streak}!`
-                              : `Streak ${streakData.current_streak}`}
-                          </Text>
-                        </View>
-                      )}
-                    </View>
-                  );
-                })()}
-
+                {/* Go to orders — the only action */}
                 <TouchableOpacity
-                  onPress={() => { setShowConfirmation(false); router.replace('/(tabs)/orders' as never); }}
-                  style={{ backgroundColor: '#e3ff5c', borderRadius: 16, paddingVertical: 16, paddingHorizontal: 48, marginTop: 20 }}
+                  onPress={() => { dismissConfirmAndNavigate(); }}
+                  style={{ backgroundColor: '#e3ff5c', borderRadius: 16, paddingVertical: 16, alignItems: 'center', marginTop: 24, width: '100%' }}
+                  accessibilityLabel={t('reserve.goToOrders', { defaultValue: 'Mes commandes' })}
+                  accessibilityRole="button"
                 >
-                  <Text style={{ color: '#114b3c', ...theme.typography.button, fontWeight: '700' }}>
-                    {t('reserve.done', { defaultValue: 'Done' })}
+                  <Text style={{ color: '#114b3c', ...theme.typography.body, fontWeight: '700', fontSize: 16 }}>
+                    {t('reserve.goToOrders', { defaultValue: 'Mes commandes' })}
                   </Text>
                 </TouchableOpacity>
               </ScrollView>
-
-              {/* Level Up Overlay */}
-              {showLevelUp && (() => {
-                const gamData = gamificationQuery.data as any;
-                const rawLevel = gamData?.level;
-                const isLevelObject = rawLevel !== null && typeof rawLevel === 'object';
-                const currentLevel: number = isLevelObject
-                  ? Number(rawLevel?.level ?? 1)
-                  : Number(rawLevel ?? 1);
-                return (
-                  <Animated.View style={{
-                    position: 'absolute',
-                    top: 0, left: 0, right: 0, bottom: 0,
-                    backgroundColor: 'rgba(0,0,0,0.7)',
-                    justifyContent: 'center',
-                    alignItems: 'center',
-                    transform: [{ scale: levelUpScale }],
-                  }}>
-                    <View style={{ backgroundColor: '#114b3c', borderRadius: 24, padding: 32, alignItems: 'center', width: '80%' }}>
-                      <Trophy size={48} color="#e3ff5c" />
-                      <Text style={{ color: '#e3ff5c', fontSize: 28, fontWeight: '700', fontFamily: 'Poppins_700Bold', marginTop: 16 }}>
-                        Level Up!
-                      </Text>
-                      <Text style={{ color: '#fff', fontSize: 18, fontWeight: '600', fontFamily: 'Poppins_600SemiBold', marginTop: 8 }}>
-                        Level {currentLevel + 1}
-                      </Text>
-                      <Text style={{ color: 'rgba(255,255,255,0.6)', fontSize: 14, fontFamily: 'Poppins_400Regular', marginTop: 8, textAlign: 'center' }}>
-                        Keep saving food to unlock more rewards!
-                      </Text>
-                      <TouchableOpacity
-                        onPress={() => setShowLevelUp(false)}
-                        style={{ backgroundColor: '#e3ff5c', borderRadius: 14, paddingVertical: 14, paddingHorizontal: 32, marginTop: 24 }}
-                      >
-                        <Text style={{ color: '#114b3c', fontSize: 16, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
-                          Continue
-                        </Text>
-                      </TouchableOpacity>
-                    </View>
-                  </Animated.View>
-                );
-              })()}
             </>
-            )}
-          </View>
+          )}
         </View>
-      )}
-    </View>
+      </Modal>
+    </SafeAreaView>
   );
 }
 

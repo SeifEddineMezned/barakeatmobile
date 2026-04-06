@@ -2,7 +2,7 @@ import type { Basket } from '@/src/types';
 import type { RestaurantFromAPI } from '@/src/services/restaurants';
 
 const CATEGORY_MAP: Record<string, string> = {
-  bakery: 'Patisseries/Boulangeries',
+  bakery: 'Pâtisseries/Boulangeries',
   meals: 'Restaurants',
   grocery: 'Produits frais',
   fresh: 'Produits frais',

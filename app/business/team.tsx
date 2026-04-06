@@ -1,9 +1,9 @@
 import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Modal, TextInput, Switch, Alert, ActivityIndicator, Animated } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Modal, TextInput, Switch, Alert, ActivityIndicator, Animated, Image } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import { useRouter } from 'expo-router';
-import { X, UserPlus, Trash2, Shield, Users, MapPin, Crown, ShieldCheck, Key, Plus, ChevronDown, ChevronUp, List, Network, Mail } from 'lucide-react-native';
+import { X, UserPlus, Trash2, Shield, Users, MapPin, Crown, ShieldCheck, Key, Plus, ChevronDown, ChevronUp, ChevronLeft, List, Network, Mail, MoreVertical, Building2 } from 'lucide-react-native';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import {
@@ -474,6 +474,10 @@ export default function TeamScreen() {
   const [showAddLocationModal, setShowAddLocationModal] = useState(false);
   const [newLocationName, setNewLocationName] = useState('');
   const [newLocationAddress, setNewLocationAddress] = useState('');
+  const [newLocationCategory, setNewLocationCategory] = useState('');
+  const LOCATION_CATEGORIES = ['bakery', 'restaurant', 'grocery', 'cafe', 'pastry', 'supermarket'] as const;
+
+  const [memberMenuId, setMemberMenuId] = useState<string | null>(null);
 
   // Create-org modal state (shown when user has no organization)
   const [showCreateOrgModal, setShowCreateOrgModal] = useState(false);
@@ -614,6 +618,7 @@ export default function TeamScreen() {
       return addLocation(orgId, {
         name: newLocationName.trim() || undefined,
         address: newLocationAddress.trim() || undefined,
+        category: newLocationCategory || undefined,
       });
     },
     onSuccess: () => {
@@ -621,6 +626,7 @@ export default function TeamScreen() {
       setShowAddLocationModal(false);
       setNewLocationName('');
       setNewLocationAddress('');
+      setNewLocationCategory('');
       Alert.alert(
         t('common.success'),
         t('business.team.locationAdded', { defaultValue: 'Location added successfully.' })
@@ -657,16 +663,10 @@ export default function TeamScreen() {
     );
   }, [deleteLocationMutation, t]);
 
+  const [removeMemberTarget, setRemoveMemberTarget] = useState<{ id: string; name: string } | null>(null);
   const handleRemoveMember = useCallback((memberId: string, memberName: string) => {
-    Alert.alert(
-      t('business.profile.removeMember'),
-      memberName,
-      [
-        { text: t('common.cancel'), style: 'cancel' },
-        { text: t('common.confirm'), style: 'destructive', onPress: () => removeMemberMutation.mutate(memberId) },
-      ]
-    );
-  }, [removeMemberMutation, t]);
+    setRemoveMemberTarget({ id: memberId, name: memberName });
+  }, []);
 
   const handleChangeRole = useCallback((memberId: string, currentRole: string) => {
     const newRole = currentRole === 'admin' ? 'member' : 'admin';
@@ -765,7 +765,7 @@ export default function TeamScreen() {
   const renderHeader = (title?: string) => (
     <View style={[styles.header, { paddingHorizontal: theme.spacing.xl, paddingVertical: theme.spacing.md, borderBottomWidth: 1, borderBottomColor: theme.colors.divider }]}>
       <TouchableOpacity onPress={() => router.back()} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
-        <X size={24} color={theme.colors.textPrimary} />
+        <ChevronLeft size={24} color={theme.colors.textPrimary} />
       </TouchableOpacity>
       <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h2, flex: 1, textAlign: 'center' as const }]}>
         {title ?? t('business.profile.teamManagement')}
@@ -819,7 +819,7 @@ export default function TeamScreen() {
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]}>
       {/* Header */}
-      {renderHeader(org?.name ?? t('business.profile.teamManagement'))}
+      {renderHeader(t('business.profile.teamManagement'))}
 
       {/* Org chart view (alternative to list) */}
       {viewMode === 'chart' && FeatureFlags.ENABLE_TEAM_ORG_CHART ? (
@@ -866,69 +866,70 @@ export default function TeamScreen() {
         </View>
       ) : (
         <ScrollView style={styles.content} contentContainerStyle={{ padding: theme.spacing.xl }} showsVerticalScrollIndicator={false}>
-          {/* Organization Info Card */}
-          <View style={[{
-            backgroundColor: theme.colors.surface,
-            borderRadius: theme.radii.r16,
-            padding: theme.spacing.xl,
-            ...theme.shadows.shadowSm,
-          }]}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: theme.spacing.lg }}>
-              <View style={[{
-                backgroundColor: theme.colors.primary + '12',
-                borderRadius: theme.radii.r12,
-                width: 48,
-                height: 48,
-                justifyContent: 'center',
-                alignItems: 'center',
-              }]}>
-                <Users size={24} color={theme.colors.primary} />
-              </View>
-              <View style={{ flex: 1, marginLeft: 14 }}>
-                <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h2 }]}>
-                  {org?.name ?? '--'}
-                </Text>
-                {org?.category ? (
-                  <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, marginTop: 2 }]}>
-                    {org.category}
+          {/* Organization Info Card — brand-colored header */}
+          {/* Org card with overlapping stats */}
+          <View style={{ marginBottom: 24 }}>
+            {/* Green banner — taller to allow overlap */}
+            <View style={{
+              backgroundColor: '#114b3c',
+              borderRadius: theme.radii.r16,
+              padding: theme.spacing.xl,
+              paddingBottom: 40,
+            }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                {org?.image_url ? (
+                  <Image source={{ uri: org.image_url }} style={{ width: 52, height: 52, borderRadius: 14, borderWidth: 2, borderColor: 'rgba(255,255,255,0.2)' }} />
+                ) : (
+                  <View style={{ width: 52, height: 52, borderRadius: 14, backgroundColor: 'rgba(255,255,255,0.15)', justifyContent: 'center', alignItems: 'center' }}>
+                    <Building2 size={26} color="#e3ff5c" />
+                  </View>
+                )}
+                <View style={{ flex: 1, marginLeft: 14 }}>
+                  <Text style={{ color: '#fff', ...theme.typography.h2 }}>
+                    {org?.name ?? '--'}
                   </Text>
-                ) : null}
+                  {org?.category ? (
+                    <View style={{ alignSelf: 'flex-start', marginTop: 4, backgroundColor: 'rgba(227,255,92,0.2)', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 3 }}>
+                      <Text style={{ color: '#e3ff5c', ...theme.typography.caption, fontWeight: '600' }}>
+                        {t(`categories.${org.category.toLowerCase()}`, { defaultValue: org.category })}
+                      </Text>
+                    </View>
+                  ) : null}
+                </View>
               </View>
             </View>
 
-            <View style={{ flexDirection: 'row' }}>
-              <View style={[{
-                backgroundColor: theme.colors.bg,
-                borderRadius: theme.radii.r12,
-                paddingHorizontal: 14,
-                paddingVertical: 10,
-                flex: 1,
-                alignItems: 'center' as const,
-                marginRight: 8,
-              }]}>
-                <Users size={16} color={theme.colors.primary} />
-                <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, marginTop: 4 }]}>
-                  {members.length}
-                </Text>
-                <Text style={[{ color: theme.colors.muted, ...theme.typography.caption }]}>
+            {/* Stats card — overlaps the green banner */}
+            <View style={{
+              flexDirection: 'row',
+              backgroundColor: theme.colors.surface,
+              borderRadius: 14,
+              marginTop: -24,
+              marginHorizontal: 20,
+              paddingVertical: 14,
+              ...theme.shadows.shadowMd,
+            }}>
+              <View style={{ flex: 1, alignItems: 'center' }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                  <Users size={14} color={theme.colors.primary} />
+                  <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3 }}>
+                    {members.length}
+                  </Text>
+                </View>
+                <Text style={{ color: theme.colors.muted, ...theme.typography.caption, marginTop: 2 }}>
                   {t('business.team.members')}
                 </Text>
               </View>
-              <View style={[{
-                backgroundColor: theme.colors.bg,
-                borderRadius: theme.radii.r12,
-                paddingHorizontal: 14,
-                paddingVertical: 10,
-                flex: 1,
-                alignItems: 'center' as const,
-                marginLeft: 8,
-              }]}>
-                <MapPin size={16} color={theme.colors.primary} />
-                <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, marginTop: 4 }]}>
-                  {locations.length}
-                </Text>
-                <Text style={[{ color: theme.colors.muted, ...theme.typography.caption }]}>
-                  {t('business.team.locations', { defaultValue: 'Locations' })}
+              <View style={{ width: 1, backgroundColor: theme.colors.divider }} />
+              <View style={{ flex: 1, alignItems: 'center' }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                  <MapPin size={14} color={theme.colors.primary} />
+                  <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3 }}>
+                    {locations.length}
+                  </Text>
+                </View>
+                <Text style={{ color: theme.colors.muted, ...theme.typography.caption, marginTop: 2 }}>
+                  {t('business.team.locations', { defaultValue: 'Emplacements' })}
                 </Text>
               </View>
             </View>
@@ -954,7 +955,7 @@ export default function TeamScreen() {
                 {/* "+" button in Locations section header (admin only) */}
                 {isOrgAdmin && (
                 <TouchableOpacity
-                  onPress={() => setShowAddLocationModal(true)}
+                  onPress={() => router.push('/business/add-location' as never)}
                   style={{
                     backgroundColor: theme.colors.primary + '12',
                     borderRadius: 16,
@@ -1105,18 +1106,16 @@ export default function TeamScreen() {
                 <TouchableOpacity
                   onPress={handleAddMemberFromLocation}
                   style={{
-                    flexDirection: 'row',
-                    alignItems: 'center',
                     backgroundColor: theme.colors.primary + '12',
-                    borderRadius: 20,
-                    paddingHorizontal: 10,
-                    paddingVertical: 5,
+                    borderRadius: 16,
+                    width: 32,
+                    height: 32,
+                    justifyContent: 'center',
+                    alignItems: 'center',
                   }}
+                  accessibilityLabel={t('business.profile.addMember')}
                 >
-                  <UserPlus size={14} color={theme.colors.primary} />
-                  <Text style={{ color: theme.colors.primary, ...theme.typography.caption, fontWeight: '600' as const, marginLeft: 4 }}>
-                    {t('business.profile.addMember')}
-                  </Text>
+                  <UserPlus size={16} color={theme.colors.primary} />
                 </TouchableOpacity>
               )}
             </View>
@@ -1200,15 +1199,13 @@ export default function TeamScreen() {
                     paddingVertical: theme.spacing.lg,
                     borderTopWidth: 1,
                     borderTopColor: theme.colors.divider,
-                    borderLeftWidth: 3,
-                    borderLeftColor: badge.color + '60',
                   }}
                 >
-                  {/* Top row: avatar + name/badges */}
+                  {/* Top row: avatar + name + 3-dot menu */}
                   <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                     {/* Avatar circle with initials */}
                     <View style={{
-                      backgroundColor: theme.colors.primary + '20',
+                      backgroundColor: '#114b3c18',
                       borderRadius: 22,
                       width: 44,
                       height: 44,
@@ -1217,7 +1214,7 @@ export default function TeamScreen() {
                       flexShrink: 0,
                     }}>
                       <Text style={{
-                        color: theme.colors.primary,
+                        color: '#114b3c',
                         fontSize: 16,
                         fontWeight: '700',
                         lineHeight: 20,
@@ -1257,66 +1254,58 @@ export default function TeamScreen() {
                           alignItems: 'center',
                           marginTop: 4,
                           alignSelf: 'flex-start',
-                          backgroundColor: theme.colors.bg,
+                          backgroundColor: '#114b3c10',
                           borderRadius: theme.radii.r8,
                           paddingHorizontal: 6,
                           paddingVertical: 2,
                         }}>
-                          <MapPin size={10} color={theme.colors.muted} />
+                          <MapPin size={10} color="#114b3c" />
                           <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, marginLeft: 3 }}>
                             {locationName}
                           </Text>
                         </View>
                       ) : null}
                     </View>
+
+                    {/* 3-dot menu button (admin only, non-owner) */}
+                    {!isOwner && isOrgAdmin && (
+                      <TouchableOpacity
+                        onPress={(e) => { e.stopPropagation?.(); setMemberMenuId(memberMenuId === memberId ? null : memberId); }}
+                        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                        style={{ padding: 4 }}
+                      >
+                        <MoreVertical size={18} color={theme.colors.textSecondary} />
+                      </TouchableOpacity>
+                    )}
                   </View>
 
-                  {/* Quick action row for non-owner members (admin only) */}
-                  {!isOwner && isOrgAdmin && (
+                  {/* Dropdown menu — shown when 3-dot is tapped */}
+                  {memberMenuId === memberId && !isOwner && isOrgAdmin && (
                     <View style={{
-                      flexDirection: 'row',
-                      marginTop: theme.spacing.md,
+                      marginTop: 8,
                       marginLeft: 56,
-                      gap: 8,
+                      backgroundColor: theme.colors.surface,
+                      borderRadius: theme.radii.r12,
+                      borderWidth: 1,
+                      borderColor: theme.colors.divider,
+                      ...theme.shadows.shadowMd,
+                      overflow: 'hidden',
                     }}>
-                      {/* Permissions button */}
                       <TouchableOpacity
-                        onPress={() => handleOpenPermissions(memberId, member.permissions)}
-                        style={{
-                          flex: 1,
-                          backgroundColor: theme.colors.bg,
-                          borderRadius: theme.radii.r8,
-                          paddingVertical: 8,
-                          flexDirection: 'row',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          borderWidth: 1,
-                          borderColor: theme.colors.divider,
-                        }}
+                        onPress={() => { setMemberMenuId(null); handleOpenPermissions(memberId, member.permissions); }}
+                        style={{ flexDirection: 'row', alignItems: 'center', padding: 12, borderBottomWidth: 1, borderBottomColor: theme.colors.divider }}
                       >
-                        <Shield size={13} color={theme.colors.textSecondary} />
-                        <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, fontWeight: '600' as const, marginLeft: 4 }}>
+                        <Shield size={14} color={theme.colors.primary} />
+                        <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, marginLeft: 10 }}>
                           {t('business.profile.permissions')}
                         </Text>
                       </TouchableOpacity>
-
-                      {/* Remove button (destructive red) */}
                       <TouchableOpacity
-                        onPress={() => handleRemoveMember(memberId, memberName)}
-                        style={{
-                          flex: 1,
-                          backgroundColor: theme.colors.error + '10',
-                          borderRadius: theme.radii.r8,
-                          paddingVertical: 8,
-                          flexDirection: 'row',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          borderWidth: 1,
-                          borderColor: theme.colors.error + '30',
-                        }}
+                        onPress={() => { setMemberMenuId(null); handleRemoveMember(memberId, memberName); }}
+                        style={{ flexDirection: 'row', alignItems: 'center', padding: 12 }}
                       >
-                        <Trash2 size={13} color={theme.colors.error} />
-                        <Text style={{ color: theme.colors.error, ...theme.typography.caption, fontWeight: '600' as const, marginLeft: 4 }}>
+                        <Trash2 size={14} color={theme.colors.error} />
+                        <Text style={{ color: theme.colors.error, ...theme.typography.bodySm, marginLeft: 10 }}>
                           {t('business.profile.removeMember')}
                         </Text>
                       </TouchableOpacity>
@@ -1327,22 +1316,20 @@ export default function TeamScreen() {
             })}
 
             {/* Add Member Button (only shown when there are already members and user is admin) */}
+            {/* Bottom add member — icon only, centered */}
             {displayedMembers.length > 0 && isOrgAdmin && (
               <TouchableOpacity
                 onPress={handleAddMemberFromLocation}
+                accessibilityLabel={t('business.profile.addMember')}
                 style={[{
-                  flexDirection: 'row',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  padding: theme.spacing.lg,
+                  padding: theme.spacing.md,
                   borderTopWidth: 1,
                   borderTopColor: theme.colors.divider,
                 }]}
               >
                 <UserPlus size={18} color={theme.colors.primary} />
-                <Text style={[{ color: theme.colors.primary, ...theme.typography.body, fontWeight: '600' as const, marginLeft: 8 }]}>
-                  {t('business.profile.addMember')}
-                </Text>
               </TouchableOpacity>
             )}
           </View>
@@ -1639,40 +1626,103 @@ export default function TeamScreen() {
       <Modal visible={showAddLocationModal} transparent animationType="fade" onRequestClose={() => setShowAddLocationModal(false)}>
         <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setShowAddLocationModal(false)}>
           <View
-            style={[styles.modalContent, { backgroundColor: theme.colors.surface, borderRadius: theme.radii.r24, padding: theme.spacing.xl, ...theme.shadows.shadowLg }]}
+            style={[styles.modalContent, { backgroundColor: theme.colors.surface, borderRadius: theme.radii.r24, padding: theme.spacing.xl, ...theme.shadows.shadowLg, maxWidth: 420, width: '100%' }]}
             onStartShouldSetResponder={() => true}
           >
             <View style={styles.modalHeader}>
               <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3 }]}>
-                {t('business.team.addLocation', { defaultValue: 'Add Location' })}
+                {t('business.team.addLocation', { defaultValue: 'Ajouter un emplacement' })}
               </Text>
-              <TouchableOpacity onPress={() => { setShowAddLocationModal(false); setNewLocationName(''); setNewLocationAddress(''); }}>
+              <TouchableOpacity onPress={() => { setShowAddLocationModal(false); setNewLocationName(''); setNewLocationAddress(''); setNewLocationCategory(''); }}>
                 <X size={20} color={theme.colors.textSecondary} />
               </TouchableOpacity>
             </View>
 
+            <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, marginTop: theme.spacing.sm, lineHeight: 18 }}>
+              {t('business.team.addLocationDesc', { defaultValue: 'Ajoutez un nouvel emplacement pour votre organisation. Les informations seront vérifiées par notre équipe.' })}
+            </Text>
+
+            <Text style={{ color: '#114b3c', ...theme.typography.caption, fontWeight: '600', marginTop: theme.spacing.lg, marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.5 }}>
+              {t('business.team.locationName', { defaultValue: 'Nom' })} *
+            </Text>
             <TextInput
-              style={[styles.modalInput, { backgroundColor: theme.colors.bg, borderRadius: theme.radii.r12, color: theme.colors.textPrimary, ...theme.typography.body, marginTop: theme.spacing.lg }]}
+              style={[styles.modalInput, { backgroundColor: theme.colors.bg, borderRadius: theme.radii.r12, color: theme.colors.textPrimary, ...theme.typography.body, borderWidth: 1, borderColor: theme.colors.divider }]}
               value={newLocationName}
               onChangeText={setNewLocationName}
-              placeholder={t('business.team.locationName', { defaultValue: 'Location name' })}
+              placeholder={t('business.team.locationNamePlaceholder', { defaultValue: 'Ex: Succursale Centre-Ville' })}
               placeholderTextColor={theme.colors.muted}
               autoCapitalize="words"
             />
 
+            <Text style={{ color: '#114b3c', ...theme.typography.caption, fontWeight: '600', marginTop: theme.spacing.lg, marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.5 }}>
+              {t('business.team.locationAddress', { defaultValue: 'Adresse' })} *
+            </Text>
             <TextInput
-              style={[styles.modalInput, { backgroundColor: theme.colors.bg, borderRadius: theme.radii.r12, color: theme.colors.textPrimary, ...theme.typography.body, marginTop: theme.spacing.md }]}
+              style={[styles.modalInput, { backgroundColor: theme.colors.bg, borderRadius: theme.radii.r12, color: theme.colors.textPrimary, ...theme.typography.body, borderWidth: 1, borderColor: theme.colors.divider }]}
               value={newLocationAddress}
               onChangeText={setNewLocationAddress}
-              placeholder={t('business.team.locationAddress', { defaultValue: 'Address' })}
+              placeholder={t('business.team.locationAddressPlaceholder', { defaultValue: 'Ex: 12 Rue de la République, Tunis' })}
               placeholderTextColor={theme.colors.muted}
             />
 
+            <Text style={{ color: '#114b3c', ...theme.typography.caption, fontWeight: '600', marginTop: theme.spacing.lg, marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.5 }}>
+              {t('business.profile.category', { defaultValue: 'Catégorie' })}
+            </Text>
+            {/* Dropdown-style category selector */}
+            <View style={{
+              backgroundColor: theme.colors.bg,
+              borderRadius: theme.radii.r12,
+              borderWidth: 1,
+              borderColor: newLocationCategory ? '#114b3c40' : theme.colors.divider,
+              overflow: 'hidden',
+            }}>
+              {LOCATION_CATEGORIES.map((cat, idx) => {
+                const isActive = newLocationCategory === cat;
+                return (
+                  <TouchableOpacity
+                    key={cat}
+                    onPress={() => setNewLocationCategory(isActive ? '' : cat)}
+                    style={{
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      paddingHorizontal: 14,
+                      paddingVertical: 10,
+                      borderTopWidth: idx > 0 ? 1 : 0,
+                      borderTopColor: theme.colors.divider,
+                      backgroundColor: isActive ? '#114b3c10' : 'transparent',
+                    }}
+                  >
+                    <View style={{
+                      width: 18, height: 18, borderRadius: 9,
+                      borderWidth: 2,
+                      borderColor: isActive ? '#114b3c' : theme.colors.muted,
+                      backgroundColor: isActive ? '#114b3c' : 'transparent',
+                      justifyContent: 'center', alignItems: 'center',
+                      marginRight: 10,
+                    }}>
+                      {isActive && <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: '#fff' }} />}
+                    </View>
+                    <Text style={{ color: isActive ? '#114b3c' : theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: isActive ? '600' : '400' }}>
+                      {t(`categories.${cat}`, { defaultValue: cat })}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+
+            {/* Admin approval note */}
+            <View style={{ flexDirection: 'row', alignItems: 'flex-start', backgroundColor: theme.colors.primary + '08', borderRadius: theme.radii.r12, padding: 12, marginTop: theme.spacing.lg, gap: 8 }}>
+              <ShieldCheck size={16} color={theme.colors.primary} style={{ marginTop: 1 }} />
+              <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, flex: 1, lineHeight: 17 }}>
+                {t('business.team.adminApprovalNote', { defaultValue: 'L\'ajout de ce nouvel emplacement sera soumis à validation par notre équipe admin.' })}
+              </Text>
+            </View>
+
             <TouchableOpacity
               onPress={() => addLocationMutation.mutate()}
-              disabled={addLocationMutation.isPending || (!newLocationName.trim() && !newLocationAddress.trim())}
+              disabled={addLocationMutation.isPending || !newLocationName.trim() || !newLocationAddress.trim()}
               style={[{
-                backgroundColor: (!newLocationName.trim() && !newLocationAddress.trim()) ? theme.colors.muted : theme.colors.primary,
+                backgroundColor: (!newLocationName.trim() || !newLocationAddress.trim()) ? theme.colors.muted : theme.colors.primary,
                 borderRadius: theme.radii.r12,
                 padding: theme.spacing.lg,
                 marginTop: theme.spacing.lg,
@@ -1682,12 +1732,47 @@ export default function TeamScreen() {
                 <ActivityIndicator color="#fff" />
               ) : (
                 <Text style={[{ color: '#fff', ...theme.typography.button, textAlign: 'center' as const }]}>
-                  {t('common.add')}
+                  {t('business.team.submitLocation', { defaultValue: 'Soumettre la demande' })}
                 </Text>
               )}
             </TouchableOpacity>
           </View>
         </TouchableOpacity>
+      </Modal>
+
+      {/* ── Remove Member Confirmation ──────────────────────────────────── */}
+      <Modal visible={!!removeMemberTarget} transparent animationType="fade" onRequestClose={() => setRemoveMemberTarget(null)}>
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', alignItems: 'center', padding: 24 }}>
+          <View style={{ backgroundColor: theme.colors.surface, borderRadius: 20, padding: 24, width: '100%', maxWidth: 340, alignItems: 'center', ...theme.shadows.shadowLg }}>
+            <View style={{ backgroundColor: theme.colors.error + '15', width: 56, height: 56, borderRadius: 28, justifyContent: 'center', alignItems: 'center', marginBottom: 16 }}>
+              <Trash2 size={26} color={theme.colors.error} />
+            </View>
+            <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3, textAlign: 'center', marginBottom: 8 }}>
+              {t('business.profile.removeMember', { defaultValue: 'Retirer le membre' })}
+            </Text>
+            <Text style={{ color: theme.colors.textSecondary, ...theme.typography.body, textAlign: 'center', lineHeight: 22, marginBottom: 24 }}>
+              {t('business.team.removeMemberConfirm', { defaultValue: 'Êtes-vous sûr de vouloir retirer', name: removeMemberTarget?.name })} <Text style={{ fontWeight: '700' }}>{removeMemberTarget?.name}</Text> ?
+            </Text>
+            <View style={{ flexDirection: 'row', gap: 10, width: '100%' }}>
+              <TouchableOpacity
+                onPress={() => setRemoveMemberTarget(null)}
+                style={{ flex: 1, backgroundColor: theme.colors.bg, borderRadius: 12, paddingVertical: 14, alignItems: 'center', borderWidth: 1, borderColor: theme.colors.divider }}
+              >
+                <Text style={{ color: theme.colors.textPrimary, ...theme.typography.body, fontWeight: '600' }}>
+                  {t('common.cancel', { defaultValue: 'Annuler' })}
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => { if (removeMemberTarget) removeMemberMutation.mutate(removeMemberTarget.id); setRemoveMemberTarget(null); }}
+                style={{ flex: 1, backgroundColor: theme.colors.error, borderRadius: 12, paddingVertical: 14, alignItems: 'center' }}
+              >
+                <Text style={{ color: '#fff', ...theme.typography.body, fontWeight: '600' }}>
+                  {t('business.team.confirmRemove', { defaultValue: 'Retirer' })}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
       </Modal>
 
       {/* ── Create Org Modal ──────────────────────────────────────────────── */}

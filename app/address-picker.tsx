@@ -1,10 +1,11 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import {
   View, Text, TouchableOpacity, ScrollView,
   TextInput, Platform, StyleSheet,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { MapPin, Home, Briefcase, Plus, ChevronLeft, Check, Trash2, Edit3 } from 'lucide-react-native';
+import { MapPin, Home, Briefcase, Plus, ChevronLeft, Check, Trash2, Edit3, Navigation } from 'lucide-react-native';
+import * as Location from 'expo-location';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { useAddressStore, type SavedAddress } from '@/src/stores/addressStore';
 import { useRouter } from 'expo-router';
@@ -18,7 +19,7 @@ if (Platform.OS !== 'web') {
   Marker = maps.Marker;
 }
 
-const QUICK_LABELS = ['Home', 'Work'];
+const QUICK_LABELS = ['home', 'work'] as const;
 
 type Step = 'list' | 'map' | 'form' | 'edit';
 
@@ -30,6 +31,18 @@ export default function AddressPickerScreen() {
 
   const [step, setStep] = useState<Step>('list');
   const [pendingRegion, setPendingRegion] = useState({ lat: 36.8065, lng: 10.1815 });
+  const mapRef = useRef<any>(null);
+
+  const goToCurrentLocation = async () => {
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') return;
+      const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+      const coords = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+      setPendingRegion(coords);
+      mapRef.current?.animateToRegion({ latitude: coords.lat, longitude: coords.lng, latitudeDelta: 0.01, longitudeDelta: 0.01 }, 600);
+    } catch {}
+  };
   const [labelInput, setLabelInput] = useState('');
   const [editingAddress, setEditingAddress] = useState<SavedAddress | null>(null);
 
@@ -69,7 +82,7 @@ export default function AddressPickerScreen() {
   const handleMapConfirm = () => setStep('form');
 
   const handleFormSave = () => {
-    const label = labelInput.trim() || 'My Location';
+    const label = labelInput.trim() || t('addressPicker.defaultLabel', { defaultValue: 'Mon adresse' });
     void addAddress({ label, lat: pendingRegion.lat, lng: pendingRegion.lng });
     reset();
   };
@@ -209,6 +222,7 @@ export default function AddressPickerScreen() {
           <View style={{ flex: 1 }}>
             {MapView && Platform.OS !== 'web' ? (
               <MapView
+                ref={mapRef}
                 style={StyleSheet.absoluteFillObject}
                 initialRegion={{
                   latitude: 36.8065,
@@ -224,7 +238,7 @@ export default function AddressPickerScreen() {
               <View style={[StyleSheet.absoluteFillObject, { backgroundColor: theme.colors.divider, alignItems: 'center', justifyContent: 'center' }]}>
                 <MapPin size={32} color={theme.colors.muted} />
                 <Text style={[theme.typography.bodySm, { color: theme.colors.muted, marginTop: 8 }]}>
-                  Map unavailable on this platform
+                  {t('addressPicker.mapUnavailable', { defaultValue: 'Carte non disponible' })}
                 </Text>
               </View>
             )}
@@ -244,7 +258,14 @@ export default function AddressPickerScreen() {
             </View>
           </View>
 
-          <View style={[styles.mapFooter, { backgroundColor: theme.colors.bg }]}>
+          <View style={[styles.mapFooter, { backgroundColor: theme.colors.bg, gap: 10 }]}>
+            <TouchableOpacity
+              onPress={goToCurrentLocation}
+              style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 12, borderRadius: theme.radii.r16, borderWidth: 1, borderColor: theme.colors.divider, backgroundColor: theme.colors.surface }}
+            >
+              <Navigation size={14} color={theme.colors.primary} />
+              <Text style={[theme.typography.bodySm, { color: theme.colors.primary, fontWeight: '600' }]}>{t('addressPicker.useCurrentLocation', { defaultValue: 'Utiliser ma position actuelle' })}</Text>
+            </TouchableOpacity>
             <TouchableOpacity
               onPress={handleMapConfirm}
               style={[styles.confirmBtn, { backgroundColor: theme.colors.primary, borderRadius: theme.radii.r16 }]}
@@ -261,6 +282,7 @@ export default function AddressPickerScreen() {
           <View style={{ flex: 1 }}>
             {MapView && Platform.OS !== 'web' ? (
               <MapView
+                ref={mapRef}
                 style={StyleSheet.absoluteFillObject}
                 initialRegion={{
                   latitude: editingAddress.lat,
@@ -276,7 +298,7 @@ export default function AddressPickerScreen() {
               <View style={[StyleSheet.absoluteFillObject, { backgroundColor: theme.colors.divider, alignItems: 'center', justifyContent: 'center' }]}>
                 <MapPin size={32} color={theme.colors.muted} />
                 <Text style={[theme.typography.bodySm, { color: theme.colors.muted, marginTop: 8 }]}>
-                  Map unavailable on this platform
+                  {t('addressPicker.mapUnavailable', { defaultValue: 'Carte non disponible' })}
                 </Text>
               </View>
             )}
@@ -296,7 +318,14 @@ export default function AddressPickerScreen() {
             </View>
           </View>
 
-          <View style={[styles.mapFooter, { backgroundColor: theme.colors.bg }]}>
+          <View style={[styles.mapFooter, { backgroundColor: theme.colors.bg, gap: 10 }]}>
+            <TouchableOpacity
+              onPress={goToCurrentLocation}
+              style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 12, borderRadius: theme.radii.r16, borderWidth: 1, borderColor: theme.colors.divider, backgroundColor: theme.colors.surface }}
+            >
+              <Navigation size={14} color={theme.colors.primary} />
+              <Text style={[theme.typography.bodySm, { color: theme.colors.primary, fontWeight: '600' }]}>{t('addressPicker.useCurrentLocation', { defaultValue: 'Utiliser ma position actuelle' })}</Text>
+            </TouchableOpacity>
             <TouchableOpacity
               onPress={handleEditConfirm}
               style={[styles.confirmBtn, { backgroundColor: theme.colors.primary, borderRadius: theme.radii.r16 }]}
@@ -313,12 +342,13 @@ export default function AddressPickerScreen() {
           {/* Quick label chips */}
           <View style={{ flexDirection: 'row', gap: 10, marginBottom: 20 }}>
             {QUICK_LABELS.map((ql) => {
-              const isActive = labelInput === ql;
-              const QIcon = ql === 'Home' ? Home : Briefcase;
+              const QIcon = ql === 'home' ? Home : Briefcase;
+              const qlLabel = t(`addressPicker.label_${ql}`, { defaultValue: ql === 'home' ? 'Maison' : 'Travail' });
+              const isActive = labelInput === qlLabel;
               return (
                 <TouchableOpacity
                   key={ql}
-                  onPress={() => setLabelInput(ql)}
+                  onPress={() => setLabelInput(qlLabel)}
                   style={[
                     styles.quickChip,
                     {
@@ -330,7 +360,7 @@ export default function AddressPickerScreen() {
                 >
                   <QIcon size={14} color={isActive ? theme.colors.primary : theme.colors.textSecondary} />
                   <Text style={[theme.typography.bodySm, { color: isActive ? theme.colors.primary : theme.colors.textPrimary, fontWeight: '600' as const, marginLeft: 5 }]}>
-                    {ql}
+                    {qlLabel}
                   </Text>
                 </TouchableOpacity>
               );
@@ -351,7 +381,7 @@ export default function AddressPickerScreen() {
                 borderColor: theme.colors.divider,
               },
             ]}
-            placeholder="Or enter a custom name..."
+            placeholder={t('addressPicker.customNamePlaceholder', { defaultValue: 'Ou entrez un nom personnalisé...' })}
             placeholderTextColor={theme.colors.muted}
             value={labelInput}
             onChangeText={setLabelInput}

@@ -278,9 +278,14 @@ export default function HomeScreen() {
     return ['all', ...Array.from(cats)];
   }, [baskets]);
 
-  // Simple Euclidean distance approximation (sufficient for sorting nearby locations)
-  const dist = (lat1: number, lon1: number, lat2: number, lon2: number) =>
-    Math.sqrt((lat1 - lat2) ** 2 + (lon1 - lon2) ** 2);
+  // Haversine distance in km
+  const distKm = (lat1: number, lon1: number, lat2: number, lon2: number) => {
+    const R = 6371;
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) ** 2;
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  };
 
   const filteredBaskets = useMemo(() => {
     let result = baskets;
@@ -316,12 +321,21 @@ export default function HomeScreen() {
 
       // Within the same tier, sort by distance if user location is known
       if (hasUserLoc) {
-        const aDist = a.hasCoords ? dist(userLat!, userLng!, a.latitude!, a.longitude!) : Infinity;
-        const bDist = b.hasCoords ? dist(userLat!, userLng!, b.latitude!, b.longitude!) : Infinity;
+        const aDist = a.hasCoords ? distKm(userLat!, userLng!, a.latitude!, a.longitude!) : Infinity;
+        const bDist = b.hasCoords ? distKm(userLat!, userLng!, b.latitude!, b.longitude!) : Infinity;
         return aDist - bDist;
       }
       return 0;
     });
+
+    // Compute distance in km for each basket (for card display)
+    if (hasUserLoc) {
+      result = result.map(b => ({
+        ...b,
+        distance: b.hasCoords ? Math.round(distKm(userLat!, userLng!, b.latitude!, b.longitude!) * 10) / 10 : 0,
+      }));
+    }
+
     return result;
   }, [baskets, activeCategory, searchQuery, selectedAddress]);
 
@@ -350,7 +364,7 @@ export default function HomeScreen() {
   const heroSlidesQuery = useQuery({
     queryKey: ['hero-slides'],
     queryFn: fetchHeroSlides,
-    staleTime: 5 * 60_000,
+    staleTime: 15_000, // 15s — hero slides are admin-edited, keep fresh
   });
   const dynamicSlides = heroSlidesQuery.data ?? [];
 
@@ -376,6 +390,12 @@ export default function HomeScreen() {
     .filter((b) => b.hasCoords)
     .map((b) => ({ id: b.id, name: b.merchantName, lat: b.latitude as number, lng: b.longitude as number }));
 
+  // Debug: log map marker status
+  console.log(`[Map] Total baskets: ${baskets.length}, with coords: ${mapMarkers.length}`);
+  baskets.forEach(b => {
+    console.log(`[Map] "${b.merchantName}" hasCoords=${b.hasCoords} lat=${b.latitude} lng=${b.longitude}`);
+  });
+
   return (
     <Animated.View style={[styles.container, { backgroundColor: containerBg }]}>
       {/* Status bar: white icons on dark green hero, black icons on light content */}
@@ -392,14 +412,17 @@ export default function HomeScreen() {
       }}>
         <TouchableOpacity
           onPress={() => router.push('/address-picker' as never)}
+          accessibilityRole="button"
+          accessibilityLabel={selectedAddress?.label ?? t('home.chooseLocation')}
+          accessibilityHint={t('home.chooseLocation', { defaultValue: 'Choose location' })}
           style={{
             flexDirection: 'row',
             alignItems: 'center',
             gap: 5,
+            height: 34,
             backgroundColor: heroVisible ? 'rgba(255,255,255,0.15)' : theme.colors.surface,
-            borderRadius: 20,
+            borderRadius: 17,
             paddingHorizontal: 12,
-            paddingVertical: 6,
           }}
         >
           <MapPin size={13} color={heroVisible ? '#e3ff5c' : theme.colors.primary} />
@@ -411,13 +434,13 @@ export default function HomeScreen() {
           </Text>
           <ChevronDown size={13} color={heroVisible ? 'rgba(255,255,255,0.7)' : theme.colors.textSecondary} />
         </TouchableOpacity>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, height: 34 }}>
           {/* Spacer — the map button is rendered by the tab layout overlay so it can animate between tabs */}
           <View pointerEvents="none" style={{ width: 34, height: 34 }} />
-          <TouchableOpacity onPress={() => router.push('/settings' as never)}>
+          <TouchableOpacity onPress={() => router.push('/settings' as never)} accessibilityLabel={t('settings.title', { defaultValue: 'Settings' })} accessibilityRole="button">
             <Settings size={20} color={heroVisible ? '#e3ff5c' : theme.colors.textPrimary} />
           </TouchableOpacity>
-          <TouchableOpacity onPress={() => router.push('/notifications' as never)}>
+          <TouchableOpacity onPress={() => router.push('/notifications' as never)} accessibilityLabel={t('notifications.title', { defaultValue: 'Notifications' })} accessibilityRole="button">
             <Bell size={20} color={heroVisible ? '#e3ff5c' : theme.colors.textPrimary} />
             {unreadCount > 0 && (
               <View style={{
@@ -483,15 +506,25 @@ export default function HomeScreen() {
                 : require('@/assets/images/man_holding_basket-removebg-preview.png')}
               style={{ width: HERO_HEIGHT * 0.68, height: HERO_HEIGHT * 0.92, marginLeft: 4 }}
               resizeMode="contain"
+              accessibilityLabel={t('home.heroImage', { defaultValue: 'Person holding a food basket' })}
             />
           </View>
           {/* Dynamic slides from API */}
-          {dynamicSlides.map((slide: HeroSlide) => (
+          {dynamicSlides.map((slide: HeroSlide) => {
+            const imgW = slide.image_size ?? HERO_HEIGHT * 0.5;
+            const imgH = Math.round(imgW * 1.36);
+            const alignMap: Record<string, 'flex-start' | 'center' | 'flex-end'> = { top: 'flex-start', center: 'center', bottom: 'flex-end' };
+            const textJustify = alignMap[slide.text_align_v ?? 'center'] ?? 'center';
+            const titleSize = slide.title_font_size ?? 18;
+            const subtitleOp = slide.subtitle_opacity ?? 0.7;
+            const imgOp = slide.image_opacity ?? 1;
+            const offsetY = slide.text_offset_y ?? 0;
+            return (
             <View key={slide.id} style={{ width: carouselWidth, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-              <View style={{ flex: 1 }}>
+              <View style={{ flex: 1, justifyContent: textJustify, transform: [{ translateY: offsetY }] }}>
                 {slide.subtitle ? (
                   <Text style={{
-                    color: 'rgba(255,255,255,0.7)',
+                    color: `rgba(255,255,255,${subtitleOp})`,
                     fontSize: 12,
                     fontFamily: 'Poppins_400Regular',
                   }}>
@@ -499,8 +532,8 @@ export default function HomeScreen() {
                   </Text>
                 ) : null}
                 <Text style={{
-                  color: '#fff',
-                  fontSize: 18,
+                  color: slide.text_color ?? '#fff',
+                  fontSize: titleSize,
                   fontWeight: '700',
                   fontFamily: 'Poppins_700Bold',
                   marginTop: 4,
@@ -511,7 +544,7 @@ export default function HomeScreen() {
               {slide.image_url ? (
                 <Image
                   source={{ uri: slide.image_url }}
-                  style={{ width: HERO_HEIGHT * 0.5, height: HERO_HEIGHT * 0.68, marginLeft: 8 }}
+                  style={{ width: imgW, height: imgH, marginLeft: 8, opacity: imgOp }}
                   resizeMode="contain"
                 />
               ) : (
@@ -519,12 +552,13 @@ export default function HomeScreen() {
                   source={userGender === 'female'
                     ? require('@/assets/images/woman_holding_basket-removebg-preview.png')
                     : require('@/assets/images/man_holding_basket-removebg-preview.png')}
-                  style={{ width: HERO_HEIGHT * 0.5, height: HERO_HEIGHT * 0.68, marginLeft: 8 }}
+                  style={{ width: imgW, height: imgH, marginLeft: 8, opacity: imgOp }}
                   resizeMode="contain"
                 />
               )}
             </View>
-          ))}
+            );
+          })}
         </ScrollView>
 
         {/* Dot indicators */}
@@ -583,7 +617,7 @@ export default function HomeScreen() {
             <TextInput
               style={[
                 styles.searchInput,
-                { color: theme.colors.textPrimary, fontFamily: 'Poppins_400Regular', fontSize: 14, flex: 1, textAlign: 'center' },
+                { color: theme.colors.textPrimary, fontFamily: 'Poppins_400Regular', fontSize: 14, flex: 1, textAlign: 'left' },
               ]}
               placeholder={t('home.searchPlaceholder')}
               placeholderTextColor={theme.colors.muted}
@@ -591,9 +625,11 @@ export default function HomeScreen() {
               onChangeText={setSearchQuery}
               returnKeyType="search"
               textAlignVertical="center"
+              accessibilityLabel={t('home.searchPlaceholder')}
+              accessibilityRole="search"
             />
             {searchQuery.length > 0 && (
-              <TouchableOpacity onPress={() => setSearchQuery('')} style={{ padding: 4 }}>
+              <TouchableOpacity onPress={() => setSearchQuery('')} style={{ padding: 4 }} accessibilityLabel={t('common.clear', { defaultValue: 'Clear search' })} accessibilityRole="button">
                 <X size={16} color={theme.colors.muted} />
               </TouchableOpacity>
             )}
@@ -649,6 +685,9 @@ export default function HomeScreen() {
                     key={cat}
                     onPress={() => handleCategoryPress(cat)}
                     activeOpacity={0.7}
+                    accessibilityRole="button"
+                    accessibilityLabel={t(`home.categories.${cat}`, { defaultValue: cat })}
+                    accessibilityState={{ selected: isActive }}
                     style={[
                       styles.categoryPill,
                       {
@@ -695,6 +734,8 @@ export default function HomeScreen() {
               <TouchableOpacity
                 onPress={() => { locationsQuery.refetch(); }}
                 style={[styles.retryButton, { backgroundColor: theme.colors.primary, borderRadius: theme.radii.r12 }]}
+                accessibilityLabel={t('common.retry')}
+                accessibilityRole="button"
               >
                 <RefreshCw size={16} color="#fff" />
                 <Text style={[{ color: '#fff', ...theme.typography.bodySm, fontWeight: '600' as const, marginLeft: 8 }]}>
@@ -733,6 +774,8 @@ export default function HomeScreen() {
               <TouchableOpacity
                 onPress={() => setShowRadiusModal(false)}
                 style={[styles.closeBtn, { backgroundColor: theme.colors.bg }]}
+                accessibilityLabel={t('common.close', { defaultValue: 'Close' })}
+                accessibilityRole="button"
               >
                 <X size={18} color={theme.colors.textPrimary} />
               </TouchableOpacity>
@@ -743,16 +786,10 @@ export default function HomeScreen() {
                 <MapView
                   style={styles.mapView}
                   initialRegion={{
-                    latitude: 36.8065,
-                    longitude: 10.1815,
-                    latitudeDelta: radius * 0.02,
-                    longitudeDelta: radius * 0.02,
-                  }}
-                  region={{
-                    latitude: 36.8065,
-                    longitude: 10.1815,
-                    latitudeDelta: Math.max(0.02, radius * 0.015),
-                    longitudeDelta: Math.max(0.02, radius * 0.015),
+                    latitude: selectedAddress?.lat ?? 36.8065,
+                    longitude: selectedAddress?.lng ?? 10.1815,
+                    latitudeDelta: 0.15,
+                    longitudeDelta: 0.15,
                   }}
                 >
                   {MapCircle && (

@@ -1,20 +1,21 @@
-import React, { useCallback, useEffect, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Switch, Alert, Modal, TextInput, Linking } from 'react-native';
+import React, { useCallback, useEffect, useState, useRef } from 'react';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Switch, Alert, Modal, TextInput, Linking, Animated, PanResponder } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import { useRouter } from 'expo-router';
 import {
   ArrowLeft, Globe, Bell as BellIcon, Shield, HelpCircle, Info, LogOut,
-  ChevronRight, Lock, FileText, Headphones, X, Trash2, Camera, MapPin, Image,
+  ChevronRight, Lock, FileText, Headphones, X, Trash2, Camera, MapPin, Image, AlertTriangle, Mail, ExternalLink,
 } from 'lucide-react-native';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { StatusBar } from 'expo-status-bar';
 import { useAuthStore } from '@/src/stores/authStore';
 import { useSplashStore } from '@/src/stores/splashStore';
-import { logout } from '@/src/services/auth';
+import { logout, deleteAccount as deleteAccountApi } from '@/src/services/auth';
 import { updatePassword } from '@/src/services/profile';
 import i18n from '@/src/i18n';
+import Constants from 'expo-constants';
 import { Camera as ExpoCamera } from 'expo-camera';
 import * as Location from 'expo-location';
 import * as ImagePicker from 'expo-image-picker';
@@ -52,6 +53,7 @@ export default function SettingsScreen() {
   const triggerSplash = useSplashStore((s) => s.triggerSplash);
 
   const [notifications, setNotifications] = useState(true);
+  const PUSH_ENABLED_KEY = '@barakeat_push_enabled';
   const [showLanguageModal, setShowLanguageModal] = useState(false);
   const [currentLang, setCurrentLang] = useState(i18n.language ?? 'en');
   const [demoRole, setDemoRole] = useState<'admin' | 'restricted'>('admin');
@@ -79,6 +81,9 @@ export default function SettingsScreen() {
         if (stored) {
           setNotifPrefs({ ...DEFAULT_NOTIF_PREFS, ...JSON.parse(stored) });
         }
+        // Load main push toggle
+        const pushEnabled = await AsyncStorage.getItem(PUSH_ENABLED_KEY);
+        if (pushEnabled !== null) setNotifications(pushEnabled === 'true');
       } catch (err) {
         console.log('[Settings] Error loading notif prefs:', err);
       }
@@ -133,80 +138,128 @@ export default function SettingsScreen() {
   }, []);
 
   const handleDemoRoleSwitch = useCallback(() => {
-    const newRole = demoRole === 'admin' ? 'restricted' : 'admin';
-    setDemoRole(newRole);
-    console.log('[Settings] Demo role switched to:', newRole);
-    Alert.alert(
-      t('profile.demoMode'),
-      newRole === 'admin' ? t('profile.demoAdmin') : t('profile.demoRestricted'),
-      [{ text: t('common.ok') }]
-    );
-  }, [demoRole, t]);
+    // Navigate to onboarding with demo flag to bypass auth redirect
+    router.push('/onboarding?demo=true' as never);
+  }, [router]);
 
   const handleFAQPress = useCallback(() => {
     setShowFaqModal(true);
   }, []);
 
+  // Bottom sheet: 3 states — closed / half / full
+  // Only use translateY for closing (slide down off screen), use height change for expand/collapse
+  const sheetY = useRef(new Animated.Value(0)).current;
+  const sheetStateRef = useRef<'half' | 'full'>('half');
+  const [sheetState, setSheetState] = useState<'half' | 'full'>('half');
+  useEffect(() => { sheetStateRef.current = sheetState; }, [sheetState]);
+
+  const sheetPan = useRef(PanResponder.create({
+    onStartShouldSetPanResponder: () => true,
+    onMoveShouldSetPanResponder: (_, g) => Math.abs(g.dy) > 8,
+    onPanResponderMove: (_, g) => {
+      if (g.dy > 0) sheetY.setValue(g.dy);
+    },
+    onPanResponderRelease: (_, g) => {
+      const state = sheetStateRef.current;
+      if (g.dy > 80 || g.vy > 0.5) {
+        // Swipe down
+        if (state === 'full') {
+          // Full → half (just change state, snap back)
+          sheetStateRef.current = 'half';
+          setSheetState('half');
+          Animated.spring(sheetY, { toValue: 0, friction: 8, useNativeDriver: true }).start();
+        } else {
+          // Half → close (slide off)
+          Animated.timing(sheetY, { toValue: 600, duration: 200, useNativeDriver: true }).start(() => {
+            setShowFaqModal(false); setShowLegalModal(null); sheetY.setValue(0);
+            sheetStateRef.current = 'half'; setSheetState('half');
+          });
+        }
+      } else if (g.dy < -50) {
+        // Swipe up → expand (just change state)
+        sheetStateRef.current = 'full';
+        setSheetState('full');
+        Animated.spring(sheetY, { toValue: 0, friction: 8, useNativeDriver: true }).start();
+      } else {
+        // Snap back
+        Animated.spring(sheetY, { toValue: 0, friction: 8, useNativeDriver: true }).start();
+      }
+    },
+  })).current;
+  const closeSheet = useCallback(() => {
+    Animated.timing(sheetY, { toValue: 600, duration: 200, useNativeDriver: true }).start(() => {
+      setShowFaqModal(false); setShowLegalModal(null); sheetY.setValue(0);
+      sheetStateRef.current = 'half'; setSheetState('half');
+    });
+  }, [sheetY]);
+
+  const [showSupportModal, setShowSupportModal] = useState(false);
+  const [showAboutModal, setShowAboutModal] = useState(false);
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [deleteStep, setDeleteStep] = useState<'first' | 'final'>('first');
+
   const handleSupportPress = useCallback(() => {
-    Alert.alert(
-      t('profile.customerSupport'),
-      'support@barakeat.tn',
-      [{ text: t('common.ok') }]
-    );
-  }, [t]);
+    setShowSupportModal(true);
+  }, []);
 
   const handleAboutPress = useCallback(() => {
-    Alert.alert(
-      t('profile.about'),
-      `${t('profile.mission')}\n\n"${t('profile.motto')}"\n\n${t('profile.availability')}`,
-      [{ text: t('common.ok') }]
-    );
-  }, [t]);
+    setShowAboutModal(true);
+  }, []);
 
+  const [pwError, setPwError] = useState('');
+  const [pwSuccess, setPwSuccess] = useState(false);
   const handleChangePassword = async () => {
+    setPwError('');
+    setPwSuccess(false);
     if (!currentPw || !newPw || !confirmPw) {
-      Alert.alert(t('auth.error'), t('auth.fillAllFields'));
+      setPwError(t('auth.fillAllFields'));
       return;
     }
     if (newPw !== confirmPw) {
-      Alert.alert(t('auth.error'), t('auth.passwordMismatch'));
+      setPwError(t('auth.passwordMismatch'));
       return;
     }
-    if (newPw.length < 6) {
-      Alert.alert(t('auth.error'), t('auth.passwordTooShort'));
+    if (newPw.length < 8 || !/[A-Z]/.test(newPw) || !/[a-z]/.test(newPw) || !/[0-9]/.test(newPw) || !/[!@#$%^&*]/.test(newPw)) {
+      setPwError(t('auth.passwordRequirements'));
       return;
     }
     setPwLoading(true);
     try {
       await updatePassword(currentPw, newPw);
-      Alert.alert(t('common.success'), t('profile.passwordChanged'));
-      setShowPasswordModal(false);
-      setCurrentPw('');
-      setNewPw('');
-      setConfirmPw('');
+      setPwSuccess(true);
+      setTimeout(() => { setShowPasswordModal(false); setCurrentPw(''); setNewPw(''); setConfirmPw(''); setPwSuccess(false); }, 1500);
     } catch (err: any) {
-      Alert.alert(t('auth.error'), err?.message ?? t('common.errorOccurred'));
+      setPwError(err?.message ?? t('common.errorOccurred'));
     } finally {
       setPwLoading(false);
     }
   };
 
+  const [deleteLoading, setDeleteLoading] = useState(false);
+
   const deleteAccount = useCallback(() => {
-    Alert.alert(
-      t('profile.deleteAccount'),
-      t('profile.deleteAccountConfirm'),
-      [
-        { text: t('common.cancel'), style: 'cancel' },
-        {
-          text: t('common.delete'),
-          style: 'destructive',
-          onPress: () => {
-            Alert.alert(t('common.featureSoon'), t('profile.deleteAccountSoon'));
-          },
-        },
-      ]
-    );
-  }, [t]);
+    setDeleteStep('first');
+    setShowDeleteModal(true);
+  }, []);
+
+  const handleDeleteConfirm = useCallback(async () => {
+    if (deleteStep === 'first') {
+      setDeleteStep('final');
+      return;
+    }
+    setDeleteLoading(true);
+    try {
+      await deleteAccountApi();
+      await signOut();
+      triggerSplash(false);
+      router.replace('/auth/sign-in' as never);
+    } catch (err: any) {
+      // keep modal open, show error inline if needed
+    } finally {
+      setDeleteLoading(false);
+      setShowDeleteModal(false);
+    }
+  }, [deleteStep, signOut, triggerSplash, router]);
 
   const handleSignOut = useCallback(async () => {
     await logout();
@@ -237,7 +290,7 @@ export default function SettingsScreen() {
     <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]} edges={['top']}>
       <StatusBar style="dark" />
       <View style={[styles.header, { paddingHorizontal: theme.spacing.xl, paddingVertical: theme.spacing.md }]}>
-        <TouchableOpacity onPress={() => router.back()}>
+        <TouchableOpacity onPress={() => router.back()} accessibilityLabel={t('common.goBack', { defaultValue: 'Go back' })} accessibilityRole="button">
           <ArrowLeft size={24} color={theme.colors.textPrimary} />
         </TouchableOpacity>
         <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h2, marginLeft: theme.spacing.lg }]}>
@@ -253,6 +306,8 @@ export default function SettingsScreen() {
           <TouchableOpacity
             style={[styles.menuItem, { padding: theme.spacing.lg }]}
             onPress={() => setShowLanguageModal(true)}
+            accessibilityLabel={t('profile.language')}
+            accessibilityRole="button"
           >
             <View style={styles.menuItemLeft}>
               <Globe size={20} color={theme.colors.textSecondary} />
@@ -276,7 +331,7 @@ export default function SettingsScreen() {
         <View style={[{ backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, ...theme.shadows.shadowSm, padding: theme.spacing.lg, marginBottom: theme.spacing.xl, flexDirection: 'row', alignItems: 'center' }]}>
           <BellIcon size={20} color={theme.colors.textSecondary} />
           <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.body, flex: 1, marginLeft: 12 }]}>{t('settings.pushNotifications')}</Text>
-          <Switch value={notifications} onValueChange={setNotifications} trackColor={{ false: theme.colors.divider, true: theme.colors.primary + '50' }} thumbColor={notifications ? theme.colors.primary : theme.colors.muted} />
+          <Switch value={notifications} onValueChange={(val) => { setNotifications(val); void AsyncStorage.setItem(PUSH_ENABLED_KEY, String(val)); }} trackColor={{ false: theme.colors.divider, true: theme.colors.primary + '50' }} thumbColor={notifications ? theme.colors.primary : theme.colors.muted} accessibilityLabel={t('settings.pushNotifications')} accessibilityRole="switch" />
         </View>
 
         {/* Notification Preferences — only shown when push notifications are ON */}
@@ -310,6 +365,8 @@ export default function SettingsScreen() {
                     onValueChange={(val) => updateNotifPref(item.key, val)}
                     trackColor={{ false: theme.colors.divider, true: theme.colors.primary + '50' }}
                     thumbColor={notifPrefs[item.key] ? theme.colors.primary : theme.colors.muted}
+                    accessibilityLabel={t(item.labelKey)}
+                    accessibilityRole="switch"
                   />
                 </View>
               ))}
@@ -334,6 +391,8 @@ export default function SettingsScreen() {
                   borderTopColor: theme.colors.divider,
                 }]}
                 onPress={handleOpenSettings}
+                accessibilityLabel={`${t(item.labelKey)}: ${isGranted ? t('settings.granted') : t('settings.notSet')}`}
+                accessibilityRole="button"
               >
                 <View style={styles.menuItemLeft}>
                   <IconComponent size={20} color={theme.colors.textSecondary} />
@@ -372,6 +431,8 @@ export default function SettingsScreen() {
           <TouchableOpacity
             style={[styles.menuItem, { padding: theme.spacing.lg, borderBottomWidth: 1, borderBottomColor: theme.colors.divider }]}
             onPress={() => setShowPasswordModal(true)}
+            accessibilityLabel={t('profile.changePassword')}
+            accessibilityRole="button"
           >
             <View style={styles.menuItemLeft}>
               <Lock size={20} color={theme.colors.textSecondary} />
@@ -385,6 +446,8 @@ export default function SettingsScreen() {
           <TouchableOpacity
             style={[styles.menuItem, { padding: theme.spacing.lg }]}
             onPress={handleDemoRoleSwitch}
+            accessibilityLabel={t('profile.demoMode')}
+            accessibilityRole="button"
           >
             <View style={styles.menuItemLeft}>
               <Shield size={20} color={theme.colors.textSecondary} />
@@ -393,21 +456,6 @@ export default function SettingsScreen() {
               </Text>
             </View>
             <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-              <View style={[{
-                backgroundColor: demoRole === 'admin' ? theme.colors.primary + '18' : theme.colors.accentWarm + '18',
-                borderRadius: theme.radii.pill,
-                paddingHorizontal: 10,
-                paddingVertical: 4,
-                marginRight: 6,
-              }]}>
-                <Text style={[{
-                  color: demoRole === 'admin' ? theme.colors.primary : theme.colors.accentWarm,
-                  ...theme.typography.caption,
-                  fontWeight: '600' as const,
-                }]}>
-                  {demoRole === 'admin' ? t('profile.demoAdmin') : t('profile.demoRestricted')}
-                </Text>
-              </View>
               <ChevronRight size={18} color={theme.colors.muted} />
             </View>
           </TouchableOpacity>
@@ -421,6 +469,8 @@ export default function SettingsScreen() {
           <TouchableOpacity
             style={[styles.menuItem, { padding: theme.spacing.lg, borderBottomWidth: 1, borderBottomColor: theme.colors.divider }]}
             onPress={handleFAQPress}
+            accessibilityLabel={t('profile.faq')}
+            accessibilityRole="button"
           >
             <View style={styles.menuItemLeft}>
               <HelpCircle size={20} color={theme.colors.textSecondary} />
@@ -434,6 +484,8 @@ export default function SettingsScreen() {
           <TouchableOpacity
             style={[styles.menuItem, { padding: theme.spacing.lg, borderBottomWidth: 1, borderBottomColor: theme.colors.divider }]}
             onPress={handleSupportPress}
+            accessibilityLabel={t('profile.customerSupport')}
+            accessibilityRole="button"
           >
             <View style={styles.menuItemLeft}>
               <Headphones size={20} color={theme.colors.textSecondary} />
@@ -447,6 +499,8 @@ export default function SettingsScreen() {
           <TouchableOpacity
             style={[styles.menuItem, { padding: theme.spacing.lg }]}
             onPress={handleAboutPress}
+            accessibilityLabel={t('profile.about')}
+            accessibilityRole="button"
           >
             <View style={styles.menuItemLeft}>
               <Info size={20} color={theme.colors.textSecondary} />
@@ -476,6 +530,8 @@ export default function SettingsScreen() {
                 borderTopColor: theme.colors.divider,
               }]}
               onPress={() => setShowLegalModal(item.key)}
+              accessibilityLabel={item.label}
+              accessibilityRole="button"
             >
               <View style={styles.menuItemLeft}>
                 <FileText size={18} color={theme.colors.textSecondary} />
@@ -492,6 +548,8 @@ export default function SettingsScreen() {
         <TouchableOpacity
           onPress={() => void handleSignOut()}
           style={[{ backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, ...theme.shadows.shadowSm, padding: theme.spacing.lg, flexDirection: 'row', justifyContent: 'center', alignItems: 'center', marginBottom: theme.spacing.lg }]}
+          accessibilityLabel={t('profile.signOut')}
+          accessibilityRole="button"
         >
           <LogOut size={20} color={theme.colors.error} />
           <Text style={[{ color: theme.colors.error, ...theme.typography.body, marginLeft: 12 }]}>{t('profile.signOut')}</Text>
@@ -500,11 +558,19 @@ export default function SettingsScreen() {
         {/* Delete Account */}
         <TouchableOpacity
           onPress={deleteAccount}
-          style={[{ backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, ...theme.shadows.shadowSm, padding: theme.spacing.lg, flexDirection: 'row', justifyContent: 'center', alignItems: 'center' }]}
+          disabled={deleteLoading}
+          style={[{ backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, ...theme.shadows.shadowSm, padding: theme.spacing.lg, flexDirection: 'row', justifyContent: 'center', alignItems: 'center', opacity: deleteLoading ? 0.5 : 1 }]}
+          accessibilityLabel={t('profile.deleteAccount')}
+          accessibilityRole="button"
         >
           <Trash2 size={20} color="#e53e3e" />
           <Text style={[{ color: '#e53e3e', ...theme.typography.body, marginLeft: 12 }]}>{t('profile.deleteAccount')}</Text>
         </TouchableOpacity>
+
+        {/* App Version */}
+        <Text style={[{ color: theme.colors.muted, ...theme.typography.caption, textAlign: 'center' as const, marginTop: theme.spacing.xl }]}>
+          Barakeat v{Constants.expoConfig?.version ?? '1.0.0'}
+        </Text>
 
         <View style={{ height: 80 }} />
       </ScrollView>
@@ -525,6 +591,9 @@ export default function SettingsScreen() {
                 <TouchableOpacity
                   key={lang.code}
                   onPress={() => handleLanguageChange(lang.code)}
+                  accessibilityLabel={lang.label}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: isSelected }}
                   style={[{
                     flexDirection: 'row',
                     alignItems: 'center',
@@ -562,49 +631,171 @@ export default function SettingsScreen() {
         </TouchableOpacity>
       </Modal>
 
-      {/* FAQ Modal */}
-      <Modal visible={showFaqModal} transparent animationType="slide" onRequestClose={() => setShowFaqModal(false)}>
+      {/* FAQ Modal — 3-state bottom sheet: half → full → close */}
+      <Modal visible={showFaqModal} transparent animationType="fade" onRequestClose={closeSheet}>
         <View style={styles.bottomModalOverlay}>
-          <View style={[styles.bottomModalContent, { backgroundColor: theme.colors.surface, borderTopLeftRadius: theme.radii.r24, borderTopRightRadius: theme.radii.r24, ...theme.shadows.shadowLg }]}>
+          <TouchableOpacity style={{ flex: sheetState === 'full' ? 0 : 1, minHeight: sheetState === 'full' ? 0 : 40 }} activeOpacity={1} onPress={closeSheet} />
+          <Animated.View
+            style={[styles.bottomModalContent, {
+              backgroundColor: theme.colors.surface,
+              borderTopLeftRadius: theme.radii.r24,
+              borderTopRightRadius: theme.radii.r24,
+              ...theme.shadows.shadowLg,
+              height: sheetState === 'full' ? '95%' : '50%',
+              transform: [{ translateY: sheetY }],
+            }]}
+          >
+            <View {...sheetPan.panHandlers} style={{ paddingTop: 6, paddingBottom: 4 }}>
+              <View style={[styles.bottomModalHandle, { backgroundColor: theme.colors.divider, alignSelf: 'center', marginTop: 4, marginBottom: 4 }]} />
+            </View>
             <View style={[styles.bottomModalHeader, { padding: theme.spacing.xl }]}>
               <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h2 }]}>
                 {t('profile.faq')}
               </Text>
-              <TouchableOpacity onPress={() => setShowFaqModal(false)}>
-                <Text style={[{ color: theme.colors.primary, ...theme.typography.body, fontWeight: '600' as const }]}>
-                  {t('common.close')}
-                </Text>
+              <TouchableOpacity onPress={closeSheet}>
+                <X size={20} color={theme.colors.textSecondary} />
               </TouchableOpacity>
             </View>
-            <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingHorizontal: theme.spacing.xl, paddingBottom: 40 }}>
+            <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingHorizontal: theme.spacing.xl, paddingBottom: 40 }} scrollEnabled={sheetState === 'full'}>
               <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.body, lineHeight: 24 }]}>
                 {t('profile.faqContent')}
               </Text>
             </ScrollView>
-          </View>
+          </Animated.View>
         </View>
       </Modal>
 
-      {/* Legal Modal */}
-      <Modal visible={showLegalModal !== null} transparent animationType="slide" onRequestClose={() => setShowLegalModal(null)}>
+      {/* Legal Modal — 3-state bottom sheet: half → full → close */}
+      <Modal visible={showLegalModal !== null} transparent animationType="fade" onRequestClose={closeSheet}>
         <View style={styles.bottomModalOverlay}>
-          <View style={[styles.bottomModalContent, { backgroundColor: theme.colors.surface, borderTopLeftRadius: theme.radii.r24, borderTopRightRadius: theme.radii.r24, ...theme.shadows.shadowLg }]}>
+          <TouchableOpacity style={{ flex: sheetState === 'full' ? 0 : 1, minHeight: sheetState === 'full' ? 0 : 40 }} activeOpacity={1} onPress={closeSheet} />
+          <Animated.View
+            style={[styles.bottomModalContent, {
+              backgroundColor: theme.colors.surface,
+              borderTopLeftRadius: theme.radii.r24,
+              borderTopRightRadius: theme.radii.r24,
+              ...theme.shadows.shadowLg,
+              height: sheetState === 'full' ? '95%' : '50%',
+              transform: [{ translateY: sheetY }],
+            }]}
+          >
+            <View {...sheetPan.panHandlers} style={{ paddingTop: 6, paddingBottom: 4 }}>
+              <View style={[styles.bottomModalHandle, { backgroundColor: theme.colors.divider, alignSelf: 'center', marginTop: 4, marginBottom: 4 }]} />
+            </View>
             <View style={[styles.bottomModalHeader, { padding: theme.spacing.xl }]}>
               <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h2 }]}>
                 {showLegalModal === 'terms' ? t('profile.termsAndConditions') :
                  showLegalModal === 'cookies' ? t('profile.cookies') :
                  t('profile.privacyPolicy')}
               </Text>
-              <TouchableOpacity onPress={() => setShowLegalModal(null)}>
-                <Text style={[{ color: theme.colors.primary, ...theme.typography.body, fontWeight: '600' as const }]}>
-                  {t('common.close')}
-                </Text>
+              <TouchableOpacity onPress={closeSheet}>
+                <X size={20} color={theme.colors.textSecondary} />
               </TouchableOpacity>
             </View>
-            <View style={{ padding: theme.spacing.xl }}>
-              <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.body, textAlign: 'center' as const }]}>
-                {t('profile.legalContentSoon')}
+            <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingHorizontal: theme.spacing.xl, paddingBottom: 40 }} scrollEnabled={sheetState === 'full'}>
+              <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.body, lineHeight: 24 }]}>
+                {showLegalModal === 'terms' ? t('legal.termsContent') :
+                 showLegalModal === 'cookies' ? t('legal.cookiesContent') :
+                 t('legal.privacyContent')}
               </Text>
+            </ScrollView>
+          </Animated.View>
+        </View>
+      </Modal>
+
+      {/* Customer Support Modal */}
+      <Modal visible={showSupportModal} transparent animationType="fade" onRequestClose={() => setShowSupportModal(false)}>
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', alignItems: 'center', padding: 24 }}>
+          <View style={{ backgroundColor: theme.colors.surface, borderRadius: 20, padding: 24, width: '100%', maxWidth: 340, alignItems: 'center', ...theme.shadows.shadowLg }}>
+            <View style={{ backgroundColor: theme.colors.primary + '15', width: 56, height: 56, borderRadius: 28, justifyContent: 'center', alignItems: 'center', marginBottom: 16 }}>
+              <Headphones size={26} color={theme.colors.primary} />
+            </View>
+            <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3, textAlign: 'center', marginBottom: 8 }}>
+              {t('profile.customerSupport', { defaultValue: 'Support client' })}
+            </Text>
+            <Text style={{ color: theme.colors.textSecondary, ...theme.typography.body, textAlign: 'center', lineHeight: 22, marginBottom: 20 }}>
+              {t('profile.supportDesc', { defaultValue: 'Envoyez-nous un email et nous vous répondrons dans les plus brefs délais.' })}
+            </Text>
+            <TouchableOpacity
+              onPress={() => { Linking.openURL('mailto:contactbarakeat@gmail.com'); setShowSupportModal(false); }}
+              style={{ backgroundColor: theme.colors.primary, borderRadius: 14, paddingVertical: 14, width: '100%', alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 8 }}
+            >
+              <Mail size={16} color="#e3ff5c" />
+              <Text style={{ color: '#e3ff5c', fontWeight: '700', fontSize: 15 }}>contactbarakeat@gmail.com</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => setShowSupportModal(false)} style={{ marginTop: 12 }}>
+              <Text style={{ color: theme.colors.textSecondary, ...theme.typography.body }}>{t('common.close', { defaultValue: 'Fermer' })}</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* About / A Propos Modal */}
+      <Modal visible={showAboutModal} transparent animationType="fade" onRequestClose={() => setShowAboutModal(false)}>
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', alignItems: 'center', padding: 24 }}>
+          <View style={{ backgroundColor: theme.colors.surface, borderRadius: 20, padding: 24, width: '100%', maxWidth: 360, alignItems: 'center', ...theme.shadows.shadowLg }}>
+            <View style={{ backgroundColor: '#114b3c', width: 56, height: 56, borderRadius: 28, justifyContent: 'center', alignItems: 'center', marginBottom: 16 }}>
+              <Info size={26} color="#e3ff5c" />
+            </View>
+            <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3, textAlign: 'center', marginBottom: 12 }}>
+              {t('profile.about', { defaultValue: 'À propos' })}
+            </Text>
+            <Text style={{ color: theme.colors.textSecondary, ...theme.typography.body, textAlign: 'center', lineHeight: 22, marginBottom: 8 }}>
+              {t('profile.mission')}
+            </Text>
+            <Text style={{ color: theme.colors.primary, ...theme.typography.body, fontStyle: 'italic', textAlign: 'center', marginBottom: 8 }}>
+              "{t('profile.motto')}"
+            </Text>
+            <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, textAlign: 'center', marginBottom: 20 }}>
+              {t('profile.availability')}
+            </Text>
+            <TouchableOpacity
+              onPress={() => Linking.openURL('https://barakeat.tn')}
+              style={{ backgroundColor: '#114b3c', borderRadius: 14, paddingVertical: 12, width: '100%', alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 8, marginBottom: 8 }}
+            >
+              <ExternalLink size={16} color="#e3ff5c" />
+              <Text style={{ color: '#e3ff5c', fontWeight: '700', fontSize: 14 }}>barakeat.tn</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => setShowAboutModal(false)} style={{ marginTop: 8 }}>
+              <Text style={{ color: theme.colors.textSecondary, ...theme.typography.body }}>{t('common.close', { defaultValue: 'Fermer' })}</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Delete Account Confirmation Modal */}
+      <Modal visible={showDeleteModal} transparent animationType="fade" onRequestClose={() => setShowDeleteModal(false)}>
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', alignItems: 'center', padding: 24 }}>
+          <View style={{ backgroundColor: theme.colors.surface, borderRadius: 20, padding: 24, width: '100%', maxWidth: 340, alignItems: 'center', ...theme.shadows.shadowLg }}>
+            <View style={{ backgroundColor: theme.colors.error + '15', width: 56, height: 56, borderRadius: 28, justifyContent: 'center', alignItems: 'center', marginBottom: 16 }}>
+              <AlertTriangle size={26} color={theme.colors.error} />
+            </View>
+            <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3, textAlign: 'center', marginBottom: 8 }}>
+              {deleteStep === 'first'
+                ? t('profile.deleteAccount', { defaultValue: 'Supprimer le compte' })
+                : t('profile.deleteAccountFinalTitle', { defaultValue: 'Confirmation finale' })}
+            </Text>
+            <Text style={{ color: theme.colors.textSecondary, ...theme.typography.body, textAlign: 'center', lineHeight: 22, marginBottom: 24 }}>
+              {deleteStep === 'first'
+                ? t('profile.deleteAccountConfirm', { defaultValue: 'Cette action est irréversible. Toutes vos données seront supprimées.' })
+                : t('profile.deleteAccountFinalDesc', { defaultValue: 'Êtes-vous absolument sûr ? Cette action ne peut pas être annulée.' })}
+            </Text>
+            <View style={{ flexDirection: 'row', gap: 10, width: '100%' }}>
+              <TouchableOpacity
+                onPress={() => setShowDeleteModal(false)}
+                style={{ flex: 1, backgroundColor: theme.colors.bg, borderRadius: 12, paddingVertical: 14, alignItems: 'center', borderWidth: 1, borderColor: theme.colors.divider }}
+              >
+                <Text style={{ color: theme.colors.textPrimary, ...theme.typography.body, fontWeight: '600' }}>{t('common.cancel', { defaultValue: 'Annuler' })}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={handleDeleteConfirm}
+                disabled={deleteLoading}
+                style={{ flex: 1, backgroundColor: theme.colors.error, borderRadius: 12, paddingVertical: 14, alignItems: 'center' }}
+              >
+                <Text style={{ color: '#fff', ...theme.typography.body, fontWeight: '600' }}>
+                  {deleteLoading ? t('common.loading') : deleteStep === 'first' ? t('common.delete', { defaultValue: 'Supprimer' }) : t('profile.deleteAccountConfirmButton', { defaultValue: 'Confirmer la suppression' })}
+                </Text>
+              </TouchableOpacity>
             </View>
           </View>
         </View>
@@ -617,9 +808,11 @@ export default function SettingsScreen() {
             style={[styles.modalContent, { backgroundColor: theme.colors.surface, borderRadius: theme.radii.r24, padding: theme.spacing.xl, ...theme.shadows.shadowLg }]}
             onStartShouldSetResponder={() => true}
           >
-            <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, marginBottom: theme.spacing.lg }]}>
+            <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, marginBottom: theme.spacing.sm }]}>
               {t('profile.changePassword')}
             </Text>
+            {pwError ? <Text style={{ color: theme.colors.error, ...theme.typography.caption, marginBottom: theme.spacing.sm }}>{pwError}</Text> : null}
+            {pwSuccess ? <Text style={{ color: '#16a34a', ...theme.typography.bodySm, fontWeight: '600', marginBottom: theme.spacing.sm }}>{t('profile.passwordChanged', { defaultValue: 'Mot de passe changé !' })}</Text> : null}
             <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.bodySm, marginBottom: theme.spacing.sm }]}>
               {t('profile.currentPassword')}
             </Text>
@@ -630,6 +823,7 @@ export default function SettingsScreen() {
               placeholder={t('profile.currentPassword')}
               placeholderTextColor={theme.colors.muted}
               secureTextEntry
+              accessibilityLabel={t('profile.currentPassword')}
             />
             <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.bodySm, marginBottom: theme.spacing.sm }]}>
               {t('profile.newPasswordLabel')}
@@ -641,6 +835,7 @@ export default function SettingsScreen() {
               placeholder={t('profile.newPasswordLabel')}
               placeholderTextColor={theme.colors.muted}
               secureTextEntry
+              accessibilityLabel={t('profile.newPasswordLabel')}
             />
             <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.bodySm, marginBottom: theme.spacing.sm }]}>
               {t('profile.confirmPasswordLabel')}
@@ -652,11 +847,14 @@ export default function SettingsScreen() {
               placeholder={t('profile.confirmPasswordLabel')}
               placeholderTextColor={theme.colors.muted}
               secureTextEntry
+              accessibilityLabel={t('profile.confirmPasswordLabel')}
             />
             <TouchableOpacity
               onPress={handleChangePassword}
               disabled={pwLoading}
               style={{ backgroundColor: theme.colors.primary, borderRadius: theme.radii.r12, padding: theme.spacing.lg, marginTop: theme.spacing.sm, opacity: pwLoading ? 0.5 : 1 }}
+              accessibilityLabel={pwLoading ? t('common.loading') : t('common.save')}
+              accessibilityRole="button"
             >
               <Text style={{ color: '#fff', ...theme.typography.button, textAlign: 'center' }}>
                 {pwLoading ? t('common.loading') : t('common.save')}
@@ -714,5 +912,10 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+  },
+  bottomModalHandle: {
+    width: 40,
+    height: 4,
+    borderRadius: 2,
   },
 });

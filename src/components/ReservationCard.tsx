@@ -10,7 +10,7 @@ import { fetchReservationQRCode } from '@/src/services/reservations';
 
 interface ReservationCardProps {
   reservation: ReservationFromAPI;
-  onCancel?: (id: string) => void;
+  onCancel?: (id: string, quantity: number, locationId?: string, merchantName?: string) => void;
   onHide?: (id: string) => void;
   overrideExpired?: boolean;
 }
@@ -228,7 +228,10 @@ export function ReservationCard({ reservation, onCancel, onHide: _onHide, overri
       return { label: t('orders.startsIn'), time: h > 0 ? `${h}h ${m}m` : `${m}m`, color: theme.colors.primary };
     } else if (nowMin <= endMin) {
       const diff = endMin - nowMin;
-      return { label: t('orders.endsIn'), time: `${diff}m`, color: diff < 15 ? theme.colors.error : theme.colors.accentWarm };
+      const h = Math.floor(diff / 60);
+      const m = diff % 60;
+      const timeStr = h > 0 ? `${h}h ${m}m` : `${diff}m`;
+      return { label: t('orders.endsIn'), time: timeStr, color: diff < 15 ? theme.colors.error : theme.colors.accentWarm };
     } else {
       return { label: t('orders.pickupEnded'), time: '', color: theme.colors.muted };
     }
@@ -250,22 +253,19 @@ export function ReservationCard({ reservation, onCancel, onHide: _onHide, overri
       ]}
     >
       {/* Collapsed header — always visible */}
-      <TouchableOpacity onPress={handlePress} activeOpacity={0.85}>
+      <TouchableOpacity onPress={handlePress} activeOpacity={0.85} accessibilityLabel={`${basketTypeName}, ${merchantName}, ${total > 0 ? total + ' TND' : ''}, ${getStatusLabel()}`} accessibilityRole="button" accessibilityHint={t('orders.tapToExpand', { defaultValue: 'Tap to expand details' })}>
         <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-          {/* Left: basket icon */}
-          <View
-            style={{
-              width: 44,
-              height: 44,
-              borderRadius: 12,
-              backgroundColor: theme.colors.primary + '12',
-              alignItems: 'center',
-              justifyContent: 'center',
-              marginRight: 12,
-            }}
-          >
-            <ShoppingBag size={20} color={theme.colors.primary} />
-          </View>
+          {/* Left: location/basket image */}
+          {(() => {
+            const imgUrl = (basket as any)?.image_url ?? (basket as any)?.imageUrl ?? (basket as any)?.cover_image_url ?? r.restaurant_image ?? r.org_image_url ?? r.restaurant?.image_url ?? null;
+            return imgUrl ? (
+              <Image source={{ uri: imgUrl }} style={{ width: 44, height: 44, borderRadius: 12, marginRight: 12 }} resizeMode="cover" />
+            ) : (
+              <View style={{ width: 44, height: 44, borderRadius: 12, backgroundColor: theme.colors.primary + '12', alignItems: 'center', justifyContent: 'center', marginRight: 12 }}>
+                <ShoppingBag size={20} color={theme.colors.primary} />
+              </View>
+            );
+          })()}
 
           {/* Center: text info */}
           <View style={{ flex: 1 }}>
@@ -317,6 +317,7 @@ export function ReservationCard({ reservation, onCancel, onHide: _onHide, overri
           {/* Right: status badge + chevron */}
           <View style={{ flexDirection: 'column', alignItems: 'flex-end', gap: 4, marginLeft: 8 }}>
             <View
+              accessibilityLabel={`${t('orders.status', { defaultValue: 'Status' })}: ${getStatusLabel()}`}
               style={{
                 backgroundColor: getStatusColor() + '20',
                 borderRadius: theme.radii.r8,
@@ -359,8 +360,31 @@ export function ReservationCard({ reservation, onCancel, onHide: _onHide, overri
                 >
                   {address}
                 </Text>
+                {latitude !== 0 && longitude !== 0 && (
+                  <TouchableOpacity onPress={handleDirections} style={{ backgroundColor: theme.colors.primary, borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4, flexDirection: 'row', alignItems: 'center', gap: 3, marginLeft: 6 }}>
+                    <Navigation size={11} color="#fff" />
+                    <Text style={{ color: '#fff', fontSize: 10, fontWeight: '600' }}>{t('basket.directions')}</Text>
+                  </TouchableOpacity>
+                )}
               </View>
             ) : null}
+
+            {/* Basket photo */}
+            {((basket as any)?.image_url || (basket as any)?.cover_image_url) && (
+              <Image
+                source={{ uri: (basket as any)?.image_url ?? (basket as any)?.cover_image_url }}
+                style={{ width: '100%', height: 120, borderRadius: theme.radii.r12, marginBottom: theme.spacing.md }}
+                resizeMode="cover"
+              />
+            )}
+
+            {/* Price — above pickup code */}
+            {total > 0 && (
+              <View style={{ backgroundColor: theme.colors.bg, borderRadius: theme.radii.r12, padding: theme.spacing.md, marginBottom: theme.spacing.md, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm }}>{t('reserve.total', { defaultValue: 'Total' })}</Text>
+                <Text style={{ color: theme.colors.primary, ...theme.typography.h3, fontWeight: '700' }}>{total} TND</Text>
+              </View>
+            )}
 
             {/* Show pickup code only for upcoming orders */}
             {isUpcoming && pickupCode ? (
@@ -388,6 +412,8 @@ export function ReservationCard({ reservation, onCancel, onHide: _onHide, overri
                   </View>
                   <TouchableOpacity
                     onPress={handleToggleQR}
+                    accessibilityLabel={t('orders.showQrCode', { defaultValue: 'Show QR code' })}
+                    accessibilityRole="button"
                     style={[
                       styles.qrButton,
                       {
@@ -419,50 +445,14 @@ export function ReservationCard({ reservation, onCancel, onHide: _onHide, overri
               </View>
             ) : null}
 
-            <View style={[styles.footer, { marginTop: theme.spacing.lg }]}>
-              <View>
-                {total > 0 && (
-                  <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, fontWeight: '700' as const }]}>
-                    {total} TND
-                  </Text>
-                )}
-              </View>
-
+            {/* Footer row: review only (price + directions moved above) */}
+            <View style={[styles.footer, { marginTop: theme.spacing.md }]}>
+              <View />
               <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
-                {isUpcoming && onCancel && (
-                  <TouchableOpacity
-                    onPress={() => onCancel(reservation.id)}
-                    style={[{ padding: 6, backgroundColor: theme.colors.error + '15', borderRadius: theme.radii.r8 }]}
-                  >
-                    <XIcon size={16} color={theme.colors.error} />
-                  </TouchableOpacity>
-                )}
-                {latitude !== 0 && longitude !== 0 && (
-                  <TouchableOpacity
-                    style={[
-                      styles.directionsButton,
-                      {
-                        backgroundColor: theme.colors.primary,
-                        borderRadius: theme.radii.r12,
-                        paddingHorizontal: theme.spacing.md,
-                        paddingVertical: theme.spacing.sm,
-                        flexDirection: 'row',
-                        alignItems: 'center',
-                      },
-                    ]}
-                    onPress={handleDirections}
-                  >
-                    <Navigation size={14} color={theme.colors.surface} />
-                    <Text
-                      style={[{ color: theme.colors.surface, ...theme.typography.caption, fontWeight: '600' as const, marginLeft: 4 }]}
-                    >
-                      {t('basket.directions')}
-                    </Text>
-                  </TouchableOpacity>
-                )}
-
                 {isPast && (
                   <TouchableOpacity
+                    accessibilityLabel={t('orders.leaveReview')}
+                    accessibilityRole="button"
                     style={[
                       {
                         backgroundColor: theme.colors.accentWarm,
@@ -500,6 +490,31 @@ export function ReservationCard({ reservation, onCancel, onHide: _onHide, overri
                 )}
               </View>
             </View>
+
+            {/* Cancel Order — full-width prominent button, only for upcoming */}
+            {isUpcoming && onCancel && (
+              <TouchableOpacity
+                onPress={() => onCancel(
+                  reservation.id,
+                  quantity,
+                  String(r.location_id ?? r.restaurant_id ?? ''),
+                  merchantName,
+                )}
+                style={{
+                  flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7,
+                  marginTop: 12, paddingVertical: 12,
+                  backgroundColor: theme.colors.error,
+                  borderRadius: theme.radii.r12,
+                }}
+                accessibilityLabel={t('orders.cancelTitle', { defaultValue: 'Cancel order' })}
+                accessibilityRole="button"
+              >
+                <XIcon size={15} color="#fff" />
+                <Text style={{ color: '#fff', ...theme.typography.bodySm, fontWeight: '600' as const }}>
+                  {t('orders.cancelTitle', { defaultValue: 'Cancel Order' })}
+                </Text>
+              </TouchableOpacity>
+            )}
           </View>
         </View>
       )}

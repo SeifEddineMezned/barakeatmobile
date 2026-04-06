@@ -232,6 +232,7 @@ export async function addLocation(
     name?: string;
     address?: string;
     phone?: string;
+    category?: string;
     price_tier?: number;
     pickup_start_time?: string;
     pickup_end_time?: string;

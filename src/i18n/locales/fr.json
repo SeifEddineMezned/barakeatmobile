@@ -98,7 +98,9 @@
     "or": "ou",
     "agreeToThe": "J'accepte les ",
     "termsOfService": "Conditions d'utilisation",
-    "privacyPolicy": "Politique de confidentialité"
+    "privacyPolicy": "Politique de confidentialité",
+    "continueWithApple": "Continuer avec Apple",
+    "appleAuthError": "La connexion Apple a échoué. Veuillez réessayer."
   },
   "address": {
     "addresses": "Adresses",
@@ -191,7 +193,11 @@
     "packaging": "Emballage",
     "containerBag": "Contenant",
     "carrierBag": "Sac de transport",
-    "getDirections": "Itinéraire"
+    "getDirections": "Itinéraire",
+    "tapToView": "Appuyer pour voir les détails",
+    "addFavorite": "Ajouter aux favoris",
+    "removeFavorite": "Retirer des favoris",
+    "reserve": "Réserver"
   },
   "reserve": {
     "title": "Réserver Panier",
@@ -228,7 +234,8 @@
     "cashWarning": "Prêt à récupérer ce panier ?\n\nSi vos plans changent, annulez tôt, cela libère la place pour quelqu'un d'autre.\n\nAttention : des absences répétées sans annulation peuvent entraîner une pause temporaire de vos réservations.",
     "cashWarningIntro": "Prêt à récupérer ce panier ?\n\nSi vos plans changent, annulez tôt, cela libère la place pour quelqu'un d'autre.",
     "cashWarningBan": "Des absences répétées sans annulation peuvent entraîner une pause temporaire de vos réservations.",
-    "shareCode": "Partager les infos de retrait"
+    "shareCode": "Partager les infos de retrait",
+    "goToOrders": "Mes commandes"
   },
   "orders": {
     "title": "Commandes",
@@ -294,11 +301,14 @@
   },
   "favorites": {
     "title": "Favoris",
-    "baskets": "Paniers",
+    "baskets": "Commerces",
+    "starred": "Paniers",
     "merchants": "Commerçants",
     "emptyState": "Appuyez sur le cœur pour enregistrer",
     "emptyTitle": "Aucun favori ajouté",
     "emptyDesc": "Appuyez sur l'icône cœur d'un commerce pour l'ajouter à vos favoris et il apparaîtra ici.",
+    "emptyStarredTitle": "Aucun panier sauvegardé",
+    "emptyStarredDesc": "Appuyez sur l'icône marque-page d'un panier pour le sauvegarder et il apparaîtra ici.",
     "findBasket": "Trouver un Panier Surprise",
     "count": "{{count}} favoris"
   },
@@ -345,7 +355,7 @@
     "confirmPasswordLabel": "Confirmer le mot de passe",
     "profileUpdated": "Profil mis \u00e0 jour.",
     "editProfile": "Modifier",
-    "gender": "Genre",
+    "gender": "Sexe",
     "genderMale": "Homme",
     "genderFemale": "Femme",
     "genderNotSet": "Non défini",
@@ -353,6 +363,9 @@
     "deleteAccount": "Supprimer le compte",
     "deleteAccountConfirm": "Êtes-vous sûr de vouloir supprimer définitivement votre compte ? Cette action est irréversible.",
     "deleteAccountSoon": "La suppression de compte sera disponible dans une prochaine mise à jour.",
+    "deleteAccountFinalTitle": "Confirmation finale",
+    "deleteAccountFinalDesc": "Cela supprimera définitivement votre compte et toutes les données associées (commandes, avis, préférences). Cette action est irréversible.",
+    "deleteAccountConfirmButton": "Oui, supprimer mon compte",
     "statMoneySaved": "Argent Économisé",
     "statMoneySavedDesc": "Calculé à partir de la différence entre les prix originaux et ce que vous avez payé",
     "statCO2Saved": "CO₂ Économisé",
@@ -405,7 +418,10 @@
     "confirmLocation": "Confirmer l'emplacement",
     "saveAddress": "Enregistrer l'adresse",
     "coordinates": "Coordonnées",
-    "dragToMove": "Déplacez la carte pour repositionner le repère"
+    "dragToMove": "Déplacez la carte pour repositionner le repère",
+    "label_home": "Maison",
+    "label_work": "Travail",
+    "customNamePlaceholder": "Ou entrez un nom personnalisé..."
   },
   "map": {
     "title": "A Proximite",
@@ -449,11 +465,12 @@
     "notif_title_pickup_confirmed": "Retrait confirmé",
     "notif_title_review_received": "Nouvel avis",
     "notif_title_new_review": "Nouvel avis",
-    "notif_message_new_reservation": "{{count}} panier(s) réservé(s) dans votre restaurant",
+    "notif_message_new_reservation": "{{customerName}} a réservé {{count}} panier(s) dans votre commerce",
     "notif_message_reservation_cancelled": "{{count}} réservation(s) ont été annulées",
     "notif_title_order_confirmed": "Commande confirmée",
-    "notif_message_order_confirmed": "Votre commande chez {{location}} est confirmée ! Retrait : {{time}}. Code : {{code}}",
+    "notif_message_order_confirmed": "Votre commande chez {{location}} est confirmée ! Retrait : {{time}}.",
     "notif_message_pickup_confirmed": "Votre retrait chez {{restaurant}} a été confirmé ! Évaluez votre expérience ?",
+    "filterHidden": "Masquées",
     "notif_message_review_received": "Un client vous a laissé un avis",
     "notif_new_review": "Vous avez reçu un avis de {{rating}} étoile(s)",
     "pickupStartsTitle": "C'est l'heure du retrait !",
@@ -461,7 +478,22 @@
     "pickupEndingSoonTitle": "Retrait bientôt terminé !",
     "pickupEndingSoonBody": "Votre créneau de retrait se termine dans 30 minutes.",
     "favoriteNewBasket": "Nouveau panier disponible !",
-    "favoriteNewBasketBody": "Un de vos commerces favoris a un panier disponible aujourd'hui."
+    "favoriteNewBasketBody": "Un de vos commerces favoris a un panier disponible aujourd'hui.",
+    "basket": "Panier",
+    "location": "Commerce",
+    "customer": "Client",
+    "pickupTime": "Retrait",
+    "quantity": "Quantité",
+    "price": "Prix",
+    "rating": "Note",
+    "viewOrder": "Voir la commande",
+    "viewDashboard": "Tableau de bord",
+    "readyBy": "À préparer pour",
+    "cancelledInfo": "Commande annulée",
+    "filterAll": "Toutes",
+    "filterUnread": "Non lues",
+    "hide": "Masquer",
+    "hidden": "Masquée"
   },
   "business": {
     "allLocations": "Tous les emplacements",
@@ -470,6 +502,7 @@
     "unnamedLocation": "Emplacement sans nom",
     "dashboard": {
       "title": "Tableau de bord",
+      "tabLabel": "Accueil",
       "greeting": "Bonjour",
       "todayOverview": "Résumé du jour",
       "basketsSold": "Paniers vendus",
@@ -531,8 +564,12 @@
       "defaultQty": "Réinit. journalière",
       "addPhoto": "Ajouter une photo",
       "maxPerCustomer": "Max paniers par client",
-      "sameAllDays": "Meme pour tous les jours",
-      "withinHours": "Doit être dans les horaires du commerce"
+      "sameAllDays": "Même pour tous les jours",
+      "withinHours": "Doit être dans les horaires du commerce",
+      "days": {
+        "mon": "Lundi", "tue": "Mardi", "wed": "Mercredi", "thu": "Jeudi", "fri": "Vendredi", "sat": "Samedi", "sun": "Dimanche"
+      },
+      "dailyReinit": "Réinit."
     },
     "orders": {
       "title": "Commandes",
@@ -571,7 +608,7 @@
       "name": "Nom du commerce",
       "address": "Adresse",
       "phone": "Téléphone",
-      "hours": "Horaires d'ouverture",
+      "hours": "Créneaux de récupération",
       "category": "Catégorie",
       "description": "Description",
       "switchToCustomer": "Vue client",
@@ -669,7 +706,16 @@
       "menuItemsDesc": "Sélectionnez les articles du menu dans ce panier (optionnel)",
       "noMenuItems": "Aucun article — ajoutez-en dans Articles du menu",
       "aiSuggestionTitle": "Suggestion IA",
-      "aiSuggestionFilled": "Contenu suggéré rempli ! Ajustez-le selon vos besoins."
+      "aiSuggestionFilled": "Contenu suggéré rempli ! Ajustez-le selon vos besoins.",
+      "pickupInstructions": "Instructions de retrait",
+      "useDefaultInstructions": "Utiliser celles du commerce",
+      "pickupInstructionsPlaceholder": "Ex: Sonnez à l'entrée arrière",
+      "showMenuItems": "Afficher les articles du menu dans l'aperçu ?",
+      "menuItemsWithPicsDesc": "Seuls les articles avec photos seront visibles par les clients",
+      "noMenuItemsWithPics": "Aucun article avec photo — ajoutez des photos dans Articles du menu",
+      "menuItemsSelected": "{{count}} article(s) sélectionné(s)",
+      "useCustomPickupTime": "Utiliser un créneau personnalisé",
+      "usingLocationDefault": "Créneau par défaut du commerce"
     },
     "auth": {
       "businessSignIn": "Connexion Commerce",
@@ -889,5 +935,15 @@
       "performanceTitle": "Suivez vos performances",
       "performanceDesc": "Surveillez vos ventes, la nourriture sauvée et les avis clients au fil du temps."
     }
+  },
+  "legal": {
+    "privacyContent": "POLITIQUE DE CONFIDENTIALITÉ\n\nDate d'entrée en vigueur : 2 avril 2026\n\nBarakeat (\"nous\", \"notre\") exploite l'application mobile Barakeat Surprise Baskets. Cette politique de confidentialité explique comment nous collectons, utilisons, divulguons et protégeons vos informations.\n\n1. INFORMATIONS COLLECTÉES\n\nInformations personnelles : Lors de la création de votre compte, nous collectons votre nom, adresse email, numéro de téléphone et mot de passe (stocké de manière sécurisée). Si vous vous connectez via Google ou Apple, nous recevons votre nom et email de ces services.\n\nDonnées de localisation : Avec votre permission, nous collectons la localisation de votre appareil pour afficher les commerçants et paniers à proximité. Nous accédons à la localisation uniquement lorsque l'application est en cours d'utilisation.\n\nDonnées d'utilisation : Nous collectons des informations sur vos interactions avec l'application, y compris les commandes passées, avis soumis et préférences sélectionnées.\n\n2. UTILISATION DES INFORMATIONS\n\n- Fournir et maintenir notre service\n- Traiter vos réservations et commandes\n- Vous envoyer des rappels de collecte et confirmations de commande\n- Personnaliser votre expérience\n- Calculer les statistiques d'impact environnemental\n- Opérer les fonctionnalités de gamification\n\n3. PARTAGE DES DONNÉES\n\nNous partageons des informations limitées avec :\n- Les partenaires restaurateurs : Votre nom et code de collecte lors d'une réservation\n- Les fournisseurs de services : Hébergement (Railway), notifications push (Expo)\n\nNous ne vendons PAS vos données personnelles.\n\n4. VOS DROITS\n\nVous avez le droit de :\n- Accéder à vos données personnelles\n- Corriger les données inexactes\n- Supprimer votre compte et les données associées\n- Retirer le consentement pour le suivi de localisation\n\n5. CONTACT\n\nPour les questions de confidentialité : contactbarakeat@gmail.com",
+    "termsContent": "CONDITIONS GÉNÉRALES D'UTILISATION\n\nDate d'entrée en vigueur : 2 avril 2026\n\nBienvenue sur Barakeat Surprise Baskets. En utilisant notre application, vous acceptez ces conditions.\n\n1. ACCEPTATION DES CONDITIONS\n\nEn accédant ou en utilisant l'application Barakeat, vous acceptez d'être lié par ces Conditions Générales et notre Politique de Confidentialité.\n\n2. INSCRIPTION\n\nVous devez fournir des informations exactes lors de la création de votre compte. Vous êtes responsable de la confidentialité de vos identifiants. Vous devez avoir au moins 13 ans pour utiliser ce service.\n\n3. DESCRIPTION DU SERVICE\n\nBarakeat connecte les clients avec des commerçants locaux proposant des paniers surprise de nourriture excédentaire à prix réduits. Nous agissons comme une plateforme intermédiaire.\n\n4. RÉSERVATIONS ET PAIEMENTS\n\nLes réservations sont soumises à disponibilité. Le paiement se fait directement au commerçant lors de la collecte. La confirmation de réservation fournit un code de collecte.\n\n5. POLITIQUE DE COLLECTE\n\nVous devez récupérer votre panier pendant le créneau de collecte spécifié. Les paniers non récupérés peuvent être perdus sans remboursement.\n\n6. PANIERS SURPRISE\n\nLe contenu des paniers varie quotidiennement. Les articles spécifiques ne sont pas garantis. Si vous avez des allergies alimentaires, informez directement le commerçant.\n\n7. ANNULATION\n\nLes annulations avant le début du créneau de collecte sont gratuites. Les annulations tardives peuvent affecter votre compte.\n\n8. LIMITATION DE RESPONSABILITÉ\n\nBarakeat est une plateforme connectant acheteurs et vendeurs. Nous ne sommes pas responsables de la qualité ou de la sécurité des aliments.\n\n9. LOI APPLICABLE\n\nCes conditions sont régies par les lois de la Tunisie.\n\n10. CONTACT\n\nQuestions : contactbarakeat@gmail.com",
+    "cookiesContent": "POLITIQUE DE COOKIES ET STOCKAGE LOCAL\n\nDate d'entrée en vigueur : 2 avril 2026\n\n1. CE QUE NOUS UTILISONS\n\nEn tant qu'application mobile, Barakeat n'utilise pas de cookies de navigateur. Nous utilisons les mécanismes de stockage local suivants :\n\n- Stockage sécurisé : Votre jeton d'authentification est stocké en utilisant le stockage sécurisé de votre appareil.\n- AsyncStorage : Nous stockons vos préférences localement (langue, notifications, adresse sélectionnée).\n\n2. OBJECTIF\n\nCes données locales sont utilisées exclusivement pour :\n- Vous garder connecté entre les sessions\n- Mémoriser vos paramètres\n- Fournir une expérience personnalisée\n\n3. VOTRE CONTRÔLE\n\nVous pouvez effacer toutes les données locales en vous déconnectant ou en désinstallant l'application.\n\n4. CONTACT\n\nQuestions : contactbarakeat@gmail.com"
+  },
+  "offline": {
+    "title": "Pas de connexion Internet",
+    "message": "Veuillez vérifier votre connexion réseau et réessayer.",
+    "retry": "Réessayer"
   }
 }

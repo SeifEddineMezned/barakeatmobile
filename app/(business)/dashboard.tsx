@@ -1,5 +1,5 @@
-import React, { useState, useCallback } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Modal, Dimensions, Image, Animated as RNAnimated } from 'react-native';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Modal, Dimensions, Image, Animated as RNAnimated, PanResponder } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import { TrendingUp, ShoppingBag, Banknote, Clock, Leaf, Star, X, Package, AlertCircle, Store, Settings, Bell, ChevronDown, Check, Building2 } from 'lucide-react-native';
@@ -315,6 +315,25 @@ export default function BusinessDashboard() {
   const weeklyRevenueTotal = stats.dailyRevenue.reduce((a: number, b: number) => a + b, 0);
 
   const [showRatingModal, setShowRatingModal] = useState(false);
+  const ratingSlideY = useRef(new RNAnimated.Value(400)).current;
+  const ratingPanResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => false,
+      onMoveShouldSetPanResponder: (_, g) => g.dy > 8,
+      onPanResponderMove: (_, g) => { if (g.dy > 0) ratingSlideY.setValue(g.dy); },
+      onPanResponderRelease: (_, g) => {
+        if (g.dy > 80 || g.vy > 0.5) {
+          RNAnimated.timing(ratingSlideY, { toValue: 400, duration: 200, useNativeDriver: true }).start(() => setShowRatingModal(false));
+        } else {
+          RNAnimated.spring(ratingSlideY, { toValue: 0, friction: 8, useNativeDriver: true }).start();
+        }
+      },
+    })
+  ).current;
+  useEffect(() => {
+    if (showRatingModal) RNAnimated.spring(ratingSlideY, { toValue: 0, friction: 8, useNativeDriver: true }).start();
+    else ratingSlideY.setValue(400);
+  }, [showRatingModal]);
 
   const teamContextQuery = useQuery({
     queryKey: ['team-context'],
@@ -506,9 +525,13 @@ export default function BusinessDashboard() {
             <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3 }]}>
               {profileQuery.data?.name ?? user?.name ?? ''}
             </Text>
-            <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, marginTop: 2 }]}>
-              {profileQuery.data?.category ?? ''}
-            </Text>
+            {profileQuery.data?.category ? (
+              <View style={{ alignSelf: 'flex-start', marginTop: 4, backgroundColor: '#114b3c15', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 3 }}>
+                <Text style={{ color: '#114b3c', fontSize: 11, fontWeight: '600' }}>
+                  {t(`categories.${profileQuery.data.category.toLowerCase()}`, { defaultValue: profileQuery.data.category })}
+                </Text>
+              </View>
+            ) : null}
           </View>
         </View>
 
@@ -529,8 +552,6 @@ export default function BusinessDashboard() {
               overflow: 'hidden',
             }}
           >
-            {/* Decorative background circle */}
-            <View style={{ position: 'absolute', right: -24, top: -24, width: 110, height: 110, borderRadius: 55, backgroundColor: 'rgba(227,255,92,0.07)' }} />
             {/* Label */}
             <Text style={{ color: 'rgba(255,255,255,0.5)', fontSize: 10, fontFamily: 'Poppins_400Regular', letterSpacing: 0.8, textTransform: 'uppercase', marginBottom: 14 }}>
               {t('business.dashboard.daySummary')}
@@ -797,9 +818,15 @@ export default function BusinessDashboard() {
         <View style={{ height: 40 }} />
       </ScrollView>
 
-      <Modal visible={showRatingModal} transparent animationType="slide" onRequestClose={() => setShowRatingModal(false)}>
+      <Modal visible={showRatingModal} transparent animationType="fade" onRequestClose={() => setShowRatingModal(false)}>
         <View style={styles.modalOverlay}>
-          <View style={[styles.modalContent, { backgroundColor: theme.colors.surface, borderTopLeftRadius: 28, borderTopRightRadius: 28, padding: theme.spacing.xl, ...theme.shadows.shadowLg }]}>
+          <TouchableOpacity style={StyleSheet.absoluteFillObject} activeOpacity={1} onPress={() => {
+            RNAnimated.timing(ratingSlideY, { toValue: 400, duration: 200, useNativeDriver: true }).start(() => setShowRatingModal(false));
+          }} />
+          <RNAnimated.View
+            {...ratingPanResponder.panHandlers}
+            style={[styles.modalContent, { backgroundColor: theme.colors.surface, borderTopLeftRadius: 28, borderTopRightRadius: 28, padding: theme.spacing.xl, ...theme.shadows.shadowLg, transform: [{ translateY: ratingSlideY }] }]}
+          >
             <View style={[styles.modalHandle, { backgroundColor: theme.colors.divider, alignSelf: 'center', marginBottom: theme.spacing.lg }]} />
             <View style={styles.modalHeader}>
               <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h2 }]}>
@@ -833,7 +860,7 @@ export default function BusinessDashboard() {
                 {t('common.close')}
               </Text>
             </TouchableOpacity>
-          </View>
+          </RNAnimated.View>
         </View>
       </Modal>
 
@@ -863,7 +890,7 @@ export default function BusinessDashboard() {
               >
                 <Store size={18} color={selectedLocationId === null ? theme.colors.primary : theme.colors.textSecondary} />
                 <Text style={[{ ...theme.typography.body, color: selectedLocationId === null ? theme.colors.primary : theme.colors.textPrimary, flex: 1, marginLeft: 12, fontWeight: selectedLocationId === null ? ('600' as const) : ('400' as const) }]}>
-                  All locations
+                  {t('business.allLocations', { defaultValue: 'Tous les emplacements' })}
                 </Text>
                 {selectedLocationId === null && <Check size={18} color={theme.colors.primary} />}
               </TouchableOpacity>

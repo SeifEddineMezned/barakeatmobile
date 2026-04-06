@@ -5,7 +5,7 @@ import React, { useEffect, useState, useRef } from "react";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { ThemeProvider, useTheme } from "@/src/theme/ThemeProvider";
 import "@/src/i18n";
-import { StyleSheet, View, ActivityIndicator, Text, Modal, ScrollView, Dimensions, TouchableOpacity, Animated, Platform } from "react-native";
+import { StyleSheet, View, ActivityIndicator, Text, Modal, ScrollView, Dimensions, TouchableOpacity, Animated, Platform, Image } from "react-native";
 import {
   useFonts,
   Poppins_400Regular,
@@ -21,12 +21,16 @@ import { ErrorBoundary } from "@/src/components/ErrorBoundary";
 import { useFavoritesStore } from "@/src/stores/favoritesStore";
 import { useAddressStore } from "@/src/stores/addressStore";
 import { useSplashStore } from "@/src/stores/splashStore";
+import { useCelebrationStore } from "@/src/stores/celebrationStore";
 import { fetchGamificationStats } from "@/src/services/gamification";
 import { apiClient } from "@/src/lib/api";
 import { Search, ShoppingBag, Trophy, LayoutDashboard, Package, BarChart3 } from "lucide-react-native";
 // import { registerForPushNotifications } from "@/src/services/pushNotifications";
 import * as NavigationBar from "expo-navigation-bar";
+import { initSentry } from "@/src/lib/sentry";
+import { OfflineBanner } from "@/src/components/OfflineBanner";
 
+initSentry();
 SplashScreen.preventAutoHideAsync().catch(() => {});
 
 const queryClient = new QueryClient();
@@ -45,14 +49,15 @@ function RootLayoutNav() {
       <Stack.Screen name="restaurant/[id]" options={{ headerShown: false }} />
       <Stack.Screen name="business-detail/[id]" options={{ headerShown: false }} />
       <Stack.Screen name="basket/[id]" options={{ headerShown: false }} />
-      <Stack.Screen name="reserve" options={{ presentation: "modal", headerShown: false }} />
+      <Stack.Screen name="reserve" options={{ presentation: "card", headerShown: false }} />
       <Stack.Screen name="review" options={{ presentation: "modal", headerShown: false }} />
       <Stack.Screen name="business/create-basket" options={{ presentation: "modal", headerShown: false }} />
       <Stack.Screen name="business/availability" options={{ presentation: "modal", headerShown: false }} />
       <Stack.Screen name="business/menu-items" options={{ presentation: "modal", headerShown: false }} />
       <Stack.Screen name="business/scan-qr" options={{ presentation: "modal", headerShown: false }} />
-      <Stack.Screen name="business/team" options={{ presentation: "modal", headerShown: false }} />
+      <Stack.Screen name="business/team" options={{ headerShown: false }} />
       <Stack.Screen name="business/member-detail" options={{ headerShown: false }} />
+      <Stack.Screen name="business/add-location" options={{ headerShown: false }} />
       <Stack.Screen name="address-picker" options={{ headerShown: false }} />
       <Stack.Screen name="settings" options={{ headerShown: false }} />
       <Stack.Screen name="map-view" options={{ headerShown: false }} />
@@ -121,7 +126,7 @@ function RootLayoutInner() {
       return;
     }
 
-    const isBiz = user?.role === 'business';
+    const isBiz = user?.role === 'business' || (user as any)?.type === 'restaurant';
 
     if (isBiz && !inBusinessFlow && !inAuth) {
       console.log('[RootLayout] Routing business user to (business)/dashboard');
@@ -141,8 +146,11 @@ function RootLayoutInner() {
   });
 
   const splashDone = useSplashStore((s) => s.splashDone);
+  const celebrationPending = useCelebrationStore((s) => s.pending);
   useEffect(() => {
     if (!splashDone) return; // wait for splash animation to finish
+    if (showWelcomeModal) return; // don't overlap with welcome popup
+    if (celebrationPending) return; // don't overlap with post-reservation celebration
     const gData = gamQuery.data as any;
     if (!gData?.newBadges?.length || !gData?.badges) return;
     for (const newBadgeId of gData.newBadges) {
@@ -150,14 +158,17 @@ function RootLayoutInner() {
       badgeShownRef.current.add(newBadgeId);
       const badge = gData.badges.find((b: any) => b.id === newBadgeId);
       if (badge) {
-        setBadgePopup({ icon: badge.icon, nameKey: badge.nameKey, descKey: badge.descKey });
-        badgeScale.setValue(0);
-        Animated.spring(badgeScale, { toValue: 1, friction: 5, tension: 60, useNativeDriver: true }).start();
-        setTimeout(() => setBadgePopup(null), 4000);
+        // Delay badge popup slightly to avoid modal collision
+        setTimeout(() => {
+          setBadgePopup({ icon: badge.icon, nameKey: badge.nameKey, descKey: badge.descKey });
+          badgeScale.setValue(0);
+          Animated.spring(badgeScale, { toValue: 1, friction: 5, tension: 60, useNativeDriver: true }).start();
+          setTimeout(() => setBadgePopup(null), 4000);
+        }, 500);
         break;
       }
     }
-  }, [gamQuery.data, splashDone]);
+  }, [gamQuery.data, splashDone, showWelcomeModal, celebrationPending]);
 
   // Check if user needs the post-login tutorial
   useEffect(() => {
@@ -226,7 +237,7 @@ function RootLayoutInner() {
           }
         }} />
       )}
-      {showWelcomeModal && (
+      {showWelcomeModal && user?.role !== 'business' && (
         <Modal visible transparent animationType="fade" onRequestClose={() => setShowWelcomeModal(false)}>
           <TouchableOpacity style={{
             flex: 1,
@@ -261,56 +272,22 @@ function RootLayoutInner() {
                 <Text style={{ color: '#fff', fontSize: 14, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>✕</Text>
               </TouchableOpacity>
 
-              {/* Carousel */}
-              <ScrollView
-                horizontal
-                pagingEnabled
-                showsHorizontalScrollIndicator={false}
-                onMomentumScrollEnd={(e) => {
-                  const page = Math.round(e.nativeEvent.contentOffset.x / (WELCOME_WIDTH - 48));
-                  setWelcomeCarouselPage(page);
-                }}
-              >
-                {/* Page 1: Welcome */}
-                <View style={{ width: WELCOME_WIDTH - 48, paddingVertical: 60, paddingHorizontal: 30, alignItems: 'center' }}>
-                  <Hand size={40} color="rgba(255,255,255,0.9)" />
-                  <Text style={{ color: 'rgba(255,255,255,0.7)', fontSize: 14, fontFamily: 'Poppins_400Regular', marginTop: 20 }}>
-                    {t('home.welcomePopup.back')}
-                  </Text>
-                  <Text style={{ color: '#fff', fontSize: 28, fontWeight: '700', fontFamily: 'Poppins_700Bold', marginTop: 8, textAlign: 'center' }}>
-                    {user?.name ?? 'there'}
-                  </Text>
-                </View>
-
-                {/* Page 2: Updates */}
-                <View style={{ width: WELCOME_WIDTH - 48, paddingVertical: 60, paddingHorizontal: 30, alignItems: 'center' }}>
-                  <Sparkles size={40} color="rgba(255,255,255,0.9)" />
-                  <Text style={{ color: 'rgba(255,255,255,0.7)', fontSize: 14, fontFamily: 'Poppins_400Regular', marginTop: 20 }}>
-                    {t('home.welcomePopup.whatsNew')}
-                  </Text>
-                  <Text style={{ color: '#fff', fontSize: 22, fontWeight: '700', fontFamily: 'Poppins_700Bold', marginTop: 8, textAlign: 'center' }}>
-                    {t('home.welcomePopup.newPartners')}
-                  </Text>
-                  <Text style={{ color: 'rgba(255,255,255,0.6)', fontSize: 13, fontFamily: 'Poppins_400Regular', marginTop: 12, textAlign: 'center' }}>
-                    {t('home.welcomePopup.newPartnersDesc')}
-                  </Text>
-                </View>
-              </ScrollView>
-
-              {/* Dot indicators */}
-              <View style={{ flexDirection: 'row', justifyContent: 'center', paddingBottom: 20 }}>
-                {[0, 1].map((i) => (
-                  <View
-                    key={i}
-                    style={{
-                      width: welcomeCarouselPage === i ? 20 : 6,
-                      height: 6,
-                      borderRadius: 3,
-                      backgroundColor: welcomeCarouselPage === i ? '#e3ff5c' : 'rgba(255,255,255,0.3)',
-                      marginHorizontal: 3,
-                    }}
-                  />
-                ))}
+              {/* Single welcome page with gendered basket holder image */}
+              <View style={{ paddingTop: 40, paddingBottom: 30, paddingHorizontal: 30, alignItems: 'center' }}>
+                <Image
+                  source={(user as any)?.gender === 'female'
+                    ? require('@/assets/images/woman_holding_basket-removebg-preview.png')
+                    : require('@/assets/images/man_holding_basket-removebg-preview.png')}
+                  style={{ width: 90, height: 120, marginBottom: 12 }}
+                  resizeMode="contain"
+                />
+                <Hand size={32} color="rgba(255,255,255,0.9)" />
+                <Text style={{ color: 'rgba(255,255,255,0.7)', fontSize: 14, fontFamily: 'Poppins_400Regular', marginTop: 12 }}>
+                  {t('home.welcomePopup.back')}
+                </Text>
+                <Text style={{ color: '#fff', fontSize: 28, fontWeight: '700', fontFamily: 'Poppins_700Bold', marginTop: 8, textAlign: 'center' }}>
+                  {user?.name ?? 'there'}
+                </Text>
               </View>
             </View>
           </TouchableOpacity>
@@ -486,6 +463,7 @@ export default function RootLayout() {
   return (
     <QueryClientProvider client={queryClient}>
       <ThemeProvider>
+        <OfflineBanner />
         <RootLayoutInner />
       </ThemeProvider>
     </QueryClientProvider>

@@ -12,6 +12,7 @@ import { fetchMyBaskets, deleteBasket as deleteBasketAPI, fetchMyProfile, update
 import * as ImagePicker from 'expo-image-picker';
 import { getErrorMessage } from '@/src/lib/api';
 import { FeatureFlags } from '@/src/lib/featureFlags';
+import { DelayedLoader } from '@/src/components/DelayedLoader';
 
 export default function MyBasketsScreen() {
   const { t } = useTranslation();
@@ -120,6 +121,7 @@ export default function MyBasketsScreen() {
   const [detailBasket, setDetailBasket] = useState<typeof baskets[0] | null>(null);
   const [detailTodayQty, setDetailTodayQty] = useState(0);
   const [showFullDesc, setShowFullDesc] = useState(false);
+  const [descTruncated, setDescTruncated] = useState(false);
   const [showPickupEditor, setShowPickupEditor] = useState(false);
   const [pickupStartTime, setPickupStartTime] = useState('');
   const [pickupEndTime, setPickupEndTime] = useState('');
@@ -225,6 +227,15 @@ export default function MyBasketsScreen() {
       Alert.alert(t('common.error'), err?.message ?? t('errors.serverError'));
     }
   }, [queryClient]);
+
+  if (basketsQuery.isLoading && !basketsQuery.data) {
+    return (
+      <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]} edges={[]}>
+        <StatusBar style="dark" />
+        <DelayedLoader />
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]} edges={[]}>
@@ -344,7 +355,7 @@ export default function MyBasketsScreen() {
                           fontWeight: '700',
                           fontFamily: 'Poppins_700Bold',
                         }}>
-                          {basket.quantityLeft}
+                          {basket.quantityLeft >= 10 ? '9+' : basket.quantityLeft}
                         </Text>
                       </View>
                     </View>
@@ -369,14 +380,22 @@ export default function MyBasketsScreen() {
                           {basket.originalPrice} TND
                         </Text>
                       </View>
-                      {/* Only pickup window chip remains – quantity removed from text area */}
+                      {/* Meta row: daily reinit qty + custom pickup time (if different from location default) */}
                       <View style={[styles.metaRow, { marginTop: 6 }]}>
                         <View style={[styles.metaChip, { backgroundColor: theme.colors.bg, borderRadius: theme.radii.pill, paddingHorizontal: 8, paddingVertical: 3 }]}>
-                          <Clock size={10} color={theme.colors.textSecondary} />
+                          <ShoppingBag size={10} color={theme.colors.textSecondary} />
                           <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, marginLeft: 3 }]}>
+                            {t('business.baskets.dailyReinit', { defaultValue: 'Réinit.' })} {basket.quantityTotal}
+                          </Text>
+                        </View>
+                        {(basket.pickupWindow.start !== pickupStart || basket.pickupWindow.end !== pickupEnd) && (
+                        <View style={[styles.metaChip, { backgroundColor: '#e3ff5c18', borderRadius: theme.radii.pill, paddingHorizontal: 8, paddingVertical: 3 }]}>
+                          <Clock size={10} color="#8a7d00" />
+                          <Text style={[{ color: '#8a7d00', ...theme.typography.caption, marginLeft: 3, fontWeight: '600' }]}>
                             {basket.pickupWindow.start}-{basket.pickupWindow.end}
                           </Text>
                         </View>
+                        )}
                       </View>
                     </View>
                   </View>
@@ -517,12 +536,16 @@ export default function MyBasketsScreen() {
                 </View>
                 {detailBasket?.description ? (
                   <TouchableOpacity onPress={() => setShowFullDesc(!showFullDesc)} style={{ marginTop: 8 }}>
-                    <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm, lineHeight: 20 }} numberOfLines={showFullDesc ? undefined : 2}>
+                    <Text
+                      style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm, lineHeight: 20 }}
+                      numberOfLines={showFullDesc ? undefined : 2}
+                      onTextLayout={(e) => { if (!showFullDesc && e.nativeEvent.lines.length > 2) setDescTruncated(true); }}
+                    >
                       {detailBasket.description}
                     </Text>
-                    {!showFullDesc && (
+                    {!showFullDesc && descTruncated && (
                       <Text style={{ color: theme.colors.primary, ...theme.typography.caption, marginTop: 2 }}>
-                        {t('common.seeMore', { defaultValue: '...see more' })}
+                        {t('common.seeMore', { defaultValue: '...voir plus' })}
                       </Text>
                     )}
                   </TouchableOpacity>
@@ -566,8 +589,10 @@ export default function MyBasketsScreen() {
                   </View>
                 </View>
 
-                {/* Pickup Time — display row removed per CEO request.
-                     The inline editor below remains so retrait is still editable when tapping "Edit pickup time". */}
+                {/* Pickup Time editor — only show if basket has custom pickup times
+                     (different from location default) */}
+                {(detailBasket && (detailBasket.pickupWindow.start !== pickupStart || detailBasket.pickupWindow.end !== pickupEnd)) && (
+                <>
                 <TouchableOpacity
                   onPress={() => setShowPickupEditor(!showPickupEditor)}
                   style={{
@@ -580,10 +605,12 @@ export default function MyBasketsScreen() {
                   <Clock size={15} color={theme.colors.primary} />
                   <Text style={{ color: theme.colors.primary, ...theme.typography.bodySm, fontWeight: '600' }}>
                     {showPickupEditor
-                      ? t('business.availability.hidePickupEditor', { defaultValue: 'Hide pickup time editor' })
-                      : t('business.availability.editPickupTime', { defaultValue: 'Edit pickup time' })}
+                      ? t('business.availability.hidePickupEditor', { defaultValue: 'Masquer l\'éditeur de créneau' })
+                      : t('business.availability.editPickupTime', { defaultValue: 'Modifier l\'heure de retrait' })}
                   </Text>
                 </TouchableOpacity>
+                </>
+                )}
 
                 {/* Inline Pickup Time Editor */}
                 {showPickupEditor && (
@@ -745,17 +772,21 @@ export default function MyBasketsScreen() {
                     const clampedStart = `${String(Math.floor(psMin / 60)).padStart(2, '0')}:${String(psMin % 60).padStart(2, '0')}`;
                     const clampedEnd = `${String(Math.floor(peMin / 60)).padStart(2, '0')}:${String(peMin % 60).padStart(2, '0')}`;
 
+                    // Only include pickup times if the editor was opened (user explicitly changed them)
+                    const saveData: Record<string, any> = {
+                      name: detailBasket.name,
+                      original_price: detailBasket.originalPrice,
+                      selling_price: detailBasket.discountedPrice,
+                      quantity: detailTodayQty,
+                    };
+                    if (showPickupEditor) {
+                      saveData.pickup_start_time = `${clampedStart}:00`;
+                      saveData.pickup_end_time = `${clampedEnd}:00`;
+                    }
                     basketUpdateMutation.mutate(
                       {
                         id: detailBasket.id,
-                        data: {
-                          name: detailBasket.name,
-                          original_price: detailBasket.originalPrice,
-                          selling_price: detailBasket.discountedPrice,
-                          quantity: detailTodayQty,
-                          pickup_start_time: `${clampedStart}:00`,
-                          pickup_end_time: `${clampedEnd}:00`,
-                        },
+                        data: saveData,
                       },
                       {
                         onSuccess: () => {

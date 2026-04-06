@@ -68,23 +68,23 @@ export const FeatureFlags = {
   // "Scan Menu" button in menu-items screen → pick a photo of a menu →
   // Claude reads the items → checkbox review modal → bulk-add to menu.
   // ⚠️  Requires ANTHROPIC_API_KEY in backend .env to work.
-  ENABLE_AI_MENU_SCANNER: true,
+  ENABLE_AI_MENU_SCANNER: false,
 
   // ── B5: AI basket content & pricing suggestions ──────────────────────────
   // ✨ "Suggest" button in create-basket screen → Claude suggests a catchy
   // name, description, and a recommended price based on restaurant category.
   // ⚠️  Requires ANTHROPIC_API_KEY in backend .env to work.
-  ENABLE_AI_BASKET_SUGGESTIONS: true,
+  ENABLE_AI_BASKET_SUGGESTIONS: false,
 
   // ── B6: Easter eggs ──────────────────────────────────────────────────────
   // Master toggle — set false to silently disable ALL easter eggs at once.
-  ENABLE_EASTER_EGGS: true,
+  ENABLE_EASTER_EGGS: false,
 
   // 🥚 See header comment above for full descriptions of each egg.
-  ENABLE_MAP_EASTER_EGG: true,       // Nearby map constellation
-  ENABLE_LOGO_TAP_EASTER_EGG: true,  // Business dashboard logo × 5 taps
-  ENABLE_LUCKY_DIP: true,            // 5% bonus discount after reservation
-  ENABLE_TIME_BADGES: true,          // Early Bird 🌅 / Night Owl 🦉 badges
+  ENABLE_MAP_EASTER_EGG: false,       // Nearby map constellation
+  ENABLE_LOGO_TAP_EASTER_EGG: false,  // Business dashboard logo × 5 taps
+  ENABLE_LUCKY_DIP: false,            // 5% bonus discount after reservation
+  ENABLE_TIME_BADGES: false,          // Early Bird 🌅 / Night Owl 🦉 badges
 
   // ── B7: Animations v2 ────────────────────────────────────────────────────
   // Skeleton loaders on all loading states, staggered list entrances,
@@ -102,10 +102,26 @@ export const FeatureFlags = {
   // Second view mode in team management: org shown as a central circle with
   // member circles animating outward around it on a dark (#114b3c) canvas.
   // Toggle the view with the grid/chart button in the team screen header.
-  ENABLE_TEAM_ORG_CHART: true,
+  ENABLE_TEAM_ORG_CHART: false,
 
   // ── Payment ──────────────────────────────────────────────────────────────
   ENABLE_CARD_PAYMENT: false,  // Card payment at checkout — enable when payment provider is integrated
+
+  // ── Financial info in business profile ────────────────────────────────────
+  ENABLE_FINANCIAL_INFO: false,  // Show IBAN and payment history in business profile
+
+  // ── Cancellation limits ──────────────────────────────────────────────────
+  ENABLE_SAME_DAY_CANCEL_LIMIT: false,  // If true, prevent re-ordering from same location after cancelling same day
+  ENABLE_GLOBAL_CANCEL_BAN: false,  // If true, ban user from reserving after too many cancellations
+
+  // ── Location approval required ───────────────────────────────────────────
+  REQUIRE_LOCATION_APPROVAL: false,  // If true, new locations require admin approval before activation
+
+  // ── Menu items (Articles du menu) ────────────────────────────────────────
+  ENABLE_MENU_ITEMS: false,  // Show menu items feature in business profile, create-basket, and basket preview
+
+  // ── Dietary preferences in buyer profile ─────────────────────────────────
+  ENABLE_DIETARY_PREFERENCES: false,  // Show food preferences section on buyer profile
 
   // ── Previously disabled ──────────────────────────────────────────────────
   ENABLE_MAX_PER_CUSTOMER: false,  // Per-basket cap on how many a single customer can reserve

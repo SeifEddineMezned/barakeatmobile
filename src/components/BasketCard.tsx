@@ -98,6 +98,9 @@ export function BasketCard({ basket, onFavoritePress, isFavorite = false }: Bask
           onPressIn={handlePressIn}
           onPressOut={handlePressOut}
           activeOpacity={0.95}
+          accessibilityLabel={`${basket.name}, ${basket.merchantName}, ${basket.discountedPrice} TND`}
+          accessibilityRole="button"
+          accessibilityHint={isUnavailable ? t('basket.soldOut') : t('basket.tapToView', { defaultValue: 'Tap to view details' })}
           style={[
             styles.card,
             {
@@ -116,6 +119,7 @@ export function BasketCard({ basket, onFavoritePress, isFavorite = false }: Bask
                   styles.image,
                   { borderTopLeftRadius: theme.radii.r16, borderTopRightRadius: theme.radii.r16 },
                 ]}
+                accessibilityLabel={`${basket.merchantName} ${basket.name}`}
               />
             ) : (
               <View
@@ -135,25 +139,10 @@ export function BasketCard({ basket, onFavoritePress, isFavorite = false }: Bask
               ]}>
                 <ShoppingBag size={16} color={bagsCountColor} />
                 <Text style={[styles.bagsLeftText, { color: bagsCountColor, ...theme.typography.bodySm, fontWeight: '700' as const, marginLeft: 5 }]}>
-                  {basket.quantityLeft}
+                  {basket.quantityLeft >= 10 ? '9+' : basket.quantityLeft}
                 </Text>
               </View>
-              {/* Basket types badge — only shown if > 1 type and not sold out */}
-              {!isUnavailable && basket.basketTypeCount != null && basket.basketTypeCount > 1 && (
-                <View style={{
-                  flexDirection: 'row',
-                  alignItems: 'center',
-                  backgroundColor: '#e3ff5c',
-                  borderRadius: theme.radii.r12,
-                  paddingHorizontal: 10,
-                  paddingVertical: 5,
-                }}>
-                  <Layers size={14} color="#1a1a1a" />
-                  <Text style={{ color: '#1a1a1a', ...theme.typography.bodySm, fontWeight: '700' as const, marginLeft: 5 }}>
-                    {basket.basketTypeCount}
-                  </Text>
-                </View>
-              )}
+              {/* Basket types badge removed — was confusing for users */}
             </View>
 
             {/* Top-right buttons row: heart */}
@@ -161,6 +150,8 @@ export function BasketCard({ basket, onFavoritePress, isFavorite = false }: Bask
               {/* Heart (favorite) button */}
               <TouchableOpacity
                 onPress={handleFavoritePress}
+                accessibilityLabel={isFavorite ? t('basket.removeFavorite', { defaultValue: 'Remove from favorites' }) : t('basket.addFavorite', { defaultValue: 'Add to favorites' })}
+                accessibilityRole="button"
                 style={[
                   styles.iconButton,
                   { backgroundColor: 'rgba(255,255,255,0.92)', ...theme.shadows.shadowSm },
@@ -237,7 +228,7 @@ export function BasketCard({ basket, onFavoritePress, isFavorite = false }: Bask
               <View style={[styles.categoryRow, { marginTop: 3 }]}>
                 <Tag size={10} color={theme.colors.textSecondary} />
                 <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, marginLeft: 4 }]} numberOfLines={1}>
-                  {basket.category}
+                  {t(`categories.${basket.category.toLowerCase()}`, { defaultValue: basket.category })}
                 </Text>
               </View>
             )}
@@ -306,7 +297,7 @@ export function BasketCard({ basket, onFavoritePress, isFavorite = false }: Bask
               <View style={{ flex: 1 }}>
                 <Text style={styles.modalTitle} numberOfLines={2}>{basket.merchantName}</Text>
                 {basket.category && basket.category !== 'Tous' && (
-                  <Text style={styles.modalCategory}>{basket.category}</Text>
+                  <Text style={styles.modalCategory}>{t(`categories.${basket.category.toLowerCase()}`, { defaultValue: basket.category })}</Text>
                 )}
               </View>
               <TouchableOpacity onPress={() => setInfoVisible(false)} style={styles.modalCloseBtn}>

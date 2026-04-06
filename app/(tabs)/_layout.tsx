@@ -1,5 +1,5 @@
 import { Tabs } from "expo-router";
-import { Search, ShoppingBag, Heart, User, Star, Flag, Map, Bell, Settings } from "lucide-react-native";
+import { Search, ShoppingBag, Heart, User, Star, Flag, Map, Bell, Settings, Flame, Trophy, Zap } from "lucide-react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import React, { useState, useEffect, useMemo } from "react";
 import { useTranslation } from "react-i18next";
@@ -12,9 +12,9 @@ import { useNotificationStore } from "@/src/stores/notificationStore";
 import { useAuthStore } from "@/src/stores/authStore";
 import { useHeroStore } from "@/src/stores/heroStore";
 import { useSplashStore } from "@/src/stores/splashStore";
+import { useCelebrationStore } from "@/src/stores/celebrationStore";
 import { fetchMyReservations } from "@/src/services/reservations";
 import { fetchGamificationStats } from "@/src/services/gamification";
-import { Flame } from "lucide-react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
 const REVIEW_DISMISSED_KEY = 'barakeat_review_dismissed';
@@ -162,10 +162,12 @@ export default function TabLayout() {
 
   const reservations = useMemo(() => reservationsQuery.data ?? [], [reservationsQuery.data]);
 
-  // Show review popup only ONCE per reservation — persist immediately when shown, wait for splash
+  // Show review popup only ONCE per reservation — wait for splash + celebration to finish
   const reviewShownRef = React.useRef(false);
+  const hasPendingCelebration = useCelebrationStore((s) => !!s.pending);
   useEffect(() => {
-    if (!splashDone) return; // wait for splash animation to finish
+    if (!splashDone) return;
+    if (hasPendingCelebration) return; // wait for celebration to finish
     if (!reviewDismissedLoaded.current || !reservations.length || reviewShownRef.current) return;
     const needsReview = reservations.find((r) => {
       const status = ((r as any).status ?? '').toLowerCase();
@@ -195,7 +197,52 @@ export default function TabLayout() {
         total: rr.total_price ?? rr.total ?? rr.basket?.price ?? 0,
       });
     }
-  }, [reservations, reviewDismissed, reviewPrompt, splashDone]);
+  }, [reservations, reviewDismissed, reviewPrompt, splashDone, hasPendingCelebration]);
+
+  // ── Post-reservation celebration popup ──
+  const celebrationPending = useCelebrationStore((s) => s.pending);
+  const clearCelebration = useCelebrationStore((s) => s.clearPending);
+  const [showCelebration, setShowCelebration] = useState(false);
+  const flameScale = React.useRef(new Animated.Value(6)).current;
+  const celebrationOpacity = React.useRef(new Animated.Value(0)).current;
+  const statsOpacity = React.useRef(new Animated.Value(0)).current;
+  const xpBarWidth = React.useRef(new Animated.Value(0)).current;
+
+  React.useEffect(() => {
+    if (!celebrationPending) return;
+    setShowCelebration(true);
+    flameScale.setValue(celebrationPending.streakChanged ? 9 : 4);
+    celebrationOpacity.setValue(1);
+    statsOpacity.setValue(0);
+    xpBarWidth.setValue(0);
+
+    // Phase 1: flame shrinks from huge to normal
+    Animated.spring(flameScale, {
+      toValue: 1,
+      useNativeDriver: true,
+      friction: 5,
+      tension: 40,
+    }).start();
+
+    // Phase 2 (after 700ms): stats fade in + XP bar animates
+    setTimeout(() => {
+      Animated.parallel([
+        Animated.timing(statsOpacity, { toValue: 1, duration: 400, useNativeDriver: false }),
+        Animated.timing(xpBarWidth, {
+          toValue: celebrationPending.xpProgress,
+          duration: 900,
+          useNativeDriver: false,
+        }),
+      ]).start();
+    }, 700);
+  }, [celebrationPending]);
+
+  const dismissCelebration = React.useCallback(() => {
+    Animated.timing(celebrationOpacity, { toValue: 0, duration: 250, useNativeDriver: false }).start(() => {
+      setShowCelebration(false);
+      clearCelebration();
+    });
+  }, [celebrationOpacity, clearCelebration]);
 
   // ── Streak expiry warning — only after splash animation ends ──
   const splashDone = useSplashStore((s) => s.splashDone);
@@ -628,6 +675,79 @@ export default function TabLayout() {
             </View>
           </View>
         </View>
+      </Modal>
+
+      {/* Post-reservation celebration popup */}
+      <Modal visible={showCelebration} transparent animationType="none" onRequestClose={dismissCelebration}>
+        <Animated.View style={{ flex: 1, backgroundColor: 'rgba(17,75,60,0.97)', justifyContent: 'center', alignItems: 'center', padding: 28, opacity: celebrationOpacity }}>
+          {/* Flame — starts huge, springs to normal */}
+          {celebrationPending?.streakChanged ? (
+            <Animated.View style={{ transform: [{ scale: flameScale }], marginBottom: 12 }}>
+              <Flame size={56} color="#FF6B35" fill="#FF6B35" />
+            </Animated.View>
+          ) : (
+            <Animated.View style={{ transform: [{ scale: flameScale }], marginBottom: 12 }}>
+              <Trophy size={56} color="#e3ff5c" />
+            </Animated.View>
+          )}
+
+          {/* Stats card fades in */}
+          <Animated.View style={{ opacity: statsOpacity, width: '100%', alignItems: 'center' }}>
+            {/* Level heading */}
+            <Text style={{ color: '#e3ff5c', fontSize: 28, fontWeight: '700', fontFamily: 'Poppins_700Bold', textAlign: 'center' }}>
+              {celebrationPending?.levelAfter !== undefined && celebrationPending.levelAfter > celebrationPending.levelBefore
+                ? t('reserve.levelUp', { defaultValue: 'Level Up!' })
+                : t('reserve.goodJob', { defaultValue: 'Bien joué !' })}
+            </Text>
+            <Text style={{ color: 'rgba(255,255,255,0.75)', fontSize: 15, fontFamily: 'Poppins_400Regular', marginTop: 4, textAlign: 'center' }}>
+              {t('impact.level', { level: String(celebrationPending?.levelAfter ?? 1), defaultValue: `Level ${celebrationPending?.levelAfter ?? 1}` })}
+            </Text>
+
+            {/* XP gained badge */}
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: 'rgba(227,255,92,0.15)', borderRadius: 20, paddingHorizontal: 16, paddingVertical: 8, marginTop: 16 }}>
+              <Zap size={16} color="#e3ff5c" />
+              <Text style={{ color: '#e3ff5c', fontSize: 15, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
+                +{celebrationPending?.xpGained ?? 0} XP
+              </Text>
+            </View>
+
+            {/* XP bar */}
+            <View style={{ width: '100%', backgroundColor: 'rgba(255,255,255,0.12)', borderRadius: 8, height: 14, overflow: 'hidden', marginTop: 20 }}>
+              <Animated.View style={{
+                height: '100%',
+                backgroundColor: '#e3ff5c',
+                borderRadius: 8,
+                width: xpBarWidth.interpolate({ inputRange: [0, 1], outputRange: ['0%', '100%'] }),
+              }} />
+            </View>
+            <Text style={{ color: 'rgba(255,255,255,0.5)', fontSize: 12, fontFamily: 'Poppins_400Regular', marginTop: 6, alignSelf: 'flex-end' }}>
+              {celebrationPending?.xpInLevel ?? 0}/{celebrationPending?.xpBandSize ?? 50} XP
+            </Text>
+
+            {/* Streak row (if changed) */}
+            {celebrationPending?.streakChanged && (celebrationPending?.newStreak ?? 0) > 0 && (
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: 'rgba(255,107,53,0.18)', borderRadius: 14, paddingHorizontal: 18, paddingVertical: 10, marginTop: 16 }}>
+                <Flame size={18} color="#FF6B35" fill="#FF6B35" />
+                <Text style={{ color: '#FF6B35', fontSize: 16, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
+                  {celebrationPending.newStreak} {t('streak.days', { defaultValue: 'jours' })}
+                </Text>
+                <Text style={{ color: 'rgba(255,107,53,0.8)', fontSize: 13, fontFamily: 'Poppins_400Regular' }}>
+                  {t('streak.current', { defaultValue: 'de suite' })}
+                </Text>
+              </View>
+            )}
+
+            {/* Continue button */}
+            <TouchableOpacity
+              onPress={dismissCelebration}
+              style={{ backgroundColor: '#e3ff5c', borderRadius: 16, paddingVertical: 16, paddingHorizontal: 48, marginTop: 28 }}
+            >
+              <Text style={{ color: '#114b3c', fontSize: 16, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
+                {t('common.continue', { defaultValue: 'Continuer' })}
+              </Text>
+            </TouchableOpacity>
+          </Animated.View>
+        </Animated.View>
       </Modal>
 
       {/* Review popup on app open after pickup */}

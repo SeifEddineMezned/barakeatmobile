@@ -240,9 +240,16 @@ export function normalizeLocationToBasket(loc: LocationFromAPI): Basket {
   const bagDesc = loc.bag_description?.trim();
   const description = loc.description?.trim();
 
+  const rawLat = Number(loc.latitude);
+  const rawLng = Number(loc.longitude);
   const hasCoords =
     loc.latitude != null && loc.longitude != null &&
-    isFinite(Number(loc.latitude)) && isFinite(Number(loc.longitude));
+    isFinite(rawLat) && isFinite(rawLng) &&
+    (rawLat !== 0 || rawLng !== 0); // (0,0) = Gulf of Guinea, not valid
+
+  if (!hasCoords && loc.latitude != null) {
+    console.log(`[Normalize] "${loc.display_name ?? loc.name}" has lat=${loc.latitude} lng=${loc.longitude} but hasCoords=false`);
+  }
 
   // Fallback: derive approximate coordinates from address text
   const fallbackCoords = hasCoords ? null : geocodeFromAddress(loc.address ?? '');
@@ -307,7 +314,9 @@ export function mapCategory(cat: string | null | undefined): string {
     case 'bakery':
     case 'boulangerie':
     case 'patisserie':
+    case 'pâtisserie':
     case 'patisseries/boulangeries': // guard already-mapped legacy French
+    case 'pâtisseries/boulangeries':
     case 'pastry':
     case 'baked_goods':
     case 'baked goods':

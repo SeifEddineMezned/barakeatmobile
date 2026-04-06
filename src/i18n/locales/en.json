@@ -98,7 +98,9 @@
     "or": "or",
     "agreeToThe": "I agree to the ",
     "termsOfService": "Terms of Service",
-    "privacyPolicy": "Privacy Policy"
+    "privacyPolicy": "Privacy Policy",
+    "continueWithApple": "Continue with Apple",
+    "appleAuthError": "Apple sign-in failed. Please try again."
   },
   "address": {
     "addresses": "Addresses",
@@ -191,7 +193,11 @@
     "packaging": "Packaging",
     "containerBag": "Container",
     "carrierBag": "Carrier Bag",
-    "getDirections": "Get Directions"
+    "getDirections": "Get Directions",
+    "tapToView": "Tap to view details",
+    "addFavorite": "Add to favorites",
+    "removeFavorite": "Remove from favorites",
+    "reserve": "Reserve"
   },
   "reserve": {
     "title": "Reserve Basket",
@@ -228,7 +234,8 @@
     "cashWarning": "Ready to pick up this basket?\n\nIf your plans change, please cancel early, it frees up the spot for someone else.\n\nHeads up: repeated no shows without cancelling may lead to a temporary pause on your reservations.",
     "cashWarningIntro": "Ready to pick up this basket?\n\nIf your plans change, please cancel early, it frees up the spot for someone else.",
     "cashWarningBan": "Repeated no shows without cancelling may lead to a temporary pause on your reservations.",
-    "shareCode": "Share pickup info"
+    "shareCode": "Share pickup info",
+    "goToOrders": "My Orders"
   },
   "orders": {
     "title": "Orders",
@@ -294,11 +301,14 @@
   },
   "favorites": {
     "title": "Favorites",
-    "baskets": "Baskets",
+    "baskets": "Shops",
+    "starred": "Baskets",
     "merchants": "Merchants",
     "emptyState": "Tap the heart to save favorites",
     "emptyTitle": "No favorites added yet",
     "emptyDesc": "Tap the heart icon on a store to add it to your favorites and it will show up here.",
+    "emptyStarredTitle": "No starred baskets yet",
+    "emptyStarredDesc": "Tap the bookmark icon on a basket to star it and it will appear here.",
     "findBasket": "Find a Surprise Bag",
     "count": "{{count}} favorites"
   },
@@ -353,6 +363,9 @@
     "deleteAccount": "Delete Account",
     "deleteAccountConfirm": "Are you sure you want to permanently delete your account? This action cannot be undone.",
     "deleteAccountSoon": "Account deletion will be available in a future update.",
+    "deleteAccountFinalTitle": "Final Confirmation",
+    "deleteAccountFinalDesc": "This will permanently delete your account and all associated data (orders, reviews, preferences). This cannot be undone.",
+    "deleteAccountConfirmButton": "Yes, Delete My Account",
     "statMoneySaved": "Money Saved",
     "statMoneySavedDesc": "Calculated from the difference between original prices and what you paid",
     "statCO2Saved": "CO₂ Saved",
@@ -886,5 +899,15 @@
       "performanceTitle": "Track Performance",
       "performanceDesc": "Monitor your sales, food saved, and customer ratings over time."
     }
+  },
+  "legal": {
+    "privacyContent": "PRIVACY POLICY\n\nEffective Date: April 2, 2026\n\nBarakeat (\"we\", \"our\", \"us\") operates the Barakeat Surprise Baskets mobile application. This Privacy Policy explains how we collect, use, disclose, and safeguard your information.\n\n1. INFORMATION WE COLLECT\n\nPersonal Information: When you create an account, we collect your name, email address, phone number, and password (stored securely hashed). If you sign in via Google or Apple, we receive your name and email from those services.\n\nLocation Data: With your permission, we collect your device location to show nearby merchants and baskets. We only access location while the app is in use.\n\nUsage Data: We collect information about your interactions with the app, including orders placed, reviews submitted, and preferences selected.\n\nDevice Information: We collect device type, operating system, and push notification tokens to deliver notifications.\n\n2. HOW WE USE YOUR INFORMATION\n\n- To provide and maintain our service\n- To process your reservations and orders\n- To send you pickup reminders and order confirmations\n- To personalize your experience (food preferences, nearby results)\n- To calculate environmental impact statistics\n- To operate gamification features (badges, leaderboard)\n- To communicate with you about your account\n\n3. DATA SHARING\n\nWe share limited information with:\n- Restaurant partners: Your name and pickup code when you place a reservation\n- Service providers: Hosting (Railway), push notifications (Expo)\n\nWe do NOT sell your personal data to third parties.\n\n4. DATA RETENTION\n\nWe retain your data for as long as your account is active. You may request deletion at any time through the app settings.\n\n5. YOUR RIGHTS\n\nYou have the right to:\n- Access your personal data\n- Correct inaccurate data\n- Delete your account and associated data\n- Withdraw consent for location tracking\n- Opt out of promotional notifications\n\n6. DATA SECURITY\n\nWe use industry-standard security measures including encrypted storage for authentication tokens, HTTPS for all API communications, and secure password hashing.\n\n7. CHILDREN'S PRIVACY\n\nOur service is not directed to children under 13. We do not knowingly collect data from children.\n\n8. CHANGES TO THIS POLICY\n\nWe may update this policy from time to time. We will notify you of changes through the app.\n\n9. CONTACT US\n\nFor privacy-related questions: contactbarakeat@gmail.com",
+    "termsContent": "TERMS AND CONDITIONS\n\nEffective Date: April 2, 2026\n\nWelcome to Barakeat Surprise Baskets. By using our app, you agree to these terms.\n\n1. ACCEPTANCE OF TERMS\n\nBy accessing or using the Barakeat app, you agree to be bound by these Terms and Conditions and our Privacy Policy.\n\n2. ACCOUNT REGISTRATION\n\nYou must provide accurate information when creating an account. You are responsible for maintaining the confidentiality of your login credentials. You must be at least 13 years old to use this service.\n\n3. SERVICE DESCRIPTION\n\nBarakeat connects customers with local merchants offering surprise baskets of surplus food at discounted prices. We act as an intermediary platform; the food is prepared and sold by independent merchants.\n\n4. RESERVATIONS AND PAYMENTS\n\nReservations are subject to availability. Payment is made directly to the merchant at pickup unless otherwise specified. Prices shown include applicable taxes. Reservation confirmation provides a pickup code that must be presented at collection.\n\n5. PICKUP POLICY\n\nYou must collect your basket during the specified pickup window. Uncollected baskets may be forfeited without refund. The merchant may verify your identity using the pickup code or QR code.\n\n6. SURPRISE BASKETS\n\nBasket contents vary daily based on available surplus. Specific items are not guaranteed. If you have food allergies, please inform the merchant directly at pickup.\n\n7. CANCELLATION POLICY\n\nCancellations made before the pickup window begins are free. Late cancellations or no-shows may affect your account standing.\n\n8. USER CONDUCT\n\nYou agree not to: misuse the platform, submit false reviews, create multiple accounts, harass merchants or other users, or attempt to circumvent our systems.\n\n9. REVIEWS AND CONTENT\n\nBy submitting reviews, you grant Barakeat a license to display your review content. Reviews must be honest and related to your actual experience. We reserve the right to remove reviews that violate our guidelines.\n\n10. MERCHANT RESPONSIBILITIES\n\nMerchants are responsible for food safety and quality. Barakeat does not prepare, handle, or inspect the food. Any food safety concerns should be directed to the merchant and reported to us.\n\n11. LIMITATION OF LIABILITY\n\nBarakeat is a platform connecting buyers and sellers. We are not liable for the quality, safety, or availability of food items. Our liability is limited to the extent permitted by law.\n\n12. ACCOUNT TERMINATION\n\nWe may suspend or terminate accounts that violate these terms. You may delete your account at any time through the app settings.\n\n13. CHANGES TO TERMS\n\nWe may update these terms. Continued use of the app after changes constitutes acceptance.\n\n14. GOVERNING LAW\n\nThese terms are governed by the laws of Tunisia.\n\n15. CONTACT\n\nQuestions about these terms: contactbarakeat@gmail.com",
+    "cookiesContent": "COOKIES AND LOCAL STORAGE POLICY\n\nEffective Date: April 2, 2026\n\n1. WHAT WE USE\n\nAs a mobile application, Barakeat does not use browser cookies. Instead, we use the following local storage mechanisms:\n\n- Secure Storage: Your authentication token is stored using your device's secure storage (iOS Keychain / Android EncryptedSharedPreferences). This is essential for keeping you logged in.\n\n- AsyncStorage: We store your app preferences locally, including:\n  • Language preference\n  • Notification preferences\n  • Onboarding completion status\n  • Selected delivery address\n\n2. PURPOSE\n\nThis local data is used exclusively to:\n- Keep you signed in between sessions\n- Remember your language and notification settings\n- Provide a personalized experience\n- Cache data for faster app performance\n\n3. THIRD-PARTY SERVICES\n\nWe use Expo push notification services to deliver notifications. No advertising cookies or tracking pixels are used.\n\n4. YOUR CONTROL\n\nYou can clear all local data by:\n- Signing out of the app (clears authentication data)\n- Uninstalling the app (clears all local storage)\n- Adjusting notification preferences in Settings\n\n5. CONTACT\n\nQuestions about our data practices: contactbarakeat@gmail.com"
+  },
+  "offline": {
+    "title": "No Internet Connection",
+    "message": "Please check your network connection and try again.",
+    "retry": "Retry"
   }
 }

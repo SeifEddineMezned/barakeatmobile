@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useState, useRef } from 'react';
 import {
   View,
   Text,
@@ -7,6 +7,10 @@ import {
   TouchableOpacity,
   RefreshControl,
   Modal,
+  ScrollView,
+  Image,
+  Animated,
+  PanResponder,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
@@ -22,6 +26,7 @@ import {
   NotificationFromAPI,
 } from '@/src/services/notifications';
 import { useNotificationStore } from '@/src/stores/notificationStore';
+import { useAuthStore } from '@/src/stores/authStore';
 import { DelayedLoader } from '@/src/components/DelayedLoader';
 
 function timeAgo(dateStr: string, t: (key: string, opts?: Record<string, unknown>) => string): string {
@@ -93,6 +98,129 @@ function getNotifIcon(type?: string | null, title?: string | null): { Icon: any;
   return { Icon: Bell, color: '#6b7280', bg: '#6b728018' };
 }
 
+/** Swipeable notification card — slides left to reveal hide button, then slides off */
+function SwipeableNotifCard({ item, theme, t, onPress, onHide, hiddenIds, setHiddenIds, getReservationImage }: {
+  item: NotificationFromAPI; theme: any; t: any;
+  onPress: (item: NotificationFromAPI) => void;
+  onHide: (id: number) => void;
+  hiddenIds: Set<number>;
+  setHiddenIds: React.Dispatch<React.SetStateAction<Set<number>>>;
+  getReservationImage: (refId?: number) => string | null;
+}) {
+  const translateX = useRef(new Animated.Value(0)).current;
+  const [swiped, setSwiped] = useState(false);
+  const { Icon, color, bg } = getNotifIcon(item.type, item.title);
+  const isHidden = hiddenIds.has(item.id);
+
+  // Extract image from notification params, fall back to cached reservation data
+  const notifImage = React.useMemo(() => {
+    try {
+      const parsed = JSON.parse(item.message);
+      const p = parsed?.params ?? {};
+      const fromParams = p.locationImage ?? p.location_image ?? p.restaurant_image ?? p.image_url ?? p.basketImage ?? p.basket_image ?? null;
+      if (fromParams) return fromParams;
+    } catch {}
+    // Fallback: look up reservation image from cache
+    return getReservationImage(item.reference_id) ?? null;
+  }, [item.message, item.reference_id, getReservationImage]);
+  const isOrderRelated = (item.type ?? '').includes('reservation') || (item.type ?? '').includes('order') || (item.type ?? '').includes('pickup') || (item.type ?? '').includes('cancelled');
+  const REVEAL_THRESHOLD = -70;
+  const screenW = 400;
+
+  const panResponder = useRef(PanResponder.create({
+    onStartShouldSetPanResponder: () => false,
+    onMoveShouldSetPanResponder: (_, g) => Math.abs(g.dx) > 10 && Math.abs(g.dx) > Math.abs(g.dy),
+    onPanResponderMove: (_, g) => {
+      if (g.dx < 0) { translateX.setValue(g.dx); setSwiped(true); }
+    },
+    onPanResponderRelease: (_, g) => {
+      if (g.dx < -screenW * 0.4) {
+        Animated.timing(translateX, { toValue: -screenW, duration: 200, useNativeDriver: true }).start(() => {
+          onHide(item.id);
+          translateX.setValue(0); setSwiped(false);
+        });
+      } else if (g.dx < REVEAL_THRESHOLD) {
+        Animated.spring(translateX, { toValue: REVEAL_THRESHOLD, friction: 8, useNativeDriver: true }).start();
+      } else {
+        Animated.spring(translateX, { toValue: 0, friction: 8, useNativeDriver: true }).start(() => setSwiped(false));
+      }
+    },
+  })).current;
+
+  const handleHidePress = () => {
+    if (isHidden) {
+      setHiddenIds((prev: Set<number>) => { const s = new Set(prev); s.delete(item.id); return s; });
+    } else {
+      Animated.timing(translateX, { toValue: -screenW, duration: 200, useNativeDriver: true }).start(() => {
+        onHide(item.id);
+        translateX.setValue(0);
+      });
+    }
+  };
+
+  return (
+    <View style={{ marginBottom: theme.spacing.md }}>
+      {/* Hide action behind card — only visible when swiped */}
+      {swiped && (
+      <View style={{ position: 'absolute', right: 0, top: 0, bottom: 0, width: 70, backgroundColor: theme.colors.error, borderRadius: theme.radii.r12, justifyContent: 'center', alignItems: 'center' }}>
+        <TouchableOpacity onPress={handleHidePress} style={{ alignItems: 'center' }}>
+          <XCircle size={16} color="#fff" />
+          <Text style={{ color: '#fff', fontSize: 9, fontWeight: '600', marginTop: 2 }}>
+            {isHidden ? t('notifications.show', { defaultValue: 'Afficher' }) : t('notifications.hide', { defaultValue: 'Masquer' })}
+          </Text>
+        </TouchableOpacity>
+      </View>
+      )}
+      {/* Card that slides */}
+      <Animated.View {...panResponder.panHandlers} style={{ transform: [{ translateX }] }}>
+        <TouchableOpacity
+          style={{
+            backgroundColor: theme.colors.surface,
+            borderRadius: theme.radii.r12,
+            padding: theme.spacing.lg,
+          }}
+          onPress={() => onPress(item)}
+          activeOpacity={1}
+        >
+          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+            {notifImage && isOrderRelated ? (
+              <View style={{ marginRight: theme.spacing.md }}>
+                <Image source={{ uri: notifImage }} style={{ width: 40, height: 40, borderRadius: 12 }} resizeMode="cover" />
+                {!item.is_read && (
+                  <View style={{ position: 'absolute', top: -2, right: -2, width: 10, height: 10, borderRadius: 5, backgroundColor: theme.colors.primary, borderWidth: 2, borderColor: theme.colors.surface }} />
+                )}
+              </View>
+            ) : (
+              <View style={{ width: 40, height: 40, borderRadius: 20, backgroundColor: bg, justifyContent: 'center', alignItems: 'center', marginRight: theme.spacing.md }}>
+                <Icon size={18} color={color} />
+                {!item.is_read && (
+                  <View style={{ position: 'absolute', top: 0, right: 0, width: 10, height: 10, borderRadius: 5, backgroundColor: theme.colors.primary, borderWidth: 2, borderColor: theme.colors.surface }} />
+                )}
+              </View>
+            )}
+            <View style={{ flex: 1 }}>
+              {item.title ? (
+                <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: item.is_read ? ('400' as const) : ('600' as const) }} numberOfLines={1}>
+                  {resolveNotifText(item.title, t)}
+                </Text>
+              ) : null}
+              <Text
+                style={{ color: item.title ? theme.colors.textSecondary : theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: !item.title && !item.is_read ? ('600' as const) : ('400' as const), marginTop: item.title ? 2 : 0 }}
+                numberOfLines={2}
+              >
+                {resolveNotifText(item.message, t)}
+              </Text>
+            </View>
+            <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, marginLeft: theme.spacing.md }}>
+              {timeAgo(item.created_at, t)}
+            </Text>
+          </View>
+        </TouchableOpacity>
+      </Animated.View>
+    </View>
+  );
+}
+
 export default function NotificationsScreen() {
   const { t } = useTranslation();
   const theme = useTheme();
@@ -100,7 +228,23 @@ export default function NotificationsScreen() {
   const queryClient = useQueryClient();
   const decrementUnread = useNotificationStore((s) => s.decrementUnread);
   const clearUnread = useNotificationStore((s) => s.clearUnread);
+  const { user } = useAuthStore();
+  const isBusiness = user?.role === 'business';
+  // Get cached reservations to find location images for notifications
+  const cachedReservations = queryClient.getQueryData<any[]>(['reservations']) ?? [];
+  const getReservationImage = useCallback((refId?: number) => {
+    if (!refId) return null;
+    const r = cachedReservations.find((res: any) => res.id === refId || String(res.id) === String(refId));
+    if (!r) return null;
+    return r.restaurant_image ?? r.org_image_url ?? r.restaurant?.image_url ?? r.basket?.image_url ?? r.basket?.cover_image_url ?? null;
+  }, [cachedReservations]);
   const [detailNotif, setDetailNotif] = useState<NotificationFromAPI | null>(null);
+  const [filter, setFilter] = useState<'all' | 'unread' | 'hidden'>('all');
+  const [hiddenIds, setHiddenIds] = useState<Set<number>>(new Set());
+
+  const hideNotification = useCallback((id: number) => {
+    setHiddenIds(prev => new Set(prev).add(id));
+  }, []);
 
   const notificationsQuery = useQuery({
     queryKey: ['notifications'],
@@ -137,76 +281,10 @@ export default function NotificationsScreen() {
   );
 
   const renderItem = useCallback(
-    ({ item }: { item: NotificationFromAPI }) => (
-      <TouchableOpacity
-        style={[
-          styles.notificationItem,
-          {
-            backgroundColor: theme.colors.surface,
-            borderRadius: theme.radii.r12,
-            padding: theme.spacing.lg,
-            marginBottom: theme.spacing.md,
-          },
-        ]}
-        onPress={() => handlePressNotification(item)}
-        activeOpacity={0.7}
-      >
-        <View style={styles.notificationRow}>
-          {(() => {
-            const { Icon, color, bg } = getNotifIcon(item.type, item.title);
-            return (
-              <View style={{ width: 40, height: 40, borderRadius: 20, backgroundColor: bg, justifyContent: 'center', alignItems: 'center', marginRight: theme.spacing.md }}>
-                <Icon size={18} color={color} />
-                {!item.is_read && (
-                  <View style={{ position: 'absolute', top: 0, right: 0, width: 10, height: 10, borderRadius: 5, backgroundColor: theme.colors.primary, borderWidth: 2, borderColor: theme.colors.surface }} />
-                )}
-              </View>
-            );
-          })()}
-          <View style={styles.notificationContent}>
-            {item.title ? (
-              <Text
-                style={[
-                  {
-                    color: theme.colors.textPrimary,
-                    ...theme.typography.bodySm,
-                    fontWeight: item.is_read ? ('400' as const) : ('600' as const),
-                  },
-                ]}
-                numberOfLines={1}
-              >
-                {resolveNotifText(item.title, t)}
-              </Text>
-            ) : null}
-            <Text
-              style={[
-                {
-                  color: item.title ? theme.colors.textSecondary : theme.colors.textPrimary,
-                  ...theme.typography.bodySm,
-                  fontWeight: !item.title && !item.is_read ? ('600' as const) : ('400' as const),
-                  marginTop: item.title ? 2 : 0,
-                },
-              ]}
-              numberOfLines={2}
-            >
-              {resolveNotifText(item.message, t)}
-            </Text>
-          </View>
-          <Text
-            style={[
-              {
-                color: theme.colors.textSecondary,
-                ...theme.typography.caption,
-                marginLeft: theme.spacing.md,
-              },
-            ]}
-          >
-            {timeAgo(item.created_at, t)}
-          </Text>
-        </View>
-      </TouchableOpacity>
-    ),
-    [theme, handlePressNotification]
+    ({ item }: { item: NotificationFromAPI }) => {
+      return <SwipeableNotifCard item={item} theme={theme} t={t} onPress={handlePressNotification} onHide={hideNotification} hiddenIds={hiddenIds} setHiddenIds={setHiddenIds} getReservationImage={getReservationImage} />;
+    },
+    [theme, handlePressNotification, hideNotification, hiddenIds, t]
   );
 
   return (
@@ -235,11 +313,41 @@ export default function NotificationsScreen() {
         </TouchableOpacity>
       </View>
 
+      {/* Filter tabs */}
+      <View style={{ flexDirection: 'row', paddingHorizontal: theme.spacing.xl, gap: 8, marginBottom: theme.spacing.sm }}>
+        {(['all', 'unread', 'hidden'] as const).map((f) => (
+          <TouchableOpacity
+            key={f}
+            onPress={() => setFilter(f)}
+            style={{
+              paddingHorizontal: 16, paddingVertical: 7, borderRadius: 20,
+              backgroundColor: filter === f ? theme.colors.primary : theme.colors.surface,
+              borderWidth: 1, borderColor: filter === f ? theme.colors.primary : theme.colors.divider,
+            }}
+          >
+            <Text style={{
+              color: filter === f ? '#fff' : theme.colors.textSecondary,
+              ...theme.typography.caption, fontWeight: '600',
+            }}>
+              {f === 'all' ? t('notifications.filterAll', { defaultValue: 'Toutes' })
+                : f === 'unread' ? t('notifications.filterUnread', { defaultValue: 'Non lues' })
+                : t('notifications.filterHidden', { defaultValue: 'Masquées' })}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+
       {notificationsQuery.isLoading ? (
         <DelayedLoader />
       ) : (
         <FlatList
-          data={notificationsQuery.data ?? []}
+          style={{ flex: 1 }}
+          data={(notificationsQuery.data ?? []).filter(n => {
+            if (filter === 'hidden') return hiddenIds.has(n.id);
+            if (hiddenIds.has(n.id)) return false;
+            if (filter === 'unread' && n.is_read) return false;
+            return true;
+          })}
           keyExtractor={(item) => String(item.id)}
           renderItem={renderItem}
           contentContainerStyle={{
@@ -257,17 +365,15 @@ export default function NotificationsScreen() {
             />
           }
           ListEmptyComponent={
-            <View style={styles.emptyState}>
-              <Text
-                style={[
-                  {
-                    color: theme.colors.textSecondary,
-                    ...theme.typography.body,
-                    textAlign: 'center' as const,
-                  },
-                ]}
-              >
-                {t('notifications.empty')}
+            <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', marginTop: -60 }}>
+              <View style={{ width: 72, height: 72, borderRadius: 36, backgroundColor: theme.colors.primary + '12', justifyContent: 'center', alignItems: 'center', marginBottom: 16 }}>
+                <Bell size={32} color={theme.colors.primary} />
+              </View>
+              <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3, textAlign: 'center', marginBottom: 6 }}>
+                {t('notifications.emptyTitle', { defaultValue: 'Aucune notification' })}
+              </Text>
+              <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm, textAlign: 'center', lineHeight: 20 }}>
+                {t('notifications.emptyDesc', { defaultValue: 'Vos notifications apparaîtront ici.' })}
               </Text>
             </View>
           }
@@ -276,41 +382,306 @@ export default function NotificationsScreen() {
 
       {/* Notification detail popup */}
       <Modal visible={detailNotif !== null} transparent animationType="fade" onRequestClose={() => setDetailNotif(null)}>
-        <TouchableOpacity style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 24 }} activeOpacity={1} onPress={() => setDetailNotif(null)}>
+        <TouchableOpacity style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 16 }} activeOpacity={1} onPress={() => setDetailNotif(null)}>
           <View
-            style={{ backgroundColor: theme.colors.surface, borderRadius: 24, padding: 24, width: '100%', maxWidth: 380 }}
+            style={{ backgroundColor: theme.colors.surface, borderRadius: 24, width: '100%', maxWidth: 420, maxHeight: '90%', overflow: 'hidden', ...theme.shadows.shadowLg }}
             onStartShouldSetResponder={() => true}
           >
             {detailNotif && (() => {
               const { Icon, color, bg } = getNotifIcon(detailNotif.type, detailNotif.title);
+              const notifType = detailNotif.type ?? '';
+              const isNewReservation = notifType.includes('new_reservation') || notifType.includes('order_confirmed');
+              const isCancelled = notifType.includes('cancelled');
+              const isReview = notifType.includes('review');
+              const isPickupConfirmed = notifType.includes('pickup_confirmed') || notifType.includes('collected');
+
+              // Extract params from JSON message — handle multiple possible key names
+              let msgParams: Record<string, any> = {};
+              try {
+                const parsed = JSON.parse(detailNotif.message);
+                if (parsed?.params) msgParams = parsed.params;
+              } catch {}
+
+              // Normalise param keys — backends use varied naming conventions
+              const basketName = msgParams.basketName ?? msgParams.basket_name ?? msgParams.basketname ?? null;
+              const locationName = msgParams.locationName ?? msgParams.restaurantName ?? msgParams.restaurant_name ?? msgParams.location_name ?? msgParams.merchantName ?? null;
+              const customerName = msgParams.customerName ?? msgParams.customer_name ?? null;
+              const pickupStart = msgParams.pickupStart ?? msgParams.pickup_start ?? msgParams.startTime ?? null;
+              const pickupEnd = msgParams.pickupEnd ?? msgParams.pickup_end ?? msgParams.endTime ?? null;
+              const pickupTime = (pickupStart && pickupEnd) ? `${String(pickupStart).substring(0,5)} – ${String(pickupEnd).substring(0,5)}` : (pickupStart ?? pickupEnd ?? null);
+              const qty = msgParams.quantity ?? msgParams.qty ?? null;
+              const rating = msgParams.rating ?? null;
+              const comment = msgParams.comment ?? msgParams.review ?? null;
+              const price = msgParams.price ?? msgParams.total ?? msgParams.amount ?? null;
+              const pickupCode = msgParams.pickupCode ?? msgParams.pickup_code ?? msgParams.code ?? null;
+              const basketImage = msgParams.basketImage ?? msgParams.basket_image ?? msgParams.image_url ?? null;
+              const locationImage = msgParams.locationImage ?? msgParams.location_image ?? msgParams.restaurant_image ?? null;
+
+              const hasDetails = basketName || locationName || customerName || pickupTime || qty || rating || comment || price || pickupCode;
+              const hasAction = isNewReservation || isCancelled || isReview || isPickupConfirmed;
+
+              const handleAction = () => {
+                setDetailNotif(null);
+                if (isPickupConfirmed && !isBusiness) {
+                  // Navigate to review
+                  router.push({ pathname: '/review', params: { reservationId: String(detailNotif.reference_id ?? ''), locationName: locationName ?? '', basketName: basketName ?? '', quantity: String(qty ?? 1), total: String(price ?? 0) } } as never);
+                  return;
+                }
+                if (isNewReservation || isCancelled) {
+                  router.push(isBusiness ? '/(business)/incoming-orders' : '/(tabs)/orders');
+                } else if (isReview) {
+                  router.push('/(business)/dashboard');
+                }
+              };
+
               return (
                 <>
-                  <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 16 }}>
-                    <View style={{ width: 48, height: 48, borderRadius: 24, backgroundColor: bg, justifyContent: 'center', alignItems: 'center', marginRight: 14 }}>
-                      <Icon size={22} color={color} />
+                  {/* Coloured top strip */}
+                  <View style={{ backgroundColor: color, paddingHorizontal: 20, paddingVertical: 16, flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                    <View style={{ width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(255,255,255,0.25)', justifyContent: 'center', alignItems: 'center' }}>
+                      <Icon size={20} color="#fff" />
                     </View>
                     <View style={{ flex: 1 }}>
                       {detailNotif.title ? (
-                        <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3 }}>
+                        <Text style={{ color: '#fff', ...theme.typography.h3, fontWeight: '700' }}>
                           {resolveNotifText(detailNotif.title, t)}
                         </Text>
                       ) : null}
-                      <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, marginTop: 2 }}>
+                      <Text style={{ color: 'rgba(255,255,255,0.75)', ...theme.typography.caption, marginTop: 2 }}>
                         {timeAgo(detailNotif.created_at, t)}
                       </Text>
                     </View>
                   </View>
-                  <Text style={{ color: theme.colors.textPrimary, ...theme.typography.body, lineHeight: 22, marginBottom: 20 }}>
-                    {resolveNotifText(detailNotif.message, t)}
-                  </Text>
-                  <TouchableOpacity
-                    onPress={() => setDetailNotif(null)}
-                    style={{ backgroundColor: theme.colors.primary, borderRadius: 14, paddingVertical: 14, alignItems: 'center' }}
-                  >
-                    <Text style={{ color: '#fff', ...theme.typography.body, fontWeight: '600' }}>
-                      {t('common.close', { defaultValue: 'Close' })}
+
+                  <View style={{ padding: 24 }}>
+                  <ScrollView showsVerticalScrollIndicator={false} style={{ maxHeight: 500 }}>
+                    {/* Paper bag image for new reservations */}
+                    {isNewReservation && (
+                      <View style={{ alignItems: 'center', marginBottom: 16 }}>
+                        <Image source={require('@/assets/images/barakeat_paper_bag.png')} style={{ width: 80, height: 80, borderRadius: 16 }} resizeMode="cover" />
+                      </View>
+                    )}
+
+                    {/* Photos row — basket + location images (non-reservation) */}
+                    {!isNewReservation && (basketImage || locationImage) && (
+                      <View style={{ flexDirection: 'row', gap: 12, marginBottom: 16, justifyContent: 'center' }}>
+                        {basketImage ? (
+                          <Image source={{ uri: basketImage }} style={{ width: 70, height: 70, borderRadius: 14, borderWidth: 1, borderColor: theme.colors.divider }} resizeMode="cover" />
+                        ) : null}
+                        {locationImage ? (
+                          <Image source={{ uri: locationImage }} style={{ width: 70, height: 70, borderRadius: 14, borderWidth: 1, borderColor: theme.colors.divider }} resizeMode="cover" />
+                        ) : null}
+                      </View>
+                    )}
+
+                    {/* Message */}
+                    <Text style={{ color: theme.colors.textSecondary, ...theme.typography.body, lineHeight: 22, marginBottom: 12 }}>
+                      {resolveNotifText(detailNotif.message, t)}
                     </Text>
-                  </TouchableOpacity>
+
+                    {/* Bold price + qty for order confirmations */}
+                    {(isNewReservation || notifType.includes('order_confirmed')) && (qty || price) && (
+                      <View style={{ flexDirection: 'row', gap: 16, marginBottom: 16 }}>
+                        {qty ? <Text style={{ color: theme.colors.textPrimary, ...theme.typography.body }}>
+                          <Text style={{ fontWeight: '700' }}>{qty}</Text> {Number(qty) > 1 ? t('basket.baskets', { defaultValue: 'paniers' }) : t('basket.basket', { defaultValue: 'panier' })}
+                        </Text> : null}
+                        {price && !isCancelled ? <Text style={{ color: theme.colors.primary, ...theme.typography.body, fontWeight: '700' }}>
+                          {price} TND
+                        </Text> : null}
+                      </View>
+                    )}
+
+                    {/* Ready-by info for new reservations */}
+                    {isNewReservation && pickupTime && (
+                      <View style={{ backgroundColor: '#114b3c10', borderRadius: 12, padding: 14, marginBottom: 16, flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                        <View style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: '#114b3c', justifyContent: 'center', alignItems: 'center' }}>
+                          <ShoppingBag size={16} color="#e3ff5c" />
+                        </View>
+                        <View style={{ flex: 1 }}>
+                          <Text style={{ color: theme.colors.primary, ...theme.typography.bodySm, fontWeight: '700' }}>
+                            {t('notifications.readyBy', { defaultValue: 'À préparer pour' })} {pickupTime}
+                          </Text>
+                          {qty && <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, marginTop: 2 }}>
+                            <Text style={{ fontWeight: '700', color: theme.colors.textPrimary }}>{qty}</Text> {Number(qty) > 1 ? t('basket.baskets', { defaultValue: 'paniers' }) : t('basket.basket', { defaultValue: 'panier' })}
+                            {price && !isCancelled ? ` · ${price} TND` : ''}
+                          </Text>}
+                        </View>
+                      </View>
+                    )}
+
+                    {/* Cancelled info banner */}
+                    {isCancelled && (
+                      <View style={{ backgroundColor: '#ef444410', borderRadius: 12, padding: 14, marginBottom: 16, flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                        <XCircle size={20} color="#ef4444" />
+                        <View style={{ flex: 1 }}>
+                          <Text style={{ color: '#ef4444', ...theme.typography.bodySm, fontWeight: '700' }}>
+                            {t('notifications.cancelledInfo', { defaultValue: 'Commande annulée' })}
+                          </Text>
+                          {qty && <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, marginTop: 2 }}>
+                            <Text style={{ fontWeight: '700' }}>{qty}</Text> {Number(qty) > 1 ? t('basket.baskets', { defaultValue: 'paniers' }) : t('basket.basket', { defaultValue: 'panier' })}
+                          </Text>}
+                        </View>
+                      </View>
+                    )}
+
+                    {/* Pickup confirmed — order summary with review prompt */}
+                    {isPickupConfirmed && !isBusiness && (
+                      <View style={{ backgroundColor: '#16a34a10', borderRadius: 12, padding: 14, marginBottom: 16 }}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                          <CheckCircle size={18} color="#16a34a" />
+                          <Text style={{ color: '#16a34a', ...theme.typography.bodySm, fontWeight: '700' }}>
+                            {t('notifications.pickupComplete', { defaultValue: 'Retrait effectué' })}
+                          </Text>
+                        </View>
+                        {(basketName || locationName) && (
+                          <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, marginBottom: 4 }}>
+                            {basketName ? <Text style={{ fontWeight: '700' }}>{basketName}</Text> : null}
+                            {basketName && locationName ? ' — ' : ''}
+                            {locationName ?? ''}
+                          </Text>
+                        )}
+                        {(qty || price) && (
+                          <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption }}>
+                            {qty ? <><Text style={{ fontWeight: '700', color: theme.colors.textPrimary }}>{qty}</Text> {Number(qty) > 1 ? 'paniers' : 'panier'}</> : null}
+                            {qty && price ? ' · ' : ''}
+                            {price ? <Text style={{ fontWeight: '700', color: theme.colors.primary }}>{price} TND</Text> : null}
+                          </Text>
+                        )}
+                        <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, marginTop: 8, fontStyle: 'italic' }}>
+                          {t('notifications.reviewPromptHint', { defaultValue: 'Partagez votre expérience en laissant un avis !' })}
+                        </Text>
+                      </View>
+                    )}
+
+                    {/* Pickup code — prominent display for order confirmations */}
+                    {pickupCode && isNewReservation && (
+                      <View style={{ backgroundColor: theme.colors.primary, borderRadius: 16, padding: 16, marginBottom: 16, alignItems: 'center' }}>
+                        <Text style={{ color: 'rgba(255,255,255,0.7)', ...theme.typography.caption, marginBottom: 4 }}>
+                          {t('reserve.success.pickupCode', { defaultValue: 'Code de retrait' })}
+                        </Text>
+                        <Text style={{ color: '#e3ff5c', fontSize: 26, fontWeight: '700', fontFamily: 'Poppins_700Bold', letterSpacing: 6 }}>
+                          {pickupCode}
+                        </Text>
+                      </View>
+                    )}
+
+                    {/* Detail rows */}
+                    {hasDetails && (
+                      <View style={{ backgroundColor: theme.colors.bg, borderRadius: 14, padding: 16, marginBottom: 16, gap: 12 }}>
+                        {basketName ? (
+                          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, flex: 1 }}>
+                              {t('notifications.basket', { defaultValue: 'Basket' })}
+                            </Text>
+                            <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '600', flex: 2, textAlign: 'right' }} numberOfLines={1}>
+                              {basketName}
+                            </Text>
+                          </View>
+                        ) : null}
+                        {locationName ? (
+                          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, flex: 1 }}>
+                              {t('notifications.location', { defaultValue: 'Location' })}
+                            </Text>
+                            <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '600', flex: 2, textAlign: 'right' }} numberOfLines={1}>
+                              {locationName}
+                            </Text>
+                          </View>
+                        ) : null}
+                        {customerName ? (
+                          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, flex: 1 }}>
+                              {t('notifications.customer', { defaultValue: 'Customer' })}
+                            </Text>
+                            <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '600', flex: 2, textAlign: 'right' }}>
+                              {customerName}
+                            </Text>
+                          </View>
+                        ) : null}
+                        {pickupTime ? (
+                          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, flex: 1 }}>
+                              {t('notifications.pickupTime', { defaultValue: 'Pickup' })}
+                            </Text>
+                            <Text style={{ color: color, ...theme.typography.bodySm, fontWeight: '700', flex: 2, textAlign: 'right' }}>
+                              {pickupTime}
+                            </Text>
+                          </View>
+                        ) : null}
+                        {qty ? (
+                          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, flex: 1 }}>
+                              {t('notifications.quantity', { defaultValue: 'Qty' })}
+                            </Text>
+                            <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '600', flex: 2, textAlign: 'right' }}>
+                              {qty}
+                            </Text>
+                          </View>
+                        ) : null}
+                        {price && !isCancelled ? (
+                          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, flex: 1 }}>
+                              {t('notifications.price', { defaultValue: 'Prix' })}
+                            </Text>
+                            <Text style={{ color: theme.colors.primary, ...theme.typography.body, fontWeight: '700', flex: 2, textAlign: 'right' }}>
+                              {price} TND
+                            </Text>
+                          </View>
+                        ) : null}
+                        {rating ? (
+                          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, flex: 1 }}>
+                              {t('notifications.rating', { defaultValue: 'Rating' })}
+                            </Text>
+                            <Text style={{ color: '#f59e0b', ...theme.typography.bodySm, fontWeight: '700', flex: 2, textAlign: 'right' }}>
+                              {'★'.repeat(Math.min(Number(rating), 5))}{'☆'.repeat(Math.max(0, 5 - Math.min(Number(rating), 5)))}
+                            </Text>
+                          </View>
+                        ) : null}
+                        {comment ? (
+                          <View style={{ borderTopWidth: 1, borderTopColor: theme.colors.divider, paddingTop: 10, marginTop: 2 }}>
+                            <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontStyle: 'italic', lineHeight: 20 }}>
+                              "{comment}"
+                            </Text>
+                          </View>
+                        ) : null}
+                      </View>
+                    )}
+
+                  </ScrollView>
+                  {/* Action buttons — with top spacing */}
+                  <View style={{ flexDirection: 'row', gap: 10, marginTop: 20 }}>
+                    {hasAction && (
+                      <TouchableOpacity
+                        onPress={handleAction}
+                        style={{ flex: 1, backgroundColor: theme.colors.primary, borderRadius: 14, paddingVertical: 14, alignItems: 'center' }}
+                      >
+                        <Text style={{ color: '#fff', ...theme.typography.body, fontWeight: '600' }}>
+                          {isPickupConfirmed && !isBusiness
+                            ? t('notifications.leaveReview', { defaultValue: 'Laisser un avis' })
+                            : isReview
+                            ? t('notifications.viewDashboard', { defaultValue: 'Tableau de bord' })
+                            : t('notifications.viewOrder', { defaultValue: 'Voir la commande' })}
+                        </Text>
+                      </TouchableOpacity>
+                    )}
+                    <TouchableOpacity
+                      onPress={() => setDetailNotif(null)}
+                      style={{
+                        flex: hasAction ? undefined : 1,
+                        backgroundColor: theme.colors.bg,
+                        borderRadius: 14,
+                        paddingVertical: 14,
+                        paddingHorizontal: 20,
+                        alignItems: 'center',
+                      }}
+                    >
+                      <Text style={{ color: theme.colors.textPrimary, ...theme.typography.body, fontWeight: '600' }}>
+                        {t('common.close', { defaultValue: 'Close' })}
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+                  </View>{/* end padding:20 */}
                 </>
               );
             })()}

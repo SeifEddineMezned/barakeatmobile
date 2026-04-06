@@ -32,6 +32,7 @@ import { fetchLocations } from '@/src/services/restaurants';
 import { normalizeLocationToBasket } from '@/src/utils/normalizeRestaurant';
 import type { Basket } from '@/src/types';
 import { FeatureFlags } from '@/src/lib/featureFlags';
+import { useAddressStore } from '@/src/stores/addressStore';
 
 let MapView: any = null;
 let Marker: any = null;
@@ -63,6 +64,7 @@ const MAP_STYLE = [
 const DEFAULT_CENTER = { latitude: 36.8065, longitude: 10.1815 };
 const COLLAPSED_HEIGHT = 140;
 const EXPANDED_HEIGHT = SCREEN_HEIGHT * 0.55;
+// FULL_HEIGHT computed inside component using insets
 
 function getDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
   const R = 6371;
@@ -207,6 +209,7 @@ export default function MapViewScreen() {
   const theme = useTheme();
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const FULL_HEIGHT = SCREEN_HEIGHT - insets.top - 56; // stops below search bar + back btn
 
   const [selectedBasket, setSelectedBasket] = useState<BasketWithDist | null>(null);
   const [radius, setRadius] = useState(5);
@@ -220,6 +223,8 @@ export default function MapViewScreen() {
       setSearchQuery('');
       searchInputRef.current?.blur();
       Animated.timing(searchWidthAnim, { toValue: 44, duration: 250, useNativeDriver: false }).start(() => setSearchExpanded(false));
+      // Slide sheet back to expanded (level 1) when closing search
+      if (sheetLevelRef.current === 2) animateToLevel(1);
     } else {
       setSearchExpanded(true);
       Animated.timing(searchWidthAnim, { toValue: Dimensions.get('window').width - 80, duration: 250, useNativeDriver: false }).start(() => {
@@ -302,30 +307,48 @@ export default function MapViewScreen() {
     }
   }, [userLocation, radius]);
 
-  const center = userLocation ?? DEFAULT_CENTER;
+  // Use saved address (Tunisia) for center, not device GPS (could be US/abroad)
+  const { addresses, selectedId } = useAddressStore();
+  const selectedAddr = addresses.find((a) => a.id === selectedId);
+  const center = selectedAddr
+    ? { latitude: selectedAddr.lat, longitude: selectedAddr.lng }
+    : DEFAULT_CENTER; // Always default to Tunisia, device GPS only for blue dot
 
   const sheetHeight = useRef(new Animated.Value(COLLAPSED_HEIGHT)).current;
-  const isExpandedRef = useRef(false);
-  const [isExpanded, setIsExpanded] = useState(false);
+  // 3-state: 0 = collapsed, 1 = expanded (half), 2 = full
+  const sheetLevelRef = useRef(0);
+  const [sheetLevel, setSheetLevel] = useState(0);
+  const isExpanded = sheetLevel >= 1;
+  const isExpandedRef = { current: sheetLevel >= 1 }; // compat
+
+  const getHeightForLevel = (lvl: number) => lvl === 0 ? COLLAPSED_HEIGHT : lvl === 1 ? EXPANDED_HEIGHT : FULL_HEIGHT;
+
+  const animateToLevel = (lvl: number) => {
+    sheetLevelRef.current = lvl;
+    setSheetLevel(lvl);
+    Animated.spring(sheetHeight, { toValue: getHeightForLevel(lvl), useNativeDriver: false, friction: 10 }).start();
+  };
 
   const panResponder = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: () => true,
       onMoveShouldSetPanResponder: (_, gs) => Math.abs(gs.dy) > 5,
       onPanResponderMove: (_, gs) => {
-        const currentHeight = isExpandedRef.current ? EXPANDED_HEIGHT : COLLAPSED_HEIGHT;
-        const clamped = Math.max(COLLAPSED_HEIGHT, Math.min(EXPANDED_HEIGHT, currentHeight - gs.dy));
+        const currentHeight = getHeightForLevel(sheetLevelRef.current);
+        const clamped = Math.max(COLLAPSED_HEIGHT, Math.min(FULL_HEIGHT, currentHeight - gs.dy));
         sheetHeight.setValue(clamped);
       },
       onPanResponderRelease: (_, gs) => {
+        const cur = sheetLevelRef.current;
         if (gs.dy < -50) {
-          Animated.spring(sheetHeight, { toValue: EXPANDED_HEIGHT, useNativeDriver: false, friction: 10 }).start();
-          isExpandedRef.current = true; setIsExpanded(true);
+          // Swipe up — go to next level
+          animateToLevel(Math.min(2, cur + 1));
         } else if (gs.dy > 50) {
-          Animated.spring(sheetHeight, { toValue: COLLAPSED_HEIGHT, useNativeDriver: false, friction: 10 }).start();
-          isExpandedRef.current = false; setIsExpanded(false);
+          // Swipe down — go to previous level
+          animateToLevel(Math.max(0, cur - 1));
         } else {
-          Animated.spring(sheetHeight, { toValue: isExpandedRef.current ? EXPANDED_HEIGHT : COLLAPSED_HEIGHT, useNativeDriver: false, friction: 10 }).start();
+          // Snap back
+          Animated.spring(sheetHeight, { toValue: getHeightForLevel(cur), useNativeDriver: false, friction: 10 }).start();
         }
       },
     }),
@@ -344,35 +367,50 @@ export default function MapViewScreen() {
     return baskets.filter((b) => b.name.toLowerCase().includes(q) || b.merchantName.toLowerCase().includes(q));
   }, [baskets, searchQuery]);
 
-  const nearbyBaskets: BasketWithDist[] = useMemo(() => {
+  // All baskets with coords + distance
+  const allCoordsBaskets: BasketWithDist[] = useMemo(() => {
     return filteredBaskets
       .filter((b) => b.hasCoords)
       .map((b) => ({ ...b, dist: getDistance(center.latitude, center.longitude, b.latitude as number, b.longitude as number) }))
-      .filter((b) => b.dist <= radius)
       .sort((a, b) => a.dist - b.dist);
-  }, [filteredBaskets, center, radius]);
+  }, [filteredBaskets, center]);
+
+  // Only those within radius (for the bottom sheet list + rich pins)
+  const nearbyBaskets = useMemo(() => allCoordsBaskets.filter((b) => b.dist <= radius), [allCoordsBaskets, radius]);
+
+  // Those outside radius (shown as simple pins)
+  const farBaskets = useMemo(() => allCoordsBaskets.filter((b) => b.dist > radius), [allCoordsBaskets, radius]);
 
   const noCoordBaskets = useMemo(() => filteredBaskets.filter((b) => !b.hasCoords), [filteredBaskets]);
 
   const markers = nearbyBaskets.map((b) => ({ id: b.id, name: b.merchantName, lat: b.latitude as number, lng: b.longitude as number }));
 
+  // Search suggestions
+  const searchSuggestions = useMemo(() => {
+    if (!searchQuery.trim()) return [];
+    const q = searchQuery.toLowerCase();
+    return allCoordsBaskets.filter((b) => b.name.toLowerCase().includes(q) || b.merchantName.toLowerCase().includes(q)).slice(0, 5);
+  }, [allCoordsBaskets, searchQuery]);
+
   const handleMarkerPress = useCallback((basket: BasketWithDist) => {
     setSelectedBasket(basket);
-    Animated.spring(sheetHeight, { toValue: COLLAPSED_HEIGHT, useNativeDriver: false, friction: 10 }).start();
-    isExpandedRef.current = false; setIsExpanded(false);
-  }, [sheetHeight]);
+    animateToLevel(0);
+  }, []);
 
   const handleMapPress = useCallback(() => { setSelectedBasket(null); }, []);
 
   const toggleSheet = useCallback(() => {
-    const expanding = !isExpandedRef.current;
-    Animated.spring(sheetHeight, { toValue: expanding ? EXPANDED_HEIGHT : COLLAPSED_HEIGHT, useNativeDriver: false, friction: 10 }).start();
-    isExpandedRef.current = expanding; setIsExpanded(expanding);
-  }, [sheetHeight]);
+    animateToLevel(sheetLevelRef.current === 0 ? 1 : 0);
+  }, []);
 
   return (
     <View style={styles.container}>
       <StatusBar style="dark" />
+
+      {/* White header bg when sheet is full */}
+      {sheetLevel === 2 && (
+        <View style={{ position: 'absolute', top: 0, left: 0, right: 0, height: insets.top + 52, backgroundColor: '#fff', zIndex: 25, borderBottomWidth: 1, borderBottomColor: 'rgba(0,0,0,0.06)' }} />
+      )}
 
       {/* ── Back button — returns to Découvrir cleanly ── */}
       <TouchableOpacity
@@ -413,15 +451,31 @@ export default function MapViewScreen() {
             }
           }}
         >
+          {/* Rich pins for nearby baskets (within radius) — name + basket count */}
           {nearbyBaskets.map((basket) =>
             Marker && basket.hasCoords ? (
-              <Marker key={basket.id} coordinate={{ latitude: basket.latitude as number, longitude: basket.longitude as number }} anchor={{ x: 0.5, y: 1 }} onPress={() => handleMarkerPress(basket)}>
-                <View style={{ alignItems: 'center' }}>
-                  <View style={{ backgroundColor: basket.isActive && basket.quantityLeft > 0 ? '#114b3c' : '#888', borderRadius: 14, paddingHorizontal: 8, paddingVertical: 4, flexDirection: 'row', alignItems: 'center', gap: 3, shadowColor: '#000', shadowOpacity: 0.25, shadowRadius: 4, shadowOffset: { width: 0, height: 2 }, elevation: 5 }}>
-                    <Text style={{ fontSize: 13 }}>🧺</Text>
-                    <Text style={{ color: '#fff', fontSize: 11, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>{basket.discountedPrice} TND</Text>
+              <Marker key={basket.id} coordinate={{ latitude: basket.latitude as number, longitude: basket.longitude as number }} anchor={{ x: 0.5, y: 1 }} onPress={() => router.push(`/restaurant/${basket.merchantId}` as never)}>
+                <View style={{ alignItems: 'center', maxWidth: 140 }}>
+                  <Text style={{ color: '#114b3c', fontSize: 10, fontWeight: '700', fontFamily: 'Poppins_700Bold', textAlign: 'center', marginBottom: 2 }} numberOfLines={1}>{basket.merchantName}</Text>
+                  <View style={{ backgroundColor: '#e3ff5c', borderRadius: 14, paddingHorizontal: 8, paddingVertical: 4, flexDirection: 'row', alignItems: 'center', gap: 4, shadowColor: '#000', shadowOpacity: 0.2, shadowRadius: 4, shadowOffset: { width: 0, height: 2 }, elevation: 5 }}>
+                    <ShoppingBag size={12} color="#114b3c" />
+                    <Text style={{ color: '#114b3c', fontSize: 11, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>{basket.quantityLeft}</Text>
                   </View>
-                  <View style={{ width: 0, height: 0, borderLeftWidth: 5, borderRightWidth: 5, borderTopWidth: 6, borderLeftColor: 'transparent', borderRightColor: 'transparent', borderTopColor: basket.isActive && basket.quantityLeft > 0 ? '#114b3c' : '#888' }} />
+                  <View style={{ width: 0, height: 0, borderLeftWidth: 5, borderRightWidth: 5, borderTopWidth: 6, borderLeftColor: 'transparent', borderRightColor: 'transparent', borderTopColor: '#e3ff5c' }} />
+                </View>
+              </Marker>
+            ) : null,
+          )}
+          {/* Simple pins for far baskets (outside radius) — name + pin icon */}
+          {farBaskets.map((basket) =>
+            Marker && basket.hasCoords ? (
+              <Marker key={`far-${basket.id}`} coordinate={{ latitude: basket.latitude as number, longitude: basket.longitude as number }} anchor={{ x: 0.5, y: 1 }} onPress={() => router.push(`/restaurant/${basket.merchantId}` as never)}>
+                <View style={{ alignItems: 'center', maxWidth: 120 }}>
+                  <Text style={{ color: '#555', fontSize: 9, fontWeight: '600', textAlign: 'center', marginBottom: 2 }} numberOfLines={1}>{basket.merchantName}</Text>
+                  <View style={{ backgroundColor: '#114b3c', borderRadius: 12, width: 28, height: 28, justifyContent: 'center', alignItems: 'center', shadowColor: '#000', shadowOpacity: 0.15, shadowRadius: 3, shadowOffset: { width: 0, height: 1 }, elevation: 3 }}>
+                    <MapPin size={14} color="#fff" />
+                  </View>
+                  <View style={{ width: 0, height: 0, borderLeftWidth: 4, borderRightWidth: 4, borderTopWidth: 5, borderLeftColor: 'transparent', borderRightColor: 'transparent', borderTopColor: '#114b3c' }} />
                 </View>
               </Marker>
             ) : null,
@@ -446,7 +500,7 @@ export default function MapViewScreen() {
         position: 'absolute',
         top: insets.top + 8,
         right: 16,
-        zIndex: 10,
+        zIndex: 30,
         width: searchWidthAnim,
         height: 44,
         backgroundColor: theme.colors.surface,
@@ -469,8 +523,23 @@ export default function MapViewScreen() {
             placeholder={t('home.searchPlaceholder')}
             placeholderTextColor={theme.colors.muted}
             value={searchQuery}
-            onChangeText={setSearchQuery}
-            onSubmitEditing={toggleSearch}
+            onChangeText={(q) => {
+              setSearchQuery(q);
+              // Go to full screen when typing
+              if (q.trim() && sheetLevelRef.current < 2) {
+                animateToLevel(2);
+              }
+            }}
+            onSubmitEditing={() => {
+              // On enter: navigate to first suggestion
+              if (searchSuggestions.length > 0 && mapRef.current) {
+                const s = searchSuggestions[0];
+                mapRef.current.animateToRegion({ latitude: s.latitude as number, longitude: s.longitude as number, latitudeDelta: 0.01, longitudeDelta: 0.01 }, 600);
+                handleMarkerPress(s);
+                setSearchQuery('');
+                toggleSearch();
+              }
+            }}
             returnKeyType="search"
           />
         )}
@@ -548,6 +617,37 @@ export default function MapViewScreen() {
         </View>
 
         <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 40 }} scrollEnabled={isExpanded}>
+          {/* Search suggestions */}
+          {searchQuery.trim() && searchSuggestions.length > 0 && (
+            <View style={{ marginBottom: 12 }}>
+              <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, fontWeight: '600', marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.5 }}>
+                {t('home.searchResults', { defaultValue: 'Résultats' })}
+              </Text>
+              {searchSuggestions.map((s) => (
+                <TouchableOpacity
+                  key={s.id}
+                  onPress={() => {
+                    if (mapRef.current) {
+                      mapRef.current.animateToRegion({ latitude: s.latitude as number, longitude: s.longitude as number, latitudeDelta: 0.01, longitudeDelta: 0.01 }, 600);
+                    }
+                    handleMarkerPress(s);
+                    setSearchQuery('');
+                    setSearchExpanded(false);
+                  }}
+                  style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: theme.colors.divider }}
+                >
+                  <View style={{ width: 36, height: 36, borderRadius: 10, backgroundColor: theme.colors.primary + '12', justifyContent: 'center', alignItems: 'center', marginRight: 12 }}>
+                    <MapPin size={16} color={theme.colors.primary} />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '600' }} numberOfLines={1}>{s.merchantName}</Text>
+                    <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, marginTop: 1 }} numberOfLines={1}>{s.address || `${(s.dist ?? 0).toFixed(1)} km`}</Text>
+                  </View>
+                  <Navigation size={14} color={theme.colors.primary} />
+                </TouchableOpacity>
+              ))}
+            </View>
+          )}
           {selectedBasket ? (
             <TouchableOpacity onPress={() => router.push(`/basket/${selectedBasket.id}` as never)} activeOpacity={0.9} style={{ flexDirection: 'row', padding: 12, backgroundColor: theme.colors.bg, borderRadius: 12, marginBottom: 8 }}>
               {selectedBasket.imageUrl ? (
@@ -701,7 +801,7 @@ const styles = StyleSheet.create({
   backBtn: {
     position: 'absolute',
     left: 16,
-    zIndex: 20,
+    zIndex: 30,
     width: 40,
     height: 40,
     borderRadius: 20,

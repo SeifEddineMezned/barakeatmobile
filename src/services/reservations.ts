@@ -118,9 +118,9 @@ export async function fetchReservationQRCode(reservationId: string): Promise<str
   return '';
 }
 
-export async function cancelReservation(reservationId: string): Promise<void> {
-  console.log('[Reservations] Cancelling reservation:', reservationId);
-  await apiClient.delete(`/api/reservations/${reservationId}`);
+export async function cancelReservation(reservationId: string, reason?: string): Promise<void> {
+  console.log('[Reservations] Cancelling reservation:', reservationId, reason ? `reason: ${reason}` : '');
+  await apiClient.delete(`/api/reservations/${reservationId}`, reason ? { data: { reason } } : undefined);
   console.log('[Reservations] Cancelled reservation:', reservationId);
 }
 

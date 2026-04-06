@@ -5,13 +5,15 @@ import { useTranslation } from 'react-i18next';
 import { useRouter } from 'expo-router';
 import {
   ChevronRight, MapPin, Clock, Phone, Store,
-  Users, UserPlus, Trash2, Shield, CreditCard, Camera, X, UtensilsCrossed
+  Users, UserPlus, Trash2, Shield, CreditCard, Camera, X, UtensilsCrossed, Package, Check
 } from 'lucide-react-native';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { useAuthStore } from '@/src/stores/authStore';
 import { useBusinessStore, DEFAULT_PERMISSIONS } from '@/src/stores/businessStore';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { fetchMyProfile, fetchMyBaskets } from '@/src/services/business';
+import { FeatureFlags } from '@/src/lib/featureFlags';
+import { DelayedLoader } from '@/src/components/DelayedLoader';
 import { fetchMyContext, fetchOrganizationDetails, addMember as addMemberAPI, updateMember, removeMember as removeMemberAPI } from '@/src/services/teams';
 import * as ImagePicker from 'expo-image-picker';
 import type { TeamMember, TeamRole, TeamPermission } from '@/src/types';
@@ -126,6 +128,28 @@ export default function BusinessProfileScreen() {
         isSupermarket: (profileQuery.data.category ?? '').toLowerCase() === 'supermarket',
       }
     : store.profile;
+  // Pickup instructions editor state
+  const [showPickupInstructionsEditor, setShowPickupInstructionsEditor] = useState(false);
+  const [pickupInstructionsText, setPickupInstructionsText] = useState(profileQuery.data?.pickup_instructions ?? '');
+  const [pickupInstructionsSaving, setPickupInstructionsSaving] = useState(false);
+
+  const handleSavePickupInstructions = async () => {
+    setPickupInstructionsSaving(true);
+    try {
+      const { updateLocationById } = await import('@/src/services/business');
+      const locationId = profileQuery.data?.id;
+      if (!locationId) throw new Error('Profil non chargé');
+      const userId = user?.id ? Number(user.id) : undefined;
+      await updateLocationById(locationId, { pickup_instructions: pickupInstructionsText.trim() || null } as any, userId, profileQuery.data?.organization_id ?? undefined);
+      void queryClient.invalidateQueries({ queryKey: ['my-profile'] });
+      setShowPickupInstructionsEditor(false);
+    } catch (err: any) {
+      Alert.alert(t('common.error'), err?.message ?? t('common.errorOccurred'));
+    } finally {
+      setPickupInstructionsSaving(false);
+    }
+  };
+
   // Location hours editor state
   const [showHoursModal, setShowHoursModal] = useState(false);
   const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
@@ -294,6 +318,14 @@ export default function BusinessProfileScreen() {
 
   const selectedMemberForPerms = showPermissionsModal ? team.find((m) => m.id === showPermissionsModal) : null;
 
+  if (profileQuery.isLoading && !profileQuery.data) {
+    return (
+      <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]} edges={[]}>
+        <DelayedLoader />
+      </SafeAreaView>
+    );
+  }
+
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]} edges={[]}>
       <View style={[styles.header, { paddingHorizontal: theme.spacing.xl, paddingTop: theme.spacing.xs }]}>
@@ -335,9 +367,17 @@ export default function BusinessProfileScreen() {
                   ? contextQuery.data.organization_name
                   : profile?.name ?? user?.name}
               </Text>
-              <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.bodySm, marginTop: 2 }]}>
-                {!selectedLocationId ? t('business.profile.allLocationsLabel', { defaultValue: 'Organization' }) : profile?.category}
-              </Text>
+              {!selectedLocationId ? (
+                <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.bodySm, marginTop: 2 }]}>
+                  {t('business.profile.allLocationsLabel', { defaultValue: 'Organisation' })}
+                </Text>
+              ) : profile?.category ? (
+                <View style={{ alignSelf: 'flex-start', marginTop: 4, backgroundColor: '#114b3c15', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 3 }}>
+                  <Text style={{ color: '#114b3c', ...theme.typography.caption, fontWeight: '600' }}>
+                    {t(`categories.${profile.category.toLowerCase()}`, { defaultValue: profile.category })}
+                  </Text>
+                </View>
+              ) : null}
             </View>
           </View>
         </View>
@@ -379,8 +419,8 @@ export default function BusinessProfileScreen() {
         </TouchableOpacity>
         )}
 
-        {/* Menu Items Card — above Business Info */}
-        <TouchableOpacity
+        {/* Menu Items Card — above Business Info (feature-flagged) */}
+        {FeatureFlags.ENABLE_MENU_ITEMS && <TouchableOpacity
           onPress={() => router.push('/business/menu-items' as never)}
           style={[styles.infoCard, {
             backgroundColor: theme.colors.surface,
@@ -409,7 +449,7 @@ export default function BusinessProfileScreen() {
             </Text>
           </View>
           <ChevronRight size={20} color={theme.colors.muted} />
-        </TouchableOpacity>
+        </TouchableOpacity>}
 
         {/* Business Info Card */}
         <View style={[styles.infoCard, { backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, marginTop: theme.spacing.lg, ...theme.shadows.shadowSm }]}>
@@ -464,7 +504,52 @@ export default function BusinessProfileScreen() {
 
         </View>
 
+        {/* Pickup Instructions Card */}
         <View style={[styles.infoCard, { backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, marginTop: theme.spacing.lg, ...theme.shadows.shadowSm }]}>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: theme.spacing.lg, paddingBottom: theme.spacing.sm }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              <Package size={18} color={theme.colors.primary} />
+              <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3 }]}>
+                {t('business.profile.pickupInstructions', { defaultValue: 'Instructions de retrait' })}
+              </Text>
+            </View>
+            <TouchableOpacity onPress={() => { setPickupInstructionsText(profileQuery.data?.pickup_instructions ?? ''); setShowPickupInstructionsEditor(!showPickupInstructionsEditor); }}>
+              {showPickupInstructionsEditor
+                ? <X size={18} color={theme.colors.textSecondary} />
+                : <ChevronRight size={18} color={theme.colors.muted} />}
+            </TouchableOpacity>
+          </View>
+          <View style={{ paddingHorizontal: theme.spacing.lg, paddingBottom: theme.spacing.lg, borderTopWidth: 1, borderTopColor: theme.colors.divider, paddingTop: theme.spacing.md }}>
+            {showPickupInstructionsEditor ? (
+              <View>
+                <TextInput
+                  style={{ backgroundColor: theme.colors.bg, borderRadius: theme.radii.r12, padding: 12, color: theme.colors.textPrimary, ...theme.typography.body, minHeight: 80, borderWidth: 1, borderColor: theme.colors.divider, textAlignVertical: 'top' }}
+                  value={pickupInstructionsText}
+                  onChangeText={setPickupInstructionsText}
+                  placeholder={t('business.createBasket.pickupInstructionsPlaceholder', { defaultValue: 'Ex: Sonnez à l\'entrée arrière' })}
+                  placeholderTextColor={theme.colors.muted}
+                  multiline
+                />
+                <TouchableOpacity
+                  onPress={handleSavePickupInstructions}
+                  disabled={pickupInstructionsSaving}
+                  style={{ backgroundColor: theme.colors.primary, borderRadius: theme.radii.r12, paddingVertical: 12, alignItems: 'center', marginTop: theme.spacing.md, flexDirection: 'row', justifyContent: 'center', gap: 6 }}
+                >
+                  <Check size={16} color="#fff" />
+                  <Text style={{ color: '#fff', ...theme.typography.bodySm, fontWeight: '600' }}>
+                    {pickupInstructionsSaving ? t('common.loading') : t('common.save')}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            ) : (
+              <Text style={{ color: profileQuery.data?.pickup_instructions ? theme.colors.textSecondary : theme.colors.muted, ...theme.typography.bodySm, fontStyle: profileQuery.data?.pickup_instructions ? 'normal' : 'italic' }}>
+                {profileQuery.data?.pickup_instructions || t('business.profile.noPickupInstructions', { defaultValue: 'Aucune instruction définie. Appuyez pour en ajouter.' })}
+              </Text>
+            )}
+          </View>
+        </View>
+
+        {FeatureFlags.ENABLE_FINANCIAL_INFO && <View style={[styles.infoCard, { backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, marginTop: theme.spacing.lg, ...theme.shadows.shadowSm }]}>
           <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, padding: theme.spacing.lg, paddingBottom: theme.spacing.sm }]}>
             {t('business.profile.financialInfo')}
           </Text>
@@ -488,7 +573,7 @@ export default function BusinessProfileScreen() {
             </View>
             <ChevronRight size={18} color={theme.colors.muted} />
           </TouchableOpacity>
-        </View>
+        </View>}
 
         <View style={{ height: 40 }} />
       </ScrollView>

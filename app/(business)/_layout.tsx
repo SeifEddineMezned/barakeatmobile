@@ -128,7 +128,7 @@ export default function BusinessTabLayout() {
 
   // Derive the current location name for display
   const selectedLocationName = React.useMemo(() => {
-    if (!selectedLocationId) return isAdminOrOwner ? t('business.allLocations', { defaultValue: 'All locations' }) : (orgLocations[0]?.name ?? t('business.location', { defaultValue: 'Location' }));
+    if (!selectedLocationId) return myContextQuery.data?.organization_name ?? (isAdminOrOwner ? t('business.allLocations', { defaultValue: 'Tous les emplacements' }) : (orgLocations[0]?.name ?? t('business.location', { defaultValue: 'Emplacement' })));
     const loc = orgLocations.find((l) => l.id === Number(selectedLocationId));
     return loc?.name ?? t('business.location', { defaultValue: 'Location' });
   }, [selectedLocationId, orgLocations, isAdminOrOwner, t]);
@@ -277,7 +277,7 @@ export default function BusinessTabLayout() {
               right: 32,
               height: 68,
               backgroundColor: theme.colors.surface,
-              borderRadius: 30,
+              borderRadius: 20,
               borderTopWidth: 0,
               shadowColor: '#000',
               shadowOffset: { width: 0, height: 4 },
@@ -396,7 +396,7 @@ export default function BusinessTabLayout() {
       <Tabs.Screen
         name="dashboard"
         options={{
-          title: t('business.dashboard.title'),
+          title: t('business.dashboard.tabLabel', { defaultValue: 'Accueil' }),
           headerShown: false,
           tabBarIcon: ({ size, focused }) => <LayoutDashboard size={size} color={focused ? '#FFFFFF' : theme.colors.textSecondary} fill={focused ? theme.colors.primary : 'transparent'} />,
         }}

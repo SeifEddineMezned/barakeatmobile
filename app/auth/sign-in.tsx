@@ -1,18 +1,20 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, ScrollView, Alert, ActivityIndicator, Image } from 'react-native';
+import { View, Text, StyleSheet, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, ScrollView, Alert, ActivityIndicator, Image, Modal } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Store, User, ChevronLeft } from 'lucide-react-native';
+import { Store, User, ChevronLeft, AlertTriangle } from 'lucide-react-native';
+import { FontAwesome } from '@expo/vector-icons';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { useAuthStore } from '@/src/stores/authStore';
 import { useSplashStore } from '@/src/stores/splashStore';
-import { login, loginWithGoogle } from '@/src/services/auth';
+import { login, loginWithGoogle, loginWithApple } from '@/src/services/auth';
+import { clearSession } from '@/src/lib/session';
 import { getErrorMessage } from '@/src/lib/api';
 import type { UserRole, User as UserType } from '@/src/types';
 import { StatusBar } from 'expo-status-bar';
 import * as WebBrowser from 'expo-web-browser';
-
+import * as AppleAuthentication from 'expo-apple-authentication';
 // Required by expo-web-browser — must be called at module level
 WebBrowser.maybeCompleteAuthSession();
 
@@ -30,22 +32,28 @@ const GOOGLE_CLIENT = {
   },
 } as const;
 
-function buildGoogleAuthUrl(): { url: string; redirectUri: string; codeVerifier: string; clientId: string } {
+async function buildGoogleAuthUrl(): Promise<{ url: string; redirectUri: string; codeVerifier: string; clientId: string }> {
   const cfg = Platform.OS === 'ios' ? GOOGLE_CLIENT.ios : GOOGLE_CLIENT.android;
   const redirectUri = `${cfg.scheme}:/oauth2redirect`;
-  // Plain PKCE: code_challenge === code_verifier (no SHA-256, no expo-crypto)
   const codeVerifier = [
     Math.random().toString(36).substring(2),
     Math.random().toString(36).substring(2),
     Math.random().toString(36).substring(2),
   ].join('');
+  // SHA-256 PKCE using Web Crypto API (available in Hermes, no native module needed)
+  const encoded = new TextEncoder().encode(codeVerifier);
+  const hashBuffer = await globalThis.crypto.subtle.digest('SHA-256', encoded);
+  const hashBytes = new Uint8Array(hashBuffer);
+  let binary = '';
+  hashBytes.forEach((b) => { binary += String.fromCharCode(b); });
+  const codeChallenge = btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
   const params = new URLSearchParams({
     client_id: cfg.clientId,
     redirect_uri: redirectUri,
     response_type: 'code',
     scope: 'openid email profile',
-    code_challenge: codeVerifier,       // plain method: challenge === verifier
-    code_challenge_method: 'plain',
+    code_challenge: codeChallenge,
+    code_challenge_method: 'S256',
     access_type: 'online',
   });
   console.log('[Google] Platform:', Platform.OS, '| clientId:', cfg.clientId.substring(0, 20) + '...');
@@ -119,15 +127,80 @@ export default function SignInScreen() {
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
+  const [appleLoading, setAppleLoading] = useState(false);
   const [role, setRole] = useState<UserRole>('customer');
   const [step, setStep] = useState<'choose' | 'login'>('choose');
+  const [roleMismatchMsg, setRoleMismatchMsg] = useState<string | null>(null);
+
+  // ── Apple Sign-In ────────────────────────────────────────────────────────
+
+  const handleAppleSignIn = async () => {
+    try {
+      setAppleLoading(true);
+      const credential = await AppleAuthentication.signInAsync({
+        requestedScopes: [
+          AppleAuthentication.AppleAuthenticationScope.FULL_NAME,
+          AppleAuthentication.AppleAuthenticationScope.EMAIL,
+        ],
+      });
+
+      if (!credential.identityToken) {
+        Alert.alert(t('auth.error'), t('auth.appleAuthError'));
+        return;
+      }
+
+      const fullName = credential.fullName
+        ? `${credential.fullName.givenName ?? ''} ${credential.fullName.familyName ?? ''}`.trim()
+        : undefined;
+
+      const res = await loginWithApple(credential.identityToken, fullName);
+
+      const backendType = (res as any).user?.type ?? '';
+      const mappedRole: UserRole = backendType === 'restaurant' ? 'business' : 'customer';
+
+      // Enforce role match — block cross-role login
+      if (mappedRole !== role) {
+        await clearSession();
+        setRoleMismatchMsg(role === 'customer'
+          ? t('auth.notCustomerAccount', { defaultValue: 'Ce compte est enregistré comme commerce. Veuillez passer en mode commerçant.' })
+          : t('auth.notBusinessAccount', { defaultValue: 'Ce compte est enregistré comme client. Veuillez passer en mode client.' }));
+        setLoading(false);
+        return;
+      }
+
+      const user: UserType = {
+        id: res.user.id,
+        name: res.user.name,
+        firstName: res.user.firstName,
+        email: res.user.email,
+        phone: res.user.phone,
+        role: mappedRole,
+      };
+
+      signIn(user, res.token);
+      console.log('[SignIn] Apple success, navigating for role:', mappedRole);
+      triggerSplash();
+      if (mappedRole === 'business') {
+        router.replace('/(business)/dashboard' as never);
+      } else {
+        router.replace('/(tabs)');
+      }
+    } catch (err: any) {
+      if (err.code === 'ERR_REQUEST_CANCELED') return; // user cancelled
+      const msg = getErrorMessage(err);
+      console.log('[SignIn] Apple error:', msg);
+      Alert.alert(t('auth.error'), msg);
+    } finally {
+      setAppleLoading(false);
+    }
+  };
 
   // ── Google OAuth ─────────────────────────────────────────────────────────
 
   const handleGoogleSignIn = async () => {
     try {
       setGoogleLoading(true);
-      const { url, redirectUri, codeVerifier, clientId } = buildGoogleAuthUrl();
+      const { url, redirectUri, codeVerifier, clientId } = await buildGoogleAuthUrl();
       const result = await WebBrowser.openAuthSessionAsync(url, redirectUri);
 
       // User cancelled / dismissed — silent no-op
@@ -165,6 +238,16 @@ export default function SignInScreen() {
       const mappedRole: UserRole =
         backendType === 'restaurant' ? 'business' : 'customer';
 
+      // Enforce role match — block cross-role login
+      if (mappedRole !== role) {
+        await clearSession();
+        setRoleMismatchMsg(role === 'customer'
+          ? t('auth.notCustomerAccount', { defaultValue: 'Ce compte est enregistré comme commerce. Veuillez passer en mode commerçant.' })
+          : t('auth.notBusinessAccount', { defaultValue: 'Ce compte est enregistré comme client. Veuillez passer en mode client.' }));
+        setGoogleLoading(false);
+        return;
+      }
+
       const user: UserType = {
         id: res.user.id,
         name: res.user.name,
@@ -199,7 +282,7 @@ export default function SignInScreen() {
     }
     setLoading(true);
     try {
-      const res = await login({ email: email.trim(), password });
+      const res = await login({ email: email.trim(), password, requested_type: role === 'business' ? 'restaurant' : 'buyer' } as any);
       // Map backend type ("buyer"/"restaurant") to app role ("customer"/"business")
       const backendRole = res.user.role ?? (res as any).user?.type ?? '';
       let mappedRole: UserRole = role;
@@ -210,8 +293,10 @@ export default function SignInScreen() {
       }
       // Block login if selected role doesn't match account type
       if (mappedRole !== role) {
-        const msgKey = role === 'customer' ? 'auth.notCustomerAccount' : 'auth.notBusinessAccount';
-        Alert.alert(t('auth.error'), t(msgKey));
+        await clearSession();
+        setRoleMismatchMsg(role === 'customer'
+          ? t('auth.notCustomerAccount', { defaultValue: 'Ce compte est enregistré comme commerce. Veuillez passer en mode commerçant.' })
+          : t('auth.notBusinessAccount', { defaultValue: 'Ce compte est enregistré comme client. Veuillez passer en mode client.' }));
         setLoading(false);
         return;
       }
@@ -251,18 +336,16 @@ export default function SignInScreen() {
           <View style={[styles.content, { padding: theme.spacing.xxl }]}>
             {step === 'choose' ? (
               <>
-                <Text
-                  style={[
-                    styles.title,
-                    { color: '#fff', ...theme.typography.h1, marginBottom: theme.spacing.sm },
-                  ]}
-                >
-                  {t('auth.welcome')}
+                <Text style={{ color: 'rgba(255,255,255,0.7)', fontSize: 16, fontFamily: 'Poppins_400Regular', textAlign: 'center' }}>
+                  {t('auth.welcomeTo', { defaultValue: 'Bienvenue chez' })}
+                </Text>
+                <Text style={{ color: '#eff35c', fontSize: 36, fontWeight: '700', fontFamily: 'Poppins_700Bold', textAlign: 'center', marginTop: 4, marginBottom: theme.spacing.lg }}>
+                  Barakeat.
                 </Text>
                 <Text
                   style={[
                     styles.subtitle,
-                    { color: 'rgba(255,255,255,0.7)', ...theme.typography.body, marginBottom: theme.spacing.xxxl },
+                    { color: 'rgba(255,255,255,0.6)', ...theme.typography.body, marginBottom: theme.spacing.xxxl, textAlign: 'center' },
                   ]}
                 >
                   {t('auth.chooseAccountType')}
@@ -279,15 +362,18 @@ export default function SignInScreen() {
                     }}
                     onPress={() => { setRole('customer'); setStep('login'); }}
                     activeOpacity={0.8}
+                    accessibilityLabel={t('auth.customerRole')}
+                    accessibilityRole="button"
+                    accessibilityHint={t('auth.customerRoleDesc')}
                   >
                     <View style={{ width: 52, height: 52, borderRadius: 26, backgroundColor: '#114b3c20', justifyContent: 'center', alignItems: 'center', marginBottom: 10 }}>
                       <User size={26} color="#114b3c" />
                     </View>
-                    <Text style={{ color: '#114b3c', ...theme.typography.body, fontWeight: '700', textAlign: 'center' }}>
-                      {t('auth.customerRole')}
+                    <Text style={{ color: '#114b3c', fontSize: 13, fontFamily: 'Poppins_400Regular', textAlign: 'center' }}>
+                      {t('auth.iAm', { defaultValue: 'Je suis' })}
                     </Text>
-                    <Text style={{ color: '#114b3c90', ...theme.typography.caption, marginTop: 4, textAlign: 'center' }}>
-                      {t('auth.customerRoleDesc')}
+                    <Text style={{ color: '#114b3c', fontSize: 17, fontWeight: '700', fontFamily: 'Poppins_700Bold', textAlign: 'center' }}>
+                      {t('auth.clientLabel', { defaultValue: 'Client' })}
                     </Text>
                   </TouchableOpacity>
 
@@ -303,15 +389,18 @@ export default function SignInScreen() {
                     }}
                     onPress={() => { setRole('business'); setStep('login'); }}
                     activeOpacity={0.8}
+                    accessibilityLabel={t('business.auth.switchToBusiness')}
+                    accessibilityRole="button"
+                    accessibilityHint={t('auth.businessRoleDesc')}
                   >
                     <View style={{ width: 52, height: 52, borderRadius: 26, backgroundColor: 'rgba(255,255,255,0.15)', justifyContent: 'center', alignItems: 'center', marginBottom: 10 }}>
                       <Store size={26} color="#fff" />
                     </View>
-                    <Text style={{ color: '#fff', ...theme.typography.body, fontWeight: '700', textAlign: 'center' }}>
-                      {t('business.auth.switchToBusiness')}
+                    <Text style={{ color: 'rgba(255,255,255,0.7)', fontSize: 13, fontFamily: 'Poppins_400Regular', textAlign: 'center' }}>
+                      {t('auth.iAm', { defaultValue: 'Je suis' })}
                     </Text>
-                    <Text style={{ color: 'rgba(255,255,255,0.6)', ...theme.typography.caption, marginTop: 4, textAlign: 'center' }}>
-                      {t('auth.businessRoleDesc')}
+                    <Text style={{ color: '#fff', fontSize: 17, fontWeight: '700', fontFamily: 'Poppins_700Bold', textAlign: 'center' }}>
+                      {t('auth.merchantLabel', { defaultValue: 'Commerçant' })}
                     </Text>
                   </TouchableOpacity>
                 </View>
@@ -329,6 +418,8 @@ export default function SignInScreen() {
                     alignItems: 'center',
                     marginBottom: theme.spacing.xl,
                   }}
+                  accessibilityLabel={t('common.goBack', { defaultValue: 'Go back' })}
+                  accessibilityRole="button"
                 >
                   <ChevronLeft size={28} color="#fff" />
                 </TouchableOpacity>
@@ -372,6 +463,7 @@ export default function SignInScreen() {
                   keyboardType="email-address"
                   autoCapitalize="none"
                   autoCorrect={false}
+                  accessibilityLabel={t('auth.email')}
                 />
               </View>
 
@@ -395,12 +487,15 @@ export default function SignInScreen() {
                   placeholder="••••••••"
                   placeholderTextColor="rgba(255,255,255,0.4)"
                   secureTextEntry
+                  accessibilityLabel={t('auth.password')}
                 />
               </View>
 
               <TouchableOpacity
                 style={styles.forgotPassword}
                 onPress={() => router.push('/auth/forgot-password' as never)}
+                accessibilityLabel={t('auth.forgotPassword')}
+                accessibilityRole="button"
               >
                 <Text style={[{ color: '#e3ff5c', ...theme.typography.bodySm }]}>
                   {t('auth.forgotPassword')}
@@ -421,6 +516,8 @@ export default function SignInScreen() {
                     opacity: loading ? 0.5 : 1,
                   }}
                   activeOpacity={0.8}
+                  accessibilityLabel={loading ? t('common.loading') : t('auth.signIn')}
+                  accessibilityRole="button"
                 >
                   <Text style={{ color: '#114b3c', ...theme.typography.button, textAlign: 'center', fontWeight: '700' as const }}>
                     {loading ? t('common.loading') : t('auth.signIn')}
@@ -453,6 +550,8 @@ export default function SignInScreen() {
                       paddingHorizontal: 16,
                       opacity: googleLoading || loading ? 0.6 : 1,
                     }}
+                    accessibilityLabel={t('auth.continueWithGoogle')}
+                    accessibilityRole="button"
                   >
                     {googleLoading ? (
                       <ActivityIndicator size="small" color="#4285F4" style={{ marginRight: 10 }} />
@@ -467,6 +566,38 @@ export default function SignInScreen() {
                       {t('auth.continueWithGoogle')}
                     </Text>
                   </TouchableOpacity>
+
+                  {/* Apple Sign-In — iOS only */}
+                  {Platform.OS === 'ios' && (
+                    <TouchableOpacity
+                      onPress={handleAppleSignIn}
+                      disabled={appleLoading || loading}
+                      activeOpacity={0.8}
+                      style={{
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        alignSelf: 'center',
+                        height: 48,
+                        backgroundColor: '#000000',
+                        borderRadius: theme.radii.r12,
+                        paddingHorizontal: 16,
+                        marginTop: 12,
+                        opacity: appleLoading || loading ? 0.6 : 1,
+                      }}
+                      accessibilityLabel={t('auth.continueWithApple')}
+                      accessibilityRole="button"
+                    >
+                      {appleLoading ? (
+                        <ActivityIndicator size="small" color="#fff" style={{ marginRight: 10 }} />
+                      ) : (
+                        <FontAwesome name="apple" size={20} color="#fff" style={{ marginRight: 8 }} />
+                      )}
+                      <Text style={{ color: '#ffffff', ...theme.typography.body, fontWeight: '600' }}>
+                        {t('auth.continueWithApple')}
+                      </Text>
+                    </TouchableOpacity>
+                  )}
                 </>
               )}
 
@@ -474,7 +605,7 @@ export default function SignInScreen() {
                 <Text style={[{ color: 'rgba(255,255,255,0.7)', ...theme.typography.body }]}>
                   {t('auth.noAccount')}{' '}
                 </Text>
-                <TouchableOpacity onPress={() => router.push('/auth/sign-up' as never)}>
+                <TouchableOpacity onPress={() => router.push('/auth/sign-up' as never)} accessibilityLabel={t('auth.signUp')} accessibilityRole="button">
                   <Text style={[{ color: '#e3ff5c', ...theme.typography.body, fontWeight: '600' as const }]}>
                     {t('auth.signUp')}
                   </Text>
@@ -486,6 +617,30 @@ export default function SignInScreen() {
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
+      {/* Role mismatch modal */}
+      <Modal visible={!!roleMismatchMsg} transparent animationType="fade" onRequestClose={() => setRoleMismatchMsg(null)}>
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 24 }}>
+          <View style={{ backgroundColor: '#fff', borderRadius: 24, padding: 28, width: '100%', maxWidth: 340, alignItems: 'center' }}>
+            <View style={{ backgroundColor: '#ef444418', width: 56, height: 56, borderRadius: 28, justifyContent: 'center', alignItems: 'center', marginBottom: 16 }}>
+              <AlertTriangle size={28} color="#ef4444" />
+            </View>
+            <Text style={{ color: '#1a1a1a', fontSize: 18, fontWeight: '700', fontFamily: 'Poppins_700Bold', textAlign: 'center', marginBottom: 10 }}>
+              {t('auth.wrongAccountType', { defaultValue: 'Mauvais type de compte' })}
+            </Text>
+            <Text style={{ color: '#666', fontSize: 14, fontFamily: 'Poppins_400Regular', textAlign: 'center', lineHeight: 22, marginBottom: 24 }}>
+              {roleMismatchMsg}
+            </Text>
+            <TouchableOpacity
+              onPress={() => { setRoleMismatchMsg(null); setStep('choose'); }}
+              style={{ backgroundColor: '#114b3c', borderRadius: 14, paddingVertical: 14, width: '100%', alignItems: 'center' }}
+            >
+              <Text style={{ color: '#e3ff5c', fontSize: 15, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
+                {t('auth.switchRole', { defaultValue: 'Changer de mode' })}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }

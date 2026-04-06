@@ -11,7 +11,7 @@ export const mockBaskets: Basket[] = [
     reviews: { service: 4.8, quantite: 4.5, qualite: 4.7, variete: 4.5 },
     description: 'Boulangerie artisanale depuis 1998, nous proposons chaque jour des pains frais, viennoiseries et pâtisseries maison. Nos paniers surprise contiennent un assortiment varié de nos invendus du jour.',
     name: 'Panier Surprise - Boulangerie',
-    category: 'Patisseries/Boulangeries',
+    category: 'Pâtisseries/Boulangeries',
     originalPrice: 20,
     discountedPrice: 10,
     discountPercentage: 50,
@@ -86,7 +86,7 @@ export const mockBaskets: Basket[] = [
     reviews: { service: 4.9, quantite: 4.7, qualite: 4.9, variete: 4.6 },
     description: 'Pâtisserie traditionnelle tunisienne proposant des douceurs orientales faites maison : baklava, makroud, zlebia et bien plus. Un savoir-faire transmis depuis trois générations.',
     name: 'Panier Surprise - Douceurs',
-    category: 'Patisseries/Boulangeries',
+    category: 'Pâtisseries/Boulangeries',
     originalPrice: 16,
     discountedPrice: 8,
     discountPercentage: 50,
@@ -138,7 +138,7 @@ export const mockPartners: Partner[] = [
 
 export const CATEGORIES = [
   'Tous',
-  'Patisseries/Boulangeries',
+  'Pâtisseries/Boulangeries',
   'Produits frais',
   'Restaurants',
 ] as const;

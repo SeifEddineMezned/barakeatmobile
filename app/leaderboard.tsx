@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity,
 } from 'react-native';
+import { MapPin } from 'lucide-react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
@@ -11,21 +12,45 @@ import { useTheme } from '@/src/theme/ThemeProvider';
 import { useAuthStore } from '@/src/stores/authStore';
 import { fetchLeaderboard, type LeaderboardEntry } from '@/src/services/gamification';
 import { DelayedLoader } from '@/src/components/DelayedLoader';
+import { useAddressStore } from '@/src/stores/addressStore';
+import { Minus, Plus } from 'lucide-react-native';
 
 type FilterTab = 'all' | 'region';
+
+// Haversine distance in km
+function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 6371;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
 
 export default function LeaderboardScreen() {
   const { t } = useTranslation();
   const theme = useTheme();
   const router = useRouter();
   const { user } = useAuthStore();
+  const { addresses, selectedId } = useAddressStore();
+  const selectedAddr = addresses.find((a) => a.id === selectedId);
 
   const [activeFilter, setActiveFilter] = useState<FilterTab>('all');
   const [showFull, setShowFull] = useState(false);
+  const [regionRadius, setRegionRadius] = useState(10); // km
+
+  // Extract city from address (use first comma segment or full address)
+  const userRegion = activeFilter === 'region' && user?.address
+    ? (user.address as string).split(',')[0].trim()
+    : undefined;
 
   const leaderboardQuery = useQuery({
-    queryKey: ['leaderboard'],
-    queryFn: fetchLeaderboard,
+    queryKey: ['leaderboard', activeFilter, activeFilter === 'region' ? regionRadius : 'all'],
+    queryFn: () => {
+      if (activeFilter === 'region' && selectedAddr) {
+        return fetchLeaderboard(undefined, selectedAddr.lat, selectedAddr.lng, regionRadius);
+      }
+      return fetchLeaderboard(userRegion);
+    },
     staleTime: 60_000,
   });
 
@@ -246,6 +271,32 @@ export default function LeaderboardScreen() {
           </Text>
         </TouchableOpacity>
       </View>
+
+      {/* Region radius slider — shown when "My Region" is active */}
+      {activeFilter === 'region' && (
+        <View style={{ paddingHorizontal: theme.spacing.xl, marginBottom: theme.spacing.md }}>
+          <View style={{ backgroundColor: theme.colors.surface, borderRadius: theme.radii.r12, padding: 12, ...theme.shadows.shadowSm }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                <MapPin size={14} color={theme.colors.primary} />
+                <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption }}>{t('home.radiusFilter', { defaultValue: 'Rayon de recherche' })}</Text>
+              </View>
+              <Text style={{ color: theme.colors.primary, ...theme.typography.bodySm, fontWeight: '700' }}>{regionRadius} km</Text>
+            </View>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+              <TouchableOpacity onPress={() => setRegionRadius(Math.max(1, regionRadius - 5))} style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: theme.colors.bg, justifyContent: 'center', alignItems: 'center' }}>
+                <Minus size={14} color={theme.colors.textPrimary} />
+              </TouchableOpacity>
+              <View style={{ flex: 1, height: 4, backgroundColor: theme.colors.divider, borderRadius: 2 }}>
+                <View style={{ width: `${Math.min(100, (regionRadius / 50) * 100)}%`, height: 4, backgroundColor: theme.colors.primary, borderRadius: 2 }} />
+              </View>
+              <TouchableOpacity onPress={() => setRegionRadius(Math.min(50, regionRadius + 5))} style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: theme.colors.bg, justifyContent: 'center', alignItems: 'center' }}>
+                <Plus size={14} color={theme.colors.textPrimary} />
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      )}
 
       {/* Leaderboard list */}
       {leaderboardQuery.isLoading ? (

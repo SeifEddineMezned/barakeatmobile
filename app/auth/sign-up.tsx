@@ -45,6 +45,10 @@ export default function SignUpScreen() {
       Alert.alert(t('auth.error'), t('auth.fillAllFields'));
       return;
     }
+    if (password.length < 8 || !/[A-Z]/.test(password) || !/[a-z]/.test(password) || !/[0-9]/.test(password) || !/[!@#$%^&*]/.test(password)) {
+      Alert.alert(t('auth.error'), t('auth.passwordRequirements'));
+      return;
+    }
     setLoading(true);
     try {
       const payload = {
@@ -114,6 +118,9 @@ export default function SignUpScreen() {
             onPress={() => setStep('customer')}
             activeOpacity={0.85}
             style={[styles.roleCard, { backgroundColor: '#e3ff5c', borderRadius: theme.radii.r16, marginBottom: theme.spacing.md }]}
+            accessibilityLabel={t('auth.customerRole')}
+            accessibilityRole="button"
+            accessibilityHint={t('auth.customerRoleDesc')}
           >
             <View style={[styles.roleCardIcon, { backgroundColor: 'rgba(17,75,60,0.12)', borderRadius: 40 }]}>
               <User size={28} color="#114b3c" />
@@ -133,6 +140,9 @@ export default function SignUpScreen() {
             onPress={() => setStep('business')}
             activeOpacity={0.85}
             style={[styles.roleCard, { backgroundColor: 'rgba(255,255,255,0.12)', borderRadius: theme.radii.r16, borderWidth: 1, borderColor: 'rgba(255,255,255,0.2)' }]}
+            accessibilityLabel={t('business.auth.switchToBusiness')}
+            accessibilityRole="button"
+            accessibilityHint={t('auth.businessRoleDesc')}
           >
             <View style={[styles.roleCardIcon, { backgroundColor: 'rgba(255,255,255,0.15)', borderRadius: 40 }]}>
               <Store size={28} color="#e3ff5c" />
@@ -171,7 +181,7 @@ export default function SignUpScreen() {
           <ScrollView contentContainerStyle={styles.scrollContent}>
             <View style={[styles.content, { padding: theme.spacing.xxl }]}>
               {/* Back button */}
-              <TouchableOpacity onPress={() => setStep('role')} style={[styles.backBtn, { marginBottom: theme.spacing.xl }]}>
+              <TouchableOpacity onPress={() => setStep('role')} style={[styles.backBtn, { marginBottom: theme.spacing.xl }]} accessibilityLabel={t('common.goBack', { defaultValue: 'Go back' })} accessibilityRole="button">
                 <ArrowLeft size={22} color="#fff" />
               </TouchableOpacity>
 
@@ -190,6 +200,7 @@ export default function SignUpScreen() {
                     style={[styles.input, { backgroundColor: 'rgba(255,255,255,0.12)', borderColor: 'rgba(255,255,255,0.2)', borderRadius: theme.radii.r12, color: '#fff', ...theme.typography.body }]}
                     value={name} onChangeText={setName}
                     placeholder="John Doe" placeholderTextColor="rgba(255,255,255,0.4)"
+                    accessibilityLabel={t('auth.name')}
                   />
                 </View>
 
@@ -201,6 +212,7 @@ export default function SignUpScreen() {
                     value={email} onChangeText={setEmail}
                     placeholder="you@example.com" placeholderTextColor="rgba(255,255,255,0.4)"
                     keyboardType="email-address" autoCapitalize="none" autoCorrect={false}
+                    accessibilityLabel={t('auth.email')}
                   />
                 </View>
 
@@ -212,6 +224,7 @@ export default function SignUpScreen() {
                     value={phone} onChangeText={setPhone}
                     placeholder="+216 XX XXX XXX" placeholderTextColor="rgba(255,255,255,0.4)"
                     keyboardType="phone-pad"
+                    accessibilityLabel={t('auth.phone')}
                   />
                 </View>
 
@@ -223,6 +236,7 @@ export default function SignUpScreen() {
                     value={password} onChangeText={setPassword}
                     placeholder="••••••••" placeholderTextColor="rgba(255,255,255,0.4)"
                     secureTextEntry
+                    accessibilityLabel={t('auth.password')}
                   />
                 </View>
 
@@ -232,6 +246,9 @@ export default function SignUpScreen() {
                     onPress={() => setTosAccepted(!tosAccepted)}
                     activeOpacity={0.7}
                     style={[styles.tosCheckbox, { borderColor: tosAccepted ? '#e3ff5c' : 'rgba(255,255,255,0.5)', backgroundColor: tosAccepted ? '#e3ff5c' : 'transparent' }]}
+                    accessibilityRole="checkbox"
+                    accessibilityState={{ checked: tosAccepted }}
+                    accessibilityLabel={t('auth.agreeToThe', { defaultValue: 'I agree to the Terms of Service and Privacy Policy' })}
                   >
                     {tosAccepted && <Text style={{ color: '#114b3c', fontSize: 13, fontWeight: '700' as const, lineHeight: 18 }}>✓</Text>}
                   </TouchableOpacity>
@@ -249,6 +266,8 @@ export default function SignUpScreen() {
                     disabled={loading || !tosAccepted}
                     style={{ height: 56, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 32, backgroundColor: '#e3ff5c', borderRadius: theme.radii.pill, opacity: loading || !tosAccepted ? 0.5 : 1 }}
                     activeOpacity={0.8}
+                    accessibilityLabel={loading ? t('common.loading') : t('auth.createAccount')}
+                    accessibilityRole="button"
                   >
                     <Text style={{ color: '#114b3c', ...theme.typography.button, textAlign: 'center', fontWeight: '700' as const }}>
                       {loading ? t('common.loading') : t('auth.createAccount')}
@@ -279,7 +298,7 @@ export default function SignUpScreen() {
           <ScrollView contentContainerStyle={styles.scrollContent}>
             <View style={[styles.content, { padding: theme.spacing.xxl }]}>
               {/* Back button */}
-              <TouchableOpacity onPress={() => setStep('role')} style={[styles.backBtn, { marginBottom: theme.spacing.xl }]}>
+              <TouchableOpacity onPress={() => setStep('role')} style={[styles.backBtn, { marginBottom: theme.spacing.xl }]} accessibilityLabel={t('common.goBack', { defaultValue: 'Go back' })} accessibilityRole="button">
                 <ArrowLeft size={22} color="#fff" />
               </TouchableOpacity>
 
@@ -303,6 +322,7 @@ export default function SignUpScreen() {
                     style={[styles.input, { backgroundColor: 'rgba(255,255,255,0.12)', borderColor: 'rgba(255,255,255,0.2)', borderRadius: theme.radii.r12, color: '#fff', ...theme.typography.body }]}
                     value={contactName} onChangeText={setContactName}
                     placeholder="Ahmed Ben Ali" placeholderTextColor="rgba(255,255,255,0.4)"
+                    accessibilityLabel={t('business.auth.contactName')}
                   />
                 </View>
 
@@ -313,6 +333,7 @@ export default function SignUpScreen() {
                     style={[styles.input, { backgroundColor: 'rgba(255,255,255,0.12)', borderColor: 'rgba(255,255,255,0.2)', borderRadius: theme.radii.r12, color: '#fff', ...theme.typography.body }]}
                     value={restaurantName} onChangeText={setRestaurantName}
                     placeholder="Mon Restaurant" placeholderTextColor="rgba(255,255,255,0.4)"
+                    accessibilityLabel={t('business.auth.businessName')}
                   />
                 </View>
 
@@ -324,6 +345,7 @@ export default function SignUpScreen() {
                     value={bizEmail} onChangeText={setBizEmail}
                     placeholder="contact@monrestaurant.tn" placeholderTextColor="rgba(255,255,255,0.4)"
                     keyboardType="email-address" autoCapitalize="none" autoCorrect={false}
+                    accessibilityLabel={t('auth.email')}
                   />
                 </View>
 
@@ -338,6 +360,7 @@ export default function SignUpScreen() {
                     value={bizPhone} onChangeText={setBizPhone}
                     placeholder="+216 XX XXX XXX" placeholderTextColor="rgba(255,255,255,0.4)"
                     keyboardType="phone-pad"
+                    accessibilityLabel={t('auth.phone')}
                   />
                 </View>
 
@@ -351,6 +374,7 @@ export default function SignUpScreen() {
                     style={[styles.input, { backgroundColor: 'rgba(255,255,255,0.12)', borderColor: 'rgba(255,255,255,0.2)', borderRadius: theme.radii.r12, color: '#fff', ...theme.typography.body }]}
                     value={bizAddress} onChangeText={setBizAddress}
                     placeholder="Avenue Habib Bourguiba, Tunis" placeholderTextColor="rgba(255,255,255,0.4)"
+                    accessibilityLabel={t('business.auth.businessAddress')}
                   />
                 </View>
 
@@ -359,6 +383,8 @@ export default function SignUpScreen() {
                   disabled={loading}
                   style={{ height: 56, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 32, backgroundColor: '#e3ff5c', borderRadius: theme.radii.pill, opacity: loading ? 0.5 : 1 }}
                   activeOpacity={0.8}
+                  accessibilityLabel={loading ? t('common.loading') : t('business.auth.submitApplication')}
+                  accessibilityRole="button"
                 >
                   <Text style={{ color: '#114b3c', ...theme.typography.button, textAlign: 'center', fontWeight: '700' as const }}>
                     {loading ? t('common.loading') : t('business.auth.submitApplication')}

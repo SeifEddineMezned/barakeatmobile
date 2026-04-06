@@ -9,7 +9,7 @@ import {
   FlatList,
   ViewToken,
 } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { ShoppingBag, Package, MapPin, CreditCard } from 'lucide-react-native';
@@ -28,6 +28,8 @@ interface OnboardingSlide {
 }
 
 export default function OnboardingScreen() {
+  const { demo } = useLocalSearchParams<{ demo?: string }>();
+  const isDemo = demo === 'true';
   const { t, i18n } = useTranslation();
   const theme = useTheme();
   const router = useRouter();
@@ -40,8 +42,8 @@ export default function OnboardingScreen() {
   const user = useAuthStore((state) => state.user);
 
   useEffect(() => {
+    if (isDemo) return; // Demo mode — stay on onboarding regardless of auth state
     if (isAuthenticated) {
-      // Route by role — business users must never enter the customer (tabs) flow
       if (user?.role === 'business') {
         router.replace('/(business)/dashboard' as never);
       } else {
@@ -50,7 +52,7 @@ export default function OnboardingScreen() {
     } else if (hasCompletedOnboarding) {
       router.replace('/auth/sign-in' as never);
     }
-  }, [hasCompletedOnboarding, isAuthenticated, user?.role]);
+  }, [hasCompletedOnboarding, isAuthenticated, user?.role, isDemo]);
 
   const slides: OnboardingSlide[] = [
     {
@@ -95,15 +97,17 @@ export default function OnboardingScreen() {
     if (currentIndex < slides.length - 1) {
       flatListRef.current?.scrollToIndex({ index: currentIndex + 1 });
     } else {
+      if (isDemo) { router.back(); return; }
       completeOnboarding();
       router.replace('/auth/sign-in' as never);
     }
-  }, [currentIndex, slides.length, completeOnboarding, router]);
+  }, [currentIndex, slides.length, completeOnboarding, router, isDemo]);
 
   const handleSkip = useCallback(() => {
+    if (isDemo) { router.back(); return; }
     completeOnboarding();
     router.replace('/auth/sign-in' as never);
-  }, [completeOnboarding, router]);
+  }, [completeOnboarding, router, isDemo]);
 
   const changeLanguage = useCallback((lang: string) => {
     i18n.changeLanguage(lang);

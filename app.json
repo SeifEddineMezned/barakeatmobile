@@ -5,7 +5,7 @@
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "rork-app",
+    "scheme": "barakeat",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "splash": {
@@ -15,7 +15,11 @@
     },
     "ios": {
       "supportsTablet": false,
-      "bundleIdentifier": "app.rork.barakeat-surprise-baskets"
+      "bundleIdentifier": "tn.barakeat.app",
+      "usesAppleSignIn": true,
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
       "edgeToEdgeEnabled": true,
@@ -23,10 +27,9 @@
         "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
-      "package": "app.rork.barakeat_surprise_baskets",
+      "package": "tn.barakeat.app",
       "softwareKeyboardLayoutMode": "pan",
       "permissions": [
-        "android.permission.RECORD_AUDIO",
         "android.permission.ACCESS_COARSE_LOCATION",
         "android.permission.ACCESS_FINE_LOCATION",
         "android.permission.CAMERA"
@@ -39,7 +42,7 @@
       [
         "expo-router",
         {
-          "origin": "https://rork.com/"
+          "origin": "https://barakeat.tn/"
         }
       ],
       "expo-font",
@@ -72,14 +75,16 @@
           "icon": "./assets/images/icon.png",
           "color": "#114b3c"
         }
-      ]
+      ],
+      "expo-apple-authentication",
+      "./plugins/withRemovePermissions"
     ],
     "experiments": {
       "typedRoutes": true
     },
     "extra": {
       "router": {
-        "origin": "https://rork.com/"
+        "origin": "https://barakeat.tn/"
       },
       "eas": {
         "projectId": "d3b5c7d2-49f2-4de1-bfe8-f6146c2576e8"

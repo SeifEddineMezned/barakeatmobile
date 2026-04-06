@@ -29,10 +29,9 @@ export interface AuthResponse {
 export async function login(data: LoginRequest): Promise<AuthResponse> {
   console.log('[Auth] Logging in with:', data.email);
   const res = await apiClient.post<AuthResponse>('/api/auth/login', data);
-  const { token, user } = res.data;
-  await saveToken(token);
-  await saveUser(user);
-  console.log('[Auth] Login successful, user:', user.name);
+  // DON'T persist session here — let the caller (sign-in.tsx) verify role match first
+  // and call authStore.signIn() which now handles persistence
+  console.log('[Auth] Login successful, user:', res.data.user.name);
   return res.data;
 }
 
@@ -86,14 +85,25 @@ export async function restaurantAccessRequest(data: RestaurantAccessRequest): Pr
 
 export async function loginWithGoogle(accessToken: string, idToken: string): Promise<AuthResponse> {
   console.log('[Auth] Logging in with Google idToken');
-  console.log('[Auth] idToken exists:', !!idToken, '| length:', idToken?.length ?? 0);
-  console.log('[Auth] accessToken exists:', !!accessToken);
   const res = await apiClient.post<AuthResponse>('/api/auth/google', { accessToken, idToken });
-  const { token, user } = res.data;
-  await saveToken(token);
-  await saveUser(user);
-  console.log('[Auth] Google login successful, user:', user.name);
+  // DON'T persist session here — caller verifies role match first
+  console.log('[Auth] Google login successful, user:', res.data.user.name);
   return res.data;
+}
+
+export async function loginWithApple(identityToken: string, fullName?: string): Promise<AuthResponse> {
+  console.log('[Auth] Logging in with Apple identityToken');
+  const res = await apiClient.post<AuthResponse>('/api/auth/apple', { identityToken, fullName });
+  // DON'T persist session here — caller verifies role match first
+  console.log('[Auth] Apple login successful, user:', res.data.user.name);
+  return res.data;
+}
+
+export async function deleteAccount(): Promise<void> {
+  console.log('[Auth] Requesting account deletion');
+  await apiClient.delete('/api/auth/account');
+  await clearSession();
+  console.log('[Auth] Account deleted and session cleared');
 }
 
 export async function logout(): Promise<void> {

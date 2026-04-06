@@ -1,8 +1,8 @@
-import React, { useState, useMemo, useCallback } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Linking, Modal, TextInput, KeyboardAvoidingView, Platform, Alert } from 'react-native';
+import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Modal, TextInput, KeyboardAvoidingView, Platform, Alert, Dimensions } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
-import { Phone, CheckCircle, XCircle, Clock, QrCode, ClipboardList, Check, X as XIcon } from 'lucide-react-native';
+import { CheckCircle, XCircle, Clock, QrCode, ClipboardList, Check, X as XIcon, ChevronDown, ChevronUp } from 'lucide-react-native';
 import { useRouter } from 'expo-router';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { StatusBar } from 'expo-status-bar';
@@ -10,6 +10,7 @@ import { useBusinessStore } from '@/src/stores/businessStore';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { fetchTodayOrders, confirmPickup, type TodayReservationFromAPI } from '@/src/services/business';
 import { getErrorMessage, apiClient } from '@/src/lib/api';
+import { DelayedLoader } from '@/src/components/DelayedLoader';
 
 // ─── Canonical UI status model ────────────────────────────────────────────────
 // Backend emits:  confirmed | picked_up | cancelled
@@ -61,7 +62,7 @@ export default function IncomingOrdersScreen() {
   const { t } = useTranslation();
   const theme = useTheme();
   const router = useRouter();
-  const [activeTab, setActiveTab] = useState<'incoming' | 'completed'>('incoming');
+  const [activeTab, setActiveTab] = useState<'incoming' | 'completed' | 'issues'>('incoming');
   const queryClient = useQueryClient();
   const selectedLocationId = useBusinessStore((s) => s.selectedLocationId);
 
@@ -80,7 +81,7 @@ export default function IncomingOrdersScreen() {
     return {
       id: String(o.id),
       buyerId: o.buyer_id,                          // ← preserved from API response
-      basketName: (o as any).restaurant_name ?? '',
+      basketName: (o as any).basket_name ?? (o as any).restaurant_name ?? t('orders.surpriseBag', { defaultValue: 'Panier Surprise' }),
       quantity: o.quantity ?? 1,
       total: Number(o.price_tier ?? 0) * (o.quantity ?? 1),
       pickupWindow: { start: pickupStart, end: pickupEnd },
@@ -99,11 +100,16 @@ export default function IncomingOrdersScreen() {
   );
 
   const completedOrders = useMemo(
-    () => orders.filter((o) => o.status === 'picked_up' || o.status === 'cancelled'),
+    () => orders.filter((o) => o.status === 'picked_up'),
     [orders]
   );
 
-  const displayedOrders = activeTab === 'incoming' ? incomingOrders : completedOrders;
+  const issueOrders = useMemo(
+    () => orders.filter((o) => o.status === 'cancelled'),
+    [orders]
+  );
+
+  const displayedOrders = activeTab === 'incoming' ? incomingOrders : activeTab === 'completed' ? completedOrders : issueOrders;
 
   // ─── Verify-pickup modal state ──────────────────────────────────────────────
   const [verifyModalOrderId, setVerifyModalOrderId] = useState<string | null>(null);
@@ -170,6 +176,11 @@ export default function IncomingOrdersScreen() {
     }
   }, [verifyModalOrderId, typedCode, orders, closeVerifyModal, selectedLocationId, queryClient, t]);
 
+  const [expandedOrderId, setExpandedOrderId] = useState<string | null>(null);
+  const toggleExpand = useCallback((id: string) => {
+    setExpandedOrderId((prev) => (prev === id ? null : id));
+  }, []);
+
   const handleCancel = useCallback((orderId: string) => {
     Alert.alert(
       t('business.orders.cancelOrder'),
@@ -194,12 +205,6 @@ export default function IncomingOrdersScreen() {
       ]
     );
   }, [queryClient, t]);
-
-  const handleCall = useCallback((phone?: string) => {
-    if (phone) {
-      void Linking.openURL(`tel:${phone}`);
-    }
-  }, []);
 
   const getStatusConfig = (status: CanonicalStatus) => {
     switch (status) {
@@ -227,6 +232,15 @@ export default function IncomingOrdersScreen() {
     }
   };
 
+  if (todayQuery.isLoading && !todayQuery.data) {
+    return (
+      <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]} edges={[]}>
+        <StatusBar style="dark" />
+        <DelayedLoader />
+      </SafeAreaView>
+    );
+  }
+
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]} edges={[]}>
       <StatusBar style="dark" />
@@ -236,43 +250,75 @@ export default function IncomingOrdersScreen() {
         </Text>
       </View>
 
-      {/* Order Status Breakdown */}
-      {orders.length > 0 && (
-        <View style={{ paddingHorizontal: theme.spacing.xl, marginTop: theme.spacing.md, marginBottom: theme.spacing.sm }}>
-          <View style={{ flexDirection: 'row', gap: 8 }}>
-            <View style={{ flex: 1, backgroundColor: '#16a34a12', borderRadius: theme.radii.r12, padding: 12, alignItems: 'center' }}>
-              <Check size={14} color="#16a34a" />
-              <Text style={{ color: '#16a34a', fontSize: 20, fontFamily: 'Poppins_700Bold', marginTop: 4 }}>
-                {orders.filter(o => o.status === 'picked_up').length}
-              </Text>
-              <Text style={{ color: theme.colors.textSecondary, fontSize: 10, fontFamily: 'Poppins_400Regular' }}>
-                {t('business.orders.statusPickedUp', { defaultValue: 'Picked up' })}
-              </Text>
-            </View>
-            <View style={{ flex: 1, backgroundColor: theme.colors.primary + '12', borderRadius: theme.radii.r12, padding: 12, alignItems: 'center' }}>
-              <Clock size={14} color={theme.colors.primary} />
-              <Text style={{ color: theme.colors.primary, fontSize: 20, fontFamily: 'Poppins_700Bold', marginTop: 4 }}>
-                {incomingOrders.length}
-              </Text>
-              <Text style={{ color: theme.colors.textSecondary, fontSize: 10, fontFamily: 'Poppins_400Regular' }}>
-                {t('orders.status.confirmed', { defaultValue: 'Confirmed' })}
-              </Text>
-            </View>
-            <View style={{ flex: 1, backgroundColor: theme.colors.error + '12', borderRadius: theme.radii.r12, padding: 12, alignItems: 'center' }}>
-              <XIcon size={14} color={theme.colors.error} />
-              <Text style={{ color: theme.colors.error, fontSize: 20, fontFamily: 'Poppins_700Bold', marginTop: 4 }}>
-                {orders.filter(o => o.status === 'cancelled').length}
-              </Text>
-              <Text style={{ color: theme.colors.textSecondary, fontSize: 10, fontFamily: 'Poppins_400Regular' }}>
-                {t('orders.status.cancelled', { defaultValue: 'Cancelled' })}
-              </Text>
-            </View>
-          </View>
-        </View>
-      )}
+      {/* Stat carousel — syncs with active tab */}
+      {(() => {
+        const screenW = Dimensions.get('window').width;
+        const cardW = screenW * 0.38;
+        const gap = 8;
+        const statsRef = useRef<ScrollView>(null);
+        const tabIndex = activeTab === 'incoming' ? 0 : activeTab === 'completed' ? 1 : 2;
+        useEffect(() => {
+          statsRef.current?.scrollTo({ x: tabIndex * (cardW + gap) - (screenW - cardW) / 2 + cardW / 2, animated: true });
+        }, [tabIndex]);
 
+        const slides = [
+          { key: 'incoming' as const, icon: Clock, iconColor: '#e3ff5c', bg: theme.colors.primary, textColor: '#fff', subColor: 'rgba(255,255,255,0.7)', count: incomingOrders.length, label: t('business.orders.pendingPickup', { defaultValue: 'en attente de retrait' }) },
+          { key: 'completed' as const, icon: Check, iconColor: '#114b3c', bg: '#e3ff5c', textColor: '#114b3c', subColor: theme.colors.textSecondary, count: completedOrders.length, label: t('business.orders.statusPickedUp', { defaultValue: 'récupérées' }) },
+          { key: 'issues' as const, icon: XIcon, iconColor: theme.colors.error, bg: theme.colors.error + '14', textColor: theme.colors.error, subColor: theme.colors.textSecondary, count: issueOrders.length, label: t('business.orders.issues', { defaultValue: 'annulées' }) },
+        ];
+
+        return (
+        <ScrollView
+          ref={statsRef}
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          style={{ marginTop: theme.spacing.sm, flexGrow: 0 }}
+          contentContainerStyle={{ paddingHorizontal: 20, gap }}
+        >
+          {slides.map((s) => {
+            const isActive = activeTab === s.key;
+            const SlideIcon = s.icon;
+            return (
+              <TouchableOpacity
+                key={s.key}
+                onPress={() => setActiveTab(s.key)}
+                activeOpacity={0.85}
+                style={{
+                  width: cardW,
+                  backgroundColor: s.bg,
+                  borderRadius: theme.radii.r12,
+                  height: 60,
+                  paddingHorizontal: 10,
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  gap: 8,
+                  opacity: isActive ? 1 : 0.5,
+                  borderWidth: isActive ? 2 : 0,
+                  borderColor: isActive ? s.textColor + '40' : 'transparent',
+                }}
+              >
+                <SlideIcon size={14} color={s.iconColor} />
+                <Text style={{ color: s.textColor, fontSize: 18, fontFamily: 'Poppins_700Bold' }}>
+                  {s.count}
+                </Text>
+                <Text style={{ color: s.subColor, fontSize: 10, fontFamily: 'Poppins_400Regular', flex: 1 }} numberOfLines={1}>
+                  {s.label}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </ScrollView>
+        );
+      })()}
+
+      {/* Tab bar — En cours / Terminées / Problèmes */}
       <View style={[styles.tabs, { paddingHorizontal: theme.spacing.xl, marginTop: theme.spacing.sm }]}>
-        {(['incoming', 'completed'] as const).map((tab) => (
+        {(['incoming', 'completed', 'issues'] as const).map((tab) => {
+          const label = tab === 'incoming' ? t('business.orders.incoming')
+            : tab === 'completed' ? t('business.orders.completed')
+            : t('business.orders.issues', { defaultValue: 'Problèmes' });
+          const count = tab === 'incoming' ? incomingOrders.length : tab === 'completed' ? completedOrders.length : issueOrders.length;
+          return (
           <TouchableOpacity
             key={tab}
             style={[
@@ -281,7 +327,7 @@ export default function IncomingOrdersScreen() {
                 flex: 1,
                 paddingVertical: theme.spacing.md,
                 borderBottomWidth: 2,
-                borderBottomColor: activeTab === tab ? theme.colors.primary : 'transparent',
+                borderBottomColor: activeTab === tab ? (tab === 'issues' ? theme.colors.error : theme.colors.primary) : 'transparent',
               },
             ]}
             onPress={() => setActiveTab(tab)}
@@ -289,18 +335,18 @@ export default function IncomingOrdersScreen() {
             <Text
               style={[
                 {
-                  color: activeTab === tab ? theme.colors.primary : theme.colors.textSecondary,
-                  ...theme.typography.body,
+                  color: activeTab === tab ? (tab === 'issues' ? theme.colors.error : theme.colors.primary) : theme.colors.textSecondary,
+                  ...theme.typography.bodySm,
                   fontWeight: activeTab === tab ? ('600' as const) : ('400' as const),
                   textAlign: 'center' as const,
                 },
               ]}
             >
-              {tab === 'incoming' ? t('business.orders.incoming') : t('business.orders.completed')}
-              {tab === 'incoming' && incomingOrders.length > 0 ? ` (${incomingOrders.length})` : ''}
+              {label}{count > 0 ? ` (${count})` : ''}
             </Text>
           </TouchableOpacity>
-        ))}
+          );
+        })}
       </View>
 
       <ScrollView
@@ -348,10 +394,13 @@ export default function IncomingOrdersScreen() {
             const statusConfig = getStatusConfig(order.status);
             const StatusIcon = statusConfig.icon;
             const isIncoming = order.status === 'confirmed';
+            const isExpanded = expandedOrderId === order.id;
 
             return (
-              <View
+              <TouchableOpacity
                 key={order.id}
+                activeOpacity={0.85}
+                onPress={() => toggleExpand(order.id)}
                 style={[
                   styles.orderCard,
                   {
@@ -363,6 +412,7 @@ export default function IncomingOrdersScreen() {
                   },
                 ]}
               >
+                {/* Compact header — always visible */}
                 <View style={styles.orderTop}>
                   <View style={{ flex: 1 }}>
                     <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3 }]}>
@@ -372,70 +422,68 @@ export default function IncomingOrdersScreen() {
                       {order.basketName} × {order.quantity}
                     </Text>
                   </View>
-                  <View style={[styles.statusBadge, { backgroundColor: statusConfig.bg, borderRadius: theme.radii.pill, paddingHorizontal: 12, paddingVertical: 6 }]}>
-                    <StatusIcon size={14} color={statusConfig.color} />
-                    <Text style={[{ color: statusConfig.color, ...theme.typography.caption, fontWeight: '600' as const, marginLeft: 4 }]}>
-                      {statusConfig.label}
-                    </Text>
-                  </View>
-                </View>
-
-                <View style={[styles.orderDetails, { marginTop: theme.spacing.md }]}>
-                  <View style={styles.detailRow}>
-                    <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption }]}>
-                      {t('reserve.total')}
-                    </Text>
-                    <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.body, fontWeight: '600' as const }]}>
-                      {order.total} TND
-                    </Text>
-                  </View>
-                  <View style={[styles.detailRow, { marginTop: 4 }]}>
-                    <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption }]}>
-                      {t('basket.pickupWindow')}
-                    </Text>
-                    <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.bodySm }]}>
-                      {order.pickupWindow.start} - {order.pickupWindow.end}
-                    </Text>
-                  </View>
-                </View>
-
-                {/* Action row — only shown for incoming (confirmed) orders */}
-                {isIncoming && (
-                  <View style={[styles.actionRow, { marginTop: theme.spacing.lg, paddingTop: theme.spacing.md, borderTopWidth: 1, borderTopColor: theme.colors.divider }]}>
-                    {order.customerPhone && (
-                      <TouchableOpacity
-                        onPress={() => handleCall(order.customerPhone)}
-                        style={[styles.actionBtn, { backgroundColor: theme.colors.primary + '12', borderRadius: theme.radii.r12, paddingHorizontal: 14, paddingVertical: 10 }]}
-                      >
-                        <Phone size={16} color={theme.colors.primary} />
-                        <Text style={[{ color: theme.colors.primary, ...theme.typography.caption, fontWeight: '600' as const, marginLeft: 6 }]}>
-                          {t('business.orders.callCustomer')}
-                        </Text>
-                      </TouchableOpacity>
-                    )}
-
-                    {/* Single real action: verify pickup code → confirmPickup */}
-                    <TouchableOpacity
-                      onPress={() => openVerifyModal(order.id)}
-                      style={[
-                        styles.actionBtn,
-                        {
-                          backgroundColor: theme.colors.primary,
-                          borderRadius: theme.radii.r12,
-                          paddingHorizontal: 14,
-                          paddingVertical: 10,
-                          marginLeft: order.customerPhone ? 8 : 0,
-                        },
-                      ]}
-                    >
-                      <CheckCircle size={16} color="#fff" />
-                      <Text style={[{ color: '#fff', ...theme.typography.caption, fontWeight: '600' as const, marginLeft: 6 }]}>
-                        {t('business.orders.confirmPickup', { defaultValue: 'Confirm Pickup' })}
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                    <View style={[styles.statusBadge, { backgroundColor: statusConfig.bg, borderRadius: theme.radii.pill, paddingHorizontal: 10, paddingVertical: 5 }]}>
+                      <StatusIcon size={12} color={statusConfig.color} />
+                      <Text style={[{ color: statusConfig.color, ...theme.typography.caption, fontWeight: '600' as const, marginLeft: 4 }]}>
+                        {statusConfig.label}
                       </Text>
-                    </TouchableOpacity>
+                    </View>
+                    {isExpanded
+                      ? <ChevronUp size={16} color={theme.colors.textSecondary} />
+                      : <ChevronDown size={16} color={theme.colors.textSecondary} />}
                   </View>
+                </View>
+
+                {/* Expanded details */}
+                {isExpanded && (
+                  <>
+                    <View style={[styles.orderDetails, { marginTop: theme.spacing.md }]}>
+                      <View style={styles.detailRow}>
+                        <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption }]}>
+                          {t('reserve.total')}
+                        </Text>
+                        <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.body, fontWeight: '600' as const }]}>
+                          {order.total} TND
+                        </Text>
+                      </View>
+                      <View style={[styles.detailRow, { marginTop: 4 }]}>
+                        <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption }]}>
+                          {t('basket.pickupWindow')}
+                        </Text>
+                        <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.bodySm }]}>
+                          {order.pickupWindow.start} - {order.pickupWindow.end}
+                        </Text>
+                      </View>
+                    </View>
+
+                    {/* Action row — only for incoming confirmed orders */}
+                    {isIncoming && (
+                      <View style={[styles.actionRow, { marginTop: theme.spacing.lg, paddingTop: theme.spacing.md, borderTopWidth: 1, borderTopColor: theme.colors.divider }]}>
+                        <TouchableOpacity
+                          onPress={(e) => { e.stopPropagation?.(); openVerifyModal(order.id); }}
+                          style={[
+                            styles.actionBtn,
+                            {
+                              flex: 1,
+                              backgroundColor: theme.colors.primary,
+                              borderRadius: theme.radii.r12,
+                              paddingHorizontal: 14,
+                              paddingVertical: 10,
+                              justifyContent: 'center',
+                            },
+                          ]}
+                        >
+                          <CheckCircle size={16} color="#fff" />
+                          <Text style={[{ color: '#fff', ...theme.typography.caption, fontWeight: '600' as const, marginLeft: 6 }]}>
+                            {t('business.orders.confirmPickup', { defaultValue: 'Confirm Pickup' })}
+                          </Text>
+                        </TouchableOpacity>
+                      </View>
+                    )}
+                  </>
                 )}
-              </View>
+              </TouchableOpacity>
             );
           })
         )}

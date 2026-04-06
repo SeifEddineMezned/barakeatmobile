@@ -11,11 +11,12 @@ import {
   TextInput,
   Platform,
   Dimensions,
+  Linking,
 } from 'react-native';
 import type { NativeSyntheticEvent, TextLayoutEventData } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useQuery } from '@tanstack/react-query';
-import { ChevronLeft, MapPin, ShoppingBag, Clock, Star, Tag, Flag, X, ChevronRight, MoreVertical, TimerOff } from 'lucide-react-native';
+import { ChevronLeft, MapPin, ShoppingBag, Clock, Star, Tag, Flag, X, ChevronRight, MoreVertical, TimerOff, Navigation } from 'lucide-react-native';
 import { isPickupExpiredInTz } from '@/src/utils/timezone';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { useTranslation } from 'react-i18next';
@@ -277,85 +278,60 @@ export default function RestaurantScreen() {
             </View>
           ) : null}
 
-          {/* Info chips row */}
-          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 14 }}>
+          {/* Info: pickup time + address (aligned icons) → rating */}
+          <View style={{ marginTop: 14, gap: 8 }}>
+            {/* Pickup time + Rating on same row */}
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              {restaurant?.pickup_start_time ? (
+                <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: theme.colors.bg, borderRadius: theme.radii.pill, paddingHorizontal: 10, paddingVertical: 6 }}>
+                  <Clock size={12} color={theme.colors.textSecondary} />
+                  <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, marginLeft: 4 }}>
+                    {restaurant.pickup_start_time.substring(0, 5)}
+                    {restaurant.pickup_end_time ? ` - ${restaurant.pickup_end_time.substring(0, 5)}` : ''}
+                  </Text>
+                </View>
+              ) : null}
+              {/* Rating chip — right of pickup time */}
+              <TouchableOpacity
+                onPress={() => setRatingsPopupVisible(true)}
+                activeOpacity={0.7}
+                style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: theme.colors.bg, borderRadius: theme.radii.pill, paddingHorizontal: 10, paddingVertical: 6 }}
+              >
+                <Star size={12} color={overallRating != null ? theme.colors.starYellow : theme.colors.muted} fill={overallRating != null ? theme.colors.starYellow : 'transparent'} />
+                <Text style={{ color: overallRating != null ? theme.colors.textPrimary : theme.colors.textSecondary, ...theme.typography.caption, fontWeight: '700', marginLeft: 4 }}>
+                  {overallRating != null ? overallRating.toFixed(1) : t('review.noRating')}
+                </Text>
+                {reviewCount > 0 ? (
+                  <Text style={{ color: theme.colors.muted, ...theme.typography.caption, marginLeft: 3 }}>({reviewCount} {t('review.reviewCount', { defaultValue: 'avis' })})</Text>
+                ) : null}
+                <ChevronRight size={10} color={theme.colors.muted} style={{ marginLeft: 2 }} />
+              </TouchableOpacity>
+            </View>
+            {/* Address + itinerary — 2nd line, pin aligned under clock */}
             {restaurant?.address ? (
-              <View style={[styles.chip, { backgroundColor: theme.colors.bg, borderRadius: theme.radii.pill }]}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingLeft: 10 }}>
                 <MapPin size={12} color={theme.colors.textSecondary} />
-                <Text
-                  style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, marginLeft: 4 }]}
-                  numberOfLines={1}
-                >
+                <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, flex: 1 }} numberOfLines={2}>
                   {restaurant.address}
                 </Text>
+                {restaurant.latitude && restaurant.longitude && (
+                  <TouchableOpacity
+                    onPress={() => {
+                      const url = Platform.select({
+                        ios: `maps:0,0?q=${restaurant.latitude},${restaurant.longitude}`,
+                        android: `geo:${restaurant.latitude},${restaurant.longitude}?q=${restaurant.latitude},${restaurant.longitude}`,
+                      });
+                      if (url) Linking.openURL(url);
+                    }}
+                    style={{ backgroundColor: theme.colors.primary, borderRadius: 14, width: 28, height: 28, justifyContent: 'center', alignItems: 'center', flexShrink: 0 }}
+                  >
+                    <Navigation size={13} color="#fff" />
+                  </TouchableOpacity>
+                )}
               </View>
             ) : null}
-            {restaurant?.pickup_start_time ? (
-              <View style={[styles.chip, { backgroundColor: theme.colors.bg, borderRadius: theme.radii.pill }]}>
-                <Clock size={12} color={theme.colors.textSecondary} />
-                <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, marginLeft: 4 }]}>
-                  {restaurant.pickup_start_time.substring(0, 5)}
-                  {restaurant.pickup_end_time ? ` - ${restaurant.pickup_end_time.substring(0, 5)}` : ''}
-                </Text>
-              </View>
-            ) : null}
-            {/* Overall rating chip — tap to expand detailed ratings */}
-            <TouchableOpacity
-              onPress={() => setRatingsPopupVisible(true)}
-              activeOpacity={0.7}
-              style={[styles.chip, { backgroundColor: theme.colors.bg, borderRadius: theme.radii.pill }]}
-            >
-              <Star
-                size={12}
-                color={overallRating != null ? theme.colors.starYellow : theme.colors.muted}
-                fill={overallRating != null ? theme.colors.starYellow : 'transparent'}
-              />
-              <Text
-                style={[
-                  {
-                    color: overallRating != null ? theme.colors.textPrimary : theme.colors.textSecondary,
-                    ...theme.typography.caption,
-                    fontWeight: '700' as const,
-                    marginLeft: 4,
-                  },
-                ]}
-              >
-                {overallRating != null ? overallRating.toFixed(1) : t('review.noRating')}
-              </Text>
-              {reviewCount > 0 ? (
-                <Text style={[{ color: theme.colors.muted, ...theme.typography.caption, marginLeft: 3 }]}>
-                  ({reviewCount})
-                </Text>
-              ) : overallRating == null ? (
-                <Text style={[{ color: theme.colors.muted, ...theme.typography.caption, marginLeft: 3 }]}>
-                  {t('review.noReviews')}
-                </Text>
-              ) : null}
-              <ChevronRight size={10} color={theme.colors.muted} style={{ marginLeft: 2 }} />
-            </TouchableOpacity>
           </View>
-
-          {/* Description with "see more" — only shows toggle when text actually overflows */}
-          {description ? (
-            <View style={{ marginTop: 14 }}>
-              <Text
-                style={[{ color: theme.colors.textSecondary, ...theme.typography.bodySm, lineHeight: 20 }]}
-                numberOfLines={descExpanded ? undefined : DESC_COLLAPSED_LINES}
-                onTextLayout={onDescTextLayout}
-              >
-                {description}
-              </Text>
-              {(descNeedsSeeMore || descExpanded) && (
-                <TouchableOpacity onPress={() => setDescExpanded((v) => !v)} style={{ marginTop: 4 }}>
-                  <Text style={[{ color: theme.colors.primary, ...theme.typography.caption, fontWeight: '600' as const }]}>
-                    {descExpanded
-                      ? t('common.seeLess', { defaultValue: 'See less' })
-                      : t('common.seeMore', { defaultValue: 'See more' })}
-                  </Text>
-                </TouchableOpacity>
-              )}
-            </View>
-          ) : null}
+          {/* Description hidden — info shown in basket preview instead */}
         </View>
 
         {/* Baskets section */}
@@ -423,7 +399,7 @@ export default function RestaurantScreen() {
                   <ShoppingBag size={12} color="#fff" />
                 )}
                 <Text style={{ color: '#fff', fontSize: 11, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
-                  {soldOut ? t('basket.soldOut') : pickupExpired ? t('orders.pickupEnded', { defaultValue: 'Expired' }) : basket.quantityLeft}
+                  {soldOut ? t('basket.soldOut') : pickupExpired ? t('orders.pickupEnded', { defaultValue: 'Expired' }) : (basket.quantityLeft >= 10 ? '9+' : basket.quantityLeft)}
                 </Text>
               </View>
               <View style={{ flex: 1, padding: 14, justifyContent: 'center' }}>
@@ -441,14 +417,23 @@ export default function RestaurantScreen() {
                     )}
                   </View>
                   <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 6, gap: 8 }}>
-                    {basket.pickupWindow.start ? (
-                      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                        <Clock size={11} color={theme.colors.muted} />
-                        <Text style={{ color: theme.colors.muted, fontSize: 11, fontFamily: 'Poppins_400Regular', marginLeft: 3 }}>
-                          {basket.pickupWindow.start}-{basket.pickupWindow.end}
-                        </Text>
-                      </View>
-                    ) : null}
+                    {(() => {
+                      const locStart = restaurant?.pickup_start_time?.substring(0, 5) ?? '';
+                      const locEnd = restaurant?.pickup_end_time?.substring(0, 5) ?? '';
+                      const isCustom = basket.pickupWindow.start && (basket.pickupWindow.start !== locStart || basket.pickupWindow.end !== locEnd);
+                      if (!isCustom) return null;
+                      return (
+                        <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: '#e3ff5c22', borderRadius: 8, paddingHorizontal: 6, paddingVertical: 2 }}>
+                          <Clock size={11} color="#b8a600" />
+                          <Text style={{ color: '#8a7d00', fontSize: 11, fontWeight: '600', fontFamily: 'Poppins_600SemiBold', marginLeft: 3 }}>
+                            {basket.pickupWindow.start}-{basket.pickupWindow.end}
+                          </Text>
+                          <Text style={{ color: '#a89800', fontSize: 9, fontFamily: 'Poppins_400Regular', marginLeft: 4 }}>
+                            (personnalisé)
+                          </Text>
+                        </View>
+                      );
+                    })()}
                   </View>
                 </View>
                 {basket.imageUrl ? (
@@ -509,11 +494,11 @@ export default function RestaurantScreen() {
             activeOpacity={1}
             onPress={() => setRatingsPopupVisible(false)}
           />
-          <View style={[styles.ratingsPopupSheet, { backgroundColor: theme.colors.surface, borderTopLeftRadius: 26, borderTopRightRadius: 26, ...theme.shadows.shadowLg }]}>
+          <View style={[styles.ratingsPopupSheet, { backgroundColor: theme.colors.surface, borderTopLeftRadius: 26, borderTopRightRadius: 26, ...theme.shadows.shadowLg, maxHeight: '85%' }]}>
             <View style={[styles.sheetHandle, { backgroundColor: theme.colors.divider }]} />
             <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 24, paddingTop: 10, paddingBottom: 16 }}>
               <Text style={{ color: theme.colors.textPrimary, fontSize: 18, fontWeight: '700', letterSpacing: -0.3 }}>
-                {t('review.ratingsTitle', { defaultValue: 'Ratings' })}
+                {t('review.ratingsTitle', { defaultValue: 'Avis' })}
               </Text>
               <TouchableOpacity
                 onPress={() => setRatingsPopupVisible(false)}
@@ -522,7 +507,7 @@ export default function RestaurantScreen() {
                 <X size={16} color={theme.colors.textSecondary} />
               </TouchableOpacity>
             </View>
-            <View style={{ paddingHorizontal: 24, paddingBottom: 32 }}>
+            <ScrollView contentContainerStyle={{ paddingHorizontal: 24, paddingBottom: 32 }}>
               {/* Overall rating */}
               <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 20 }}>
                 <Star size={24} color={theme.colors.starYellow} fill={overallRating != null ? theme.colors.starYellow : 'transparent'} />
@@ -531,23 +516,60 @@ export default function RestaurantScreen() {
                 </Text>
                 {reviewCount > 0 && (
                   <Text style={{ color: theme.colors.muted, ...theme.typography.bodySm, marginLeft: 8 }}>
-                    ({reviewCount} {reviewCount === 1 ? 'review' : 'reviews'})
+                    ({reviewCount} {t('review.reviewCount', { defaultValue: 'avis' })})
                   </Text>
                 )}
               </View>
               {catAvgs == null ? (
                 <Text style={[{ color: theme.colors.muted, ...theme.typography.bodySm, textAlign: 'center' as const }]}>
-                  {t('review.noReviews', { defaultValue: 'No ratings yet' })}
+                  {t('review.noReviews', { defaultValue: 'Pas encore d\'avis' })}
                 </Text>
               ) : (
                 <>
                   <CategoryRatingRow label={t('review.service', { defaultValue: 'Service' })} value={catAvgs.serviceAvg} />
-                  <CategoryRatingRow label={t('review.quality', { defaultValue: 'Quality' })} value={catAvgs.qualityAvg} />
-                  <CategoryRatingRow label={t('review.quantity', { defaultValue: 'Quantity' })} value={catAvgs.quantityAvg} />
-                  <CategoryRatingRow label={t('review.variety', { defaultValue: 'Variety' })} value={catAvgs.varietyAvg} />
+                  <CategoryRatingRow label={t('review.quality', { defaultValue: 'Qualité' })} value={catAvgs.qualityAvg} />
+                  <CategoryRatingRow label={t('review.quantity', { defaultValue: 'Quantité' })} value={catAvgs.quantityAvg} />
+                  <CategoryRatingRow label={t('review.variety', { defaultValue: 'Variété' })} value={catAvgs.varietyAvg} />
                 </>
               )}
-            </View>
+
+              {/* Comments section */}
+              <View style={{ marginTop: 24 }}>
+                <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3, marginBottom: 12 }}>
+                  {t('review.comments', { defaultValue: 'Commentaires' })}
+                </Text>
+                {reviews.filter((r) => r.comment?.trim()).length === 0 ? (
+                  <View style={{ alignItems: 'center', paddingVertical: 24 }}>
+                    <View style={{ width: 48, height: 48, borderRadius: 24, backgroundColor: theme.colors.bg, justifyContent: 'center', alignItems: 'center', marginBottom: 10 }}>
+                      <Star size={22} color={theme.colors.muted} />
+                    </View>
+                    <Text style={{ color: theme.colors.muted, ...theme.typography.bodySm, textAlign: 'center' }}>
+                      {t('review.noComments', { defaultValue: 'Aucun commentaire pour le moment.' })}
+                    </Text>
+                  </View>
+                ) : (
+                  reviews.filter((r) => r.comment?.trim()).map((r, idx) => (
+                    <View key={r.id ?? idx} style={{ borderTopWidth: idx > 0 ? 1 : 0, borderTopColor: theme.colors.divider, paddingVertical: 12 }}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 6 }}>
+                        <View style={{ flexDirection: 'row', gap: 2 }}>
+                          {[1, 2, 3, 4, 5].map((s) => (
+                            <Star key={s} size={12} color={s <= Math.round(r.rating) ? theme.colors.starYellow : theme.colors.divider} fill={s <= Math.round(r.rating) ? theme.colors.starYellow : 'transparent'} />
+                          ))}
+                        </View>
+                        {r.created_at && (
+                          <Text style={{ color: theme.colors.muted, ...theme.typography.caption, marginLeft: 8 }}>
+                            {new Date(r.created_at).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' })}
+                          </Text>
+                        )}
+                      </View>
+                      <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, lineHeight: 20 }}>
+                        {r.comment}
+                      </Text>
+                    </View>
+                  ))
+                )}
+              </View>
+            </ScrollView>
           </View>
         </View>
       </Modal>

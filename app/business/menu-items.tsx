@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, TextInput, FlatList, Alert, ActivityIndicator, Image, Modal, ScrollView } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, TextInput, Alert, ActivityIndicator, Image, Modal, ScrollView } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
@@ -19,6 +19,7 @@ export default function MenuItemsScreen() {
   const queryClient = useQueryClient();
 
   const [newItemName, setNewItemName] = useState('');
+  const [newItemImageUri, setNewItemImageUri] = useState<string | null>(null);
   const [showScanModal, setShowScanModal] = useState(false);
   const [scannedItems, setScannedItems] = useState<{ name: string; price?: number; selected: boolean }[]>([]);
   const [scanLoading, setScanLoading] = useState(false);
@@ -30,15 +31,21 @@ export default function MenuItemsScreen() {
   });
 
   const addMutation = useMutation({
-    mutationFn: (name: string) => {
+    mutationFn: ({ name, imageUri }: { name: string; imageUri?: string | null }) => {
       const formData = new FormData();
       formData.append('name', name);
+      if (imageUri) {
+        const filename = imageUri.split('/').pop() ?? 'item.jpg';
+        const ext = filename.split('.').pop()?.toLowerCase() ?? 'jpg';
+        const mimeType = ext === 'png' ? 'image/png' : ext === 'webp' ? 'image/webp' : 'image/jpeg';
+        formData.append('image', { uri: imageUri, name: filename, type: mimeType } as any);
+      }
       return addMenuItem(formData);
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['my-menu-items'] });
       setNewItemName('');
-      Alert.alert(t('common.success'), t('business.menuItems.added'));
+      setNewItemImageUri(null);
     },
     onError: (err) => {
       Alert.alert(t('common.error'), getErrorMessage(err));
@@ -49,7 +56,6 @@ export default function MenuItemsScreen() {
     mutationFn: (id: number | string) => deleteMenuItem(id),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['my-menu-items'] });
-      Alert.alert(t('common.success'), t('business.menuItems.deleted'));
     },
     onError: (err) => {
       Alert.alert(t('common.error'), getErrorMessage(err));
@@ -59,7 +65,7 @@ export default function MenuItemsScreen() {
   const handleAdd = () => {
     const trimmed = newItemName.trim();
     if (!trimmed) return;
-    addMutation.mutate(trimmed);
+    addMutation.mutate({ name: trimmed, imageUri: newItemImageUri });
   };
 
   const handleDelete = (item: MenuItemFromAPI) => {
@@ -71,30 +77,45 @@ export default function MenuItemsScreen() {
         {
           text: t('common.delete'),
           style: 'destructive',
-          onPress: () => {
-            deleteMutation.mutate(item.id);
-          },
+          onPress: () => deleteMutation.mutate(item.id),
         },
       ]
     );
   };
 
-  // Shared scan upload logic for both gallery and camera
+  const pickItemImage = async (source: 'camera' | 'gallery') => {
+    if (source === 'camera') {
+      const { status } = await ImagePicker.requestCameraPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert(t('common.error'), t('business.menuItems.cameraPermRequired', { defaultValue: 'Camera permission required.' }));
+        return;
+      }
+      const result = await ImagePicker.launchCameraAsync({ mediaTypes: ['images'], quality: 0.8, allowsEditing: true, aspect: [1, 1] });
+      if (!result.canceled && result.assets[0]) setNewItemImageUri(result.assets[0].uri);
+    } else {
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert(t('common.error'), t('business.menuItems.photoPermRequired'));
+        return;
+      }
+      const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 0.8, allowsEditing: true, aspect: [1, 1] });
+      if (!result.canceled && result.assets[0]) setNewItemImageUri(result.assets[0].uri);
+    }
+  };
+
+  // Shared scan upload logic (AI menu scan)
   const processImageForScan = async (uri: string) => {
     setScanLoading(true);
     try {
       const filename = uri.split('/').pop() ?? 'menu.jpg';
       const ext = filename.split('.').pop()?.toLowerCase() ?? 'jpg';
       const mimeType = ext === 'png' ? 'image/png' : ext === 'webp' ? 'image/webp' : 'image/jpeg';
-
       const formData = new FormData();
       formData.append('image', { uri, name: filename, type: mimeType } as any);
-
       const response = await apiClient.post('/api/locations/my/menu-items/scan', formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
         timeout: 30000,
       });
-
       const items: { name: string; price?: number }[] = response.data?.items ?? [];
       if (items.length === 0) {
         Alert.alert(t('business.menuItems.noItemsFound'), t('business.menuItems.noItemsDetected'));
@@ -115,11 +136,7 @@ export default function MenuItemsScreen() {
       Alert.alert(t('common.error'), t('business.menuItems.photoPermRequired'));
       return;
     }
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
-      quality: 0.8,
-      allowsEditing: false,
-    });
+    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 0.8, allowsEditing: false });
     if (result.canceled || !result.assets[0]) return;
     await processImageForScan(result.assets[0].uri);
   };
@@ -127,14 +144,10 @@ export default function MenuItemsScreen() {
   const handleCameraScan = async () => {
     const { status } = await ImagePicker.requestCameraPermissionsAsync();
     if (status !== 'granted') {
-      Alert.alert(t('common.error'), t('business.menuItems.cameraPermRequired', { defaultValue: 'Camera permission is required to take photos.' }));
+      Alert.alert(t('common.error'), t('business.menuItems.cameraPermRequired', { defaultValue: 'Camera permission is required.' }));
       return;
     }
-    const result = await ImagePicker.launchCameraAsync({
-      mediaTypes: ['images'],
-      quality: 0.8,
-      allowsEditing: false,
-    });
+    const result = await ImagePicker.launchCameraAsync({ mediaTypes: ['images'], quality: 0.8, allowsEditing: false });
     if (result.canceled || !result.assets[0]) return;
     await processImageForScan(result.assets[0].uri);
   };
@@ -149,50 +162,17 @@ export default function MenuItemsScreen() {
     for (const item of selected) {
       const formData = new FormData();
       formData.append('name', item.name);
-      try {
-        await addMenuItem(formData);
-      } catch (_) {
-        // continue adding remaining items even if one fails
-      }
+      try { await addMenuItem(formData); } catch (_) {}
     }
     void queryClient.invalidateQueries({ queryKey: ['my-menu-items'] });
     Alert.alert(t('common.success'), t('business.menuItems.addSelectedItems'));
   };
 
-  const renderItem = ({ item }: { item: MenuItemFromAPI }) => (
-    <View style={[styles.itemRow, {
-      backgroundColor: theme.colors.surface,
-      borderRadius: theme.radii.r12,
-      padding: theme.spacing.md,
-      marginBottom: theme.spacing.sm,
-      ...theme.shadows.shadowSm,
-    }]}>
-      {item.image_url ? (
-        <Image source={{ uri: item.image_url }} style={[styles.itemImage, { borderRadius: theme.radii.r8 }]} />
-      ) : null}
-      <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.body, flex: 1, marginLeft: item.image_url ? theme.spacing.md : 0 }]} numberOfLines={2}>
-        {item.name}
-      </Text>
-      <TouchableOpacity
-        onPress={() => handleDelete(item)}
-        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-        style={{ marginLeft: theme.spacing.sm }}
-      >
-        <Trash2 size={18} color={theme.colors.error} />
-      </TouchableOpacity>
-    </View>
-  );
-
-  const renderEmpty = () => (
-    <View style={[styles.emptyState, { marginTop: 60 }]}>
-      <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.body, textAlign: 'center' as const }]}>
-        {t('business.menuItems.empty')}
-      </Text>
-    </View>
-  );
+  const items = menuQuery.data ?? [];
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]} edges={['top', 'bottom']}>
+      {/* Header */}
       <View style={[styles.header, { paddingHorizontal: theme.spacing.xl, paddingTop: theme.spacing.lg, paddingBottom: theme.spacing.md }]}>
         <TouchableOpacity onPress={() => router.back()} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
           <X size={24} color={theme.colors.textPrimary} />
@@ -209,33 +189,17 @@ export default function MenuItemsScreen() {
                 <TouchableOpacity
                   onPress={handleCameraScan}
                   disabled={scanLoading}
-                  style={{
-                    flexDirection: 'row',
-                    alignItems: 'center',
-                    borderWidth: 1.5,
-                    borderColor: theme.colors.primary,
-                    borderRadius: theme.radii.r12,
-                    paddingHorizontal: theme.spacing.sm,
-                    paddingVertical: 5,
-                  }}
+                  style={{ flexDirection: 'row', alignItems: 'center', borderWidth: 1.5, borderColor: theme.colors.primary, borderRadius: theme.radii.r12, paddingHorizontal: theme.spacing.sm, paddingVertical: 5 }}
                 >
                   <Camera size={16} color={theme.colors.primary} />
                   <Text style={{ color: theme.colors.primary, ...theme.typography.caption, fontWeight: '600' as const, marginLeft: 4 }}>
-                    {t('business.menuItems.takePhoto', { defaultValue: 'Photo' })}
+                    {t('business.menuItems.takePhoto', { defaultValue: 'Scan' })}
                   </Text>
                 </TouchableOpacity>
                 <TouchableOpacity
                   onPress={handleScanMenu}
                   disabled={scanLoading}
-                  style={{
-                    flexDirection: 'row',
-                    alignItems: 'center',
-                    borderWidth: 1.5,
-                    borderColor: theme.colors.primary,
-                    borderRadius: theme.radii.r12,
-                    paddingHorizontal: theme.spacing.sm,
-                    paddingVertical: 5,
-                  }}
+                  style={{ flexDirection: 'row', alignItems: 'center', borderWidth: 1.5, borderColor: theme.colors.primary, borderRadius: theme.radii.r12, paddingHorizontal: theme.spacing.sm, paddingVertical: 5 }}
                 >
                   <ImageIcon size={16} color={theme.colors.primary} />
                   <Text style={{ color: theme.colors.primary, ...theme.typography.caption, fontWeight: '600' as const, marginLeft: 4 }}>
@@ -250,41 +214,188 @@ export default function MenuItemsScreen() {
         )}
       </View>
 
-      {menuQuery.isLoading ? (
-        <DelayedLoader />
-      ) : menuQuery.isError ? (
-        <View style={styles.loadingContainer}>
-          <Text style={[{ color: theme.colors.error, ...theme.typography.body, textAlign: 'center' as const }]}>
-            {t('common.errorOccurred')}
+      <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 40 }} showsVerticalScrollIndicator={false}>
+        {/* ── Add New Item Form ─────────────────────────────── */}
+        <View style={{
+          marginHorizontal: theme.spacing.xl,
+          marginBottom: theme.spacing.xl,
+          backgroundColor: theme.colors.surface,
+          borderRadius: theme.radii.r16,
+          padding: theme.spacing.lg,
+          ...theme.shadows.shadowSm,
+        }}>
+          <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3, marginBottom: theme.spacing.md }}>
+            {t('business.menuItems.addItem')}
           </Text>
-          <TouchableOpacity
-            onPress={() => void menuQuery.refetch()}
-            style={[{ backgroundColor: theme.colors.primary, borderRadius: theme.radii.r12, paddingHorizontal: theme.spacing.xl, paddingVertical: theme.spacing.md, marginTop: theme.spacing.lg }]}
-          >
-            <Text style={[{ color: '#fff', ...theme.typography.button }]}>
-              {t('common.retry')}
-            </Text>
-          </TouchableOpacity>
+
+          {/* Photo picker for individual item */}
+          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: theme.spacing.md, gap: 10 }}>
+            <TouchableOpacity
+              onPress={() => pickItemImage('camera')}
+              style={{
+                width: 72,
+                height: 72,
+                borderRadius: theme.radii.r12,
+                backgroundColor: theme.colors.bg,
+                borderWidth: 1.5,
+                borderStyle: newItemImageUri ? 'solid' : 'dashed',
+                borderColor: newItemImageUri ? theme.colors.primary : theme.colors.divider,
+                justifyContent: 'center',
+                alignItems: 'center',
+                overflow: 'hidden',
+              }}
+            >
+              {newItemImageUri ? (
+                <Image source={{ uri: newItemImageUri }} style={{ width: 72, height: 72 }} />
+              ) : (
+                <Camera size={24} color={theme.colors.muted} />
+              )}
+            </TouchableOpacity>
+            <View style={{ flex: 1, gap: 8 }}>
+              <TouchableOpacity
+                onPress={() => pickItemImage('camera')}
+                style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: theme.colors.bg, borderRadius: theme.radii.r12, paddingHorizontal: 12, paddingVertical: 8 }}
+              >
+                <Camera size={16} color={theme.colors.primary} />
+                <Text style={{ color: theme.colors.primary, ...theme.typography.bodySm, marginLeft: 6, fontWeight: '600' as const }}>
+                  {t('business.menuItems.takePhoto', { defaultValue: 'Take Photo' })}
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => pickItemImage('gallery')}
+                style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: theme.colors.bg, borderRadius: theme.radii.r12, paddingHorizontal: 12, paddingVertical: 8 }}
+              >
+                <ImageIcon size={16} color={theme.colors.textSecondary} />
+                <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm, marginLeft: 6 }}>
+                  {t('business.menuItems.chooseFromGallery', { defaultValue: 'Choose from gallery' })}
+                </Text>
+              </TouchableOpacity>
+            </View>
+            {newItemImageUri && (
+              <TouchableOpacity onPress={() => setNewItemImageUri(null)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                <X size={18} color={theme.colors.error} />
+              </TouchableOpacity>
+            )}
+          </View>
+
+          {/* Name input + Add button */}
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+            <TextInput
+              style={{
+                flex: 1,
+                height: 48,
+                backgroundColor: theme.colors.bg,
+                borderRadius: theme.radii.r12,
+                paddingHorizontal: 16,
+                color: theme.colors.textPrimary,
+                ...theme.typography.body,
+              }}
+              value={newItemName}
+              onChangeText={setNewItemName}
+              placeholder={t('business.menuItems.namePlaceholder')}
+              placeholderTextColor={theme.colors.muted}
+              returnKeyType="done"
+              onSubmitEditing={handleAdd}
+            />
+            <TouchableOpacity
+              onPress={handleAdd}
+              disabled={!newItemName.trim() || addMutation.isPending}
+              style={{
+                height: 48,
+                paddingHorizontal: theme.spacing.lg,
+                backgroundColor: !newItemName.trim() ? theme.colors.muted : theme.colors.primary,
+                borderRadius: theme.radii.r12,
+                flexDirection: 'row',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            >
+              {addMutation.isPending ? (
+                <ActivityIndicator size="small" color="#fff" />
+              ) : (
+                <>
+                  <Plus size={16} color="#fff" />
+                  <Text style={{ color: '#fff', ...theme.typography.bodySm, fontWeight: '600' as const, marginLeft: 4 }}>
+                    {t('business.menuItems.addItem')}
+                  </Text>
+                </>
+              )}
+            </TouchableOpacity>
+          </View>
         </View>
-      ) : (
-        <FlatList
-          data={menuQuery.data ?? []}
-          keyExtractor={(item) => String(item.id)}
-          renderItem={renderItem}
-          ListEmptyComponent={renderEmpty}
-          contentContainerStyle={{ paddingHorizontal: theme.spacing.xl, paddingTop: theme.spacing.lg, paddingBottom: 120 }}
-          showsVerticalScrollIndicator={false}
-        />
-      )}
+
+        {/* ── Items Cards (horizontal scroll) ───────────────── */}
+        {menuQuery.isLoading ? (
+          <DelayedLoader />
+        ) : menuQuery.isError ? (
+          <View style={{ alignItems: 'center', padding: 24 }}>
+            <Text style={{ color: theme.colors.error, ...theme.typography.body, textAlign: 'center', marginBottom: 12 }}>
+              {t('common.errorOccurred')}
+            </Text>
+            <TouchableOpacity
+              onPress={() => void menuQuery.refetch()}
+              style={{ backgroundColor: theme.colors.primary, borderRadius: theme.radii.r12, paddingHorizontal: theme.spacing.xl, paddingVertical: theme.spacing.md }}
+            >
+              <Text style={{ color: '#fff', ...theme.typography.button }}>{t('common.retry')}</Text>
+            </TouchableOpacity>
+          </View>
+        ) : items.length === 0 ? (
+          <View style={{ alignItems: 'center', paddingTop: 40 }}>
+            <Text style={{ color: theme.colors.textSecondary, ...theme.typography.body, textAlign: 'center' }}>
+              {t('business.menuItems.empty')}
+            </Text>
+          </View>
+        ) : (
+          <View style={{ paddingHorizontal: theme.spacing.xl }}>
+            <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3, marginBottom: theme.spacing.md }}>
+              {t('business.menuItems.yourItems', { defaultValue: 'Your items' })} ({items.length})
+            </Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 12, paddingBottom: 8 }}>
+              {items.map((item: MenuItemFromAPI) => (
+                <View
+                  key={item.id}
+                  style={{
+                    width: 120,
+                    backgroundColor: theme.colors.surface,
+                    borderRadius: theme.radii.r16,
+                    overflow: 'hidden',
+                    ...theme.shadows.shadowSm,
+                  }}
+                >
+                  {/* Image area */}
+                  <View style={{ width: 120, height: 100, backgroundColor: theme.colors.bg, justifyContent: 'center', alignItems: 'center' }}>
+                    {item.image_url ? (
+                      <Image source={{ uri: item.image_url }} style={{ width: 120, height: 100 }} resizeMode="cover" />
+                    ) : (
+                      <ImageIcon size={32} color={theme.colors.muted} />
+                    )}
+                  </View>
+                  {/* Name + delete */}
+                  <View style={{ padding: 8 }}>
+                    <Text
+                      style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '600' as const }}
+                      numberOfLines={2}
+                    >
+                      {item.name}
+                    </Text>
+                    <TouchableOpacity
+                      onPress={() => handleDelete(item)}
+                      hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                      style={{ marginTop: 6, alignSelf: 'flex-end' }}
+                    >
+                      <Trash2 size={16} color={theme.colors.error} />
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              ))}
+            </ScrollView>
+          </View>
+        )}
+      </ScrollView>
 
       {/* AI Scan Review Modal */}
       {FeatureFlags.ENABLE_AI_MENU_SCANNER && (
-        <Modal
-          visible={showScanModal}
-          animationType="slide"
-          transparent
-          onRequestClose={() => setShowScanModal(false)}
-        >
+        <Modal visible={showScanModal} animationType="slide" transparent onRequestClose={() => setShowScanModal(false)}>
           <View style={styles.modalOverlay}>
             <View style={[styles.modalContainer, { backgroundColor: theme.colors.bg, borderRadius: theme.radii.r12 }]}>
               <View style={[styles.modalHeader, { paddingHorizontal: theme.spacing.xl, paddingVertical: theme.spacing.lg, borderBottomWidth: 1, borderBottomColor: theme.colors.divider }]}>
@@ -299,48 +410,31 @@ export default function MenuItemsScreen() {
                 {scannedItems.map((item, index) => (
                   <TouchableOpacity
                     key={index}
-                    onPress={() => {
-                      setScannedItems((prev) =>
-                        prev.map((it, i) => i === index ? { ...it, selected: !it.selected } : it)
-                      );
-                    }}
-                    style={[{
-                      flexDirection: 'row',
-                      alignItems: 'center',
-                      backgroundColor: theme.colors.surface,
-                      borderRadius: theme.radii.r12,
-                      padding: theme.spacing.md,
-                      marginBottom: theme.spacing.sm,
-                      ...theme.shadows.shadowSm,
-                    }]}
+                    onPress={() => setScannedItems((prev) => prev.map((it, i) => i === index ? { ...it, selected: !it.selected } : it))}
+                    style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: theme.colors.surface, borderRadius: theme.radii.r12, padding: theme.spacing.md, marginBottom: theme.spacing.sm, ...theme.shadows.shadowSm }}
                   >
                     {item.selected ? (
                       <SquareCheck size={20} color={theme.colors.primary} />
                     ) : (
                       <Square size={20} color={theme.colors.muted} />
                     )}
-                    <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.body, flex: 1, marginLeft: theme.spacing.md }]}>
+                    <Text style={{ color: theme.colors.textPrimary, ...theme.typography.body, flex: 1, marginLeft: theme.spacing.md }}>
                       {item.name}
                     </Text>
                     {item.price != null && (
-                      <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.bodySm }]}>
+                      <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm }}>
                         {item.price} TND
                       </Text>
                     )}
                   </TouchableOpacity>
                 ))}
               </ScrollView>
-              <View style={[{ padding: theme.spacing.xl, borderTopWidth: 1, borderTopColor: theme.colors.divider }]}>
+              <View style={{ padding: theme.spacing.xl, borderTopWidth: 1, borderTopColor: theme.colors.divider }}>
                 <TouchableOpacity
                   onPress={handleAddScannedItems}
-                  style={[{
-                    backgroundColor: theme.colors.primary,
-                    borderRadius: theme.radii.r12,
-                    paddingVertical: theme.spacing.md,
-                    alignItems: 'center',
-                  }]}
+                  style={{ backgroundColor: theme.colors.primary, borderRadius: theme.radii.r12, paddingVertical: theme.spacing.md, alignItems: 'center' }}
                 >
-                  <Text style={[{ color: '#fff', ...theme.typography.button }]}>
+                  <Text style={{ color: '#fff', ...theme.typography.button }}>
                     {t('business.menuItems.addSelectedItems')} ({scannedItems.filter((i) => i.selected).length})
                   </Text>
                 </TouchableOpacity>
@@ -349,109 +443,14 @@ export default function MenuItemsScreen() {
           </View>
         </Modal>
       )}
-
-      {/* Add Item Section */}
-      <View style={[styles.addSection, {
-        backgroundColor: theme.colors.surface,
-        paddingHorizontal: theme.spacing.xl,
-        paddingVertical: theme.spacing.md,
-        borderTopWidth: 1,
-        borderTopColor: theme.colors.divider,
-        ...theme.shadows.shadowMd,
-      }]}>
-        <TextInput
-          style={[styles.addInput, {
-            backgroundColor: theme.colors.bg,
-            borderRadius: theme.radii.r12,
-            color: theme.colors.textPrimary,
-            ...theme.typography.body,
-            flex: 1,
-            marginRight: theme.spacing.sm,
-          }]}
-          value={newItemName}
-          onChangeText={setNewItemName}
-          placeholder={t('business.menuItems.namePlaceholder')}
-          placeholderTextColor={theme.colors.muted}
-          returnKeyType="done"
-          onSubmitEditing={handleAdd}
-        />
-        <TouchableOpacity
-          onPress={handleAdd}
-          disabled={!newItemName.trim() || addMutation.isPending}
-          style={[styles.addBtn, {
-            backgroundColor: !newItemName.trim() ? theme.colors.muted : theme.colors.primary,
-            borderRadius: theme.radii.r12,
-            paddingHorizontal: theme.spacing.lg,
-            paddingVertical: theme.spacing.md,
-          }]}
-        >
-          {addMutation.isPending ? (
-            <ActivityIndicator size="small" color="#fff" />
-          ) : (
-            <>
-              <Plus size={16} color="#fff" />
-              <Text style={[{ color: '#fff', ...theme.typography.bodySm, fontWeight: '600' as const, marginLeft: 4 }]}>
-                {t('business.menuItems.addItem')}
-              </Text>
-            </>
-          )}
-        </TouchableOpacity>
-      </View>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-  },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 24,
-  },
-  itemRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  itemImage: {
-    width: 40,
-    height: 40,
-  },
-  emptyState: {
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  addSection: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  addInput: {
-    height: 48,
-    paddingHorizontal: 16,
-  },
-  addBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    height: 48,
-  },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    justifyContent: 'flex-end',
-  },
-  modalContainer: {
-    maxHeight: '80%',
-    flexDirection: 'column',
-  },
-  modalHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
+  container: { flex: 1 },
+  header: { flexDirection: 'row', alignItems: 'center' },
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
+  modalContainer: { maxHeight: '80%', flexDirection: 'column' },
+  modalHeader: { flexDirection: 'row', alignItems: 'center' },
 });

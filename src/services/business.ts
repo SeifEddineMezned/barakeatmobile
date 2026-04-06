@@ -245,17 +245,29 @@ export async function updatePickupHours(
   throw lastError;
 }
 
-// Keep for backwards-compat — delegates to the cascade
+// Update location — handles pickup times via cascade, other fields via direct PUT
 export async function updateLocationById(
   locationId: number | string,
-  data: { pickup_start_time?: string; pickup_end_time?: string },
+  data: Record<string, any>,
   userId?: number,
   orgId?: number | string
 ): Promise<void> {
-  await updatePickupHours(locationId, orgId, {
-    pickup_start_time: data.pickup_start_time ?? '',
-    pickup_end_time: data.pickup_end_time ?? '',
-  }, userId);
+  // Pickup times use the existing cascade (tries multiple endpoints)
+  if (data.pickup_start_time || data.pickup_end_time) {
+    await updatePickupHours(locationId, orgId, {
+      pickup_start_time: data.pickup_start_time ?? '',
+      pickup_end_time: data.pickup_end_time ?? '',
+    }, userId);
+  }
+  // Other fields (pickup_instructions, etc.) go directly to teams endpoint
+  const extraFields = { ...data };
+  delete extraFields.pickup_start_time;
+  delete extraFields.pickup_end_time;
+  if (Object.keys(extraFields).length > 0 && orgId) {
+    const adminHeaders: Record<string, string> = {};
+    if (userId) adminHeaders['x-admin-token'] = getAdminToken(userId);
+    await apiClient.put(`/api/teams/organizations/${orgId}/locations/${locationId}`, extraFields, { headers: adminHeaders });
+  }
 }
 
 // ─── Today's Orders ─────────────────────────────────────────────────────────

@@ -22,6 +22,8 @@ import {
   fetchLeaderboard,
   type Badge,
 } from '@/src/services/gamification';
+import { calcMoneySaved, calcCO2Saved, calcLevelProgress } from '@/src/lib/impactCalculations';
+import { FeatureFlags } from '@/src/lib/featureFlags';
 
 const PLACEHOLDER_BADGES: Badge[] = [
   { id: '1', badge_id: 'first_save', name: 'First Save', unlocked: false },
@@ -113,40 +115,27 @@ export default function ProfileScreen() {
 
     // Prefer authoritative backend stats, fall back to local calculation
     const basketsBought = gStatsInner?.meals_saved ?? completedReservations.length;
-    const mealsSaved = gStatsInner?.meals_saved ?? completedReservations.length;
+    const mealsSaved = basketsBought;
 
-    // Use backend stat if available; fallback uses total_price recorded at reservation time
-    // (not current basket prices, which may have changed since the order was placed)
     const moneySaved = gStatsInner?.money_saved != null
       ? Math.max(0, parseFloat(gStatsInner.money_saved) || 0)
-      : completedReservations.reduce((sum, r) => {
-          const rAny = r as any;
-          // Use prices that were recorded AT reservation time
-          const totalPaid = Number(rAny.total_price ?? rAny.total ?? 0);
-          const orig = Number(rAny.original_price_at_reservation ?? rAny.original_price ?? r.basket?.originalPrice ?? (r.basket as any)?.original_price ?? 0);
-          const qty = r.quantity ?? 1;
-          // If we have total_price (recorded at purchase), use it directly
-          if (totalPaid > 0 && orig > 0) {
-            return sum + Math.max(0, (orig * qty) - totalPaid);
-          }
-          return sum;
-        }, 0);
+      : calcMoneySaved(completedReservations as any[]);
 
-    const co2Saved = mealsSaved * 2.5;
+    const co2Saved = calcCO2Saved(mealsSaved);
 
     // XP: handle both flat API shape and nested level-object shape
     const xp = (typeof gLevel === 'object' ? gLevel?.xp : null) ?? gStatsInner?.xp ?? mealsSaved * 10;
-    const level = (typeof gLevel === 'object' ? gLevel?.level : typeof gLevel === 'number' ? gLevel : null) ?? Math.floor(xp / 100) + 1;
+    // Always derive level from XP so optimistic cache updates (e.g. after reservation) are reflected immediately
+    const { level: computedLevel, xpInLevel, xpBandSize, xpProgress } = calcLevelProgress(xp);
+    const level = computedLevel;
 
-    // Use XP threshold table for accurate in-level progress (not simple % 100)
-    const XP_THRESHOLDS = [0, 50, 120, 210, 320, 450, 600, 800, 1050, 1350, 1700, 2100, 2600, 3200, 3900, 4700, 5600, 6600, 7700, 9000];
-    const currentLevelThreshold = XP_THRESHOLDS[level - 1] ?? 0;
-    const nextLevelThreshold = XP_THRESHOLDS[level] ?? (currentLevelThreshold + 500);
-    const xpInLevel = Math.max(0, xp - currentLevelThreshold);
-    const xpBandSize = Math.max(1, nextLevelThreshold - currentLevelThreshold);
-    const xpProgress = Math.min(1, xpInLevel / xpBandSize);
-
-    const currentStreak = gStatsInner?.current_streak ?? 0;
+    const rawStreak = gStatsInner?.current_streak ?? 0;
+    const longestStreak = gStatsInner?.longest_streak ?? 0;
+    const lastPickupDate: string | null = gStatsInner?.last_pickup_date ?? null;
+    const daysSinceLastPickup: number | null = gStatsInner?.days_since_last_pickup ?? null;
+    // Streak expires after 7 days of inactivity — show 0 client-side if expired
+    const daysUntilStreakExpiry = daysSinceLastPickup != null ? Math.max(0, 7 - daysSinceLastPickup) : null;
+    const currentStreak = (daysSinceLastPickup != null && daysSinceLastPickup >= 7) ? 0 : rawStreak;
 
     const rawBadges: Badge[] =
       gStats?.badges && gStats.badges.length > 0
@@ -162,7 +151,7 @@ export default function ProfileScreen() {
         return rAny.restaurant_name ?? r.basket?.merchantName ?? (r.basket as any)?.merchant_name ?? rAny.location_id ?? rAny.restaurant_id;
       }).filter(Boolean)).size;
 
-    return { basketsBought, moneySaved, co2Saved, level, xp, xpInLevel, xpBandSize, xpProgress, currentStreak, badges, businessesTried };
+    return { basketsBought, moneySaved, co2Saved, level, xp, xpInLevel, xpBandSize, xpProgress, currentStreak, longestStreak, lastPickupDate, daysUntilStreakExpiry, badges, businessesTried };
   }, [gamificationQuery.data, reservationsQuery.data]);
 
 
@@ -246,11 +235,23 @@ export default function ProfileScreen() {
     }
   };
 
+  const scrollY = useRef(new Animated.Value(0)).current;
+  const headerBg = scrollY.interpolate({ inputRange: [0, 30], outputRange: ['transparent', '#ffffff'], extrapolate: 'clamp' });
+
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]} edges={['top']}>
       <StatusBar style="dark" />
 
-      <ScrollView style={styles.content} contentContainerStyle={[{ padding: theme.spacing.xl, paddingTop: 50, paddingBottom: 120 }]} showsVerticalScrollIndicator={false}>
+      {/* Sticky white header overlay on scroll */}
+      <Animated.View style={{ position: 'absolute', top: 0, left: 0, right: 0, zIndex: 10, backgroundColor: headerBg, paddingTop: 50, paddingBottom: 8, paddingHorizontal: theme.spacing.xl, borderBottomWidth: 0.5, borderBottomColor: 'rgba(0,0,0,0.06)' }} pointerEvents="none" />
+
+      <ScrollView
+        style={styles.content}
+        contentContainerStyle={[{ padding: theme.spacing.xl, paddingTop: 50, paddingBottom: 180 }]}
+        showsVerticalScrollIndicator={false}
+        onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], { useNativeDriver: false })}
+        scrollEventThrottle={16}
+      >
         {/* Profile title — scrolls with content */}
         <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h1, marginBottom: theme.spacing.sm }]}>{t('profile.title')}</Text>
         {/* User Card with XP bar, level badge, streak */}
@@ -289,6 +290,8 @@ export default function ProfileScreen() {
           <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: theme.spacing.md, gap: 10 }}>
             <TouchableOpacity
               onPress={() => setLevelModal(true)}
+              accessibilityLabel={t('impact.level', { level: String(stats.level) })}
+              accessibilityRole="button"
               style={{
                 backgroundColor: theme.colors.secondary,
                 borderRadius: theme.radii.pill,
@@ -306,7 +309,7 @@ export default function ProfileScreen() {
                 {t('impact.level', { level: String(stats.level) })}
               </Text>
             </TouchableOpacity>
-            <TouchableOpacity onPress={() => setStreakModal(true)} style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+            <TouchableOpacity onPress={() => setStreakModal(true)} accessibilityLabel={`${t('impact.streak', { defaultValue: 'Streak' })}: ${stats.currentStreak}`} accessibilityRole="button" style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
               <Flame size={16} color="#FF6B35" />
               <Text style={{ color: '#fff', ...theme.typography.bodySm, fontWeight: '600' as const }}>
                 {stats.currentStreak}
@@ -351,9 +354,9 @@ export default function ProfileScreen() {
         </View>
 
         {/* Stats Row */}
-        <View style={{ marginBottom: theme.spacing.lg }}>
+        <View style={{ marginBottom: theme.spacing.xxl }}>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 10, paddingRight: theme.spacing.xl, paddingHorizontal: 2 }}>
-          <TouchableOpacity onPress={() => setStatModal('money')} style={{ width: 110, backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, padding: theme.spacing.md, alignItems: 'center', ...theme.shadows.shadowSm }}>
+          <TouchableOpacity onPress={() => setStatModal('money')} accessibilityLabel={`${stats.moneySaved.toFixed(0)} TND ${t('profile.moneySaved')}`} accessibilityRole="button" style={{ width: 110, backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, padding: theme.spacing.md, alignItems: 'center', ...theme.shadows.shadowSm }}>
             <View style={[styles.statIcon, { backgroundColor: theme.colors.primary + '15', borderRadius: theme.radii.r12, width: 36, height: 36 }]}>
               <Banknote size={18} color={theme.colors.primary} />
             </View>
@@ -364,7 +367,7 @@ export default function ProfileScreen() {
               {t('profile.moneySaved')}
             </Text>
           </TouchableOpacity>
-          <TouchableOpacity onPress={() => setStatModal('co2')} style={{ width: 110, backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, padding: theme.spacing.md, alignItems: 'center', ...theme.shadows.shadowSm }}>
+          <TouchableOpacity onPress={() => setStatModal('co2')} accessibilityLabel={`${stats.co2Saved.toFixed(1)} kg ${t('profile.co2Saved')}`} accessibilityRole="button" style={{ width: 110, backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, padding: theme.spacing.md, alignItems: 'center', ...theme.shadows.shadowSm }}>
             <View style={[styles.statIcon, { backgroundColor: theme.colors.accentFresh + '15', borderRadius: theme.radii.r12, width: 36, height: 36 }]}>
               <Leaf size={18} color={theme.colors.accentFresh} />
             </View>
@@ -375,7 +378,7 @@ export default function ProfileScreen() {
               {t('profile.co2Saved')}
             </Text>
           </TouchableOpacity>
-          <TouchableOpacity onPress={() => setStatModal('baskets')} style={{ width: 110, backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, padding: theme.spacing.md, alignItems: 'center', ...theme.shadows.shadowSm }}>
+          <TouchableOpacity onPress={() => setStatModal('baskets')} accessibilityLabel={`${stats.basketsBought} ${t('profile.basketsBought')}`} accessibilityRole="button" style={{ width: 110, backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, padding: theme.spacing.md, alignItems: 'center', ...theme.shadows.shadowSm }}>
             <View style={[styles.statIcon, { backgroundColor: theme.colors.secondary + '30', borderRadius: theme.radii.r12, width: 36, height: 36 }]}>
               <ShoppingBag size={18} color={theme.colors.primaryDark} />
             </View>
@@ -386,7 +389,7 @@ export default function ProfileScreen() {
               {t('profile.basketsBought')}
             </Text>
           </TouchableOpacity>
-          <TouchableOpacity onPress={() => setStatModal('spots')} style={{ width: 110, backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, padding: theme.spacing.md, alignItems: 'center', ...theme.shadows.shadowSm }}>
+          <TouchableOpacity onPress={() => setStatModal('spots')} accessibilityLabel={`${stats.businessesTried} ${t('profile.businessesTried', { defaultValue: 'Places Tried' })}`} accessibilityRole="button" style={{ width: 110, backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, padding: theme.spacing.md, alignItems: 'center', ...theme.shadows.shadowSm }}>
             <View style={[styles.statIcon, { backgroundColor: theme.colors.primary + '15', borderRadius: theme.radii.r12, width: 36, height: 36 }]}>
               <Store size={18} color={theme.colors.primary} />
             </View>
@@ -421,6 +424,8 @@ export default function ProfileScreen() {
                   key={badge.id}
                   onPress={() => setBadgeModal(badge)}
                   activeOpacity={0.7}
+                  accessibilityLabel={badge.unlocked ? badgeName : t('impact.locked')}
+                  accessibilityRole="button"
                   style={[
                     styles.badgeCard,
                     {
@@ -475,6 +480,8 @@ export default function ProfileScreen() {
         <View style={{ marginBottom: theme.spacing.lg }}>
           <TouchableOpacity
             onPress={() => router.push('/leaderboard' as any)}
+            accessibilityLabel={t('impact.leaderboard')}
+            accessibilityRole="button"
             style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: theme.spacing.md }}
           >
             <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3 }]}>
@@ -602,6 +609,8 @@ export default function ProfileScreen() {
                     alignItems: 'center' as const,
                   }}
                   onPress={() => setShowAllLeaderboard(!showAllLeaderboard)}
+                  accessibilityLabel={showAllLeaderboard ? t('impact.showLess', { defaultValue: 'Show Less' }) : t('impact.showMore')}
+                  accessibilityRole="button"
                 >
                   <Text style={{ color: theme.colors.primary, ...theme.typography.button }}>
                     {showAllLeaderboard ? t('impact.showLess', { defaultValue: 'Show Less' }) : t('impact.showMore')}
@@ -635,12 +644,11 @@ export default function ProfileScreen() {
                   setEditPhone(user?.phone ?? '');
                   setIsEditing(true);
                 }}
+                accessibilityLabel={t('profile.editProfile')}
+                accessibilityRole="button"
                 style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}
               >
                 <Edit3 size={16} color={theme.colors.primary} />
-                <Text style={[{ color: theme.colors.primary, ...theme.typography.bodySm, fontWeight: '600' as const }]}>
-                  {t('profile.editProfile')}
-                </Text>
               </TouchableOpacity>
             )}
           </View>
@@ -666,6 +674,7 @@ export default function ProfileScreen() {
                 onChangeText={setEditName}
                 placeholder={t('profile.name')}
                 placeholderTextColor={theme.colors.muted}
+                accessibilityLabel={t('profile.name')}
               />
             ) : (
               <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '500' as const }]}>
@@ -715,6 +724,7 @@ export default function ProfileScreen() {
                 placeholder={t('profile.phone')}
                 placeholderTextColor={theme.colors.muted}
                 keyboardType="phone-pad"
+                accessibilityLabel={t('profile.phone')}
               />
             ) : (
               <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '500' as const }]}>
@@ -747,6 +757,9 @@ export default function ProfileScreen() {
                   <TouchableOpacity
                     key={opt.key ?? 'none'}
                     onPress={() => setEditGender(opt.key)}
+                    accessibilityLabel={opt.label}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: editGender === opt.key }}
                     style={{
                       paddingHorizontal: 12,
                       paddingVertical: 6,
@@ -779,6 +792,8 @@ export default function ProfileScreen() {
             <View style={{ flexDirection: 'row', justifyContent: 'flex-end', gap: 10, paddingHorizontal: theme.spacing.lg, paddingVertical: theme.spacing.md, borderTopWidth: 1, borderTopColor: theme.colors.divider }}>
               <TouchableOpacity
                 onPress={() => setIsEditing(false)}
+                accessibilityLabel={t('common.cancel')}
+                accessibilityRole="button"
                 style={{ flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 14, paddingVertical: 8, borderRadius: theme.radii.r12, backgroundColor: theme.colors.bg, borderWidth: 1, borderColor: theme.colors.divider }}
               >
                 <X size={16} color={theme.colors.textSecondary} />
@@ -789,6 +804,8 @@ export default function ProfileScreen() {
               <TouchableOpacity
                 onPress={handleSaveProfile}
                 disabled={saveLoading}
+                accessibilityLabel={saveLoading ? t('common.loading') : t('common.save')}
+                accessibilityRole="button"
                 style={{ flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 14, paddingVertical: 8, borderRadius: theme.radii.r12, backgroundColor: theme.colors.primary, opacity: saveLoading ? 0.5 : 1 }}
               >
                 <Check size={16} color="#fff" />
@@ -798,573 +815,272 @@ export default function ProfileScreen() {
               </TouchableOpacity>
             </View>
           )}
-          {/* Card info row */}
-          <View style={[styles.infoRow, { paddingHorizontal: theme.spacing.lg, paddingVertical: theme.spacing.md, borderTopWidth: 1, borderTopColor: theme.colors.divider }]}>
-            <View style={styles.infoRowLeft}>
-              <CreditCard size={18} color={theme.colors.textSecondary} />
-              <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.bodySm, marginLeft: 10 }]}>
-                {t('profile.cardInfo')}
-              </Text>
-            </View>
-            <Text style={[{ color: theme.colors.muted, ...theme.typography.caption }]}>
-              {t('profile.cardInfoSoon')}
+        </View>
+
+        {/* Food Preferences — hidden unless feature flag is enabled */}
+        {FeatureFlags.ENABLE_DIETARY_PREFERENCES && (
+        <TouchableOpacity
+          onPress={() => setShowPrefsModal(true)}
+          accessibilityLabel={t('profile.foodPreferences', { defaultValue: 'Food Preferences' })}
+          accessibilityRole="button"
+          style={[{
+            backgroundColor: theme.colors.surface,
+            borderRadius: theme.radii.r16,
+            padding: theme.spacing.lg,
+            marginBottom: theme.spacing.lg,
+            flexDirection: 'row',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            ...theme.shadows.shadowSm,
+          }]}
+        >
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+            <UtensilsCrossed size={20} color={theme.colors.textSecondary} />
+            <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.body }]}>
+              {t('profile.foodPreferences', { defaultValue: 'Food Preferences' })}
             </Text>
           </View>
-        </View>
+          <ChevronRight size={20} color={theme.colors.muted} />
+        </TouchableOpacity>
+        )}
 
-        {/* Food Preferences — below Personal Info */}
-        <View
-          style={[
-            {
-              backgroundColor: theme.colors.surface,
-              borderRadius: theme.radii.r16,
-              marginBottom: theme.spacing.lg,
-              ...theme.shadows.shadowSm,
-            },
-          ]}
-        >
-          <TouchableOpacity
-            style={[styles.menuItem, { padding: theme.spacing.lg }]}
-            onPress={() => setShowPrefsModal(true)}
-          >
-            <View style={styles.menuItemLeft}>
-              <UtensilsCrossed size={20} color={theme.colors.textSecondary} />
-              <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.body, marginLeft: 12 }]}>
-                {t('profile.foodPreferences')}
-              </Text>
-            </View>
-            <ChevronRight size={20} color={theme.colors.muted} />
-          </TouchableOpacity>
-        </View>
-
-        <View style={{ height: 30 }} />
+        {/* Settings removed from buyer profile */}
       </ScrollView>
 
-      {/* Stat Detail Modal */}
-      <Modal
-        visible={statModal !== null}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setStatModal(null)}
-      >
-        <TouchableOpacity
-          style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 24 }}
-          activeOpacity={1}
-          onPress={() => setStatModal(null)}
-        >
-          <TouchableOpacity
-            activeOpacity={1}
-            onPress={() => {}}
-            style={{
-              backgroundColor: theme.colors.surface,
-              borderRadius: 24,
-              padding: 24,
-              maxHeight: '70%',
-              width: '100%',
-              maxWidth: 400,
-            }}
-          >
-
-            {/* Money Saved */}
-            {statModal === 'money' && (() => {
-              const reservations = reservationsQuery.data ?? [];
-              const completed = reservations.filter((r) => {
-                const status = (r.status ?? '').toLowerCase();
-                return status === 'collected' || status === 'completed' || status === 'picked_up';
-              });
-              const recent5 = completed.slice(-5).reverse();
-              return (
-                <>
-                  <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h2, marginBottom: theme.spacing.sm }}>
-                    {t('profile.statMoneySaved')}
-                  </Text>
-                  <Text style={{ color: theme.colors.primary, ...theme.typography.h1, marginBottom: theme.spacing.sm }}>
-                    {stats.moneySaved.toFixed(2)} TND
-                  </Text>
-                  <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm, marginBottom: theme.spacing.lg }}>
-                    {t('profile.statMoneySavedDesc')}
-                  </Text>
-                  <ScrollView showsVerticalScrollIndicator={false}>
-                    {recent5.length === 0 ? (
-                      <Text style={{ color: theme.colors.muted, ...theme.typography.bodySm, textAlign: 'center' as const }}>
-                        {t('profile.noCompletedReservations')}
-                      </Text>
-                    ) : (
-                      recent5.map((r, i) => {
-                        const rAny = r as any;
-                        const orig = Number(rAny.original_price ?? r.basket?.originalPrice ?? (r.basket as any)?.original_price ?? 0);
-                        const disc = Number(rAny.price_tier ?? rAny.selling_price ?? r.basket?.discountedPrice ?? (r.basket as any)?.discounted_price ?? (r.basket as any)?.price_tier ?? 0);
-                        const saving = Math.max(0, (orig - disc) * (r.quantity ?? 1));
-                        const name = rAny.basket_name ?? rAny.restaurant_name ?? r.basket?.name ?? (r.basket as any)?.basket_name ?? 'Basket';
-                        return (
-                          <View
-                            key={`ms-${i}`}
-                            style={{
-                              paddingVertical: theme.spacing.sm,
-                              borderBottomWidth: 1,
-                              borderBottomColor: theme.colors.divider,
-                            }}
-                          >
-                            <Text
-                              style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '600' as const }}
-                              numberOfLines={1}
-                            >
-                              {name}
-                            </Text>
-                            <View style={{ flexDirection: 'row' as const, justifyContent: 'space-between' as const, marginTop: 4 }}>
-                              <Text style={{ color: theme.colors.muted, ...theme.typography.caption }}>
-                                {t('profile.origPrice', { defaultValue: 'Original' })}: {orig.toFixed(2)} TND
-                              </Text>
-                              <Text style={{ color: theme.colors.muted, ...theme.typography.caption }}>
-                                {t('profile.boughtAt', { defaultValue: 'Paid' })}: {disc.toFixed(2)} TND
-                              </Text>
-                              <Text style={{ color: theme.colors.accentFresh, ...theme.typography.caption, fontWeight: '700' as const }}>
-                                {saving > 0 ? `+${saving.toFixed(2)}` : '0'} TND
-                              </Text>
-                            </View>
-                          </View>
-                        );
-                      })
-                    )}
-                    <View style={{ height: theme.spacing.lg }} />
-                  </ScrollView>
-                </>
-              );
-            })()}
-
-            {/* CO2 Saved */}
-            {statModal === 'co2' && (
-              <>
-                <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h2, marginBottom: theme.spacing.sm }}>
-                  {t('profile.statCO2Saved')}
-                </Text>
-                <Text style={{ color: theme.colors.accentFresh, ...theme.typography.h1, marginBottom: theme.spacing.lg }}>
-                  {stats.co2Saved.toFixed(1)} kg
-                </Text>
-                <ScrollView showsVerticalScrollIndicator={false}>
-                  {[
-                    { label: t('profile.carTrips'), value: (stats.co2Saved / 8).toFixed(1) },
-                    { label: t('profile.plasticBottles'), value: (stats.co2Saved * 4).toFixed(0) },
-                    { label: t('profile.kgRescued'), value: (stats.basketsBought * 1.3).toFixed(1) },
-                  ].map((eq, i) => (
-                    <View
-                      key={`co2-${i}`}
-                      style={{
-                        flexDirection: 'row' as const,
-                        alignItems: 'center' as const,
-                        paddingVertical: theme.spacing.md,
-                        borderBottomWidth: 1,
-                        borderBottomColor: theme.colors.divider,
-                        gap: 12,
-                      }}
-                    >
-                      <View
-                        style={{
-                          backgroundColor: theme.colors.accentFresh + '20',
-                          borderRadius: theme.radii.r12,
-                          paddingHorizontal: theme.spacing.md,
-                          paddingVertical: theme.spacing.sm,
-                          minWidth: 60,
-                          alignItems: 'center' as const,
-                        }}
-                      >
-                        <Text style={{ color: theme.colors.accentFresh, ...theme.typography.h3, fontWeight: '700' as const }}>
-                          {eq.value}
-                        </Text>
-                      </View>
-                      <Text style={{ color: theme.colors.textPrimary, ...theme.typography.body, flex: 1 }}>
-                        {eq.label}
-                      </Text>
-                    </View>
-                  ))}
-                  <View style={{ height: theme.spacing.lg }} />
-                </ScrollView>
-              </>
-            )}
-
-            {/* Baskets Bought */}
-            {statModal === 'baskets' && (() => {
-              const reservations = reservationsQuery.data ?? [];
-              const completed = reservations.filter((r) => {
-                const status = (r.status ?? '').toLowerCase();
-                return status === 'collected' || status === 'completed' || status === 'picked_up';
-              });
-              const last8 = completed.slice(-8).reverse();
-              return (
-                <>
-                  <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h2, marginBottom: theme.spacing.sm }}>
-                    {t('profile.statBaskets')}
-                  </Text>
-                  <Text style={{ color: theme.colors.primaryDark, ...theme.typography.h1, marginBottom: theme.spacing.lg }}>
-                    {stats.basketsBought}
-                  </Text>
-                  <ScrollView showsVerticalScrollIndicator={false}>
-                    {last8.length === 0 ? (
-                      <Text style={{ color: theme.colors.muted, ...theme.typography.bodySm, textAlign: 'center' as const }}>
-                        {t('profile.noCompletedReservations')}
-                      </Text>
-                    ) : (
-                      last8.map((r, i) => {
-                        const rAny = r as any;
-                        const name = rAny.basket_name ?? rAny.restaurant_name ?? r.basket?.name ?? (r.basket as any)?.basket_name ?? t('profile.basket', { defaultValue: 'Basket' });
-                        const qty = r.quantity ?? 1;
-                        const rawDate = rAny.created_at ?? rAny.pickup_date ?? '';
-                        const dateStr = rawDate ? new Date(rawDate).toLocaleDateString() : '—';
-                        return (
-                          <View
-                            key={`bk-${i}`}
-                            style={{
-                              flexDirection: 'row' as const,
-                              justifyContent: 'space-between' as const,
-                              alignItems: 'center' as const,
-                              paddingVertical: theme.spacing.sm,
-                              borderBottomWidth: 1,
-                              borderBottomColor: theme.colors.divider,
-                            }}
-                          >
-                            <Text
-                              style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, flex: 1 }}
-                              numberOfLines={1}
-                            >
-                              {name}{qty > 1 ? ` x${qty}` : ''}
-                            </Text>
-                            <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, marginLeft: 8 }}>
-                              {dateStr}
-                            </Text>
-                          </View>
-                        );
-                      })
-                    )}
-                    <View style={{ height: theme.spacing.lg }} />
-                  </ScrollView>
-                </>
-              );
-            })()}
-
-            {/* Places Tried */}
-            {statModal === 'spots' && (() => {
-              const reservations = reservationsQuery.data ?? [];
-              const completed = reservations.filter((r) => {
-                const status = (r.status ?? '').toLowerCase();
-                return status === 'collected' || status === 'completed' || status === 'picked_up';
-              });
-              const uniquePlaces = Array.from(
-                new Set(
-                  completed
-                    .map((r) => (r as any).restaurant_name ?? r.basket?.merchantName ?? (r.basket as any)?.merchant_name ?? null)
-                    .filter((n): n is string => Boolean(n))
-                )
-              );
-              return (
-                <>
-                  <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h2, marginBottom: theme.spacing.sm }}>
-                    {t('profile.statSpots')}
-                  </Text>
-                  <Text style={{ color: theme.colors.primary, ...theme.typography.h1, marginBottom: theme.spacing.lg }}>
-                    {stats.businessesTried}
-                  </Text>
-                  <ScrollView showsVerticalScrollIndicator={false}>
-                    {uniquePlaces.length === 0 ? (
-                      <Text style={{ color: theme.colors.muted, ...theme.typography.bodySm, textAlign: 'center' as const }}>
-                        {t('profile.noPlacesVisited')}
-                      </Text>
-                    ) : (
-                      uniquePlaces.map((place, i) => (
-                        <View
-                          key={`pl-${i}`}
-                          style={{
-                            flexDirection: 'row' as const,
-                            alignItems: 'center' as const,
-                            paddingVertical: theme.spacing.sm,
-                            borderBottomWidth: 1,
-                            borderBottomColor: theme.colors.divider,
-                            gap: 10,
-                          }}
-                        >
-                          <Store size={16} color={theme.colors.primary} />
-                          <Text style={{ color: theme.colors.textPrimary, ...theme.typography.body, flex: 1 }} numberOfLines={1}>
-                            {place}
-                          </Text>
-                        </View>
-                      ))
-                    )}
-                    <View style={{ height: theme.spacing.lg }} />
-                  </ScrollView>
-                </>
-              );
-            })()}
-
-            {/* Close button */}
-            <TouchableOpacity
-              onPress={() => setStatModal(null)}
-              style={{
-                backgroundColor: theme.colors.bg,
-                borderRadius: theme.radii.r12,
-                paddingVertical: theme.spacing.md,
-                alignItems: 'center' as const,
-                borderWidth: 1,
-                borderColor: theme.colors.divider,
-                marginTop: theme.spacing.md,
-              }}
-            >
-              <Text style={{ color: theme.colors.textPrimary, ...theme.typography.button }}>
-                {t('common.close')}
+      {/* Stat Modal */}
+      <Modal visible={statModal !== null} transparent animationType="fade" onRequestClose={() => setStatModal(null)}>
+        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setStatModal(null)}>
+          <View style={[styles.modalContent, { backgroundColor: theme.colors.surface, borderRadius: theme.radii.r24, padding: theme.spacing.xl, ...theme.shadows.shadowLg }]} onStartShouldSetResponder={() => true}>
+            <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h2, textAlign: 'center', marginBottom: theme.spacing.md }]}>
+              {statModal === 'money' ? t('profile.moneySaved')
+                : statModal === 'co2' ? t('profile.co2Saved')
+                : statModal === 'baskets' ? t('profile.basketsBought')
+                : t('profile.businessesTried', { defaultValue: 'Places Tried' })}
+            </Text>
+            <Text style={[{ color: theme.colors.primary, ...theme.typography.h1, textAlign: 'center', marginBottom: theme.spacing.lg }]}>
+              {statModal === 'money' ? `${stats.moneySaved.toFixed(0)} TND`
+                : statModal === 'co2' ? `${stats.co2Saved.toFixed(1)} kg`
+                : statModal === 'baskets' ? String(stats.basketsBought)
+                : String(stats.businessesTried)}
+            </Text>
+            <TouchableOpacity onPress={() => setStatModal(null)} accessibilityLabel={t('common.close', { defaultValue: 'Close' })} accessibilityRole="button">
+              <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.body, textAlign: 'center' }]}>
+                {t('common.close', { defaultValue: 'Close' })}
               </Text>
             </TouchableOpacity>
-          </TouchableOpacity>
+          </View>
         </TouchableOpacity>
       </Modal>
 
-      {/* Badge Detail Modal */}
+      {/* Badge Modal */}
       <Modal visible={badgeModal !== null} transparent animationType="fade" onRequestClose={() => setBadgeModal(null)}>
-        <TouchableOpacity style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 24 }} activeOpacity={1} onPress={() => setBadgeModal(null)}>
-          <TouchableOpacity activeOpacity={1} onPress={() => {}} style={{ backgroundColor: theme.colors.surface, borderRadius: 24, padding: 24, width: '100%', maxWidth: 340, alignItems: 'center' }}>
+        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setBadgeModal(null)}>
+          <View style={[styles.modalContent, { backgroundColor: theme.colors.surface, borderRadius: theme.radii.r24, padding: theme.spacing.xl, alignItems: 'center', ...theme.shadows.shadowLg }]} onStartShouldSetResponder={() => true}>
             {badgeModal && (() => {
               const bid = badgeModal.badge_id ?? badgeModal.id;
               const BadgeIcon = badgeModal.unlocked ? getBadgeIcon(bid) : Lock;
               const badgeName = badgeModal.nameKey
                 ? t(`badges.${badgeModal.nameKey}`, { defaultValue: badgeModal.name ?? bid })
                 : badgeModal.name ?? bid;
-              const badgeDesc = badgeModal.descKey
-                ? t(`badges.${badgeModal.descKey}`, { defaultValue: badgeModal.description ?? '' })
-                : badgeModal.description ?? '';
               return (
                 <>
-                  <View style={{ backgroundColor: badgeModal.unlocked ? theme.colors.primary + '15' : theme.colors.divider, borderRadius: 36, width: 72, height: 72, justifyContent: 'center', alignItems: 'center', marginBottom: 16 }}>
+                  <View style={{ width: 72, height: 72, borderRadius: 36, backgroundColor: badgeModal.unlocked ? theme.colors.primary + '15' : theme.colors.divider, justifyContent: 'center', alignItems: 'center', marginBottom: theme.spacing.lg }}>
                     <BadgeIcon size={32} color={badgeModal.unlocked ? theme.colors.primary : theme.colors.muted} />
                   </View>
-                  <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3, textAlign: 'center', marginBottom: 8 }}>
+                  <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, textAlign: 'center', marginBottom: theme.spacing.sm }]}>
                     {badgeModal.unlocked ? badgeName : t('impact.locked')}
                   </Text>
-                  {badgeModal.unlocked && badgeDesc ? (
-                    <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm, textAlign: 'center', lineHeight: 20, marginBottom: 12 }}>
-                      {badgeDesc}
-                    </Text>
-                  ) : !badgeModal.unlocked ? (
-                    <Text style={{ color: theme.colors.muted, ...theme.typography.bodySm, textAlign: 'center', lineHeight: 20, marginBottom: 12 }}>
-                      {t('badges.lockedDesc', { defaultValue: 'Keep saving food to unlock this badge!' })}
-                    </Text>
-                  ) : null}
-                  {badgeModal.unlocked && badgeModal.unlocked_at && (
-                    <Text style={{ color: theme.colors.muted, ...theme.typography.caption, marginBottom: 12 }}>
-                      {t('badges.unlockedOn', { defaultValue: 'Unlocked on' })} {new Date(badgeModal.unlocked_at).toLocaleDateString()}
-                    </Text>
-                  )}
+                  <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.bodySm, textAlign: 'center' }]}>
+                    {badgeModal.unlocked
+                      ? (badgeModal.descKey ? t(`badges.${badgeModal.descKey}`, { defaultValue: t('badges.newBadge') }) : t('badges.newBadge'))
+                      : t('badges.lockedDesc')}
+                  </Text>
                 </>
               );
             })()}
-            <TouchableOpacity onPress={() => setBadgeModal(null)} style={{ backgroundColor: theme.colors.bg, borderRadius: theme.radii.r12, paddingVertical: theme.spacing.md, alignItems: 'center', width: '100%', borderWidth: 1, borderColor: theme.colors.divider, marginTop: 4 }}>
-              <Text style={{ color: theme.colors.textPrimary, ...theme.typography.button }}>{t('common.close')}</Text>
-            </TouchableOpacity>
-          </TouchableOpacity>
-        </TouchableOpacity>
-      </Modal>
-
-      {/* Level Detail Modal */}
-      <Modal visible={levelModal} transparent animationType="fade" onRequestClose={() => setLevelModal(false)}>
-        <TouchableOpacity style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 24 }} activeOpacity={1} onPress={() => setLevelModal(false)}>
-          <TouchableOpacity activeOpacity={1} onPress={() => {}} style={{ backgroundColor: theme.colors.surface, borderRadius: 24, padding: 24, width: '100%', maxWidth: 340 }}>
-            <View style={{ alignItems: 'center', marginBottom: 16 }}>
-              <View style={{ backgroundColor: theme.colors.secondary, borderRadius: 32, width: 64, height: 64, justifyContent: 'center', alignItems: 'center' }}>
-                <Text style={{ color: theme.colors.primaryDark, fontSize: 24, fontWeight: '800', fontFamily: 'Poppins_700Bold' }}>{stats.level}</Text>
-              </View>
-            </View>
-            <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h2, textAlign: 'center', marginBottom: 4 }}>
-              {t('impact.level', { level: String(stats.level) })}
-            </Text>
-            <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm, textAlign: 'center', marginBottom: 16 }}>
-              {t('level.description', { defaultValue: 'Earn XP by saving food. The bar fills up and you level up when it reaches 100 XP.' })}
-            </Text>
-            {/* XP bar */}
-            <View style={{ backgroundColor: theme.colors.divider, borderRadius: 8, height: 12, overflow: 'hidden', marginBottom: 8 }}>
-              <View style={{ backgroundColor: theme.colors.primary, borderRadius: 8, height: 12, width: `${Math.max(stats.xpProgress * 100, 2)}%` as any }} />
-            </View>
-            <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, textAlign: 'center', marginBottom: 16 }}>
-              {stats.xpInLevel} / 100 XP — {100 - stats.xpInLevel} XP {t('level.toNext', { defaultValue: 'to next level' })}
-            </Text>
-            <View style={{ backgroundColor: theme.colors.bg, borderRadius: theme.radii.r12, padding: 12, marginBottom: 16, gap: 6 }}>
-              <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '600' as const }}>
-                {t('level.howItWorks', { defaultValue: 'How it works' })}
-              </Text>
-              <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, lineHeight: 18 }}>
-                {t('level.rule1', { defaultValue: '• Each basket saved = +10 XP' })}
-              </Text>
-              <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, lineHeight: 18 }}>
-                {t('level.rule2', { defaultValue: '• Every 100 XP = 1 level up' })}
-              </Text>
-              <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, lineHeight: 18 }}>
-                {t('level.rule3', { defaultValue: '• Total XP earned so far:' })} {stats.xp} XP
-              </Text>
-            </View>
-            <TouchableOpacity onPress={() => setLevelModal(false)} style={{ backgroundColor: theme.colors.bg, borderRadius: theme.radii.r12, paddingVertical: theme.spacing.md, alignItems: 'center', borderWidth: 1, borderColor: theme.colors.divider }}>
-              <Text style={{ color: theme.colors.textPrimary, ...theme.typography.button }}>{t('common.close')}</Text>
-            </TouchableOpacity>
-          </TouchableOpacity>
-        </TouchableOpacity>
-      </Modal>
-
-      {/* Streak Detail Modal */}
-      <Modal visible={streakModal} transparent animationType="fade" onRequestClose={() => setStreakModal(false)}>
-        <TouchableOpacity style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 24 }} activeOpacity={1} onPress={() => setStreakModal(false)}>
-          <TouchableOpacity activeOpacity={1} onPress={() => {}} style={{ backgroundColor: theme.colors.surface, borderRadius: 24, padding: 24, width: '100%', maxWidth: 340 }}>
-            {(() => {
-              const gStats = gamificationQuery.data as any;
-              const gStatsInner = gStats?.stats ?? gStats;
-              const currentStreak = gStatsInner?.current_streak ?? 0;
-              const longestStreak = gStatsInner?.longest_streak ?? 0;
-              const lastPickup = gStatsInner?.last_pickup_date;
-              const daysSince = gStatsInner?.days_since_last_pickup;
-              const expiresSoon = gStatsInner?.streak_expires_soon;
-              const daysLeft = daysSince != null ? Math.max(0, 7 - daysSince) : null;
-              return (
-                <>
-                  <View style={{ alignItems: 'center', marginBottom: 16 }}>
-                    <View style={{ backgroundColor: '#FF6B3518', borderRadius: 32, width: 64, height: 64, justifyContent: 'center', alignItems: 'center' }}>
-                      <Flame size={32} color="#FF6B35" />
-                    </View>
-                  </View>
-                  <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h2, textAlign: 'center', marginBottom: 4 }}>
-                    {currentStreak} {t('streak.days', { defaultValue: 'day streak' })}
-                  </Text>
-                  {expiresSoon && (
-                    <View style={{ backgroundColor: '#FF6B3515', borderRadius: 10, paddingVertical: 6, paddingHorizontal: 12, alignSelf: 'center', marginBottom: 12 }}>
-                      <Text style={{ color: '#FF6B35', ...theme.typography.caption, fontWeight: '700' as const }}>
-                        {daysLeft != null
-                          ? t('streak.expiresIn', { days: daysLeft, defaultValue: `Expires in ${daysLeft} day(s)` })
-                          : t('streak.expiresSoon', { defaultValue: 'Expires soon!' })}
-                      </Text>
-                    </View>
-                  )}
-                  <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm, textAlign: 'center', marginBottom: 16 }}>
-                    {t('streak.description', { defaultValue: 'Your streak counts consecutive weeks with at least one order. It resets after 7 days of inactivity.' })}
-                  </Text>
-                  <View style={{ backgroundColor: theme.colors.bg, borderRadius: theme.radii.r12, padding: 12, marginBottom: 16, gap: 8 }}>
-                    <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-                      <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm }}>{t('streak.current', { defaultValue: 'Current streak' })}</Text>
-                      <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '700' as const }}>{currentStreak}</Text>
-                    </View>
-                    <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-                      <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm }}>{t('streak.longest', { defaultValue: 'Longest streak' })}</Text>
-                      <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '700' as const }}>{longestStreak}</Text>
-                    </View>
-                    {lastPickup && (
-                      <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-                        <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm }}>{t('streak.lastOrder', { defaultValue: 'Last order' })}</Text>
-                        <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '700' as const }}>{new Date(lastPickup).toLocaleDateString()}</Text>
-                      </View>
-                    )}
-                    {daysLeft != null && (
-                      <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-                        <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm }}>{t('streak.expiresLabel', { defaultValue: 'Expires in' })}</Text>
-                        <Text style={{ color: daysLeft <= 2 ? '#FF6B35' : theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '700' as const }}>{daysLeft} {t('streak.daysUnit', { defaultValue: 'days' })}</Text>
-                      </View>
-                    )}
-                  </View>
-                </>
-              );
-            })()}
-            <TouchableOpacity onPress={() => setStreakModal(false)} style={{ backgroundColor: theme.colors.bg, borderRadius: theme.radii.r12, paddingVertical: theme.spacing.md, alignItems: 'center', borderWidth: 1, borderColor: theme.colors.divider }}>
-              <Text style={{ color: theme.colors.textPrimary, ...theme.typography.button }}>{t('common.close')}</Text>
-            </TouchableOpacity>
-          </TouchableOpacity>
-        </TouchableOpacity>
-      </Modal>
-
-      {/* Food Preferences Modal */}
-      <Modal visible={showPrefsModal} transparent animationType="fade" onRequestClose={() => setShowPrefsModal(false)}>
-        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setShowPrefsModal(false)}>
-          <View
-            style={[styles.modalContent, { backgroundColor: theme.colors.surface, borderRadius: theme.radii.r24, padding: theme.spacing.xl, ...theme.shadows.shadowLg }]}
-            onStartShouldSetResponder={() => true}
-          >
-            <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, marginBottom: theme.spacing.lg }]}>
-              {t('profile.foodPreferences')}
-            </Text>
-            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: theme.spacing.lg }}>
-              {FOOD_PREFS.map((pref) => {
-                const isSelected = selectedPrefs.includes(pref);
-                return (
-                  <TouchableOpacity
-                    key={pref}
-                    onPress={() => {
-                      setSelectedPrefs((prev) =>
-                        isSelected ? prev.filter((p) => p !== pref) : [...prev, pref]
-                      );
-                    }}
-                    style={{
-                      paddingHorizontal: 14,
-                      paddingVertical: 8,
-                      borderRadius: theme.radii.pill,
-                      backgroundColor: isSelected ? theme.colors.primary + '18' : theme.colors.bg,
-                      borderWidth: isSelected ? 1.5 : 1,
-                      borderColor: isSelected ? theme.colors.primary : theme.colors.divider,
-                    }}
-                  >
-                    <Text style={{
-                      color: isSelected ? theme.colors.primary : theme.colors.textPrimary,
-                      ...theme.typography.bodySm,
-                      fontWeight: isSelected ? ('600' as const) : ('400' as const),
-                    }}>
-                      {t(FOOD_PREF_KEY_MAP[pref] ?? pref, { defaultValue: pref })}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-            <TouchableOpacity
-              onPress={handleSavePreferences}
-              style={{ backgroundColor: theme.colors.primary, borderRadius: theme.radii.r12, padding: theme.spacing.lg }}
-            >
-              <Text style={{ color: '#fff', ...theme.typography.button, textAlign: 'center' }}>
-                {t('common.save')}
-              </Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              onPress={() => setShowPrefsModal(false)}
-              style={{ padding: theme.spacing.md, marginTop: theme.spacing.sm }}
-            >
-              <Text style={{ color: theme.colors.textSecondary, ...theme.typography.body, textAlign: 'center' }}>
-                {t('common.cancel')}
+            <TouchableOpacity onPress={() => setBadgeModal(null)} style={{ marginTop: theme.spacing.lg }} accessibilityLabel={t('common.close', { defaultValue: 'Close' })} accessibilityRole="button">
+              <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.body, textAlign: 'center' }]}>
+                {t('common.close', { defaultValue: 'Close' })}
               </Text>
             </TouchableOpacity>
           </View>
         </TouchableOpacity>
       </Modal>
 
-      {/* Level-up popup */}
-      {showLevelUp && (
-        <Modal visible transparent animationType="fade" onRequestClose={() => setShowLevelUp(false)}>
-          <TouchableOpacity
-            style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 24 }}
-            activeOpacity={1}
-            onPress={() => setShowLevelUp(false)}
-          >
-            <Animated.View
-              style={{
-                backgroundColor: '#114b3c',
-                borderRadius: 28,
-                padding: 32,
-                alignItems: 'center',
-                width: 280,
-                transform: [{ scale: levelUpScale }],
-              }}
-              onStartShouldSetResponder={() => true}
-            >
-              <View style={{ width: 72, height: 72, borderRadius: 36, backgroundColor: 'rgba(227,255,92,0.15)', justifyContent: 'center', alignItems: 'center', marginBottom: 16 }}>
-                <Trophy size={36} color="#e3ff5c" />
+      {/* Level Modal */}
+      <Modal visible={levelModal} transparent animationType="fade" onRequestClose={() => setLevelModal(false)}>
+        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setLevelModal(false)}>
+          <View style={[styles.modalContent, { backgroundColor: theme.colors.surface, borderRadius: theme.radii.r24, padding: theme.spacing.xl, alignItems: 'center', ...theme.shadows.shadowLg }]} onStartShouldSetResponder={() => true}>
+            <View style={{ width: 72, height: 72, borderRadius: 36, backgroundColor: theme.colors.secondary, justifyContent: 'center', alignItems: 'center', marginBottom: theme.spacing.lg }}>
+              <Zap size={32} color={theme.colors.primaryDark} />
+            </View>
+            <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h2, textAlign: 'center', marginBottom: theme.spacing.sm }]}>
+              {t('impact.level', { level: String(stats.level) })}
+            </Text>
+            <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.bodySm, textAlign: 'center' }]}>
+              {t('impact.xpProgress', { current: stats.xpInLevel, next: stats.xpBandSize })}
+            </Text>
+            <TouchableOpacity onPress={() => setLevelModal(false)} style={{ marginTop: theme.spacing.lg }} accessibilityLabel={t('common.close', { defaultValue: 'Close' })} accessibilityRole="button">
+              <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.body, textAlign: 'center' }]}>
+                {t('common.close', { defaultValue: 'Close' })}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* Streak Modal */}
+      <Modal visible={streakModal} transparent animationType="fade" onRequestClose={() => setStreakModal(false)}>
+        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setStreakModal(false)}>
+          <View style={[styles.modalContent, { backgroundColor: theme.colors.surface, borderRadius: theme.radii.r24, padding: theme.spacing.xl, alignItems: 'center', ...theme.shadows.shadowLg }]} onStartShouldSetResponder={() => true}>
+            <View style={{ width: 72, height: 72, borderRadius: 36, backgroundColor: '#FF6B35' + '18', justifyContent: 'center', alignItems: 'center', marginBottom: theme.spacing.lg }}>
+              <Flame size={32} color="#FF6B35" />
+            </View>
+            <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h2, textAlign: 'center', marginBottom: theme.spacing.xs }]}>
+              {stats.currentStreak} {t('streak.days')}
+            </Text>
+            {/* Streak info rows */}
+            <View style={{ width: '100%', marginTop: theme.spacing.md, gap: 8 }}>
+              {stats.longestStreak > 0 && (
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 6, borderBottomWidth: 1, borderBottomColor: theme.colors.divider }}>
+                  <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm }}>{t('streak.longest')}</Text>
+                  <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '600' as const }}>{stats.longestStreak} {t('streak.daysUnit')}</Text>
+                </View>
+              )}
+              {stats.lastPickupDate && (
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 6, borderBottomWidth: 1, borderBottomColor: theme.colors.divider }}>
+                  <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm }}>{t('streak.lastOrder')}</Text>
+                  <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '600' as const }}>
+                    {new Date(stats.lastPickupDate).toLocaleDateString()}
+                  </Text>
+                </View>
+              )}
+              {stats.lastPickupDate && (
+                (() => {
+                  const expiryDate = new Date(new Date(stats.lastPickupDate).getTime() + 7 * 24 * 3600 * 1000);
+                  const isExpiringSoon = stats.daysUntilStreakExpiry != null && stats.daysUntilStreakExpiry <= 2;
+                  return (
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 6 }}>
+                      <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm }}>{t('streak.expiresLabel')}</Text>
+                      <View style={{ alignItems: 'flex-end' }}>
+                        <Text style={{ color: isExpiringSoon ? theme.colors.error : theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '600' as const }}>
+                          {expiryDate.toLocaleDateString()}
+                        </Text>
+                        {stats.daysUntilStreakExpiry != null && stats.daysUntilStreakExpiry <= 3 && (
+                          <Text style={{ color: theme.colors.error, fontSize: 11, fontFamily: 'Poppins_400Regular', marginTop: 2 }}>
+                            {stats.daysUntilStreakExpiry === 0 ? t('streak.expiresSoon') : t('streak.expiresIn', { days: stats.daysUntilStreakExpiry })}
+                          </Text>
+                        )}
+                      </View>
+                    </View>
+                  );
+                })()
+              )}
+            </View>
+            <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, textAlign: 'center', marginTop: theme.spacing.md }]}>
+              {t('streak.description')}
+            </Text>
+            <TouchableOpacity onPress={() => setStreakModal(false)} style={{ marginTop: theme.spacing.lg }} accessibilityLabel={t('common.close', { defaultValue: 'Close' })} accessibilityRole="button">
+              <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.body, textAlign: 'center' }]}>
+                {t('common.close', { defaultValue: 'Close' })}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* Food Preferences Modal */}
+      <Modal visible={showPrefsModal} transparent animationType="slide" onRequestClose={() => setShowPrefsModal(false)}>
+        <View style={styles.bottomModalOverlay}>
+          <View style={[styles.bottomModalContent, { backgroundColor: theme.colors.surface, borderTopLeftRadius: theme.radii.r24, borderTopRightRadius: theme.radii.r24, ...theme.shadows.shadowLg }]}>
+            <View style={[styles.bottomModalHeader, { padding: theme.spacing.xl }]}>
+              <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h2 }]}>
+                {t('profile.foodPreferences', { defaultValue: 'Food Preferences' })}
+              </Text>
+              <TouchableOpacity onPress={() => setShowPrefsModal(false)} accessibilityLabel={t('common.close', { defaultValue: 'Close' })} accessibilityRole="button">
+                <Text style={[{ color: theme.colors.primary, ...theme.typography.body, fontWeight: '600' as const }]}>
+                  {t('common.close', { defaultValue: 'Close' })}
+                </Text>
+              </TouchableOpacity>
+            </View>
+            <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingHorizontal: theme.spacing.xl, paddingBottom: 40 }}>
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10 }}>
+                {FOOD_PREFS.map((pref) => {
+                  const isSelected = selectedPrefs.includes(pref);
+                  const labelKey = FOOD_PREF_KEY_MAP[pref];
+                  return (
+                    <TouchableOpacity
+                      key={pref}
+                      onPress={() => {
+                        setSelectedPrefs((prev) =>
+                          isSelected ? prev.filter((p) => p !== pref) : [...prev, pref]
+                        );
+                      }}
+                      accessibilityLabel={labelKey ? t(labelKey, { defaultValue: pref }) : pref}
+                      accessibilityRole="checkbox"
+                      accessibilityState={{ checked: isSelected }}
+                      style={{
+                        paddingHorizontal: 16,
+                        paddingVertical: 10,
+                        borderRadius: theme.radii.pill,
+                        backgroundColor: isSelected ? theme.colors.primary + '15' : theme.colors.bg,
+                        borderWidth: isSelected ? 1.5 : 1,
+                        borderColor: isSelected ? theme.colors.primary : theme.colors.divider,
+                      }}
+                    >
+                      <Text style={{
+                        color: isSelected ? theme.colors.primary : theme.colors.textPrimary,
+                        ...theme.typography.bodySm,
+                        fontWeight: isSelected ? '600' : '400',
+                      }}>
+                        {labelKey ? t(labelKey, { defaultValue: pref }) : pref}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
               </View>
-              <Text style={{ color: 'rgba(255,255,255,0.7)', fontSize: 13, fontFamily: 'Poppins_500Medium', marginBottom: 4 }}>
-                {t('impact.levelUp', { defaultValue: 'Level Up!' })}
-              </Text>
-              <Text style={{ color: '#e3ff5c', fontSize: 40, fontWeight: '700', fontFamily: 'Poppins_700Bold', marginBottom: 8 }}>
-                {stats.level}
-              </Text>
-              <Text style={{ color: 'rgba(255,255,255,0.6)', fontSize: 13, fontFamily: 'Poppins_400Regular', textAlign: 'center' }}>
-                {t('impact.levelUpDesc', { defaultValue: 'You reached level {{level}}!', level: stats.level })}
-              </Text>
-            </Animated.View>
-          </TouchableOpacity>
-        </Modal>
+              <TouchableOpacity
+                onPress={handleSavePreferences}
+                accessibilityLabel={t('common.save')}
+                accessibilityRole="button"
+                style={{ backgroundColor: theme.colors.primary, borderRadius: theme.radii.r16, paddingVertical: 16, marginTop: theme.spacing.xl, alignItems: 'center' }}
+              >
+                <Text style={{ color: '#fff', ...theme.typography.button }}>
+                  {t('common.save')}
+                </Text>
+              </TouchableOpacity>
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Level Up Banner */}
+      {showLevelUp && (
+        <Animated.View
+          style={{
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0,0,0,0.6)',
+            justifyContent: 'center',
+            alignItems: 'center',
+            transform: [{ scale: levelUpScale }],
+          }}
+        >
+          <View style={{ backgroundColor: theme.colors.surface, borderRadius: theme.radii.r24, padding: theme.spacing.xxl, alignItems: 'center', ...theme.shadows.shadowLg }}>
+            <View style={{ width: 72, height: 72, borderRadius: 36, backgroundColor: theme.colors.secondary, justifyContent: 'center', alignItems: 'center', marginBottom: theme.spacing.lg }}>
+              <Trophy size={36} color={theme.colors.primaryDark} />
+            </View>
+            <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h1, textAlign: 'center', marginBottom: theme.spacing.sm }]}>
+              {t('impact.levelUp', { defaultValue: 'Level Up!' })}
+            </Text>
+            <Text style={[{ color: theme.colors.primary, ...theme.typography.h2, textAlign: 'center' }]}>
+              {t('impact.level', { level: String(stats.level) })}
+            </Text>
+          </View>
+        </Animated.View>
       )}
     </SafeAreaView>
   );
@@ -1374,7 +1090,6 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
   },
-  header: {},
   content: {
     flex: 1,
   },
@@ -1385,15 +1100,6 @@ const styles = StyleSheet.create({
   },
   userInfo: {
     flex: 1,
-    marginLeft: 16,
-  },
-  statsRow: {
-    flexDirection: 'row',
-    gap: 10,
-  },
-  statItem: {
-    flex: 1,
-    alignItems: 'center',
   },
   statIcon: {
     justifyContent: 'center',
@@ -1412,15 +1118,6 @@ const styles = StyleSheet.create({
   },
   leaderboardAvatar: {
     justifyContent: 'center',
-    alignItems: 'center',
-  },
-  menuItem: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  menuItemLeft: {
-    flexDirection: 'row',
     alignItems: 'center',
   },
   infoSection: {},
@@ -1443,5 +1140,19 @@ const styles = StyleSheet.create({
   modalContent: {
     width: '100%',
     maxWidth: 360,
+  },
+  bottomModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'flex-end',
+  },
+  bottomModalContent: {
+    maxHeight: '85%',
+    flex: 1,
+  },
+  bottomModalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
   },
 });

@@ -42,10 +42,9 @@ import { fetchMyReservations } from '@/src/services/reservations';
 import {
   fetchGamificationStats,
   fetchLeaderboard,
-  type GamificationStats,
-  type LeaderboardEntry,
   type Badge,
 } from '@/src/services/gamification';
+import { calcMoneySaved, calcCO2Saved, calcLevelProgress } from '@/src/lib/impactCalculations';
 
 const PLACEHOLDER_BADGES: Badge[] = [
   { id: '1', badge_id: 'first_save', name: 'First Save', unlocked: false },
@@ -127,19 +126,14 @@ export default function ImpactScreen() {
 
     const moneySaved = gStatsInner?.money_saved != null
       ? Math.max(0, parseFloat(gStatsInner.money_saved) || 0)
-      : completedReservations.reduce((sum, r) => {
-          const rAny = r as any;
-          const orig = Number(rAny.original_price ?? r.basket?.originalPrice ?? (r.basket as any)?.original_price ?? 0);
-          const disc = Number(rAny.price_tier ?? rAny.selling_price ?? r.basket?.discountedPrice ?? (r.basket as any)?.discounted_price ?? (r.basket as any)?.price_tier ?? 0);
-          return sum + Math.max(0, (orig - disc) * (r.quantity ?? 1));
-        }, 0);
+      : calcMoneySaved(completedReservations as any[]);
 
-    const co2Saved = mealsSaved * 2.5;
+    const co2Saved = calcCO2Saved(mealsSaved);
 
     const xp = (typeof gLevel === 'object' ? gLevel?.xp : null) ?? gStatsInner?.xp ?? mealsSaved * 10;
-    const level = (typeof gLevel === 'object' ? gLevel?.level : typeof gLevel === 'number' ? gLevel : null) ?? Math.floor(xp / 100) + 1;
-    const xpInLevel = xp % 100;
-    const xpProgress = xpInLevel / 100;
+    const backendLevel = (typeof gLevel === 'object' ? gLevel?.level : typeof gLevel === 'number' ? gLevel : null);
+    const { level: computedLevel, xpInLevel, xpProgress } = calcLevelProgress(xp);
+    const level = backendLevel ?? computedLevel;
 
     const currentStreak = gStatsInner?.current_streak ?? 0;
 

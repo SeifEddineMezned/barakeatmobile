@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TextInput,
-  TouchableOpacity, KeyboardAvoidingView, Platform, Alert, ActivityIndicator,
+  TouchableOpacity, KeyboardAvoidingView, Platform, Alert, ActivityIndicator, Modal,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -78,7 +78,7 @@ export default function CreateBasketScreen() {
 
   // ── Daily reinit schedule (edit mode only)
   const DAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'] as const;
-  const DAY_LABELS: Record<string, string> = { mon: 'M', tue: 'T', wed: 'W', thu: 'T', fri: 'F', sat: 'S', sun: 'S' };
+  const DAY_LABELS: Record<string, string> = { mon: 'LUN', tue: 'MAR', wed: 'MER', thu: 'JEU', fri: 'VEN', sat: 'SAM', sun: 'DIM' };
   const [sameAllDays, setSameAllDays] = useState(true);
   const [daySchedule, setDaySchedule] = useState<Record<string, number>>({ mon: 0, tue: 0, wed: 0, thu: 0, fri: 0, sat: 0, sun: 0 });
 
@@ -102,6 +102,16 @@ export default function CreateBasketScreen() {
 
   const [selectedMenuItemIds, setSelectedMenuItemIds] = useState<number[]>(existingMenuItemIds);
 
+  const [showMenuItems, setShowMenuItems] = useState<boolean>(
+    !!((apiBasket as any)?.show_menu_items)
+  );
+  const [useDefaultPickupInstructions, setUseDefaultPickupInstructions] = useState(
+    !((apiBasket as any)?.pickup_instructions)
+  );
+  const [pickupInstructions, setPickupInstructions] = useState<string>(
+    (apiBasket as any)?.pickup_instructions ?? ''
+  );
+
   // Sync selected menu items when editing basket loads
   React.useEffect(() => {
     if (isEditing && apiBasket) {
@@ -110,6 +120,10 @@ export default function CreateBasketScreen() {
         const ids = Array.isArray(raw) ? raw.map(Number) : (() => { try { return JSON.parse(raw).map(Number); } catch { return []; } })();
         setSelectedMenuItemIds(ids);
       }
+      const smi = (apiBasket as any)?.show_menu_items;
+      if (smi !== undefined) setShowMenuItems(!!smi);
+      const pi = (apiBasket as any)?.pickup_instructions;
+      if (pi) { setPickupInstructions(pi); setUseDefaultPickupInstructions(false); }
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [apiBasket?.id]);
@@ -132,6 +146,20 @@ export default function CreateBasketScreen() {
 
   const [pickupStart, setPickupStart] = useState(defaultStart);
   const [pickupEnd, setPickupEnd] = useState(defaultEnd);
+
+  const [showZeroQtyWarning, setShowZeroQtyWarning] = useState(false);
+
+  // Custom pickup time toggle — if OFF, basket uses location's default pickup times
+  const locationDefaultStart = profileQuery.data?.pickup_start_time?.substring(0, 5) ?? '18:00';
+  const locationDefaultEnd = profileQuery.data?.pickup_end_time?.substring(0, 5) ?? '19:00';
+  const [useCustomPickupTime, setUseCustomPickupTime] = useState(() => {
+    if (!isEditing) return false;
+    // If editing, detect whether basket has different times than location default
+    const bStart = apiBasket?.pickup_start_time?.substring(0, 5);
+    const bEnd = apiBasket?.pickup_end_time?.substring(0, 5);
+    if (!bStart || !bEnd) return false;
+    return bStart !== locationDefaultStart || bEnd !== locationDefaultEnd;
+  });
 
   const [priceError, setPriceError] = useState('');
   const [aiLoading, setAiLoading] = useState(false);
@@ -233,7 +261,9 @@ export default function CreateBasketScreen() {
 
   const createMutation = useMutation({
     mutationFn: () => {
-      const clamped = clampPickupTime(pickupStart, pickupEnd);
+      const effectiveStart = useCustomPickupTime ? pickupStart : locationDefaultStart;
+      const effectiveEnd = useCustomPickupTime ? pickupEnd : locationDefaultEnd;
+      const clamped = clampPickupTime(effectiveStart, effectiveEnd);
       return createBasketJSON({
         name: name.trim(),
         description: description.trim() || undefined,
@@ -243,6 +273,8 @@ export default function CreateBasketScreen() {
         pickup_start_time: toTimeField(clamped.start),
         pickup_end_time: toTimeField(clamped.end),
         menu_item_ids: selectedMenuItemIds.length > 0 ? selectedMenuItemIds : undefined,
+        show_menu_items: showMenuItems,
+        pickup_instructions: useDefaultPickupInstructions ? undefined : pickupInstructions.trim() || undefined,
       });
     },
     onSuccess: () => {
@@ -257,7 +289,9 @@ export default function CreateBasketScreen() {
 
   const updateMutation = useMutation({
     mutationFn: () => {
-      const clamped = clampPickupTime(pickupStart, pickupEnd);
+      const effectiveStart = useCustomPickupTime ? pickupStart : locationDefaultStart;
+      const effectiveEnd = useCustomPickupTime ? pickupEnd : locationDefaultEnd;
+      const clamped = clampPickupTime(effectiveStart, effectiveEnd);
       return updateBasketAPI(editId!, {
         name: name.trim(),
         description: description.trim() || null,
@@ -270,6 +304,8 @@ export default function CreateBasketScreen() {
         pickup_start_time: toTimeField(clamped.start),
         pickup_end_time: toTimeField(clamped.end),
         menu_item_ids: selectedMenuItemIds,
+        show_menu_items: showMenuItems,
+        pickup_instructions: useDefaultPickupInstructions ? undefined : pickupInstructions.trim() || undefined,
       });
     },
     onSuccess: () => {
@@ -303,14 +339,7 @@ export default function CreateBasketScreen() {
       }
     };
     if (quantity === 0) {
-      Alert.alert(
-        t('business.createBasket.zeroQtyTitle', { defaultValue: 'Quantity is 0' }),
-        t('business.createBasket.zeroQtyMsg', { defaultValue: 'The daily quantity is set to 0. Are you sure?' }),
-        [
-          { text: t('common.cancel'), style: 'cancel' },
-          { text: t('common.confirm'), onPress: doSave },
-        ]
-      );
+      setShowZeroQtyWarning(true);
       return;
     }
     doSave();
@@ -344,7 +373,7 @@ export default function CreateBasketScreen() {
           {/* Name */}
           <View style={[styles.field, { marginBottom: theme.spacing.xl }]}>
             <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: theme.spacing.sm }}>
-              <Text style={[styles.label, { color: theme.colors.textPrimary, ...theme.typography.bodySm }]}>
+              <Text style={{ color: theme.colors.primary, ...theme.typography.body, fontWeight: '700' }}>
                 {t('business.createBasket.name')}
               </Text>
               {FeatureFlags.ENABLE_AI_BASKET_SUGGESTIONS && (
@@ -386,7 +415,7 @@ export default function CreateBasketScreen() {
 
           {/* Description */}
           <View style={[styles.field, { marginBottom: theme.spacing.xl }]}>
-            <Text style={[styles.label, { color: theme.colors.textPrimary, ...theme.typography.bodySm, marginBottom: theme.spacing.sm }]}>
+            <Text style={{ color: theme.colors.primary, ...theme.typography.body, fontWeight: '700', marginBottom: theme.spacing.sm }}>
               {t('business.createBasket.description')}
             </Text>
             <TextInput
@@ -404,7 +433,7 @@ export default function CreateBasketScreen() {
           {/* Prices */}
           <View style={[styles.row, { marginBottom: theme.spacing.xl }]}>
             <View style={[styles.halfField, { marginRight: theme.spacing.md }]}>
-              <Text style={[styles.label, { color: theme.colors.textPrimary, ...theme.typography.bodySm, marginBottom: theme.spacing.sm }]}>
+              <Text style={{ color: theme.colors.primary, ...theme.typography.body, fontWeight: '700', marginBottom: theme.spacing.sm }}>
                 {t('business.createBasket.originalPrice')}
               </Text>
               <TextInput
@@ -421,7 +450,7 @@ export default function CreateBasketScreen() {
               />
             </View>
             <View style={styles.halfField}>
-              <Text style={[styles.label, { color: theme.colors.textPrimary, ...theme.typography.bodySm, marginBottom: theme.spacing.sm }]}>
+              <Text style={{ color: theme.colors.primary, ...theme.typography.body, fontWeight: '700', marginBottom: theme.spacing.sm }}>
                 {t('business.createBasket.discountedPrice')} *
               </Text>
               <TextInput
@@ -455,12 +484,12 @@ export default function CreateBasketScreen() {
             </View>
           )}
 
-          {/* Daily Reinitialization Quantity — always shown (label differs by mode) */}
+          {/* Quantity */}
           <View style={[styles.field, { marginBottom: theme.spacing.xl }]}>
-            <Text style={[styles.label, { color: theme.colors.textPrimary, ...theme.typography.bodySm, marginBottom: theme.spacing.sm }]}>
+            <Text style={{ color: theme.colors.primary, ...theme.typography.body, fontWeight: '700', marginBottom: theme.spacing.sm }}>
               {isEditing
-                ? t('business.baskets.defaultQty', { defaultValue: 'Daily reinitialization quantity' })
-                : t('business.availability.quantity')}{!isEditing ? ' *' : ''}
+                ? t('business.baskets.defaultQty', { defaultValue: 'Réinit. journalière' })
+                : t('business.availability.quantity', { defaultValue: 'Quantité' })}{!isEditing ? ' *' : ''}
             </Text>
             <View style={{ flexDirection: 'row', alignItems: 'center' }}>
               <TouchableOpacity
@@ -487,13 +516,84 @@ export default function CreateBasketScreen() {
                 <Plus size={16} color={theme.colors.textPrimary} />
               </TouchableOpacity>
             </View>
+
+            {/* Same for all days checkbox + per-day schedule — only when editing */}
+            {isEditing && (
+            <View style={{ marginTop: theme.spacing.md }}>
+              <TouchableOpacity
+                onPress={() => {
+                  const next = !sameAllDays;
+                  setSameAllDays(next);
+                  if (next) {
+                    const reset: Record<string, number> = {};
+                    DAYS.forEach(d => { reset[d] = quantity; });
+                    setDaySchedule(reset);
+                  }
+                }}
+                style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 10 }}
+              >
+                <View style={{
+                  width: 22, height: 22, borderRadius: 6, borderWidth: 2,
+                  borderColor: sameAllDays ? theme.colors.primary : theme.colors.muted,
+                  backgroundColor: sameAllDays ? theme.colors.primary : 'transparent',
+                  justifyContent: 'center', alignItems: 'center',
+                }}>
+                  {sameAllDays && <Text style={{ color: '#fff', fontSize: 12, fontWeight: '700' }}>✓</Text>}
+                </View>
+                <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm }}>
+                  {t('business.baskets.sameAllDays', { defaultValue: 'Même pour tous les jours' })}
+                </Text>
+              </TouchableOpacity>
+
+              {!sameAllDays && (
+                <View style={{ backgroundColor: theme.colors.bg, borderRadius: theme.radii.r12, padding: 12, gap: 8 }}>
+                  {DAYS.map((day) => (
+                    <View key={day} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <View style={{
+                        width: 42, height: 28, borderRadius: 8,
+                        backgroundColor: daySchedule[day] > 0 ? theme.colors.primary + '18' : theme.colors.divider,
+                        justifyContent: 'center', alignItems: 'center',
+                      }}>
+                        <Text style={{
+                          color: daySchedule[day] > 0 ? theme.colors.primary : theme.colors.muted,
+                          ...theme.typography.bodySm, fontWeight: '700',
+                        }}>
+                          {DAY_LABELS[day]}
+                        </Text>
+                      </View>
+                      <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm, flex: 1, marginLeft: 10 }}>
+                        {t(`business.baskets.days.${day}`, { defaultValue: day.charAt(0).toUpperCase() + day.slice(1) })}
+                      </Text>
+                      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                        <TouchableOpacity
+                          onPress={() => setDaySchedule(prev => ({ ...prev, [day]: Math.max(0, prev[day] - 1) }))}
+                          style={{ backgroundColor: theme.colors.surface, borderRadius: 6, width: 28, height: 28, justifyContent: 'center', alignItems: 'center' }}
+                        >
+                          <Minus size={12} color={theme.colors.textPrimary} />
+                        </TouchableOpacity>
+                        <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '600', marginHorizontal: 10, minWidth: 18, textAlign: 'center' }}>
+                          {daySchedule[day]}
+                        </Text>
+                        <TouchableOpacity
+                          onPress={() => setDaySchedule(prev => ({ ...prev, [day]: prev[day] + 1 }))}
+                          style={{ backgroundColor: theme.colors.surface, borderRadius: 6, width: 28, height: 28, justifyContent: 'center', alignItems: 'center' }}
+                        >
+                          <Plus size={12} color={theme.colors.textPrimary} />
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+                  ))}
+                </View>
+              )}
+            </View>
+            )}
           </View>
 
           {/* Max Per Customer — only shown when editing */}
           {isEditing && FeatureFlags.ENABLE_MAX_PER_CUSTOMER && (
           <View style={[styles.field, { marginBottom: theme.spacing.xl }]}>
-            <Text style={[styles.label, { color: theme.colors.textPrimary, ...theme.typography.bodySm, marginBottom: theme.spacing.sm }]}>
-              {t('business.baskets.maxPerCustomer', { defaultValue: 'Max bags per customer' })}
+            <Text style={{ color: theme.colors.primary, ...theme.typography.body, fontWeight: '700', marginBottom: theme.spacing.sm }}>
+              {t('business.baskets.maxPerCustomer', { defaultValue: 'Max par client' })}
             </Text>
             <View style={{ flexDirection: 'row', alignItems: 'center' }}>
               <TouchableOpacity
@@ -523,113 +623,50 @@ export default function CreateBasketScreen() {
           </View>
           )}
 
-          {/* Daily Reinit Schedule — only shown when editing */}
-          {isEditing && (
-          <View style={[styles.field, { marginBottom: theme.spacing.xl }]}>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: theme.spacing.sm }}>
-              <Text style={[styles.label, { color: theme.colors.textPrimary, ...theme.typography.bodySm }]}>
-                {t('business.baskets.defaultQty', { defaultValue: 'Daily reinitialization quantity' })}
-              </Text>
-              {sameAllDays && (
-                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                  <TouchableOpacity
-                    onPress={() => setQuantity(Math.max(0, quantity - 1))}
-                    style={{ backgroundColor: theme.colors.surface, borderRadius: 10, width: 42, height: 42, justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: theme.colors.divider }}
-                  >
-                    <Minus size={16} color={theme.colors.textPrimary} />
-                  </TouchableOpacity>
-                  <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3, marginHorizontal: 16, minWidth: 24, textAlign: 'center' }}>
-                    {quantity}
-                  </Text>
-                  <TouchableOpacity
-                    onPress={() => setQuantity(quantity + 1)}
-                    style={{ backgroundColor: theme.colors.surface, borderRadius: 10, width: 42, height: 42, justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: theme.colors.divider }}
-                  >
-                    <Plus size={16} color={theme.colors.textPrimary} />
-                  </TouchableOpacity>
-                </View>
-              )}
-            </View>
+          {/* Old duplicate reinit section removed — merged into Quantity section above */}
 
-            {/* Same for all days checkbox */}
-            <TouchableOpacity
-              onPress={() => {
-                const next = !sameAllDays;
-                setSameAllDays(next);
-                if (next) {
-                  const reset: Record<string, number> = {};
-                  DAYS.forEach(d => { reset[d] = quantity; });
-                  setDaySchedule(reset);
-                }
-              }}
-              style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 10 }}
-            >
-              <View style={{
-                width: 22, height: 22, borderRadius: 6, borderWidth: 2,
-                borderColor: sameAllDays ? theme.colors.primary : theme.colors.muted,
-                backgroundColor: sameAllDays ? theme.colors.primary : 'transparent',
-                justifyContent: 'center', alignItems: 'center',
-              }}>
-                {sameAllDays && <Text style={{ color: '#fff', fontSize: 12, fontWeight: '700' }}>✓</Text>}
-              </View>
-              <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm }}>
-                {t('business.baskets.sameAllDays', { defaultValue: 'Same for all days' })}
-              </Text>
-            </TouchableOpacity>
-
-            {/* Per-day schedule */}
-            {!sameAllDays && (
-              <View style={{ backgroundColor: theme.colors.bg, borderRadius: theme.radii.r12, padding: 12, gap: 8 }}>
-                {DAYS.map((day) => (
-                  <View key={day} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-                    <View style={{
-                      width: 36, height: 36, borderRadius: 18,
-                      backgroundColor: daySchedule[day] > 0 ? theme.colors.primary + '18' : theme.colors.divider,
-                      justifyContent: 'center', alignItems: 'center',
-                    }}>
-                      <Text style={{
-                        color: daySchedule[day] > 0 ? theme.colors.primary : theme.colors.muted,
-                        ...theme.typography.bodySm, fontWeight: '700',
-                      }}>
-                        {DAY_LABELS[day]}
-                      </Text>
-                    </View>
-                    <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm, flex: 1, marginLeft: 10 }}>
-                      {t(`business.baskets.days.${day}`, { defaultValue: day.charAt(0).toUpperCase() + day.slice(1) })}
-                    </Text>
-                    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                      <TouchableOpacity
-                        onPress={() => setDaySchedule(prev => ({ ...prev, [day]: Math.max(0, prev[day] - 1) }))}
-                        style={{ backgroundColor: theme.colors.surface, borderRadius: 6, width: 28, height: 28, justifyContent: 'center', alignItems: 'center' }}
-                      >
-                        <Minus size={12} color={theme.colors.textPrimary} />
-                      </TouchableOpacity>
-                      <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '600', marginHorizontal: 10, minWidth: 18, textAlign: 'center' }}>
-                        {daySchedule[day]}
-                      </Text>
-                      <TouchableOpacity
-                        onPress={() => setDaySchedule(prev => ({ ...prev, [day]: prev[day] + 1 }))}
-                        style={{ backgroundColor: theme.colors.surface, borderRadius: 6, width: 28, height: 28, justifyContent: 'center', alignItems: 'center' }}
-                      >
-                        <Plus size={12} color={theme.colors.textPrimary} />
-                      </TouchableOpacity>
-                    </View>
-                  </View>
-                ))}
-              </View>
-            )}
-          </View>
-          )}
-
-          {/* Pickup Window — only shown when creating, not editing */}
-          {!isEditing && (
+          {/* Custom Pickup Time Toggle + Pickers */}
           <View style={[styles.field, { marginBottom: theme.spacing.xl }]}>
             <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: theme.spacing.sm }}>
               <Clock size={14} color={theme.colors.primary} />
-              <Text style={[styles.label, { color: theme.colors.textPrimary, ...theme.typography.bodySm, marginLeft: 6 }]}>
-                {t('basket.pickupWindow')} *
+              <Text style={{ color: theme.colors.primary, ...theme.typography.body, fontWeight: '700', marginLeft: 6 }}>
+                {t('basket.pickupWindow')}
               </Text>
             </View>
+
+            {/* Toggle: use custom pickup times */}
+            <TouchableOpacity
+              onPress={() => {
+                const next = !useCustomPickupTime;
+                setUseCustomPickupTime(next);
+                if (!next) {
+                  // Reset to location defaults
+                  setPickupStart(locationDefaultStart);
+                  setPickupEnd(locationDefaultEnd);
+                }
+              }}
+              style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: useCustomPickupTime ? theme.spacing.md : 0 }}
+            >
+              <View style={{
+                width: 22, height: 22, borderRadius: 6, borderWidth: 2,
+                borderColor: useCustomPickupTime ? theme.colors.primary : theme.colors.muted,
+                backgroundColor: useCustomPickupTime ? theme.colors.primary : 'transparent',
+                justifyContent: 'center', alignItems: 'center',
+              }}>
+                {useCustomPickupTime && <Text style={{ color: '#fff', fontSize: 12, fontWeight: '700' }}>✓</Text>}
+              </View>
+              <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, flex: 1 }}>
+                {t('business.createBasket.useCustomPickupTime', { defaultValue: 'Utiliser un créneau personnalisé' })}
+              </Text>
+            </TouchableOpacity>
+            {!useCustomPickupTime && (
+              <Text style={{ color: theme.colors.muted, ...theme.typography.caption, marginTop: 4 }}>
+                {t('business.createBasket.usingLocationDefault', { defaultValue: 'Créneau par défaut du commerce' })}: {locationDefaultStart} - {locationDefaultEnd}
+              </Text>
+            )}
+
+            {/* Pickup time pickers — only when custom is ON */}
+            {useCustomPickupTime && (
             <View style={styles.row}>
               {/* Start */}
               <View style={[styles.halfField, { marginRight: theme.spacing.md }]}>
@@ -666,96 +703,187 @@ export default function CreateBasketScreen() {
                 </View>
               </View>
             </View>
-          </View>
-          )}
-
-          {/* Menu Items Selection */}
-          <View style={[styles.field, { marginBottom: theme.spacing.xl }]}>
-            <Text style={[styles.label, { color: theme.colors.textPrimary, ...theme.typography.bodySm, marginBottom: theme.spacing.sm }]}>
-              {t('business.createBasket.menuItems', { defaultValue: 'Menu Items' })}
-            </Text>
-            <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, marginBottom: theme.spacing.md }}>
-              {t('business.createBasket.menuItemsDesc', { defaultValue: 'Select which menu items are in this basket (optional)' })}
-            </Text>
-            {menuItemsQuery.isLoading ? (
-              <ActivityIndicator size="small" color={theme.colors.primary} />
-            ) : (menuItemsQuery.data ?? []).length === 0 ? (
-              <View style={{ alignItems: 'center' as const, paddingVertical: theme.spacing.lg }}>
-                <Text style={{ color: theme.colors.muted, ...theme.typography.bodySm, textAlign: 'center' as const, marginBottom: theme.spacing.md }}>
-                  {t('business.createBasket.noMenuItems', { defaultValue: 'No menu items yet \u2014 add some in Menu Items' })}
-                </Text>
-                <TouchableOpacity
-                  onPress={() => router.push('/business/menu-items' as never)}
-                  style={{
-                    flexDirection: 'row',
-                    alignItems: 'center',
-                    backgroundColor: theme.colors.primary + '12',
-                    borderRadius: theme.radii.r12,
-                    paddingHorizontal: theme.spacing.lg,
-                    paddingVertical: theme.spacing.md,
-                    borderWidth: 1,
-                    borderColor: theme.colors.primary + '30',
-                  }}
-                >
-                  <Plus size={16} color={theme.colors.primary} />
-                  <Text style={{ color: theme.colors.primary, ...theme.typography.bodySm, fontWeight: '600' as const, marginLeft: 6 }}>
-                    {t('business.createBasket.goToMenuItems', { defaultValue: 'Go to Menu Items' })}
-                  </Text>
-                </TouchableOpacity>
-              </View>
-            ) : (
-              <View>
-                {(menuItemsQuery.data ?? []).map((item: MenuItemFromAPI) => {
-                  const isSelected = selectedMenuItemIds.includes(item.id);
-                  return (
-                    <TouchableOpacity
-                      key={item.id}
-                      onPress={() => toggleMenuItem(item.id)}
-                      style={{
-                        flexDirection: 'row',
-                        alignItems: 'center',
-                        backgroundColor: isSelected ? theme.colors.primary + '10' : theme.colors.surface,
-                        borderRadius: theme.radii.r12,
-                        padding: theme.spacing.md,
-                        marginBottom: theme.spacing.sm,
-                        borderWidth: isSelected ? 1.5 : 1,
-                        borderColor: isSelected ? theme.colors.primary : theme.colors.divider,
-                        ...theme.shadows.shadowSm,
-                      }}
-                    >
-                      {isSelected ? (
-                        <SquareCheck size={20} color={theme.colors.primary} />
-                      ) : (
-                        <Square size={20} color={theme.colors.muted} />
-                      )}
-                      <Text
-                        style={{
-                          color: theme.colors.textPrimary,
-                          ...theme.typography.body,
-                          flex: 1,
-                          marginLeft: theme.spacing.md,
-                        }}
-                        numberOfLines={2}
-                      >
-                        {item.name}
-                      </Text>
-                    </TouchableOpacity>
-                  );
-                })}
-                {selectedMenuItemIds.length > 0 && (
-                  <Text style={{ color: theme.colors.primary, ...theme.typography.caption, marginTop: theme.spacing.xs }}>
-                    {t('business.createBasket.menuItemsSelected', {
-                      count: selectedMenuItemIds.length,
-                      defaultValue: `${selectedMenuItemIds.length} item(s) selected`,
-                    })}
-                  </Text>
-                )}
-              </View>
             )}
           </View>
+
+          {/* Pickup Instructions */}
+          <View style={[styles.field, { marginBottom: theme.spacing.xl }]}>
+            <Text style={{ color: theme.colors.primary, ...theme.typography.body, fontWeight: '700', marginBottom: theme.spacing.sm }}>
+              {t('business.createBasket.pickupInstructions', { defaultValue: 'Instructions de retrait' })}
+            </Text>
+            <TouchableOpacity
+              onPress={() => setUseDefaultPickupInstructions((v) => !v)}
+              style={{ flexDirection: 'row', alignItems: 'center', marginBottom: theme.spacing.md }}
+            >
+              {useDefaultPickupInstructions ? (
+                <SquareCheck size={18} color={theme.colors.primary} />
+              ) : (
+                <Square size={18} color={theme.colors.muted} />
+              )}
+              <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm, marginLeft: 8 }}>
+                {t('business.createBasket.useDefaultInstructions', { defaultValue: 'Utiliser celles du commerce' })}
+              </Text>
+            </TouchableOpacity>
+            {!useDefaultPickupInstructions && (
+              <TextInput
+                style={[
+                  styles.textArea,
+                  {
+                    color: theme.colors.textPrimary,
+                    backgroundColor: theme.colors.surface,
+                    borderColor: theme.colors.divider,
+                    borderRadius: theme.radii.r12,
+                    ...theme.typography.body,
+                    minHeight: 80,
+                  },
+                ]}
+                value={pickupInstructions}
+                onChangeText={setPickupInstructions}
+                placeholder={t('business.createBasket.pickupInstructionsPlaceholder', { defaultValue: 'Ex: Sonnez à l\'entrée arrière' })}
+                placeholderTextColor={theme.colors.muted}
+                multiline
+                textAlignVertical="top"
+              />
+            )}
+            {useDefaultPickupInstructions && profileQuery.data?.pickup_instructions ? (
+              <Text style={{ color: theme.colors.muted, ...theme.typography.caption, fontStyle: 'italic', marginTop: 4 }}>
+                {profileQuery.data.pickup_instructions as string}
+              </Text>
+            ) : null}
+          </View>
+
+          {/* Menu Items — yes/no toggle (feature-flagged) */}
+          {FeatureFlags.ENABLE_MENU_ITEMS && <View style={[styles.field, { marginBottom: theme.spacing.xl }]}>
+            <Text style={{ color: theme.colors.primary, ...theme.typography.body, fontWeight: '700', marginBottom: theme.spacing.sm }}>
+              {t('business.createBasket.showMenuItems', { defaultValue: 'Afficher les articles du menu ?' })}
+            </Text>
+            <View style={{ flexDirection: 'row', gap: 10, marginBottom: theme.spacing.md }}>
+              <TouchableOpacity
+                onPress={() => setShowMenuItems(true)}
+                style={{
+                  flex: 1,
+                  paddingVertical: 10,
+                  borderRadius: theme.radii.r12,
+                  alignItems: 'center',
+                  backgroundColor: showMenuItems ? theme.colors.primary : theme.colors.surface,
+                  borderWidth: 1,
+                  borderColor: showMenuItems ? theme.colors.primary : theme.colors.divider,
+                }}
+              >
+                <Text style={{ color: showMenuItems ? '#fff' : theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '600' as const }}>
+                  {t('common.yes', { defaultValue: 'Yes' })}
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => setShowMenuItems(false)}
+                style={{
+                  flex: 1,
+                  paddingVertical: 10,
+                  borderRadius: theme.radii.r12,
+                  alignItems: 'center',
+                  backgroundColor: !showMenuItems ? theme.colors.primary : theme.colors.surface,
+                  borderWidth: 1,
+                  borderColor: !showMenuItems ? theme.colors.primary : theme.colors.divider,
+                }}
+              >
+                <Text style={{ color: !showMenuItems ? '#fff' : theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '600' as const }}>
+                  {t('common.no', { defaultValue: 'No' })}
+                </Text>
+              </TouchableOpacity>
+            </View>
+
+            {showMenuItems && (
+              <>
+                <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, marginBottom: theme.spacing.md }}>
+                  {t('business.createBasket.menuItemsWithPicsDesc', { defaultValue: 'Only items with photos will be shown to customers' })}
+                </Text>
+                {menuItemsQuery.isLoading ? (
+                  <ActivityIndicator size="small" color={theme.colors.primary} />
+                ) : (() => {
+                  const itemsWithPics = (menuItemsQuery.data ?? []).filter((i: MenuItemFromAPI) => !!i.image_url);
+                  if (itemsWithPics.length === 0) {
+                    return (
+                      <View style={{ alignItems: 'center' as const, paddingVertical: theme.spacing.lg }}>
+                        <Text style={{ color: theme.colors.muted, ...theme.typography.bodySm, textAlign: 'center' as const, marginBottom: theme.spacing.md }}>
+                          {t('business.createBasket.noMenuItemsWithPics', { defaultValue: 'No menu items with photos yet — add photos in Menu Items' })}
+                        </Text>
+                        <TouchableOpacity
+                          onPress={() => router.push('/business/menu-items' as never)}
+                          style={{
+                            flexDirection: 'row',
+                            alignItems: 'center',
+                            backgroundColor: theme.colors.primary + '12',
+                            borderRadius: theme.radii.r12,
+                            paddingHorizontal: theme.spacing.lg,
+                            paddingVertical: theme.spacing.md,
+                            borderWidth: 1,
+                            borderColor: theme.colors.primary + '30',
+                          }}
+                        >
+                          <Plus size={16} color={theme.colors.primary} />
+                          <Text style={{ color: theme.colors.primary, ...theme.typography.bodySm, fontWeight: '600' as const, marginLeft: 6 }}>
+                            {t('business.createBasket.goToMenuItems', { defaultValue: 'Go to Menu Items' })}
+                          </Text>
+                        </TouchableOpacity>
+                      </View>
+                    );
+                  }
+                  return (
+                    <View>
+                      {itemsWithPics.map((item: MenuItemFromAPI) => {
+                        const isSelected = selectedMenuItemIds.includes(item.id);
+                        return (
+                          <TouchableOpacity
+                            key={item.id}
+                            onPress={() => toggleMenuItem(item.id)}
+                            style={{
+                              flexDirection: 'row',
+                              alignItems: 'center',
+                              backgroundColor: isSelected ? theme.colors.primary + '10' : theme.colors.surface,
+                              borderRadius: theme.radii.r12,
+                              padding: theme.spacing.md,
+                              marginBottom: theme.spacing.sm,
+                              borderWidth: isSelected ? 1.5 : 1,
+                              borderColor: isSelected ? theme.colors.primary : theme.colors.divider,
+                              ...theme.shadows.shadowSm,
+                            }}
+                          >
+                            {isSelected ? (
+                              <SquareCheck size={20} color={theme.colors.primary} />
+                            ) : (
+                              <Square size={20} color={theme.colors.muted} />
+                            )}
+                            <Text
+                              style={{
+                                color: theme.colors.textPrimary,
+                                ...theme.typography.body,
+                                flex: 1,
+                                marginLeft: theme.spacing.md,
+                              }}
+                              numberOfLines={2}
+                            >
+                              {item.name}
+                            </Text>
+                          </TouchableOpacity>
+                        );
+                      })}
+                      {selectedMenuItemIds.length > 0 && (
+                        <Text style={{ color: theme.colors.primary, ...theme.typography.caption, marginTop: theme.spacing.xs }}>
+                          {t('business.createBasket.menuItemsSelected', {
+                            count: selectedMenuItemIds.length,
+                            defaultValue: `${selectedMenuItemIds.length} item(s) selected`,
+                          })}
+                        </Text>
+                      )}
+                    </View>
+                  );
+                })()}
+              </>
+            )}
+          </View>}
         </ScrollView>
 
-        <View style={[styles.footer, { backgroundColor: theme.colors.surface, paddingHorizontal: theme.spacing.xl, paddingVertical: theme.spacing.lg, borderTopWidth: 1, borderTopColor: theme.colors.divider, ...theme.shadows.shadowLg }]}>
+        <View style={[styles.footer, { backgroundColor: theme.colors.bg, paddingHorizontal: theme.spacing.xl, paddingTop: theme.spacing.lg, paddingBottom: theme.spacing.xxl, borderTopWidth: 1, borderTopColor: theme.colors.divider }]}>
           <PrimaryCTAButton
             onPress={handleSave}
             title={isEditing ? t('business.createBasket.save') : t('business.createBasket.create')}
@@ -764,6 +892,41 @@ export default function CreateBasketScreen() {
           />
         </View>
       </KeyboardAvoidingView>
+
+      {/* Zero quantity warning modal */}
+      <Modal visible={showZeroQtyWarning} transparent animationType="fade" onRequestClose={() => setShowZeroQtyWarning(false)}>
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', alignItems: 'center', padding: 24 }}>
+          <View style={{ backgroundColor: theme.colors.surface, borderRadius: 20, padding: 24, width: '100%', maxWidth: 340, alignItems: 'center', ...theme.shadows.shadowLg }}>
+            <View style={{ backgroundColor: '#eff35c22', width: 56, height: 56, borderRadius: 28, justifyContent: 'center', alignItems: 'center', marginBottom: 16 }}>
+              <AlertCircle size={28} color="#b8a600" />
+            </View>
+            <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3, textAlign: 'center', marginBottom: 8 }}>
+              {t('business.createBasket.zeroQtyTitle', { defaultValue: 'Quantité à 0' })}
+            </Text>
+            <Text style={{ color: theme.colors.textSecondary, ...theme.typography.body, textAlign: 'center', lineHeight: 22, marginBottom: 24 }}>
+              {t('business.createBasket.zeroQtyMsg', { defaultValue: 'La quantité quotidienne est à 0. Le panier ne sera pas visible par les clients. Continuer ?' })}
+            </Text>
+            <View style={{ flexDirection: 'row', gap: 10, width: '100%' }}>
+              <TouchableOpacity
+                onPress={() => setShowZeroQtyWarning(false)}
+                style={{ flex: 1, backgroundColor: theme.colors.bg, borderRadius: 12, paddingVertical: 14, alignItems: 'center', borderWidth: 1, borderColor: theme.colors.divider }}
+              >
+                <Text style={{ color: theme.colors.textPrimary, ...theme.typography.body, fontWeight: '600' }}>
+                  {t('common.cancel', { defaultValue: 'Annuler' })}
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => { setShowZeroQtyWarning(false); if (isEditing) updateMutation.mutate(); else createMutation.mutate(); }}
+                style={{ flex: 1, backgroundColor: theme.colors.primary, borderRadius: 12, paddingVertical: 14, alignItems: 'center' }}
+              >
+                <Text style={{ color: '#fff', ...theme.typography.body, fontWeight: '600' }}>
+                  {t('common.confirm', { defaultValue: 'Confirmer' })}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }

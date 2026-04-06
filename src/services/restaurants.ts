@@ -131,8 +131,14 @@ export async function fetchLocations(): Promise<LocationFromAPI[]> {
       } as LocationFromAPI;
     });
 
-    const withCoords = locations.filter((l) => l.latitude != null && isFinite(l.latitude!));
-    console.log('[Locations] Fetched', locations.length, 'locations,', withCoords.length, 'have GPS coordinates');
+    const withCoords = locations.filter((l) => l.latitude != null && l.longitude != null && isFinite(l.latitude!) && isFinite(l.longitude!));
+    console.log('[Locations] Fetched', locations.length, 'locations,', withCoords.length, 'have valid GPS coordinates');
+    // Debug: log ALL locations with their coord status
+    locations.forEach((l) => {
+      const name = (l as any).display_name ?? (l as any).location_name ?? (l as any).name ?? `id:${l.id}`;
+      const valid = l.latitude != null && l.longitude != null && isFinite(l.latitude!) && isFinite(l.longitude!);
+      console.log(`[Locations] "${name}" → lat=${l.latitude} (${typeof l.latitude}), lng=${l.longitude} (${typeof l.longitude}), valid=${valid}`);
+    });
     return locations;
   } catch (err: unknown) {
     const errObj = err as any;

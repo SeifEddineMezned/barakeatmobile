@@ -8,6 +8,8 @@ interface PrimaryCTAButtonProps {
   disabled?: boolean;
   loading?: boolean;
   variant?: 'primary' | 'secondary';
+  compact?: boolean;
+  borderRadius?: number;
 }
 
 export function PrimaryCTAButton({
@@ -16,6 +18,8 @@ export function PrimaryCTAButton({
   disabled = false,
   loading = false,
   variant = 'primary',
+  compact = false,
+  borderRadius,
 }: PrimaryCTAButtonProps) {
   const theme = useTheme();
   const scaleAnim = React.useRef(new Animated.Value(1)).current;
@@ -46,10 +50,10 @@ export function PrimaryCTAButton({
         onPressOut={handlePressOut}
         disabled={disabled || loading}
         style={[
-          styles.button,
+          compact ? styles.buttonCompact : styles.button,
           {
             backgroundColor: isPrimary ? theme.colors.primary : theme.colors.surface,
-            borderRadius: theme.radii.pill,
+            borderRadius: borderRadius ?? theme.radii.pill,
             borderWidth: isPrimary ? 0 : 2,
             borderColor: theme.colors.primary,
             opacity: disabled ? 0.5 : 1,
@@ -81,6 +85,12 @@ export function PrimaryCTAButton({
 const styles = StyleSheet.create({
   button: {
     height: 56,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 32,
+  },
+  buttonCompact: {
+    height: 46,
     justifyContent: 'center',
     alignItems: 'center',
     paddingHorizontal: 32,

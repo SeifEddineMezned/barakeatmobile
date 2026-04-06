@@ -75,9 +75,12 @@ export async function fetchGamificationStats(): Promise<GamificationStats> {
   return data as GamificationStats;
 }
 
-export async function fetchLeaderboard(): Promise<LeaderboardEntry[]> {
-  console.log('[Gamification] Fetching leaderboard');
-  const res = await apiClient.get<LeaderboardEntry[] | { leaderboard: LeaderboardEntry[] } | { data: LeaderboardEntry[] }>('/api/gamification/leaderboard');
+export async function fetchLeaderboard(region?: string, lat?: number, lng?: number, radius?: number): Promise<LeaderboardEntry[]> {
+  console.log('[Gamification] Fetching leaderboard', region ? `region=${region}` : '', lat ? `geo=${lat},${lng},${radius}km` : '');
+  const params: Record<string, any> = {};
+  if (region) params.region = region;
+  if (lat != null && lng != null && radius != null) { params.lat = lat; params.lng = lng; params.radius = radius; }
+  const res = await apiClient.get<LeaderboardEntry[] | { leaderboard: LeaderboardEntry[] } | { data: LeaderboardEntry[] }>('/api/gamification/leaderboard', { params });
   const data = res.data;
   let raw: any[];
   if (Array.isArray(data)) raw = data;

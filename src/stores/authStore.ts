@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { combine } from 'zustand/middleware';
 import { User } from '@/src/types';
 import { getToken, getUser, clearSession, saveUser } from '@/src/lib/session';
+import { saveToken } from '@/src/lib/session';
 
 export const useAuthStore = create(
   combine(
@@ -15,6 +16,9 @@ export const useAuthStore = create(
     (set) => ({
       signIn: (user: User, token: string) => {
         console.log('[AuthStore] signIn:', user.name, user.role);
+        // Persist user + token so session restore has the correct role
+        void saveUser(user);
+        void saveToken(token);
         set({ user, token, isAuthenticated: true });
       },
 
@@ -54,7 +58,14 @@ export const useAuthStore = create(
           } catch {}
 
           if (token && user) {
-            console.log('[AuthStore] Session restored for:', user.name);
+            // Ensure role is set — older stored sessions may only have `type` from backend
+            if (!user.role && (user as any).type) {
+              const backendType = (user as any).type;
+              user.role = (backendType === 'restaurant' || backendType === 'business') ? 'business' : 'customer';
+              console.log('[AuthStore] Derived role from type:', backendType, '->', user.role);
+              void saveUser(user); // persist the fix
+            }
+            console.log('[AuthStore] Session restored for:', user.name, '| role:', user.role);
             set({ user, token, isAuthenticated: true, isRestoringSession: false });
           } else {
             console.log('[AuthStore] No session found');
