@@ -2,7 +2,7 @@ import { Tabs } from "expo-router";
 import { LayoutDashboard, ShoppingBag, ClipboardList, User, Bell, Settings, ChevronDown, MapPin, Check } from "lucide-react-native";
 import React from "react";
 import { useTranslation } from "react-i18next";
-import { View, Text, TouchableOpacity, Animated, Dimensions, PanResponder, Modal } from "react-native";
+import { View, Text, TouchableOpacity, Animated, Dimensions, PanResponder, Modal, StyleSheet } from "react-native";
 import { useRouter } from "expo-router";
 import { useQuery } from "@tanstack/react-query";
 import { useTheme } from "@/src/theme/ThemeProvider";
@@ -12,6 +12,8 @@ import { fetchMyContext, fetchOrganizationDetails } from "@/src/services/teams";
 import { useNotificationStore } from "@/src/stores/notificationStore";
 import { useAuthStore } from "@/src/stores/authStore";
 import { useBusinessStore } from "@/src/stores/businessStore";
+import { useWalkthroughStore } from "@/src/stores/walkthroughStore";
+
 
 export default function BusinessTabLayout() {
   const { t } = useTranslation();
@@ -90,8 +92,8 @@ export default function BusinessTabLayout() {
     queryKey: ['unread-count'],
     queryFn: getUnreadCount,
     enabled: isAuthenticated,
-    refetchInterval: 60_000,
-    staleTime: 30_000,
+    refetchInterval: 20_000,
+    staleTime: 10_000,
   });
 
   React.useEffect(() => {
@@ -125,13 +127,35 @@ export default function BusinessTabLayout() {
 
   const orgLocations = orgDetailsQuery.data?.locations ?? [];
   const isAdminOrOwner = myRole === 'admin' || myRole === 'owner';
+  const myLocationId = myContextQuery.data?.location_id;
+
+  // Lock location for non-admin members assigned to a specific location
+  React.useEffect(() => {
+    if (!isAdminOrOwner && myLocationId && selectedLocationId !== myLocationId) {
+      setSelectedLocationId(myLocationId);
+    }
+  }, [isAdminOrOwner, myLocationId, selectedLocationId, setSelectedLocationId]);
+
+  // When navigating away from dashboard (tab 0) with "all locations" selected,
+  // auto-pick the first location since other pages need a specific one
+  const isDashboard = activeIndex === 0;
+  React.useEffect(() => {
+    if (!isDashboard && !selectedLocationId && orgLocations.length > 0) {
+      setSelectedLocationId(orgLocations[0].id);
+    }
+  }, [isDashboard, selectedLocationId, orgLocations, setSelectedLocationId]);
 
   // Derive the current location name for display
   const selectedLocationName = React.useMemo(() => {
-    if (!selectedLocationId) return myContextQuery.data?.organization_name ?? (isAdminOrOwner ? t('business.allLocations', { defaultValue: 'Tous les emplacements' }) : (orgLocations[0]?.name ?? t('business.location', { defaultValue: 'Emplacement' })));
+    if (!selectedLocationId) {
+      if (isDashboard && isAdminOrOwner) {
+        return myContextQuery.data?.organization_name ?? t('business.allLocations', { defaultValue: 'Tous les emplacements' });
+      }
+      return orgLocations[0]?.name ?? t('business.location', { defaultValue: 'Emplacement' });
+    }
     const loc = orgLocations.find((l) => l.id === Number(selectedLocationId));
     return loc?.name ?? t('business.location', { defaultValue: 'Location' });
-  }, [selectedLocationId, orgLocations, isAdminOrOwner, t]);
+  }, [selectedLocationId, orgLocations, isAdminOrOwner, isDashboard, t]);
 
   // PanResponder for swipe-to-dismiss on the location modal
   const modalPanResponder = React.useMemo(() => PanResponder.create({
@@ -176,9 +200,9 @@ export default function BusinessTabLayout() {
       ],
     }}>
       <TouchableOpacity
-        onPress={() => setLocationModalVisible(true)}
+        onPress={() => { if (isAdminOrOwner || !myLocationId) setLocationModalVisible(true); }}
         style={{ flexDirection: 'row', alignItems: 'center' }}
-        activeOpacity={0.7}
+        activeOpacity={isAdminOrOwner || !myLocationId ? 0.7 : 1}
       >
         <MapPin size={18} color={theme.colors.primary} style={{ marginRight: 6 }} />
         <Text
@@ -456,8 +480,8 @@ export default function BusinessTabLayout() {
             {t('business.selectLocation', { defaultValue: 'Select location' })}
           </Text>
 
-          {/* "All locations" option for admin/owner */}
-          {isAdminOrOwner && (
+          {/* "All locations" option for admin/owner — only on dashboard tab */}
+          {isDashboard && isAdminOrOwner && (
             <TouchableOpacity
               onPress={() => { setSelectedLocationId(null); setLocationModalVisible(false); }}
               style={{
@@ -527,6 +551,215 @@ export default function BusinessTabLayout() {
         </View>
       </TouchableOpacity>
     </Modal>
+
+    {/* ── Interactive business tab walkthrough overlay ── */}
+    <BusinessWalkthroughOverlay navRef={navRef} tabWidth={tabWidth} theme={theme} t={t} />
     </>
+  );
+}
+
+// ── Business walkthrough spotlight ─────────────────────────────────────────
+// highlight: 'tab' = circle the tab icon, 'element' = circle an on-screen element
+// For 'element' steps, `target` gives the position. `requireTap` = user must tap highlighted area.
+// 'skip' on element steps jumps to next tab-level step.
+type HighlightType = 'tab' | 'element';
+interface BizStep {
+  tabIndex: number;
+  routeName: string;
+  icon: any;
+  titleKey: string;
+  descKey: string;
+  highlight: HighlightType;
+  target?: { top?: number; bottom?: number; left?: number; right?: number; size: number };
+  tooltipPosition?: 'bottom' | 'top'; // where tooltip appears relative to highlight
+}
+
+const SCREEN_W_BIZ = Dimensions.get('window').width;
+const SCREEN_H_BIZ = Dimensions.get('window').height;
+
+const BIZ_WALKTHROUGH_STEPS: BizStep[] = [
+  // Tab: Dashboard
+  { tabIndex: 0, routeName: 'dashboard', icon: LayoutDashboard, titleKey: 'walkthrough.biz.dashboard.title', descKey: 'walkthrough.biz.dashboard.desc', highlight: 'tab' },
+  // Tab: Baskets
+  { tabIndex: 1, routeName: 'my-baskets', icon: ShoppingBag, titleKey: 'walkthrough.biz.baskets.title', descKey: 'walkthrough.biz.baskets.desc', highlight: 'tab' },
+  // Element: Create basket button (top-right, below nav header + safe area)
+  { tabIndex: 1, routeName: 'my-baskets', icon: ShoppingBag, titleKey: 'walkthrough.biz.basketCreate.title', descKey: 'walkthrough.biz.basketCreate.desc', highlight: 'element', target: { top: 110, right: 22, size: 40 }, tooltipPosition: 'top' },
+  // Tab: Orders
+  { tabIndex: 2, routeName: 'incoming-orders', icon: ClipboardList, titleKey: 'walkthrough.biz.orders.title', descKey: 'walkthrough.biz.orders.desc', highlight: 'tab' },
+  // Element: QR scan FAB (bottom-right)
+  { tabIndex: 2, routeName: 'incoming-orders', icon: ClipboardList, titleKey: 'walkthrough.biz.pickup.title', descKey: 'walkthrough.biz.pickup.desc', highlight: 'element', target: { bottom: 100, right: 24, size: 56 }, tooltipPosition: 'bottom' },
+  // Tab: Profile
+  { tabIndex: 3, routeName: 'business-profile', icon: User, titleKey: 'walkthrough.biz.profile.title', descKey: 'walkthrough.biz.profile.desc', highlight: 'tab' },
+  // Element: Team (settings area — center of screen)
+  { tabIndex: 3, routeName: 'business-profile', icon: User, titleKey: 'walkthrough.biz.team.title', descKey: 'walkthrough.biz.team.desc', highlight: 'tab' },
+];
+
+function BusinessWalkthroughOverlay({ navRef, tabWidth, theme, t }: { navRef: any; tabWidth: number; theme: any; t: any }) {
+  const step = useWalkthroughStore((s) => s.step);
+  const nextStep = useWalkthroughStore((s) => s.nextStep);
+  const skipWalkthrough = useWalkthroughStore((s) => s.skipWalkthrough);
+  const fadeAnim = React.useRef(new Animated.Value(0)).current;
+
+  React.useEffect(() => {
+    if (step !== null) {
+      fadeAnim.setValue(0);
+      Animated.timing(fadeAnim, { toValue: 1, duration: 300, useNativeDriver: true }).start();
+      const s = BIZ_WALKTHROUGH_STEPS[step];
+      if (s?.routeName && navRef.current) {
+        try { navRef.current.navigate(s.routeName); } catch {}
+      }
+    }
+  }, [step]);
+
+  // Skip to next tab-level step (for "Passer" on element steps)
+  const skipToNextTab = React.useCallback(() => {
+    if (step === null) return;
+    for (let i = step + 1; i < BIZ_WALKTHROUGH_STEPS.length; i++) {
+      if (BIZ_WALKTHROUGH_STEPS[i].highlight === 'tab' && BIZ_WALKTHROUGH_STEPS[i].tabIndex !== BIZ_WALKTHROUGH_STEPS[step].tabIndex) {
+        useWalkthroughStore.setState({ step: i });
+        return;
+      }
+    }
+    // No more tab steps — end walkthrough
+    skipWalkthrough();
+  }, [step, skipWalkthrough]);
+
+  if (step === null) return null;
+  const current = BIZ_WALKTHROUGH_STEPS[step];
+  if (!current) return null;
+
+  const StepIcon = current.icon;
+  const isLast = step === BIZ_WALKTHROUGH_STEPS.length - 1;
+  const tabBarLeft = 32;
+
+  // Calculate highlight position
+  let highlightStyle: any;
+  let tooltipStyle: any;
+  let arrowStyle: any;
+
+  if (current.highlight === 'element' && current.target) {
+    const t2 = current.target;
+    const cx = t2.right != null ? SCREEN_W_BIZ - t2.right - t2.size / 2 : (t2.left ?? 0) + t2.size / 2;
+    const cy = t2.bottom != null ? SCREEN_H_BIZ - t2.bottom - t2.size / 2 : (t2.top ?? 0) + t2.size / 2;
+
+    highlightStyle = {
+      position: 'absolute' as const,
+      left: cx - t2.size / 2 - 6,
+      top: cy - t2.size / 2 - 6,
+      width: t2.size + 12,
+      height: t2.size + 12,
+      borderRadius: (t2.size + 12) / 2,
+      borderWidth: 3,
+      borderColor: '#e3ff5c',
+      backgroundColor: 'transparent',
+    };
+
+    // Tooltip: position near the element
+    const tooltipBelow = (current.tooltipPosition === 'top') || (cy < SCREEN_H_BIZ / 2);
+    if (tooltipBelow) {
+      tooltipStyle = {
+        position: 'absolute' as const,
+        top: cy + t2.size / 2 + 20,
+        left: Math.max(16, Math.min(cx - 140, SCREEN_W_BIZ - 296)),
+        width: 280,
+      };
+      arrowStyle = {
+        position: 'absolute' as const, top: -8,
+        left: Math.max(20, Math.min(cx - (tooltipStyle.left ?? 0) - 8, 252)),
+        width: 16, height: 16, backgroundColor: '#fff',
+        transform: [{ rotate: '45deg' }],
+      };
+    } else {
+      tooltipStyle = {
+        position: 'absolute' as const,
+        bottom: SCREEN_H_BIZ - cy + t2.size / 2 + 20,
+        left: Math.max(16, Math.min(cx - 140, SCREEN_W_BIZ - 296)),
+        width: 280,
+      };
+      arrowStyle = {
+        position: 'absolute' as const, bottom: -8,
+        left: Math.max(20, Math.min(cx - (tooltipStyle.left ?? 0) - 8, 252)),
+        width: 16, height: 16, backgroundColor: '#fff',
+        transform: [{ rotate: '45deg' }],
+      };
+    }
+  } else {
+    // Tab highlight
+    const pillCenterX = tabBarLeft + (current.tabIndex * tabWidth) + (tabWidth / 2);
+    highlightStyle = {
+      position: 'absolute' as const,
+      bottom: 20 + 8,
+      left: pillCenterX - 28,
+      width: 56, height: 56, borderRadius: 28,
+      borderWidth: 3, borderColor: '#e3ff5c', backgroundColor: 'transparent',
+    };
+    const ttLeft = Math.max(16, Math.min(pillCenterX - 140, SCREEN_W_BIZ - 296));
+    tooltipStyle = { position: 'absolute' as const, bottom: 100, left: ttLeft, width: 280 };
+    arrowStyle = {
+      position: 'absolute' as const, bottom: -8,
+      left: Math.max(20, Math.min(pillCenterX - ttLeft - 8, 252)),
+      width: 16, height: 16, backgroundColor: '#fff',
+      transform: [{ rotate: '45deg' }],
+    };
+  }
+
+  const handleAdvance = () => nextStep(BIZ_WALKTHROUGH_STEPS.length);
+  const handleSkip = current.highlight === 'element' ? skipToNextTab : skipWalkthrough;
+
+  return (
+    <Animated.View style={{ ...StyleSheet.absoluteFillObject, zIndex: 9999, opacity: fadeAnim }}>
+      {/* Dark overlay — tapping advances for tab steps */}
+      <TouchableOpacity
+        activeOpacity={1}
+        onPress={current.highlight === 'tab' ? handleAdvance : undefined}
+        style={{ ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.55)' }}
+      />
+      {/* Highlight ring — tapping it advances for element steps */}
+      <TouchableOpacity
+        activeOpacity={0.8}
+        onPress={handleAdvance}
+        style={highlightStyle}
+      />
+      {/* Tooltip */}
+      <View style={{
+        ...tooltipStyle,
+        backgroundColor: '#fff', borderRadius: 20, padding: 20,
+        shadowColor: '#000', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.15, shadowRadius: 20, elevation: 10,
+      }}>
+        <Text style={{ color: theme.colors.muted, fontSize: 12, fontFamily: 'Poppins_500Medium', marginBottom: 10 }}>
+          {step + 1}/{BIZ_WALKTHROUGH_STEPS.length}
+        </Text>
+        <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 10 }}>
+          <View style={{ width: 44, height: 44, borderRadius: 22, backgroundColor: '#114b3c12', justifyContent: 'center', alignItems: 'center', marginRight: 12 }}>
+            <StepIcon size={22} color="#114b3c" />
+          </View>
+          <Text style={{ color: '#114b3c', fontSize: 17, fontWeight: '700', fontFamily: 'Poppins_700Bold', flex: 1 }}>
+            {t(current.titleKey)}
+          </Text>
+        </View>
+        <Text style={{ color: '#666', fontSize: 13, fontFamily: 'Poppins_400Regular', lineHeight: 19, marginBottom: 16 }}>
+          {t(current.descKey)}
+        </Text>
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+          <TouchableOpacity onPress={handleSkip}>
+            <Text style={{ color: theme.colors.muted, fontSize: 13, fontFamily: 'Poppins_500Medium' }}>
+              {t('common.skip', { defaultValue: 'Passer' })}
+            </Text>
+          </TouchableOpacity>
+          {current.highlight === 'tab' && (
+            <TouchableOpacity
+              onPress={handleAdvance}
+              style={{ backgroundColor: '#114b3c', borderRadius: 12, paddingHorizontal: 20, paddingVertical: 10 }}
+            >
+              <Text style={{ color: '#e3ff5c', fontSize: 14, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
+                {isLast ? t('walkthrough.done', { defaultValue: 'C\'est parti !' }) : t('walkthrough.next', { defaultValue: 'Suivant' })}
+              </Text>
+            </TouchableOpacity>
+          )}
+        </View>
+        {/* Arrow */}
+        <View style={arrowStyle} />
+      </View>
+    </Animated.View>
   );
 }

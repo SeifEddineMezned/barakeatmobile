@@ -22,6 +22,7 @@ import { useFavoritesStore } from "@/src/stores/favoritesStore";
 import { useAddressStore } from "@/src/stores/addressStore";
 import { useSplashStore } from "@/src/stores/splashStore";
 import { useCelebrationStore } from "@/src/stores/celebrationStore";
+import { useWalkthroughStore } from "@/src/stores/walkthroughStore";
 import { fetchGamificationStats } from "@/src/services/gamification";
 import { apiClient } from "@/src/lib/api";
 import { Search, ShoppingBag, Trophy, LayoutDashboard, Package, BarChart3 } from "lucide-react-native";
@@ -29,6 +30,7 @@ import { Search, ShoppingBag, Trophy, LayoutDashboard, Package, BarChart3 } from
 import * as NavigationBar from "expo-navigation-bar";
 import { initSentry } from "@/src/lib/sentry";
 import { OfflineBanner } from "@/src/components/OfflineBanner";
+import { CustomAlertProvider } from "@/src/components/CustomAlert";
 
 initSentry();
 SplashScreen.preventAutoHideAsync().catch(() => {});
@@ -51,13 +53,17 @@ function RootLayoutNav() {
       <Stack.Screen name="basket/[id]" options={{ headerShown: false }} />
       <Stack.Screen name="reserve" options={{ presentation: "card", headerShown: false }} />
       <Stack.Screen name="review" options={{ presentation: "modal", headerShown: false }} />
-      <Stack.Screen name="business/create-basket" options={{ presentation: "modal", headerShown: false }} />
+      <Stack.Screen name="business/create-basket" options={{ presentation: "card", headerShown: false }} />
       <Stack.Screen name="business/availability" options={{ presentation: "modal", headerShown: false }} />
       <Stack.Screen name="business/menu-items" options={{ presentation: "modal", headerShown: false }} />
       <Stack.Screen name="business/scan-qr" options={{ presentation: "modal", headerShown: false }} />
       <Stack.Screen name="business/team" options={{ headerShown: false }} />
       <Stack.Screen name="business/member-detail" options={{ headerShown: false }} />
       <Stack.Screen name="business/add-location" options={{ headerShown: false }} />
+      <Stack.Screen name="business/add-member" options={{ headerShown: false }} />
+      <Stack.Screen name="messages" options={{ headerShown: false }} />
+      <Stack.Screen name="message/[id]" options={{ headerShown: false }} />
+      <Stack.Screen name="wallet" options={{ headerShown: false }} />
       <Stack.Screen name="address-picker" options={{ headerShown: false }} />
       <Stack.Screen name="settings" options={{ headerShown: false }} />
       <Stack.Screen name="map-view" options={{ headerShown: false }} />
@@ -137,6 +143,19 @@ function RootLayoutInner() {
     }
   }, [isRestoringSession, isAuthenticated, user?.role]);
 
+  // Check favorite notifications on app open (feature-flagged)
+  useEffect(() => {
+    if (!isAuthenticated || isRestoringSession) return;
+    const { FeatureFlags } = require('@/src/lib/featureFlags');
+    if (!FeatureFlags.ENABLE_FAVORITE_NOTIFICATIONS) return;
+    const favStore = require('@/src/stores/favoritesStore').useFavoritesStore.getState();
+    const ids = favStore.favoriteBasketIds ?? [];
+    if (ids.length > 0) {
+      const { checkFavoriteNotifications } = require('@/src/services/notifications');
+      void checkFavoriteNotifications(ids);
+    }
+  }, [isAuthenticated, isRestoringSession]);
+
   // Check for newly unlocked badges
   const gamQuery = useQuery({
     queryKey: ['gamification-stats'],
@@ -192,15 +211,17 @@ function RootLayoutInner() {
   //   void registerForPushNotifications();
   // }, [isAuthenticated, isRestoringSession]);
 
+  const startWalkthrough = useWalkthroughStore((s) => s.startWalkthrough);
+
   const dismissTutorial = async () => {
     setShowTutorial(false);
     setTutorialPage(0);
     try {
       await apiClient.put('/api/auth/onboarding');
       qc.invalidateQueries({ queryKey: ['gamification-stats'] });
-    } catch {
-      // Silently fail
-    }
+    } catch {}
+    // Start interactive tab walkthrough for both customers and business
+    setTimeout(() => startWalkthrough(), 500);
   };
 
   const isBusiness = user?.role === 'business';
@@ -463,8 +484,10 @@ export default function RootLayout() {
   return (
     <QueryClientProvider client={queryClient}>
       <ThemeProvider>
-        <OfflineBanner />
-        <RootLayoutInner />
+        <CustomAlertProvider>
+          <OfflineBanner />
+          <RootLayoutInner />
+        </CustomAlertProvider>
       </ThemeProvider>
     </QueryClientProvider>
   );

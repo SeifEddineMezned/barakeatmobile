@@ -117,6 +117,9 @@ export async function createBasketJSON(payload: {
   pickup_start_time: string;
   pickup_end_time: string;
   menu_item_ids?: number[];
+  show_menu_items?: boolean;
+  pickup_instructions?: string;
+  location_id?: number;
 }): Promise<BusinessBasketFromAPI> {
   console.log('[Business] Creating basket (JSON):', JSON.stringify(payload));
   const res = await apiClient.post<BusinessBasketFromAPI | { basket: BusinessBasketFromAPI }>('/api/baskets', payload);

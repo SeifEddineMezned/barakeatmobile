@@ -4,7 +4,6 @@ import {
   Text,
   StyleSheet,
   TextInput,
-  Alert,
   KeyboardAvoidingView,
   Platform,
   TouchableOpacity,
@@ -25,11 +24,13 @@ import {
   type TodayReservationFromAPI,
 } from '@/src/services/business';
 import { getErrorMessage } from '@/src/lib/api';
+import { useCustomAlert } from '@/src/components/CustomAlert';
 
 export default function ScanQRScreen() {
   const { t } = useTranslation();
   const theme = useTheme();
   const router = useRouter();
+  const alert = useCustomAlert();
   const queryClient = useQueryClient();
 
   const [code, setCode] = useState('');
@@ -42,7 +43,7 @@ export default function ScanQRScreen() {
 
   const handleVerifyCode = async (pickupCode: string) => {
     if (pickupCode.trim().length < 4) {
-      Alert.alert(t('common.error'), t('business.scan.codeTooShort'));
+      alert.showAlert(t('common.error'), t('business.scan.codeTooShort'));
       return;
     }
     setLoading(true);
@@ -52,7 +53,7 @@ export default function ScanQRScreen() {
         (o) => (o.pickup_code ?? '').toUpperCase() === pickupCode.trim().toUpperCase()
       );
       if (!match) {
-        Alert.alert(t('common.error'), t('business.scan.codeNotFound'));
+        alert.showAlert(t('common.error'), t('business.scan.codeNotFound'));
         setLoading(false);
         setScanned(false);
         return;
@@ -63,7 +64,7 @@ export default function ScanQRScreen() {
       setMatchedOrder(match);
       void queryClient.invalidateQueries({ queryKey: ['today-orders'] });
     } catch (err) {
-      Alert.alert(t('common.error'), getErrorMessage(err));
+      alert.showAlert(t('common.error'), getErrorMessage(err));
       setScanned(false);
     } finally {
       setLoading(false);
@@ -79,7 +80,7 @@ export default function ScanQRScreen() {
     verifyQR(data)
       .then(async (verifyResult) => {
         if (!verifyResult.valid) {
-          Alert.alert(t('common.error'), t('business.scan.codeNotFound'));
+          alert.showAlert(t('common.error'), t('business.scan.codeNotFound'));
           setScanned(false);
           return;
         }
@@ -115,7 +116,7 @@ export default function ScanQRScreen() {
         if (data.trim().length >= 4) {
           void handleVerifyCode(data.trim());
         } else {
-          Alert.alert(t('common.error'), getErrorMessage(err));
+          alert.showAlert(t('common.error'), getErrorMessage(err));
           setScanned(false);
         }
       })

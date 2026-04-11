@@ -1,14 +1,13 @@
-import React, { useState } from 'react';
-import { View, Text, TouchableOpacity, TextInput, Platform, StyleSheet, ScrollView, Alert, ActivityIndicator } from 'react-native';
+import React, { useState, useCallback, useRef } from 'react';
+import { View, Text, TouchableOpacity, TextInput, Platform, StyleSheet, ScrollView, ActivityIndicator, Modal, FlatList } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { ChevronLeft, MapPin, ShieldCheck, Navigation } from 'lucide-react-native';
+import { ChevronLeft, MapPin, ShieldCheck, Navigation, XCircle, CheckCircle2, Search } from 'lucide-react-native';
 import * as Location from 'expo-location';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { addLocation } from '@/src/services/teams';
-import { useBusinessStore } from '@/src/stores/businessStore';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { addLocation, fetchMyContext } from '@/src/services/teams';
 import { getErrorMessage } from '@/src/lib/api';
 import { FeatureFlags } from '@/src/lib/featureFlags';
 
@@ -18,7 +17,15 @@ if (Platform.OS !== 'web') {
   MapView = maps.default;
 }
 
-const CATEGORIES = ['bakery', 'restaurant', 'grocery', 'cafe', 'pastry', 'supermarket'] as const;
+const CATEGORIES = ['bakery', 'restaurant', 'grocery', 'cafe', 'supermarket'] as const;
+
+// ── Nominatim address suggestion type ────────────────────────────────────────
+interface AddressSuggestion {
+  place_id: number;
+  display_name: string;
+  lat: string;
+  lon: string;
+}
 
 export default function AddLocationScreen() {
   const { t } = useTranslation();
@@ -33,34 +40,87 @@ export default function AddLocationScreen() {
   const [coords, setCoords] = useState<{ lat: number; lng: number } | null>(null);
   const [pendingRegion, setPendingRegion] = useState<{ lat: number; lng: number }>({ lat: 36.8065, lng: 10.1815 });
 
-  // Resolve orgId from business store context
-  const orgId = useBusinessStore((s) => (s as any).organizationId) ?? null;
+  // Search / suggestions
+  const [addressSearch, setAddressSearch] = useState('');
+  const [suggestions, setSuggestions] = useState<AddressSuggestion[]>([]);
+  const [searching, setSearching] = useState(false);
+  const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const mapRef = useRef<any>(null);
+
+  // Custom modal states (no native Alert)
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  const [addressExpanded, setAddressExpanded] = useState(false);
+
+  // Resolve orgId from team context API (same as team.tsx)
+  const contextQuery = useQuery({ queryKey: ['team-context'], queryFn: fetchMyContext, staleTime: 60_000 });
+  const orgId = contextQuery.data?.organization_id ?? null;
 
   const mutation = useMutation({
     mutationFn: async () => {
-      if (!orgId) throw new Error('No organization');
+      if (!orgId) throw new Error(t('business.team.noOrganization', { defaultValue: 'Aucune organisation trouvée. Veuillez d\'abord créer une organisation.' }));
       return addLocation(orgId, {
         name: name.trim() || undefined,
         address: address.trim() || undefined,
         category: category || undefined,
+        ...(coords ? { latitude: coords.lat, longitude: coords.lng } : {}),
       });
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['org-details'] });
-      Alert.alert(
-        t('common.success'),
-        t('business.team.locationAdded', { defaultValue: 'Emplacement ajouté avec succès.' }),
-        [{ text: 'OK', onPress: () => router.back() }]
-      );
+      setSuccessMsg(t('business.team.locationAdded', { defaultValue: 'Emplacement ajouté avec succès.' }));
     },
     onError: (err) => {
-      Alert.alert(t('common.error'), getErrorMessage(err));
+      setErrorMsg(getErrorMessage(err));
     },
   });
 
+  // ── Nominatim autocomplete ─────────────────────────────────────────────────
+  const fetchSuggestions = useCallback(async (query: string) => {
+    if (query.length < 2) { setSuggestions([]); return; }
+    setSearching(true);
+    try {
+      // Bias results toward Tunisia with viewbox but don't strictly limit (bounded=0)
+      // so users can still find results elsewhere if needed
+      const params = new URLSearchParams({
+        format: 'json',
+        q: query,
+        limit: '8',
+        addressdetails: '1',
+        viewbox: '7.5,30.2,11.6,37.5', // Tunisia bounding box
+        bounded: '0',
+        'accept-language': 'fr',
+      });
+      const resp = await fetch(`https://nominatim.openstreetmap.org/search?${params}`);
+      const data: AddressSuggestion[] = await resp.json();
+      setSuggestions(data);
+    } catch {
+      setSuggestions([]);
+    }
+    setSearching(false);
+  }, []);
+
+  const handleSearchChange = useCallback((text: string) => {
+    setAddressSearch(text);
+    if (searchTimer.current) clearTimeout(searchTimer.current);
+    searchTimer.current = setTimeout(() => fetchSuggestions(text), 300);
+  }, [fetchSuggestions]);
+
+  const handleSelectSuggestion = useCallback((item: AddressSuggestion) => {
+    const lat = parseFloat(item.lat);
+    const lng = parseFloat(item.lon);
+    setAddressSearch(item.display_name);
+    setSuggestions([]);
+    setPendingRegion({ lat, lng });
+    mapRef.current?.animateToRegion({
+      latitude: lat, longitude: lng,
+      latitudeDelta: 0.005, longitudeDelta: 0.005,
+    }, 600);
+  }, []);
+
   const handleMapConfirm = () => {
     setCoords(pendingRegion);
-    setAddress(`${pendingRegion.lat.toFixed(5)}, ${pendingRegion.lng.toFixed(5)}`);
+    setAddress(addressSearch.trim() || `${pendingRegion.lat.toFixed(5)}, ${pendingRegion.lng.toFixed(5)}`);
     setStep('form');
   };
 
@@ -83,9 +143,51 @@ export default function AddLocationScreen() {
       {step === 'map' ? (
         /* ── Map Step ─────────────────────────────────────────── */
         <View style={{ flex: 1 }}>
+          {/* Search bar with autocomplete */}
+          <View style={{ paddingHorizontal: 16, paddingTop: 10, paddingBottom: suggestions.length > 0 ? 0 : 10, backgroundColor: theme.colors.bg, borderBottomWidth: suggestions.length > 0 ? 0 : 1, borderBottomColor: theme.colors.divider, zIndex: 10 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', backgroundColor: theme.colors.surface, borderRadius: 12, borderWidth: 1, borderColor: theme.colors.divider, paddingHorizontal: 12 }}>
+                <Search size={16} color={theme.colors.muted} />
+                <TextInput
+                  style={{ flex: 1, paddingVertical: 10, paddingHorizontal: 8, fontSize: 14, color: theme.colors.textPrimary }}
+                  value={addressSearch}
+                  onChangeText={handleSearchChange}
+                  placeholder={t('business.team.searchAddress', { defaultValue: 'Rechercher une adresse...' })}
+                  placeholderTextColor={theme.colors.muted}
+                  returnKeyType="search"
+                  autoCorrect={false}
+                />
+                {searching && <ActivityIndicator size="small" color={theme.colors.muted} />}
+              </View>
+            </View>
+            {/* Suggestions dropdown */}
+            {suggestions.length > 0 && (
+              <ScrollView
+                style={{ maxHeight: 260, backgroundColor: theme.colors.surface, borderRadius: 12, marginTop: 6, marginBottom: 10, borderWidth: 1, borderColor: theme.colors.divider }}
+                keyboardShouldPersistTaps="handled"
+                nestedScrollEnabled
+                showsVerticalScrollIndicator
+              >
+                {suggestions.map((item, idx) => (
+                  <TouchableOpacity
+                    key={item.place_id}
+                    onPress={() => handleSelectSuggestion(item)}
+                    style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 12, borderTopWidth: idx > 0 ? 1 : 0, borderTopColor: theme.colors.divider }}
+                  >
+                    <MapPin size={14} color="#114b3c" style={{ marginRight: 10, flexShrink: 0 }} />
+                    <Text style={{ color: theme.colors.textPrimary, fontSize: 13, flex: 1, lineHeight: 18 }} numberOfLines={2}>
+                      {item.display_name}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            )}
+          </View>
+
           <View style={{ flex: 1 }}>
             {MapView && Platform.OS !== 'web' ? (
               <MapView
+                ref={mapRef}
                 style={StyleSheet.absoluteFillObject}
                 initialRegion={{
                   latitude: coords?.lat ?? 36.8065,
@@ -108,8 +210,10 @@ export default function AddLocationScreen() {
 
             {/* Center pin */}
             <View style={styles.centerPin} pointerEvents="none">
-              <View style={[styles.pinDot, { backgroundColor: '#114b3c' }]} />
-              <View style={[styles.pinStem, { backgroundColor: '#114b3c' }]} />
+              <View style={[styles.pinDot, { backgroundColor: '#e3ff5c', justifyContent: 'center', alignItems: 'center' }]}>
+                <MapPin size={10} color="#114b3c" />
+              </View>
+              <View style={[styles.pinStem, { backgroundColor: '#e3ff5c' }]} />
             </View>
 
             {/* Instruction */}
@@ -128,7 +232,12 @@ export default function AddLocationScreen() {
                   const { status } = await Location.requestForegroundPermissionsAsync();
                   if (status !== 'granted') return;
                   const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-                  setPendingRegion({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+                  const newRegion = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+                  setPendingRegion(newRegion);
+                  mapRef.current?.animateToRegion({
+                    latitude: newRegion.lat, longitude: newRegion.lng,
+                    latitudeDelta: 0.005, longitudeDelta: 0.005,
+                  }, 600);
                 } catch {}
               }}
               style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 12, borderRadius: 16, borderWidth: 1, borderColor: theme.colors.divider, backgroundColor: theme.colors.surface }}
@@ -175,11 +284,32 @@ export default function AddLocationScreen() {
             onPress={() => setStep('map')}
             style={[styles.input, styles.mapButton, { backgroundColor: theme.colors.surface, borderColor: coords ? '#114b3c40' : theme.colors.divider }]}
           >
-            <MapPin size={16} color={coords ? '#114b3c' : theme.colors.muted} />
-            <Text style={{ color: coords ? theme.colors.textPrimary : theme.colors.muted, ...theme.typography.body, flex: 1, marginLeft: 10 }} numberOfLines={1}>
-              {coords ? address : t('business.team.tapToSelectLocation', { defaultValue: 'Appuyez pour choisir sur la carte' })}
-            </Text>
+            <MapPin size={16} color={coords ? '#114b3c' : theme.colors.muted} style={{ flexShrink: 0 }} />
+            {!coords ? (
+              <Text style={{ color: theme.colors.muted, ...theme.typography.body, flex: 1, marginLeft: 10 }} numberOfLines={1}>
+                {t('business.team.tapToSelectLocation', { defaultValue: 'Appuyez pour choisir sur la carte' })}
+              </Text>
+            ) : (
+              <Text style={{ color: theme.colors.textPrimary, ...theme.typography.body, flex: 1, marginLeft: 10 }} numberOfLines={1}>
+                {t('business.team.changeLocation', { defaultValue: 'Modifier l\'emplacement' })}
+              </Text>
+            )}
           </TouchableOpacity>
+          {coords ? (
+            <View style={{ marginTop: 6 }}>
+              <TextInput
+                style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, lineHeight: 20, backgroundColor: theme.colors.surface, borderRadius: 10, borderWidth: 1, borderColor: theme.colors.divider, padding: 10, minHeight: 40 }}
+                value={address}
+                onChangeText={setAddress}
+                placeholder={t('business.team.editAddressText', { defaultValue: 'Adresse affichée aux clients...' })}
+                placeholderTextColor={theme.colors.muted}
+                multiline
+              />
+              <Text style={{ color: theme.colors.muted, fontSize: 10, marginTop: 3 }}>
+                {t('business.team.editAddressHint', { defaultValue: 'Modifiez le texte si besoin. Les coordonnées restent inchangées.' })}
+              </Text>
+            </View>
+          ) : null}
           {coords && (
             <Text style={{ color: theme.colors.muted, ...theme.typography.caption, marginTop: 4 }}>
               {coords.lat.toFixed(5)}, {coords.lng.toFixed(5)}
@@ -251,6 +381,52 @@ export default function AddLocationScreen() {
           </TouchableOpacity>
         </ScrollView>
       )}
+
+      {/* Error modal */}
+      <Modal visible={!!errorMsg} transparent animationType="fade" onRequestClose={() => setErrorMsg(null)}>
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 24 }}>
+          <View style={{ backgroundColor: '#fff', borderRadius: 24, padding: 28, width: '100%', maxWidth: 340, alignItems: 'center' }}>
+            <View style={{ backgroundColor: '#ef444418', width: 56, height: 56, borderRadius: 28, justifyContent: 'center', alignItems: 'center', marginBottom: 16 }}>
+              <XCircle size={28} color="#ef4444" />
+            </View>
+            <Text style={{ color: '#1a1a1a', fontSize: 18, fontWeight: '700', fontFamily: 'Poppins_700Bold', textAlign: 'center', marginBottom: 10 }}>
+              {t('auth.error')}
+            </Text>
+            <Text style={{ color: '#666', fontSize: 14, fontFamily: 'Poppins_400Regular', textAlign: 'center', lineHeight: 22, marginBottom: 24 }}>
+              {errorMsg}
+            </Text>
+            <TouchableOpacity
+              onPress={() => setErrorMsg(null)}
+              style={{ backgroundColor: '#114b3c', borderRadius: 14, paddingVertical: 14, width: '100%', alignItems: 'center' }}
+            >
+              <Text style={{ color: '#e3ff5c', fontSize: 15, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>OK</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Success modal */}
+      <Modal visible={!!successMsg} transparent animationType="fade" onRequestClose={() => { setSuccessMsg(null); router.back(); }}>
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 24 }}>
+          <View style={{ backgroundColor: '#fff', borderRadius: 24, padding: 28, width: '100%', maxWidth: 340, alignItems: 'center' }}>
+            <View style={{ backgroundColor: '#114b3c18', width: 56, height: 56, borderRadius: 28, justifyContent: 'center', alignItems: 'center', marginBottom: 16 }}>
+              <CheckCircle2 size={28} color="#114b3c" />
+            </View>
+            <Text style={{ color: '#1a1a1a', fontSize: 18, fontWeight: '700', fontFamily: 'Poppins_700Bold', textAlign: 'center', marginBottom: 10 }}>
+              {t('common.success', { defaultValue: 'Succès' })}
+            </Text>
+            <Text style={{ color: '#666', fontSize: 14, fontFamily: 'Poppins_400Regular', textAlign: 'center', lineHeight: 22, marginBottom: 24 }}>
+              {successMsg}
+            </Text>
+            <TouchableOpacity
+              onPress={() => { setSuccessMsg(null); router.back(); }}
+              style={{ backgroundColor: '#114b3c', borderRadius: 14, paddingVertical: 14, width: '100%', alignItems: 'center' }}
+            >
+              <Text style={{ color: '#e3ff5c', fontSize: 15, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>OK</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }

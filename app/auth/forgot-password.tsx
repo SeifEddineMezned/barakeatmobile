@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, ScrollView, Alert } from 'react-native';
-import { useRouter } from 'expo-router';
+import { View, Text, StyleSheet, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, ScrollView, Modal } from 'react-native';
+import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { ArrowLeft, Mail, KeyRound, Lock } from 'lucide-react-native';
+import { ArrowLeft, Mail, KeyRound, Lock, XCircle, CheckCircle2 } from 'lucide-react-native';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { StatusBar } from 'expo-status-bar';
 import { PrimaryCTAButton } from '@/src/components/PrimaryCTAButton';
@@ -16,6 +16,7 @@ export default function ForgotPasswordScreen() {
   const { t } = useTranslation();
   const theme = useTheme();
   const router = useRouter();
+  const { role } = useLocalSearchParams<{ role?: string }>();
 
   const [step, setStep] = useState<Step>('email');
   const [email, setEmail] = useState('');
@@ -25,6 +26,8 @@ export default function ForgotPasswordScreen() {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [countdown, setCountdown] = useState(0);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [successMsg, setSuccessMsg] = useState<{ text: string; onDismiss?: () => void } | null>(null);
 
   useEffect(() => {
     if (countdown <= 0) return;
@@ -34,17 +37,17 @@ export default function ForgotPasswordScreen() {
 
   const handleSendOtp = async () => {
     if (!email.trim()) {
-      Alert.alert(t('auth.error'), t('auth.fillAllFields'));
+      setErrorMsg(t('auth.fillAllFields'));
       return;
     }
     setLoading(true);
     try {
-      await forgotPassword(email.trim());
+      await forgotPassword(email.trim(), role === 'business' ? 'restaurant' : role === 'customer' ? 'buyer' : undefined);
       setStep('otp');
       setCountdown(60);
-      Alert.alert(t('common.success'), t('auth.otpSent'));
+      setSuccessMsg({ text: t('auth.otpSent') });
     } catch (err) {
-      Alert.alert(t('auth.error'), getErrorMessage(err));
+      setErrorMsg(getErrorMessage(err));
     } finally {
       setLoading(false);
     }
@@ -52,7 +55,7 @@ export default function ForgotPasswordScreen() {
 
   const handleVerifyOtp = async () => {
     if (!otp.trim()) {
-      Alert.alert(t('auth.error'), t('auth.fillAllFields'));
+      setErrorMsg(t('auth.fillAllFields'));
       return;
     }
     setLoading(true);
@@ -61,7 +64,7 @@ export default function ForgotPasswordScreen() {
       setResetToken(token);
       setStep('newPassword');
     } catch (err) {
-      Alert.alert(t('auth.error'), getErrorMessage(err));
+      setErrorMsg(getErrorMessage(err));
     } finally {
       setLoading(false);
     }
@@ -71,25 +74,23 @@ export default function ForgotPasswordScreen() {
 
   const handleResetPassword = async () => {
     if (!newPassword.trim() || !confirmPassword.trim()) {
-      Alert.alert(t('auth.error'), t('auth.fillAllFields'));
+      setErrorMsg(t('auth.fillAllFields'));
       return;
     }
     if (newPassword !== confirmPassword) {
-      Alert.alert(t('auth.error'), t('auth.passwordMismatch'));
+      setErrorMsg(t('auth.passwordMismatch'));
       return;
     }
     if (!PASSWORD_REGEX.test(newPassword)) {
-      Alert.alert(t('auth.error'), t('auth.passwordRequirements'));
+      setErrorMsg(t('auth.passwordRequirements'));
       return;
     }
     setLoading(true);
     try {
       await resetPassword(resetToken, newPassword);
-      Alert.alert(t('common.success'), t('auth.passwordResetSuccess'), [
-        { text: t('common.ok'), onPress: () => router.replace('/auth/sign-in' as never) },
-      ]);
+      setSuccessMsg({ text: t('auth.passwordResetSuccess'), onDismiss: () => router.replace('/auth/sign-in' as never) });
     } catch (err) {
-      Alert.alert(t('auth.error'), getErrorMessage(err));
+      setErrorMsg(getErrorMessage(err));
     } finally {
       setLoading(false);
     }
@@ -259,6 +260,54 @@ export default function ForgotPasswordScreen() {
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
+      {/* Error modal */}
+      <Modal visible={!!errorMsg} transparent animationType="fade" onRequestClose={() => setErrorMsg(null)}>
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 24 }}>
+          <View style={{ backgroundColor: '#fff', borderRadius: 24, padding: 28, width: '100%', maxWidth: 340, alignItems: 'center' }}>
+            <View style={{ backgroundColor: '#ef444418', width: 56, height: 56, borderRadius: 28, justifyContent: 'center', alignItems: 'center', marginBottom: 16 }}>
+              <XCircle size={28} color="#ef4444" />
+            </View>
+            <Text style={{ color: '#1a1a1a', fontSize: 18, fontWeight: '700', fontFamily: 'Poppins_700Bold', textAlign: 'center', marginBottom: 10 }}>
+              {t('auth.error')}
+            </Text>
+            <Text style={{ color: '#666', fontSize: 14, fontFamily: 'Poppins_400Regular', textAlign: 'center', lineHeight: 22, marginBottom: 24 }}>
+              {errorMsg}
+            </Text>
+            <TouchableOpacity
+              onPress={() => setErrorMsg(null)}
+              style={{ backgroundColor: '#114b3c', borderRadius: 14, paddingVertical: 14, width: '100%', alignItems: 'center' }}
+            >
+              <Text style={{ color: '#e3ff5c', fontSize: 15, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
+                {t('common.ok', { defaultValue: 'OK' })}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+      {/* Success modal */}
+      <Modal visible={!!successMsg} transparent animationType="fade" onRequestClose={() => { successMsg?.onDismiss?.(); setSuccessMsg(null); }}>
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 24 }}>
+          <View style={{ backgroundColor: '#fff', borderRadius: 24, padding: 28, width: '100%', maxWidth: 340, alignItems: 'center' }}>
+            <View style={{ backgroundColor: '#114b3c18', width: 56, height: 56, borderRadius: 28, justifyContent: 'center', alignItems: 'center', marginBottom: 16 }}>
+              <CheckCircle2 size={28} color="#114b3c" />
+            </View>
+            <Text style={{ color: '#1a1a1a', fontSize: 18, fontWeight: '700', fontFamily: 'Poppins_700Bold', textAlign: 'center', marginBottom: 10 }}>
+              {t('common.success', { defaultValue: 'Succès' })}
+            </Text>
+            <Text style={{ color: '#666', fontSize: 14, fontFamily: 'Poppins_400Regular', textAlign: 'center', lineHeight: 22, marginBottom: 24 }}>
+              {successMsg?.text}
+            </Text>
+            <TouchableOpacity
+              onPress={() => { successMsg?.onDismiss?.(); setSuccessMsg(null); }}
+              style={{ backgroundColor: '#114b3c', borderRadius: 14, paddingVertical: 14, width: '100%', alignItems: 'center' }}
+            >
+              <Text style={{ color: '#e3ff5c', fontSize: 15, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
+                {t('common.ok', { defaultValue: 'OK' })}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }

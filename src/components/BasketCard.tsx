@@ -167,6 +167,14 @@ export function BasketCard({ basket, onFavoritePress, isFavorite = false }: Bask
               </TouchableOpacity>
             </View>
 
+            {/* Rating badge — bottom right of image (always shown) */}
+            <View style={{ position: 'absolute', bottom: 8, right: 8, flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.92)', borderRadius: 10, paddingHorizontal: 7, paddingVertical: 3, ...theme.shadows.shadowSm }}>
+              <Star size={10} color={basket.merchantRating != null ? theme.colors.starYellow : theme.colors.muted} fill={basket.merchantRating != null ? theme.colors.starYellow : 'transparent'} />
+              <Text style={{ color: basket.merchantRating != null ? theme.colors.textPrimary : theme.colors.textSecondary, fontSize: 11, fontWeight: '700', marginLeft: 3 }}>
+                {basket.merchantRating != null ? basket.merchantRating.toFixed(1) : 'N/A'}
+              </Text>
+            </View>
+
             {/* Sold-out overlay label — pointerEvents none so heart button stays tappable */}
             {isSoldOut && (
               <View pointerEvents="none" style={styles.soldOutOverlay}>
@@ -207,20 +215,7 @@ export function BasketCard({ basket, onFavoritePress, isFavorite = false }: Bask
                   {basket.merchantName}
                 </Text>
               </View>
-              {/* Rating */}
-              {basket.merchantRating != null && (
-                <View style={[styles.ratingChip, { backgroundColor: theme.colors.bg, borderRadius: theme.radii.r8 }]}>
-                  <Star size={11} color={theme.colors.starYellow} fill={theme.colors.starYellow} />
-                  <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.caption, fontWeight: '700' as const, marginLeft: 3 }]}>
-                    {basket.merchantRating.toFixed(1)}
-                  </Text>
-                  {basket.reviewCount != null && basket.reviewCount > 0 && (
-                    <Text style={[{ color: theme.colors.muted, ...theme.typography.caption, marginLeft: 2 }]}>
-                      ({basket.reviewCount})
-                    </Text>
-                  )}
-                </View>
-              )}
+              {/* Rating moved to image overlay */}
             </View>
 
             {/* Category row */}

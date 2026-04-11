@@ -123,6 +123,12 @@ export const FeatureFlags = {
   // ── Dietary preferences in buyer profile ─────────────────────────────────
   ENABLE_DIETARY_PREFERENCES: false,  // Show food preferences section on buyer profile
 
+  // ── Favorite notifications ────────────────────────────────────────────────
+  ENABLE_FAVORITE_NOTIFICATIONS: false,  // Notify users when their favorited locations have baskets available
+
+  // ── All-locations view ────────────────────────────────────────────────────
+  ENABLE_ALL_LOCATIONS_VIEW: false,  // Show "All locations" option in business location dropdown
+
   // ── Previously disabled ──────────────────────────────────────────────────
   ENABLE_MAX_PER_CUSTOMER: false,  // Per-basket cap on how many a single customer can reserve
   ENABLE_GROWING_TREE: false,

@@ -103,8 +103,9 @@ export async function fetchMyContext(): Promise<TeamContextFromAPI> {
     organization_id: first.id,
     organization_name: first.name,
     role: first.my_role ?? first.role,
-    location_id: first.location_id,
+    location_id: first.my_location_id ?? first.location_id,
     location_name: first.location_name,
+    permissions: typeof first.my_permissions === 'string' ? JSON.parse(first.my_permissions) : (first.my_permissions ?? undefined),
   };
 }
 
@@ -236,6 +237,8 @@ export async function addLocation(
     price_tier?: number;
     pickup_start_time?: string;
     pickup_end_time?: string;
+    latitude?: number;
+    longitude?: number;
   }
 ): Promise<OrgLocationFromAPI> {
   console.log('[Teams] Adding location to org:', orgId);
@@ -251,4 +254,12 @@ export async function addLocation(
 export async function deleteLocation(orgId: number | string, locationId: number | string): Promise<void> {
   console.log('[Teams] Deleting location:', locationId, 'from org:', orgId);
   await apiClient.delete(`/api/teams/organizations/${orgId}/locations/${locationId}`);
+}
+
+export async function sendMemberCredentials(orgId: number | string, memberId: number | string, password?: string): Promise<void> {
+  await apiClient.post(`/api/teams/organizations/${orgId}/members/${memberId}/send-credentials`, { password });
+}
+
+export async function sendMemberEmail(orgId: number | string, memberId: number | string, subject: string, body: string): Promise<void> {
+  await apiClient.post(`/api/teams/organizations/${orgId}/members/${memberId}/send-email`, { subject, body });
 }

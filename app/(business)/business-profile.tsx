@@ -1,5 +1,5 @@
 import React, { useCallback, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Modal, Alert, Image, TextInput, Switch } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Modal, Image, TextInput, Switch, KeyboardAvoidingView, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import { useRouter } from 'expo-router';
@@ -8,6 +8,7 @@ import {
   Users, UserPlus, Trash2, Shield, CreditCard, Camera, X, UtensilsCrossed, Package, Check
 } from 'lucide-react-native';
 import { useTheme } from '@/src/theme/ThemeProvider';
+import { useCustomAlert } from '@/src/components/CustomAlert';
 import { useAuthStore } from '@/src/stores/authStore';
 import { useBusinessStore, DEFAULT_PERMISSIONS } from '@/src/stores/businessStore';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -21,6 +22,7 @@ import type { TeamMember, TeamRole, TeamPermission } from '@/src/types';
 export default function BusinessProfileScreen() {
   const { t } = useTranslation();
   const theme = useTheme();
+  const alert = useCustomAlert();
   const router = useRouter();
   const { user } = useAuthStore();
   const store = useBusinessStore();
@@ -47,6 +49,15 @@ export default function BusinessProfileScreen() {
     enabled: !!contextQuery.data?.organization_id,
     staleTime: 60_000,
   });
+
+  // Permission enforcement — hide/disable sections based on member permissions
+  const myRole = contextQuery.data?.role ?? 'member';
+  const isAdmin = myRole === 'owner' || myRole === 'admin';
+  const myPerms = contextQuery.data?.permissions ?? {};
+  const canEditProfile = isAdmin || myPerms.profile === 'write';
+  const canEditAvailability = isAdmin || myPerms.availability === 'write';
+  const canViewMenu = isAdmin || myPerms.menu === 'write' || myPerms.menu === 'read';
+  const canEditMenu = isAdmin || myPerms.menu === 'write';
 
   // Baskets hold the EFFECTIVE pickup times (updatable via PUT /api/baskets/:id)
   // The locations table pickup_start_time cannot be updated on this backend.
@@ -82,10 +93,10 @@ export default function BusinessProfileScreen() {
       setShowAddMemberModal(false);
       setNewMemberName('');
       setNewMemberEmail('');
-      Alert.alert(t('common.success'), t('business.profile.memberAdded'));
+      alert.showAlert(t('common.success'), t('business.profile.memberAdded'));
     },
     onError: (err: any) => {
-      Alert.alert(t('common.error'), err?.message ?? t('common.errorOccurred'));
+      alert.showAlert(t('common.error'), err?.message ?? t('common.errorOccurred'));
     },
   });
 
@@ -144,7 +155,7 @@ export default function BusinessProfileScreen() {
       void queryClient.invalidateQueries({ queryKey: ['my-profile'] });
       setShowPickupInstructionsEditor(false);
     } catch (err: any) {
-      Alert.alert(t('common.error'), err?.message ?? t('common.errorOccurred'));
+      alert.showAlert(t('common.error'), err?.message ?? t('common.errorOccurred'));
     } finally {
       setPickupInstructionsSaving(false);
     }
@@ -191,7 +202,7 @@ export default function BusinessProfileScreen() {
       void queryClient.invalidateQueries({ queryKey: ['my-profile'] });
       setShowHoursModal(false);
     } catch (err: any) {
-      Alert.alert(t('common.error'), err?.message ?? t('common.errorOccurred'));
+      alert.showAlert(t('common.error'), err?.message ?? t('common.errorOccurred'));
     } finally {
       setHoursSaving(false);
     }
@@ -210,12 +221,12 @@ export default function BusinessProfileScreen() {
   }, [newMemberName, newMemberEmail, addMemberMutation]);
 
   const handleRemoveMember = useCallback((memberId: string) => {
-    Alert.alert(
+    alert.showAlert(
       t('business.profile.removeMember'),
       '',
       [
-        { text: t('common.cancel'), style: 'cancel' },
-        { text: t('common.confirm'), style: 'destructive', onPress: () => removeMemberMutation.mutate(memberId) },
+        { text: 'Annuler', style: 'cancel' },
+        { text: 'Supprimer', style: 'destructive', onPress: () => removeMemberMutation.mutate(memberId) },
       ]
     );
   }, [removeMemberMutation, t]);
@@ -251,13 +262,13 @@ export default function BusinessProfileScreen() {
           const userId = (user as any)?.id as number | undefined;
           await updateMyProfile(formData, userId);
           profileQuery.refetch();
-          Alert.alert(t('common.success'), t('business.profile.imageUpdated'));
+          alert.showAlert(t('common.success'), t('business.profile.imageUpdated'));
         } catch (err: any) {
-          Alert.alert(t('common.error'), err?.message ?? t('common.errorOccurred'));
+          alert.showAlert(t('common.error'), err?.message ?? t('common.errorOccurred'));
         }
       }
     } catch {
-      Alert.alert(t('common.error'), t('common.errorOccurred'));
+      alert.showAlert(t('common.error'), t('common.errorOccurred'));
     }
   };
 
@@ -279,13 +290,13 @@ export default function BusinessProfileScreen() {
           const userId = (user as any)?.id as number | undefined;
           await updateMyProfile(formData, userId);
           profileQuery.refetch();
-          Alert.alert(t('common.success'), t('business.profile.imageUpdated'));
+          alert.showAlert(t('common.success'), t('business.profile.imageUpdated'));
         } catch (err: any) {
-          Alert.alert(t('common.error'), err?.message ?? t('common.errorOccurred'));
+          alert.showAlert(t('common.error'), err?.message ?? t('common.errorOccurred'));
         }
       }
     } catch {
-      Alert.alert(t('common.error'), t('common.errorOccurred'));
+      alert.showAlert(t('common.error'), t('common.errorOccurred'));
     }
   };
 
@@ -334,7 +345,8 @@ export default function BusinessProfileScreen() {
         </Text>
       </View>
 
-      <ScrollView style={styles.content} contentContainerStyle={{ padding: theme.spacing.xl, paddingBottom: 100 }} showsVerticalScrollIndicator={false}>
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'} keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}>
+      <ScrollView style={styles.content} contentContainerStyle={{ padding: theme.spacing.xl, paddingBottom: 100 }} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
         <View style={[styles.coverSection, { borderRadius: theme.radii.r16, overflow: 'hidden', ...theme.shadows.shadowSm }]}>
           {profile?.coverPhoto ? (
             <Image source={{ uri: profile.coverPhoto }} style={styles.coverImage} />
@@ -342,9 +354,11 @@ export default function BusinessProfileScreen() {
             <View style={[styles.coverImage, { backgroundColor: theme.colors.primary + '20' }]} />
           )}
           <View style={[styles.coverOverlay, { backgroundColor: 'rgba(0,0,0,0.2)' }]} />
-          <TouchableOpacity onPress={handleChangeCover} style={[styles.coverEditBtn, { backgroundColor: 'rgba(255,255,255,0.9)', borderRadius: theme.radii.r8, padding: 6 }]}>
-            <Camera size={16} color={theme.colors.textPrimary} />
-          </TouchableOpacity>
+          {canEditProfile && (
+            <TouchableOpacity onPress={handleChangeCover} style={[styles.coverEditBtn, { backgroundColor: 'rgba(255,255,255,0.9)', borderRadius: theme.radii.r8, padding: 6 }]}>
+              <Camera size={16} color={theme.colors.textPrimary} />
+            </TouchableOpacity>
+          )}
         </View>
 
         <View style={[styles.profileCard, { backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, padding: theme.spacing.xl, marginTop: -30, marginHorizontal: theme.spacing.sm, ...theme.shadows.shadowMd }]}>
@@ -357,9 +371,11 @@ export default function BusinessProfileScreen() {
                   <Store size={32} color={theme.colors.primary} />
                 </View>
               )}
-              <TouchableOpacity onPress={handleChangeLogo} style={[styles.logoEditBtn, { backgroundColor: theme.colors.primary, borderRadius: 12, width: 24, height: 24 }]}>
-                <Camera size={12} color="#fff" />
-              </TouchableOpacity>
+              {canEditProfile && (
+                <TouchableOpacity onPress={handleChangeLogo} style={[styles.logoEditBtn, { backgroundColor: theme.colors.primary, borderRadius: 12, width: 24, height: 24 }]}>
+                  <Camera size={12} color="#fff" />
+                </TouchableOpacity>
+              )}
             </View>
             <View style={styles.profileInfo}>
               <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h2 }]}>
@@ -513,11 +529,11 @@ export default function BusinessProfileScreen() {
                 {t('business.profile.pickupInstructions', { defaultValue: 'Instructions de retrait' })}
               </Text>
             </View>
-            <TouchableOpacity onPress={() => { setPickupInstructionsText(profileQuery.data?.pickup_instructions ?? ''); setShowPickupInstructionsEditor(!showPickupInstructionsEditor); }}>
+            {canEditAvailability && <TouchableOpacity onPress={() => { setPickupInstructionsText(profileQuery.data?.pickup_instructions ?? ''); setShowPickupInstructionsEditor(!showPickupInstructionsEditor); }}>
               {showPickupInstructionsEditor
                 ? <X size={18} color={theme.colors.textSecondary} />
                 : <ChevronRight size={18} color={theme.colors.muted} />}
-            </TouchableOpacity>
+            </TouchableOpacity>}
           </View>
           <View style={{ paddingHorizontal: theme.spacing.lg, paddingBottom: theme.spacing.lg, borderTopWidth: 1, borderTopColor: theme.colors.divider, paddingTop: theme.spacing.md }}>
             {showPickupInstructionsEditor ? (
@@ -577,6 +593,7 @@ export default function BusinessProfileScreen() {
 
         <View style={{ height: 40 }} />
       </ScrollView>
+      </KeyboardAvoidingView>
 
       <Modal visible={showAddMemberModal} transparent animationType="fade" onRequestClose={() => setShowAddMemberModal(false)}>
         <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setShowAddMemberModal(false)}>

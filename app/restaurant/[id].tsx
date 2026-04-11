@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useRef } from 'react';
 import {
   View,
   Text,
@@ -12,6 +12,7 @@ import {
   Platform,
   Dimensions,
   Linking,
+  Animated,
 } from 'react-native';
 import type { NativeSyntheticEvent, TextLayoutEventData } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -121,6 +122,26 @@ export default function RestaurantScreen() {
   const [descExpanded, setDescExpanded] = useState(false);
   const [descNeedsSeeMore, setDescNeedsSeeMore] = useState(false);
   const [ratingsPopupVisible, setRatingsPopupVisible] = useState(false);
+  const [ratingsExpanded, setRatingsExpanded] = useState(false);
+  const ratingsStartY = useRef(0);
+  const screenHeight = Dimensions.get('window').height;
+  const ratingsHeight = useRef(new Animated.Value(screenHeight * 0.55)).current;
+
+  const expandRatings = useCallback(() => {
+    setRatingsExpanded(true);
+    Animated.spring(ratingsHeight, { toValue: screenHeight * 0.92, friction: 10, tension: 60, useNativeDriver: false }).start();
+  }, [ratingsHeight, screenHeight]);
+
+  const collapseOrCloseRatings = useCallback(() => {
+    setRatingsExpanded(prev => {
+      if (prev) {
+        Animated.spring(ratingsHeight, { toValue: screenHeight * 0.55, friction: 10, tension: 60, useNativeDriver: false }).start();
+        return false;
+      }
+      setRatingsPopupVisible(false);
+      return false;
+    });
+  }, [ratingsHeight, screenHeight]);
   const [menuVisible, setMenuVisible] = useState(false);
 
   // Report modal state — local only, no API
@@ -249,6 +270,21 @@ export default function RestaurantScreen() {
           >
             <MoreVertical size={20} color={theme.colors.textPrimary} />
           </TouchableOpacity>
+          {/* Rating badge — bottom right of hero image */}
+          <TouchableOpacity
+            onPress={() => { setRatingsExpanded(false); ratingsHeight.setValue(screenHeight * 0.55); setRatingsPopupVisible(true); }}
+            activeOpacity={0.7}
+            style={{ position: 'absolute', bottom: 36, right: 16, flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.95)', borderRadius: 20, paddingHorizontal: 10, paddingVertical: 6, ...theme.shadows.shadowSm }}
+          >
+            <Star size={12} color={overallRating != null ? theme.colors.starYellow : theme.colors.muted} fill={overallRating != null ? theme.colors.starYellow : 'transparent'} />
+            <Text style={{ color: overallRating != null ? theme.colors.textPrimary : theme.colors.textSecondary, ...theme.typography.caption, fontWeight: '700', marginLeft: 4 }}>
+              {overallRating != null ? overallRating.toFixed(1) : t('review.noRating')}
+            </Text>
+            {reviewCount > 0 ? (
+              <Text style={{ color: theme.colors.muted, ...theme.typography.caption, marginLeft: 3 }}>({reviewCount})</Text>
+            ) : null}
+            <ChevronRight size={10} color={theme.colors.muted} style={{ marginLeft: 2 }} />
+          </TouchableOpacity>
         </View>
 
         {/* Info card */}
@@ -291,21 +327,6 @@ export default function RestaurantScreen() {
                   </Text>
                 </View>
               ) : null}
-              {/* Rating chip — right of pickup time */}
-              <TouchableOpacity
-                onPress={() => setRatingsPopupVisible(true)}
-                activeOpacity={0.7}
-                style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: theme.colors.bg, borderRadius: theme.radii.pill, paddingHorizontal: 10, paddingVertical: 6 }}
-              >
-                <Star size={12} color={overallRating != null ? theme.colors.starYellow : theme.colors.muted} fill={overallRating != null ? theme.colors.starYellow : 'transparent'} />
-                <Text style={{ color: overallRating != null ? theme.colors.textPrimary : theme.colors.textSecondary, ...theme.typography.caption, fontWeight: '700', marginLeft: 4 }}>
-                  {overallRating != null ? overallRating.toFixed(1) : t('review.noRating')}
-                </Text>
-                {reviewCount > 0 ? (
-                  <Text style={{ color: theme.colors.muted, ...theme.typography.caption, marginLeft: 3 }}>({reviewCount} {t('review.reviewCount', { defaultValue: 'avis' })})</Text>
-                ) : null}
-                <ChevronRight size={10} color={theme.colors.muted} style={{ marginLeft: 2 }} />
-              </TouchableOpacity>
             </View>
             {/* Address + itinerary — 2nd line, pin aligned under clock */}
             {restaurant?.address ? (
@@ -484,32 +505,51 @@ export default function RestaurantScreen() {
       <Modal
         visible={ratingsPopupVisible}
         transparent
-        animationType="fade"
+        animationType="none"
         statusBarTranslucent
-        onRequestClose={() => setRatingsPopupVisible(false)}
+        onRequestClose={collapseOrCloseRatings}
       >
         <View style={styles.reportOverlay}>
           <TouchableOpacity
             style={StyleSheet.absoluteFillObject}
             activeOpacity={1}
-            onPress={() => setRatingsPopupVisible(false)}
+            onPress={collapseOrCloseRatings}
           />
-          <View style={[styles.ratingsPopupSheet, { backgroundColor: theme.colors.surface, borderTopLeftRadius: 26, borderTopRightRadius: 26, ...theme.shadows.shadowLg, maxHeight: '85%' }]}>
-            <View style={[styles.sheetHandle, { backgroundColor: theme.colors.divider }]} />
-            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 24, paddingTop: 10, paddingBottom: 16 }}>
+          <Animated.View
+            onTouchStart={(e) => { ratingsStartY.current = e.nativeEvent.pageY; }}
+            onTouchEnd={(e) => {
+              const dy = e.nativeEvent.pageY - ratingsStartY.current;
+              if (dy < -30 && !ratingsExpanded) expandRatings();
+              else if (dy > 30) collapseOrCloseRatings();
+            }}
+            style={{
+              position: 'absolute', bottom: 0, left: 0, right: 0,
+              height: ratingsHeight,
+              backgroundColor: theme.colors.surface,
+              borderTopLeftRadius: 26, borderTopRightRadius: 26,
+              ...theme.shadows.shadowLg,
+            }}
+          >
+            {/* Handle bar */}
+            <View style={{ paddingVertical: 14, alignItems: 'center' }}>
+              <View style={[styles.sheetHandle, { backgroundColor: theme.colors.divider }]} />
+            </View>
+
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 24, paddingBottom: 14 }}>
               <Text style={{ color: theme.colors.textPrimary, fontSize: 18, fontWeight: '700', letterSpacing: -0.3 }}>
                 {t('review.ratingsTitle', { defaultValue: 'Avis' })}
               </Text>
               <TouchableOpacity
-                onPress={() => setRatingsPopupVisible(false)}
+                onPress={collapseOrCloseRatings}
                 style={[styles.sheetClosePill, { backgroundColor: theme.colors.bg }]}
               >
                 <X size={16} color={theme.colors.textSecondary} />
               </TouchableOpacity>
             </View>
-            <ScrollView contentContainerStyle={{ paddingHorizontal: 24, paddingBottom: 32 }}>
-              {/* Overall rating */}
-              <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 20 }}>
+
+            {/* Ratings section — always pinned at top */}
+            <View style={{ paddingHorizontal: 24 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 16 }}>
                 <Star size={24} color={theme.colors.starYellow} fill={overallRating != null ? theme.colors.starYellow : 'transparent'} />
                 <Text style={{ color: theme.colors.textPrimary, fontSize: 28, fontWeight: '700', marginLeft: 8 }}>
                   {overallRating != null ? overallRating.toFixed(1) : '—'}
@@ -520,57 +560,109 @@ export default function RestaurantScreen() {
                   </Text>
                 )}
               </View>
-              {catAvgs == null ? (
-                <Text style={[{ color: theme.colors.muted, ...theme.typography.bodySm, textAlign: 'center' as const }]}>
-                  {t('review.noReviews', { defaultValue: 'Pas encore d\'avis' })}
-                </Text>
-              ) : (
+              {catAvgs != null ? (
                 <>
                   <CategoryRatingRow label={t('review.service', { defaultValue: 'Service' })} value={catAvgs.serviceAvg} />
                   <CategoryRatingRow label={t('review.quality', { defaultValue: 'Qualité' })} value={catAvgs.qualityAvg} />
                   <CategoryRatingRow label={t('review.quantity', { defaultValue: 'Quantité' })} value={catAvgs.quantityAvg} />
                   <CategoryRatingRow label={t('review.variety', { defaultValue: 'Variété' })} value={catAvgs.varietyAvg} />
                 </>
+              ) : (
+                <Text style={{ color: theme.colors.muted, ...theme.typography.bodySm, textAlign: 'center', marginBottom: 12 }}>
+                  {t('review.noReviews', { defaultValue: 'Pas encore d\'avis' })}
+                </Text>
               )}
+            </View>
 
-              {/* Comments section */}
-              <View style={{ marginTop: 24 }}>
-                <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3, marginBottom: 12 }}>
+            {/* Divider */}
+            <View style={{ height: 1, backgroundColor: theme.colors.divider, marginHorizontal: 24, marginVertical: 14 }} />
+
+            {/* Comments section — flex: 1 fills remaining height */}
+            <View style={{ flex: 1 }}>
+              <View style={{ paddingHorizontal: 24, marginBottom: 6 }}>
+                <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3 }}>
                   {t('review.comments', { defaultValue: 'Commentaires' })}
                 </Text>
-                {reviews.filter((r) => r.comment?.trim()).length === 0 ? (
+              </View>
+
+              {(() => {
+                const commentsWithText = reviews.filter((r) => r.comment?.trim());
+
+                if (commentsWithText.length === 0) return (
                   <View style={{ alignItems: 'center', paddingVertical: 24 }}>
-                    <View style={{ width: 48, height: 48, borderRadius: 24, backgroundColor: theme.colors.bg, justifyContent: 'center', alignItems: 'center', marginBottom: 10 }}>
-                      <Star size={22} color={theme.colors.muted} />
-                    </View>
-                    <Text style={{ color: theme.colors.muted, ...theme.typography.bodySm, textAlign: 'center' }}>
+                    <Text style={{ color: theme.colors.muted, ...theme.typography.bodySm }}>
                       {t('review.noComments', { defaultValue: 'Aucun commentaire pour le moment.' })}
                     </Text>
                   </View>
-                ) : (
-                  reviews.filter((r) => r.comment?.trim()).map((r, idx) => (
-                    <View key={r.id ?? idx} style={{ borderTopWidth: idx > 0 ? 1 : 0, borderTopColor: theme.colors.divider, paddingVertical: 12 }}>
-                      <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 6 }}>
-                        <View style={{ flexDirection: 'row', gap: 2 }}>
-                          {[1, 2, 3, 4, 5].map((s) => (
-                            <Star key={s} size={12} color={s <= Math.round(r.rating) ? theme.colors.starYellow : theme.colors.divider} fill={s <= Math.round(r.rating) ? theme.colors.starYellow : 'transparent'} />
-                          ))}
+                );
+
+                if (!ratingsExpanded) {
+                  // Collapsed: show 1 comment + "voir tous"
+                  const first = commentsWithText[0];
+                  return (
+                    <View style={{ paddingHorizontal: 24, paddingBottom: 16 }}>
+                      <View style={{ paddingVertical: 10 }}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 6 }}>
+                          <View style={{ flexDirection: 'row', gap: 2 }}>
+                            {[1, 2, 3, 4, 5].map((s) => (
+                              <Star key={s} size={12} color={s <= Math.round(first.rating) ? theme.colors.starYellow : theme.colors.divider} fill={s <= Math.round(first.rating) ? theme.colors.starYellow : 'transparent'} />
+                            ))}
+                          </View>
+                          {first.created_at && (
+                            <Text style={{ color: theme.colors.muted, ...theme.typography.caption, marginLeft: 8 }}>
+                              {new Date(first.created_at).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' })}
+                            </Text>
+                          )}
                         </View>
-                        {r.created_at && (
-                          <Text style={{ color: theme.colors.muted, ...theme.typography.caption, marginLeft: 8 }}>
-                            {new Date(r.created_at).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' })}
-                          </Text>
-                        )}
+                        <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, lineHeight: 20 }} numberOfLines={2}>
+                          {first.comment}
+                        </Text>
                       </View>
-                      <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, lineHeight: 20 }}>
-                        {r.comment}
-                      </Text>
+                      {commentsWithText.length > 1 && (
+                        <TouchableOpacity onPress={() => { expandRatings(); }} style={{ alignItems: 'center', paddingVertical: 8 }}>
+                          <Text style={{ color: theme.colors.primary, fontSize: 20, letterSpacing: 4, fontWeight: '700' }}>...</Text>
+                          <Text style={{ color: theme.colors.primary, ...theme.typography.caption, fontWeight: '600', marginTop: 2 }}>
+                            {t('review.seeAllComments', { defaultValue: 'Voir tous les commentaires' })}
+                          </Text>
+                        </TouchableOpacity>
+                      )}
                     </View>
-                  ))
-                )}
-              </View>
-            </ScrollView>
-          </View>
+                  );
+                }
+
+                // Expanded: scrollable comments fill remaining space
+                return (
+                  <ScrollView
+                    onTouchStart={(e) => e.stopPropagation()}
+                    onTouchEnd={(e) => e.stopPropagation()}
+                    contentContainerStyle={{ paddingHorizontal: 24, paddingBottom: 32 }}
+                    showsVerticalScrollIndicator={false}
+                    style={{ flex: 1 }}
+                  >
+                    {commentsWithText.map((r, idx) => (
+                      <View key={r.id ?? idx} style={{ borderTopWidth: idx > 0 ? 1 : 0, borderTopColor: theme.colors.divider, paddingVertical: 12 }}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 6 }}>
+                          <View style={{ flexDirection: 'row', gap: 2 }}>
+                            {[1, 2, 3, 4, 5].map((s) => (
+                              <Star key={s} size={12} color={s <= Math.round(r.rating) ? theme.colors.starYellow : theme.colors.divider} fill={s <= Math.round(r.rating) ? theme.colors.starYellow : 'transparent'} />
+                            ))}
+                          </View>
+                          {r.created_at && (
+                            <Text style={{ color: theme.colors.muted, ...theme.typography.caption, marginLeft: 8 }}>
+                              {new Date(r.created_at).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' })}
+                            </Text>
+                          )}
+                        </View>
+                        <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, lineHeight: 20 }}>
+                          {r.comment}
+                        </Text>
+                      </View>
+                    ))}
+                  </ScrollView>
+                );
+              })()}
+            </View>
+          </Animated.View>
         </View>
       </Modal>
 
@@ -899,9 +991,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 14,
   },
-  ratingsPopupSheet: {
-    maxHeight: Dimensions.get('window').height * 0.5,
-  },
+  ratingsPopupSheet: {},
   infoCard: {},
   chip: {
     flexDirection: 'row',

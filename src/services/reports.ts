@@ -4,6 +4,7 @@ export interface SubmitReportRequest {
   restaurant_id: number | string;
   reason: string;
   details?: string;
+  image_url?: string;
 }
 
 export async function submitReport(data: SubmitReportRequest): Promise<void> {

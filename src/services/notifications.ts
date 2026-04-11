@@ -49,3 +49,8 @@ export async function deleteNotification(id: number | string): Promise<void> {
 export async function clearAllNotifications(): Promise<void> {
   await apiClient.delete('/api/notifications/clear-all');
 }
+
+export async function checkFavoriteNotifications(favoriteLocationIds: (number | string)[]): Promise<void> {
+  if (!favoriteLocationIds.length) return;
+  await apiClient.post('/api/notifications/check-favorites', { favorite_location_ids: favoriteLocationIds }).catch(() => {});
+}

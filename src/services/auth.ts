@@ -52,10 +52,9 @@ export async function register(data: RegisterRequest): Promise<AuthResponse> {
   return res.data;
 }
 
-export async function forgotPassword(email: string): Promise<void> {
-  console.log('[Auth] Forgot password for:', email);
-  // Backend expects `identifier` (email OR phone)
-  await apiClient.post('/api/auth/forgot-password', { identifier: email });
+export async function forgotPassword(email: string, accountType?: string): Promise<void> {
+  console.log('[Auth] Forgot password for:', email, accountType ? `(type: ${accountType})` : '');
+  await apiClient.post('/api/auth/forgot-password', { identifier: email, accountType });
 }
 
 export async function verifyResetOtp(identifier: string, otp: string): Promise<string> {

@@ -95,7 +95,7 @@ export default function ImpactScreen() {
     queryKey: ['gamification-stats'],
     queryFn: fetchGamificationStats,
     enabled: isAuthenticated,
-    staleTime: 60_000,
+    staleTime: 10_000,
   });
 
   const leaderboardQuery = useQuery({
@@ -130,10 +130,10 @@ export default function ImpactScreen() {
 
     const co2Saved = calcCO2Saved(mealsSaved);
 
-    const xp = (typeof gLevel === 'object' ? gLevel?.xp : null) ?? gStatsInner?.xp ?? mealsSaved * 10;
-    const backendLevel = (typeof gLevel === 'object' ? gLevel?.level : typeof gLevel === 'number' ? gLevel : null);
-    const { level: computedLevel, xpInLevel, xpProgress } = calcLevelProgress(xp);
-    const level = backendLevel ?? computedLevel;
+    // XP & level: read directly from backend DB values — never recalculate locally
+    const xp = gStats?.xp ?? (typeof gLevel === 'object' ? (gLevel?.xp ?? 0) : 0);
+    const level = gStats?.level ?? (typeof gLevel === 'object' ? (gLevel?.level ?? 1) : 1);
+    const { xpInLevel, xpProgress } = calcLevelProgress(Number(xp));
 
     const currentStreak = gStatsInner?.current_streak ?? 0;
 
@@ -728,7 +728,7 @@ export default function ImpactScreen() {
                   ) : null}
                   {badgeModal.unlocked && badgeModal.unlocked_at && (
                     <Text style={{ color: theme.colors.muted, ...theme.typography.caption, marginBottom: 12 }}>
-                      {t('badges.unlockedOn', { defaultValue: 'Unlocked on' })} {new Date(badgeModal.unlocked_at).toLocaleDateString()}
+                      {t('badges.unlockedOn', { defaultValue: 'Débloqué le' })} {new Date(badgeModal.unlocked_at).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric' })}
                     </Text>
                   )}
                 </>

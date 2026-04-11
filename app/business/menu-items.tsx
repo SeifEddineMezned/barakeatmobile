@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, TextInput, Alert, ActivityIndicator, Image, Modal, ScrollView } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, TextInput, ActivityIndicator, Image, Modal, ScrollView } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
@@ -11,11 +11,13 @@ import { fetchMyMenuItems, addMenuItem, deleteMenuItem, type MenuItemFromAPI } f
 import { getErrorMessage, apiClient } from '@/src/lib/api';
 import { FeatureFlags } from '@/src/lib/featureFlags';
 import { DelayedLoader } from '@/src/components/DelayedLoader';
+import { useCustomAlert } from '@/src/components/CustomAlert';
 
 export default function MenuItemsScreen() {
   const { t } = useTranslation();
   const theme = useTheme();
   const router = useRouter();
+  const alert = useCustomAlert();
   const queryClient = useQueryClient();
 
   const [newItemName, setNewItemName] = useState('');
@@ -48,7 +50,7 @@ export default function MenuItemsScreen() {
       setNewItemImageUri(null);
     },
     onError: (err) => {
-      Alert.alert(t('common.error'), getErrorMessage(err));
+      alert.showAlert(t('common.error'), getErrorMessage(err));
     },
   });
 
@@ -58,7 +60,7 @@ export default function MenuItemsScreen() {
       void queryClient.invalidateQueries({ queryKey: ['my-menu-items'] });
     },
     onError: (err) => {
-      Alert.alert(t('common.error'), getErrorMessage(err));
+      alert.showAlert(t('common.error'), getErrorMessage(err));
     },
   });
 
@@ -69,7 +71,7 @@ export default function MenuItemsScreen() {
   };
 
   const handleDelete = (item: MenuItemFromAPI) => {
-    Alert.alert(
+    alert.showAlert(
       t('business.menuItems.deleteConfirm'),
       item.name,
       [
@@ -87,7 +89,7 @@ export default function MenuItemsScreen() {
     if (source === 'camera') {
       const { status } = await ImagePicker.requestCameraPermissionsAsync();
       if (status !== 'granted') {
-        Alert.alert(t('common.error'), t('business.menuItems.cameraPermRequired', { defaultValue: 'Camera permission required.' }));
+        alert.showAlert(t('common.error'), t('business.menuItems.cameraPermRequired', { defaultValue: 'Camera permission required.' }));
         return;
       }
       const result = await ImagePicker.launchCameraAsync({ mediaTypes: ['images'], quality: 0.8, allowsEditing: true, aspect: [1, 1] });
@@ -95,7 +97,7 @@ export default function MenuItemsScreen() {
     } else {
       const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (status !== 'granted') {
-        Alert.alert(t('common.error'), t('business.menuItems.photoPermRequired'));
+        alert.showAlert(t('common.error'), t('business.menuItems.photoPermRequired'));
         return;
       }
       const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 0.8, allowsEditing: true, aspect: [1, 1] });
@@ -118,13 +120,13 @@ export default function MenuItemsScreen() {
       });
       const items: { name: string; price?: number }[] = response.data?.items ?? [];
       if (items.length === 0) {
-        Alert.alert(t('business.menuItems.noItemsFound'), t('business.menuItems.noItemsDetected'));
+        alert.showAlert(t('business.menuItems.noItemsFound'), t('business.menuItems.noItemsDetected'));
         return;
       }
       setScannedItems(items.map((item) => ({ ...item, selected: true })));
       setShowScanModal(true);
     } catch (err) {
-      Alert.alert(t('common.error'), getErrorMessage(err));
+      alert.showAlert(t('common.error'), getErrorMessage(err));
     } finally {
       setScanLoading(false);
     }
@@ -133,7 +135,7 @@ export default function MenuItemsScreen() {
   const handleScanMenu = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== 'granted') {
-      Alert.alert(t('common.error'), t('business.menuItems.photoPermRequired'));
+      alert.showAlert(t('common.error'), t('business.menuItems.photoPermRequired'));
       return;
     }
     const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 0.8, allowsEditing: false });
@@ -144,7 +146,7 @@ export default function MenuItemsScreen() {
   const handleCameraScan = async () => {
     const { status } = await ImagePicker.requestCameraPermissionsAsync();
     if (status !== 'granted') {
-      Alert.alert(t('common.error'), t('business.menuItems.cameraPermRequired', { defaultValue: 'Camera permission is required.' }));
+      alert.showAlert(t('common.error'), t('business.menuItems.cameraPermRequired', { defaultValue: 'Camera permission is required.' }));
       return;
     }
     const result = await ImagePicker.launchCameraAsync({ mediaTypes: ['images'], quality: 0.8, allowsEditing: false });
@@ -155,7 +157,7 @@ export default function MenuItemsScreen() {
   const handleAddScannedItems = async () => {
     const selected = scannedItems.filter((i) => i.selected);
     if (selected.length === 0) {
-      Alert.alert(t('business.menuItems.noItemsSelected'), t('business.menuItems.selectAtLeastOne'));
+      alert.showAlert(t('business.menuItems.noItemsSelected'), t('business.menuItems.selectAtLeastOne'));
       return;
     }
     setShowScanModal(false);
@@ -165,7 +167,7 @@ export default function MenuItemsScreen() {
       try { await addMenuItem(formData); } catch (_) {}
     }
     void queryClient.invalidateQueries({ queryKey: ['my-menu-items'] });
-    Alert.alert(t('common.success'), t('business.menuItems.addSelectedItems'));
+    alert.showAlert(t('common.success'), t('business.menuItems.addSelectedItems'));
   };
 
   const items = menuQuery.data ?? [];

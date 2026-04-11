@@ -1,17 +1,17 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { StatusBar } from 'expo-status-bar';
 import {
-  View, Text, StyleSheet, ScrollView, TouchableOpacity, Modal, Alert, TextInput,
+  View, Text, StyleSheet, ScrollView, TouchableOpacity, Modal, TextInput,
   ActivityIndicator, Animated,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import { useRouter } from 'expo-router';
 import { useQuery } from '@tanstack/react-query';
 import {
   ChevronRight, User, Mail, Phone,
   CreditCard, Leaf, Banknote, ShoppingBag, UtensilsCrossed, Edit3, X, Check,
-  Flame, Lock, Trophy, Award, Star, Zap, Sun, Coffee, MapPin, Shuffle, Store, BookOpen, Heart, Moon, Medal,
+  Flame, Lock, Trophy, Award, Star, Zap, Sun, Coffee, MapPin, Shuffle, Store, BookOpen, Heart, Moon, Medal, XCircle, CheckCircle2,
 } from 'lucide-react-native';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { useAuthStore } from '@/src/stores/authStore';
@@ -66,6 +66,7 @@ export default function ProfileScreen() {
   const { t } = useTranslation();
   const theme = useTheme();
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const { user, isAuthenticated } = useAuthStore();
   const setUser = useAuthStore((s) => s.setUser);
 
@@ -80,7 +81,7 @@ export default function ProfileScreen() {
   const [editPhone, setEditPhone] = useState(user?.phone ?? '');
   const [editGender, setEditGender] = useState<string | null>((user as any)?.gender ?? null);
   const [saveLoading, setSaveLoading] = useState(false);
-
+  const [toastMsg, setToastMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   const reservationsQuery = useQuery({
     queryKey: ['reservations'],
@@ -93,7 +94,7 @@ export default function ProfileScreen() {
     queryKey: ['gamification-stats'],
     queryFn: fetchGamificationStats,
     enabled: isAuthenticated,
-    staleTime: 60_000,
+    staleTime: 10_000,
   });
 
   const leaderboardQuery = useQuery({
@@ -123,11 +124,11 @@ export default function ProfileScreen() {
 
     const co2Saved = calcCO2Saved(mealsSaved);
 
-    // XP: handle both flat API shape and nested level-object shape
-    const xp = (typeof gLevel === 'object' ? gLevel?.xp : null) ?? gStatsInner?.xp ?? mealsSaved * 10;
-    // Always derive level from XP so optimistic cache updates (e.g. after reservation) are reflected immediately
-    const { level: computedLevel, xpInLevel, xpBandSize, xpProgress } = calcLevelProgress(xp);
-    const level = computedLevel;
+    // XP & level: read directly from backend DB values (set by refreshUserXpLevel on order/cancel/pickup).
+    // Use nullish coalescing (??) not || to avoid 0 being treated as falsy.
+    const xp = gStats?.xp ?? (typeof gLevel === 'object' ? (gLevel?.xp ?? 0) : 0);
+    const level = gStats?.level ?? (typeof gLevel === 'object' ? (gLevel?.level ?? 1) : 1);
+    const { xpInLevel, xpBandSize, xpProgress } = calcLevelProgress(Number(xp));
 
     const rawStreak = gStatsInner?.current_streak ?? 0;
     const longestStreak = gStatsInner?.longest_streak ?? 0;
@@ -214,10 +215,10 @@ export default function ProfileScreen() {
   const handleSavePreferences = async () => {
     try {
       await updateFoodPreferences(selectedPrefs);
-      Alert.alert(t('common.success'), t('profile.preferencesUpdated'));
+      setToastMsg({ type: 'success', text: t('profile.preferencesUpdated') });
       setShowPrefsModal(false);
     } catch {
-      Alert.alert(t('common.error'), t('common.errorOccurred'));
+      setToastMsg({ type: 'error', text: t('common.errorOccurred') });
     }
   };
 
@@ -226,10 +227,10 @@ export default function ProfileScreen() {
     try {
       await updateUserProfile({ name: editName.trim(), phone: editPhone.trim(), gender: editGender ?? undefined });
       setUser({ ...user!, name: editName.trim(), phone: editPhone.trim(), gender: editGender });
-      Alert.alert(t('common.success'), t('profile.profileUpdated'));
+      setToastMsg({ type: 'success', text: t('profile.profileUpdated') });
       setIsEditing(false);
     } catch (err: any) {
-      Alert.alert(t('common.error'), err?.message ?? t('common.errorOccurred'));
+      setToastMsg({ type: 'error', text: err?.message ?? t('common.errorOccurred') });
     } finally {
       setSaveLoading(false);
     }
@@ -242,8 +243,6 @@ export default function ProfileScreen() {
     <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]} edges={['top']}>
       <StatusBar style="dark" />
 
-      {/* Sticky white header overlay on scroll */}
-      <Animated.View style={{ position: 'absolute', top: 0, left: 0, right: 0, zIndex: 10, backgroundColor: headerBg, paddingTop: 50, paddingBottom: 8, paddingHorizontal: theme.spacing.xl, borderBottomWidth: 0.5, borderBottomColor: 'rgba(0,0,0,0.06)' }} pointerEvents="none" />
 
       <ScrollView
         style={styles.content}
@@ -353,9 +352,25 @@ export default function ProfileScreen() {
           </View>
         </View>
 
+        {/* Credits link */}
+        <TouchableOpacity
+          onPress={() => router.push('/wallet' as never)}
+          style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: theme.colors.surface, borderRadius: theme.radii.r14, padding: 16, marginBottom: theme.spacing.lg, ...theme.shadows.shadowSm }}
+          activeOpacity={0.7}
+        >
+          <View style={{ width: 40, height: 40, borderRadius: 20, backgroundColor: '#114b3c15', justifyContent: 'center', alignItems: 'center' }}>
+            <CreditCard size={18} color="#114b3c" />
+          </View>
+          <View style={{ flex: 1, marginLeft: 14 }}>
+            <Text style={{ color: theme.colors.textPrimary, fontSize: 15, fontWeight: '600' }}>{t('wallet.credits', { defaultValue: 'Crédits' })}</Text>
+            <Text style={{ color: theme.colors.muted, fontSize: 12 }}>{t('wallet.earnCreditsShort', { defaultValue: 'Gagnez et utilisez des crédits' })}</Text>
+          </View>
+          <ChevronRight size={18} color={theme.colors.muted} />
+        </TouchableOpacity>
+
         {/* Stats Row */}
-        <View style={{ marginBottom: theme.spacing.xxl }}>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 10, paddingRight: theme.spacing.xl, paddingHorizontal: 2 }}>
+        <View style={{ marginBottom: theme.spacing.xxl, overflow: 'visible' }}>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ overflow: 'visible' }} contentContainerStyle={{ gap: 10, paddingRight: theme.spacing.xl, paddingHorizontal: 4, paddingVertical: 6 }}>
           <TouchableOpacity onPress={() => setStatModal('money')} accessibilityLabel={`${stats.moneySaved.toFixed(0)} TND ${t('profile.moneySaved')}`} accessibilityRole="button" style={{ width: 110, backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, padding: theme.spacing.md, alignItems: 'center', ...theme.shadows.shadowSm }}>
             <View style={[styles.statIcon, { backgroundColor: theme.colors.primary + '15', borderRadius: theme.radii.r12, width: 36, height: 36 }]}>
               <Banknote size={18} color={theme.colors.primary} />
@@ -404,14 +419,15 @@ export default function ProfileScreen() {
         </View>
 
         {/* Badges Section */}
-        <View style={{ marginBottom: theme.spacing.lg }}>
+        <View style={{ marginBottom: theme.spacing.xl, overflow: 'visible' }}>
           <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, marginBottom: theme.spacing.md }]}>
             {t('impact.badges')}
           </Text>
           <ScrollView
             horizontal
             showsHorizontalScrollIndicator={false}
-            contentContainerStyle={{ gap: theme.spacing.md, paddingHorizontal: 2 }}
+            style={{ overflow: 'visible' }}
+            contentContainerStyle={{ gap: theme.spacing.md, paddingHorizontal: 4, paddingVertical: 6 }}
           >
             {stats.badges.map((badge) => {
               const bid = badge.badge_id ?? badge.id;
@@ -552,7 +568,7 @@ export default function ProfileScreen() {
                     >
                       <Text
                         style={{
-                          color: entry.rank <= 3 ? theme.colors.accentWarm : theme.colors.textSecondary,
+                          color: entry.rank === 1 ? '#FFD700' : entry.rank === 2 ? '#C0C0C0' : entry.rank === 3 ? '#CD7F32' : '#1a1a1a',
                           ...theme.typography.h3,
                           width: 32,
                           fontWeight: '700' as const,
@@ -642,6 +658,7 @@ export default function ProfileScreen() {
                 onPress={() => {
                   setEditName(user?.name ?? '');
                   setEditPhone(user?.phone ?? '');
+                  setEditGender((user as any)?.gender ?? null);
                   setIsEditing(true);
                 }}
                 accessibilityLabel={t('profile.editProfile')}
@@ -951,7 +968,7 @@ export default function ProfileScreen() {
                 <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 6, borderBottomWidth: 1, borderBottomColor: theme.colors.divider }}>
                   <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm }}>{t('streak.lastOrder')}</Text>
                   <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '600' as const }}>
-                    {new Date(stats.lastPickupDate).toLocaleDateString()}
+                    {new Date(stats.lastPickupDate).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric' })}
                   </Text>
                 </View>
               )}
@@ -964,7 +981,7 @@ export default function ProfileScreen() {
                       <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm }}>{t('streak.expiresLabel')}</Text>
                       <View style={{ alignItems: 'flex-end' }}>
                         <Text style={{ color: isExpiringSoon ? theme.colors.error : theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '600' as const }}>
-                          {expiryDate.toLocaleDateString()}
+                          {expiryDate.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric' })}
                         </Text>
                         {stats.daysUntilStreakExpiry != null && stats.daysUntilStreakExpiry <= 3 && (
                           <Text style={{ color: theme.colors.error, fontSize: 11, fontFamily: 'Poppins_400Regular', marginTop: 2 }}>
@@ -1082,6 +1099,31 @@ export default function ProfileScreen() {
           </View>
         </Animated.View>
       )}
+
+      {/* Success / Error toast modal */}
+      <Modal visible={!!toastMsg} transparent animationType="fade" onRequestClose={() => setToastMsg(null)}>
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 24 }}>
+          <View style={{ backgroundColor: '#fff', borderRadius: 24, padding: 28, width: '100%', maxWidth: 340, alignItems: 'center' }}>
+            <View style={{ backgroundColor: toastMsg?.type === 'success' ? '#114b3c18' : '#ef444418', width: 56, height: 56, borderRadius: 28, justifyContent: 'center', alignItems: 'center', marginBottom: 16 }}>
+              {toastMsg?.type === 'success'
+                ? <CheckCircle2 size={28} color="#114b3c" />
+                : <XCircle size={28} color="#ef4444" />}
+            </View>
+            <Text style={{ color: '#1a1a1a', fontSize: 18, fontWeight: '700', fontFamily: 'Poppins_700Bold', textAlign: 'center', marginBottom: 10 }}>
+              {toastMsg?.type === 'success' ? t('common.success') : t('auth.error')}
+            </Text>
+            <Text style={{ color: '#666', fontSize: 14, fontFamily: 'Poppins_400Regular', textAlign: 'center', lineHeight: 22, marginBottom: 24 }}>
+              {toastMsg?.text}
+            </Text>
+            <TouchableOpacity
+              onPress={() => setToastMsg(null)}
+              style={{ backgroundColor: '#114b3c', borderRadius: 14, paddingVertical: 14, width: '100%', alignItems: 'center' }}
+            >
+              <Text style={{ color: '#e3ff5c', fontSize: 15, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>OK</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }

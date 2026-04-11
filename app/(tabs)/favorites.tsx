@@ -12,6 +12,15 @@ import { fetchLocations } from '@/src/services/restaurants';
 import { fetchBaskets } from '@/src/services/baskets';
 import { normalizeLocationToBasket, normalizeRawBasketToBasket } from '@/src/utils/normalizeRestaurant';
 import { isPickupExpiredInTz } from '@/src/utils/timezone';
+import { useAddressStore } from '@/src/stores/addressStore';
+
+function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 6371;
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLon = ((lon2 - lon1) * Math.PI) / 180;
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos((lat1 * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180) * Math.sin(dLon / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
 
 function PulsingHeart({ color }: { color: string }) {
   const pulseAnim = React.useRef(new Animated.Value(1)).current;
@@ -135,6 +144,8 @@ export default function FavoritesScreen() {
   const theme = useTheme();
   const router = useRouter();
   const { favoriteBasketIds, starredBasketTypeIds, toggleBasketFavorite, isBasketFavorite } = useFavoritesStore();
+  const { addresses, selectedId } = useAddressStore();
+  const selectedAddr = addresses.find((a) => a.id === selectedId);
   const [activeTab, setActiveTab] = useState<'favorites' | 'starred'>('favorites');
 
   const locationsQuery = useQuery({
@@ -155,21 +166,28 @@ export default function FavoritesScreen() {
     return locationsQuery.data.map(normalizeLocationToBasket);
   }, [locationsQuery.data]);
 
+  const addDistance = (basket: any) => {
+    if (selectedAddr && basket.latitude && basket.longitude) {
+      const dist = haversineKm(selectedAddr.lat, selectedAddr.lng, basket.latitude, basket.longitude);
+      return { ...basket, distance: Math.round(dist * 10) / 10 };
+    }
+    return basket;
+  };
+
   const favoriteBaskets = useMemo(
-    () => allBaskets.filter((basket) => favoriteBasketIds.includes(basket.id)),
-    [allBaskets, favoriteBasketIds]
+    () => allBaskets.filter((basket) => favoriteBasketIds.includes(basket.id)).map(addDistance),
+    [allBaskets, favoriteBasketIds, selectedAddr]
   );
 
   const starredBaskets = useMemo(() => {
     if (!starredBasketTypeIds.length) return [];
-    // Use fetched baskets data first (full basket types), fall back to normalized locations
     const fromAPI = (basketsQuery.data ?? [])
       .map((b) => normalizeRawBasketToBasket(b as any))
-      .filter((b) => starredBasketTypeIds.includes(b.id));
+      .filter((b) => starredBasketTypeIds.includes(b.id))
+      .map(addDistance);
     if (fromAPI.length > 0) return fromAPI;
-    // Fallback: match against location-normalized baskets (may not cover all basket type IDs)
-    return allBaskets.filter((b) => starredBasketTypeIds.includes(b.id));
-  }, [basketsQuery.data, allBaskets, starredBasketTypeIds]);
+    return allBaskets.filter((b) => starredBasketTypeIds.includes(b.id)).map(addDistance);
+  }, [basketsQuery.data, allBaskets, starredBasketTypeIds, selectedAddr]);
 
   const isEmpty = activeTab === 'favorites' ? favoriteBaskets.length === 0 : starredBaskets.length === 0;
 

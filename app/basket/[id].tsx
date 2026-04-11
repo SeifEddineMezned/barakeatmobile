@@ -1,11 +1,13 @@
 import React, { useState, useRef } from 'react';
-import { View, Text, StyleSheet, ScrollView, Image, TouchableOpacity, Linking, Alert, Modal, TextInput, Animated } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Image, TouchableOpacity, Linking, Modal, TextInput, Animated } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import { useQuery } from '@tanstack/react-query';
 import { isPickupExpiredInTz } from '@/src/utils/timezone';
-import { MapPin, Clock, Navigation, ChevronLeft, Star, ShoppingBag, RefreshCw, Flag, X, Tag, Package, Bookmark, AlertTriangle } from 'lucide-react-native';
+import { MapPin, Clock, Navigation, ChevronLeft, Star, ShoppingBag, RefreshCw, Flag, X, Tag, Package, Bookmark, AlertTriangle, Camera } from 'lucide-react-native';
 import { useFavoritesStore } from '@/src/stores/favoritesStore';
+import * as ImagePicker from 'expo-image-picker';
+import { useCustomAlert } from '@/src/components/CustomAlert';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { StatusBar } from 'expo-status-bar';
 import { PrimaryCTAButton } from '@/src/components/PrimaryCTAButton';
@@ -62,6 +64,7 @@ export default function BasketDetailsScreen() {
   const { t } = useTranslation();
   const theme = useTheme();
   const router = useRouter();
+  const customAlert = useCustomAlert();
 
   // ALL hooks must be called before any early returns
   const [showReportModal, setShowReportModal] = useState(false);
@@ -70,6 +73,7 @@ export default function BasketDetailsScreen() {
   const [descNeedsSeeMore, setDescNeedsSeeMore] = useState(false);
   const [reportReason, setReportReason] = useState('');
   const [reportDetails, setReportDetails] = useState('');
+  const [reportImage, setReportImage] = useState<string | null>(null);
   const [reportLoading, setReportLoading] = useState(false);
 
   const scrollY = useRef(new Animated.Value(0)).current;
@@ -211,13 +215,13 @@ export default function BasketDetailsScreen() {
     if (!reportReason.trim()) return;
     setReportLoading(true);
     try {
-      await submitReport({ restaurant_id: basket?.merchantId ?? String(id), reason: reportReason.trim(), details: reportDetails.trim() || undefined });
-      Alert.alert(t('common.success'), t('report.success'));
+      await submitReport({ restaurant_id: basket?.merchantId ?? String(id), reason: reportReason.trim(), details: reportDetails.trim() || undefined, image_url: reportImage || undefined });
+      customAlert.showAlert(t('common.success'), t('report.success'));
       setShowReportModal(false);
       setReportReason('');
       setReportDetails('');
     } catch {
-      Alert.alert(t('common.error'), t('report.error'));
+      customAlert.showAlert(t('common.error'), t('report.error'));
     } finally {
       setReportLoading(false);
     }
@@ -657,6 +661,29 @@ export default function BasketDetailsScreen() {
               placeholderTextColor={theme.colors.muted}
               multiline
             />
+            {/* Photo (optional) */}
+            <TouchableOpacity
+              onPress={async () => {
+                const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+                if (status !== 'granted') return;
+                const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: 'images', allowsEditing: true, quality: 0.7 });
+                if (!result.canceled && result.assets?.[0]) setReportImage(result.assets[0].uri);
+              }}
+              style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: theme.spacing.lg, paddingVertical: 10, paddingHorizontal: 14, backgroundColor: theme.colors.bg, borderRadius: theme.radii.r12, borderWidth: 1, borderColor: theme.colors.divider }}
+            >
+              <Camera size={16} color={theme.colors.textSecondary} />
+              <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm, flex: 1 }}>
+                {t('report.addPhoto', { defaultValue: 'Ajouter une photo (optionnel)' })}
+              </Text>
+            </TouchableOpacity>
+            {reportImage && (
+              <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 8, gap: 8 }}>
+                <Image source={{ uri: reportImage }} style={{ width: 60, height: 60, borderRadius: 10 }} />
+                <TouchableOpacity onPress={() => setReportImage(null)}>
+                  <X size={16} color={theme.colors.error} />
+                </TouchableOpacity>
+              </View>
+            )}
             <TouchableOpacity
               onPress={handleReport}
               disabled={reportLoading || !reportReason.trim()}

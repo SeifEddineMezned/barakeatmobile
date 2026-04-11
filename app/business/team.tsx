@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Modal, TextInput, Switch, Alert, ActivityIndicator, Animated, Image } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Modal, TextInput, Switch, ActivityIndicator, Animated, Image } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import { useRouter } from 'expo-router';
@@ -14,11 +14,13 @@ import {
   removeMember,
   updateMember,
   addLocation,
+  sendMemberEmail,
   type OrgDetailsFromAPI,
 } from '@/src/services/teams';
 import { getErrorMessage } from '@/src/lib/api';
 import { FeatureFlags } from '@/src/lib/featureFlags';
 import { DelayedLoader } from '@/src/components/DelayedLoader';
+import { useCustomAlert } from '@/src/components/CustomAlert';
 
 type PermissionKey = 'availability' | 'reservations' | 'profile' | 'menu' | 'team';
 
@@ -447,6 +449,7 @@ export default function TeamScreen() {
   const theme = useTheme();
   const router = useRouter();
   const queryClient = useQueryClient();
+  const alert = useCustomAlert();
 
   const [viewMode, setViewMode] = useState<'list' | 'chart'>('list');
   const [showAddMemberModal, setShowAddMemberModal] = useState(false);
@@ -478,6 +481,10 @@ export default function TeamScreen() {
   const LOCATION_CATEGORIES = ['bakery', 'restaurant', 'grocery', 'cafe', 'pastry', 'supermarket'] as const;
 
   const [memberMenuId, setMemberMenuId] = useState<string | null>(null);
+  const [emailTarget, setEmailTarget] = useState<{ memberId: string; memberName: string } | null>(null);
+  const [emailSubject, setEmailSubject] = useState('');
+  const [emailBody, setEmailBody] = useState('');
+  const [emailSending, setEmailSending] = useState(false);
 
   // Create-org modal state (shown when user has no organization)
   const [showCreateOrgModal, setShowCreateOrgModal] = useState(false);
@@ -541,10 +548,10 @@ export default function TeamScreen() {
       void queryClient.invalidateQueries({ queryKey: ['org-details'] });
       setShowCreateOrgModal(false);
       setNewOrgName('');
-      Alert.alert(t('common.success'), t('business.team.orgCreated', { defaultValue: 'Organization created!' }));
+      alert.showAlert(t('common.success'), t('business.team.orgCreated', { defaultValue: 'Organization created!' }));
     },
     onError: (err: any) => {
-      Alert.alert(t('common.error'), err?.message ?? t('common.errorOccurred'));
+      alert.showAlert(t('common.error'), err?.message ?? t('common.errorOccurred'));
     },
   });
 
@@ -576,13 +583,13 @@ export default function TeamScreen() {
       resetAddMemberForm();
       // Show the temporary password so the owner can share it
       const tempPw = data?.temporary_password || newMemberPassword;
-      Alert.alert(
+      alert.showAlert(
         t('common.success'),
         `${t('business.profile.memberAdded')}\n\n${t('business.profile.memberEmail')}: ${newMemberEmail.trim()}\n${t('business.team.tempPasswordLabel', { defaultValue: 'Password' })}: ${tempPw}`
       );
     },
     onError: (err: any) => {
-      Alert.alert(t('common.error'), err?.message ?? t('common.errorOccurred'));
+      alert.showAlert(t('common.error'), err?.message ?? t('common.errorOccurred'));
     },
   });
 
@@ -595,7 +602,7 @@ export default function TeamScreen() {
       void queryClient.invalidateQueries({ queryKey: ['org-details'] });
     },
     onError: (err: any) => {
-      Alert.alert(t('common.error'), err?.message ?? t('common.errorOccurred'));
+      alert.showAlert(t('common.error'), err?.message ?? t('common.errorOccurred'));
     },
   });
 
@@ -608,7 +615,7 @@ export default function TeamScreen() {
       void queryClient.invalidateQueries({ queryKey: ['org-details'] });
     },
     onError: (err: any) => {
-      Alert.alert(t('common.error'), err?.message ?? t('common.errorOccurred'));
+      alert.showAlert(t('common.error'), err?.message ?? t('common.errorOccurred'));
     },
   });
 
@@ -627,13 +634,13 @@ export default function TeamScreen() {
       setNewLocationName('');
       setNewLocationAddress('');
       setNewLocationCategory('');
-      Alert.alert(
+      alert.showAlert(
         t('common.success'),
         t('business.team.locationAdded', { defaultValue: 'Location added successfully.' })
       );
     },
     onError: (err: any) => {
-      Alert.alert(t('common.error'), err?.message ?? t('common.errorOccurred'));
+      alert.showAlert(t('common.error'), err?.message ?? t('common.errorOccurred'));
     },
   });
 
@@ -648,17 +655,17 @@ export default function TeamScreen() {
       if (selectedLocation) setSelectedLocation(null);
     },
     onError: (err: any) => {
-      Alert.alert(t('common.error'), err?.message ?? t('common.errorOccurred'));
+      alert.showAlert(t('common.error'), err?.message ?? t('common.errorOccurred'));
     },
   });
 
   const handleDeleteLocation = useCallback((locationId: number, locationName: string) => {
-    Alert.alert(
+    alert.showAlert(
       t('business.team.deleteLocation', { defaultValue: 'Delete Location' }),
       t('business.team.deleteLocationConfirm', { defaultValue: `Are you sure you want to delete "${locationName}"? Members will be unassigned.` }),
       [
-        { text: t('common.cancel'), style: 'cancel' },
-        { text: t('common.confirm'), style: 'destructive', onPress: () => deleteLocationMutation.mutate(locationId) },
+        { text: 'Annuler', style: 'cancel' },
+        { text: 'Supprimer', style: 'destructive', onPress: () => deleteLocationMutation.mutate(locationId) },
       ]
     );
   }, [deleteLocationMutation, t]);
@@ -732,15 +739,10 @@ export default function TeamScreen() {
 
   const handleAddMemberFromLocation = () => {
     if (selectedLocation) {
-      setNewMemberLocationId(selectedLocation);
+      router.push(`/business/add-member?locationId=${selectedLocation}` as never);
+    } else {
+      router.push('/business/add-member' as never);
     }
-    setNewMemberPassword(generatePassword());
-    // Apply default preset
-    const defaultPreset = ROLE_PRESETS.find((p) => p.id === 'orders_only')!;
-    setSelectedPreset(defaultPreset.id);
-    setNewMemberRole(defaultPreset.role);
-    setPermissionsState(defaultPreset.permissions);
-    setShowAddMemberModal(true);
   };
 
   const canAddMember = newMemberName.trim() && newMemberEmail.trim() && newMemberPassword;
@@ -793,6 +795,20 @@ export default function TeamScreen() {
       <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]}>
         {renderHeader()}
         <DelayedLoader />
+      </SafeAreaView>
+    );
+  }
+
+  // Guard: non-admin members cannot access team management
+  if (!isLoading && hasOrg && !isOrgAdmin) {
+    return (
+      <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]}>
+        {renderHeader()}
+        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 32 }}>
+          <Text style={{ color: theme.colors.textSecondary, ...theme.typography.body, textAlign: 'center' }}>
+            {t('business.team.noPermission', { defaultValue: 'Vous n\'avez pas la permission d\'accéder à cette page.' })}
+          </Text>
+        </View>
       </SafeAreaView>
     );
   }
@@ -1298,6 +1314,15 @@ export default function TeamScreen() {
                         <Shield size={14} color={theme.colors.primary} />
                         <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, marginLeft: 10 }}>
                           {t('business.profile.permissions')}
+                        </Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        onPress={() => { setMemberMenuId(null); setEmailTarget({ memberId, memberName: memberName ?? '' }); }}
+                        style={{ flexDirection: 'row', alignItems: 'center', padding: 12, borderBottomWidth: 1, borderBottomColor: theme.colors.divider }}
+                      >
+                        <Mail size={14} color={theme.colors.primary} />
+                        <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, marginLeft: 10 }}>
+                          {t('business.team.sendEmail', { defaultValue: 'Envoyer un email' })}
                         </Text>
                       </TouchableOpacity>
                       <TouchableOpacity
@@ -1818,6 +1843,65 @@ export default function TeamScreen() {
             </TouchableOpacity>
           </View>
         </TouchableOpacity>
+      </Modal>
+
+      {/* ── Send Email Modal ── */}
+      <Modal visible={!!emailTarget} transparent animationType="fade" onRequestClose={() => setEmailTarget(null)}>
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 24 }}>
+          <View style={{ backgroundColor: theme.colors.surface, borderRadius: 24, padding: 24, width: '100%', maxWidth: 380 }}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+              <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3 }}>
+                {t('business.team.sendEmailTo', { name: emailTarget?.memberName, defaultValue: `Email à ${emailTarget?.memberName ?? ''}` })}
+              </Text>
+              <TouchableOpacity onPress={() => setEmailTarget(null)}>
+                <X size={20} color={theme.colors.textSecondary} />
+              </TouchableOpacity>
+            </View>
+            <Text style={{ color: '#114b3c', fontSize: 13, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 }}>
+              {t('business.team.emailSubject', { defaultValue: 'Sujet' })}
+            </Text>
+            <TextInput
+              style={{ backgroundColor: theme.colors.bg, borderRadius: 12, padding: 12, color: theme.colors.textPrimary, fontSize: 14, borderWidth: 1, borderColor: theme.colors.divider, marginBottom: 14 }}
+              value={emailSubject}
+              onChangeText={setEmailSubject}
+              placeholder={t('business.team.emailSubjectPlaceholder', { defaultValue: 'Sujet de l\'email...' })}
+              placeholderTextColor={theme.colors.muted}
+            />
+            <Text style={{ color: '#114b3c', fontSize: 13, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 }}>
+              {t('business.team.emailBody', { defaultValue: 'Message' })}
+            </Text>
+            <TextInput
+              style={{ backgroundColor: theme.colors.bg, borderRadius: 12, padding: 12, color: theme.colors.textPrimary, fontSize: 14, borderWidth: 1, borderColor: theme.colors.divider, minHeight: 120, textAlignVertical: 'top' }}
+              value={emailBody}
+              onChangeText={setEmailBody}
+              placeholder={t('business.team.emailBodyPlaceholder', { defaultValue: 'Écrivez votre message...' })}
+              placeholderTextColor={theme.colors.muted}
+              multiline
+            />
+            <TouchableOpacity
+              onPress={async () => {
+                if (!emailSubject.trim() || !emailBody.trim() || !orgId || !emailTarget) return;
+                setEmailSending(true);
+                try {
+                  await sendMemberEmail(orgId, emailTarget.memberId, emailSubject.trim(), emailBody.trim());
+                  alert.showAlert(t('common.success'), t('business.team.emailSent', { defaultValue: 'Email envoyé avec succès.' }));
+                  setEmailTarget(null);
+                  setEmailSubject('');
+                  setEmailBody('');
+                } catch (err: any) {
+                  alert.showAlert(t('common.error'), err?.message ?? t('common.errorOccurred'));
+                }
+                setEmailSending(false);
+              }}
+              disabled={emailSending || !emailSubject.trim() || !emailBody.trim()}
+              style={{ backgroundColor: '#114b3c', borderRadius: 14, paddingVertical: 14, alignItems: 'center', marginTop: 18, opacity: emailSending || !emailSubject.trim() || !emailBody.trim() ? 0.5 : 1 }}
+            >
+              <Text style={{ color: '#e3ff5c', fontWeight: '700', fontSize: 15 }}>
+                {emailSending ? t('common.loading') : t('business.team.sendEmailBtn', { defaultValue: 'Envoyer' })}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
       </Modal>
     </SafeAreaView>
   );

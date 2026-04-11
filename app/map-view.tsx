@@ -381,6 +381,46 @@ export default function MapViewScreen() {
   // Those outside radius (shown as simple pins)
   const farBaskets = useMemo(() => allCoordsBaskets.filter((b) => b.dist > radius), [allCoordsBaskets, radius]);
 
+  // Deduplicate pins by merchantId — group baskets at the same location into one pin
+  // so restaurants with multiple baskets don't render overlapping markers
+  // Deduplicate by merchantId AND by coordinates (handles same location with multiple DB entries)
+  const nearbyPins = useMemo(() => {
+    const map = new Map<string, BasketWithDist & { totalQty: number }>();
+    const coordsSeen = new Set<string>();
+    for (const b of nearbyBaskets) {
+      const coordKey = `${(b.latitude as number).toFixed(4)},${(b.longitude as number).toFixed(4)}`;
+      const key = b.merchantId;
+      const existing = map.get(key);
+      if (existing) {
+        existing.totalQty += b.quantityLeft;
+      } else if (coordsSeen.has(coordKey)) {
+        // Same coords but different merchantId — merge into existing pin at those coords
+        const existingByCoord = Array.from(map.values()).find(
+          p => (p.latitude as number).toFixed(4) === (b.latitude as number).toFixed(4)
+            && (p.longitude as number).toFixed(4) === (b.longitude as number).toFixed(4)
+        );
+        if (existingByCoord) existingByCoord.totalQty += b.quantityLeft;
+      } else {
+        map.set(key, { ...b, totalQty: b.quantityLeft });
+        coordsSeen.add(coordKey);
+      }
+    }
+    return Array.from(map.values());
+  }, [nearbyBaskets]);
+
+  const farPins = useMemo(() => {
+    const map = new Map<string, BasketWithDist>();
+    const coordsSeen = new Set<string>();
+    for (const b of farBaskets) {
+      const coordKey = `${(b.latitude as number).toFixed(4)},${(b.longitude as number).toFixed(4)}`;
+      if (!map.has(b.merchantId) && !coordsSeen.has(coordKey)) {
+        map.set(b.merchantId, b);
+        coordsSeen.add(coordKey);
+      }
+    }
+    return Array.from(map.values());
+  }, [farBaskets]);
+
   const noCoordBaskets = useMemo(() => filteredBaskets.filter((b) => !b.hasCoords), [filteredBaskets]);
 
   const markers = nearbyBaskets.map((b) => ({ id: b.id, name: b.merchantName, lat: b.latitude as number, lng: b.longitude as number }));
@@ -451,28 +491,28 @@ export default function MapViewScreen() {
             }
           }}
         >
-          {/* Rich pins for nearby baskets (within radius) — name + basket count */}
-          {nearbyBaskets.map((basket) =>
-            Marker && basket.hasCoords ? (
-              <Marker key={basket.id} coordinate={{ latitude: basket.latitude as number, longitude: basket.longitude as number }} anchor={{ x: 0.5, y: 1 }} onPress={() => router.push(`/restaurant/${basket.merchantId}` as never)}>
+          {/* Rich pins for nearby locations (deduplicated by merchant) — name + total basket count */}
+          {nearbyPins.map((pin) =>
+            Marker && pin.hasCoords ? (
+              <Marker key={`pin-${pin.merchantId}`} coordinate={{ latitude: pin.latitude as number, longitude: pin.longitude as number }} anchor={{ x: 0.5, y: 1 }} tracksViewChanges={false} onPress={() => router.push(`/restaurant/${pin.merchantId}` as never)}>
                 <View style={{ alignItems: 'center', maxWidth: 140 }}>
-                  <Text style={{ color: '#114b3c', fontSize: 10, fontWeight: '700', fontFamily: 'Poppins_700Bold', textAlign: 'center', marginBottom: 2 }} numberOfLines={1}>{basket.merchantName}</Text>
-                  <View style={{ backgroundColor: '#e3ff5c', borderRadius: 14, paddingHorizontal: 8, paddingVertical: 4, flexDirection: 'row', alignItems: 'center', gap: 4, shadowColor: '#000', shadowOpacity: 0.2, shadowRadius: 4, shadowOffset: { width: 0, height: 2 }, elevation: 5 }}>
+                  <Text style={{ color: '#fff', fontSize: 10, fontWeight: '700', fontFamily: 'Poppins_700Bold', textAlign: 'center', marginBottom: 2, textShadowColor: 'rgba(0,0,0,0.6)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 3 }} numberOfLines={1}>{pin.merchantName}</Text>
+                  <View style={{ backgroundColor: '#e3ff5c', borderRadius: 14, paddingHorizontal: 8, paddingVertical: 4, flexDirection: 'row', alignItems: 'center', gap: 4, elevation: 5 }}>
                     <ShoppingBag size={12} color="#114b3c" />
-                    <Text style={{ color: '#114b3c', fontSize: 11, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>{basket.quantityLeft}</Text>
+                    <Text style={{ color: '#114b3c', fontSize: 11, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>{pin.totalQty}</Text>
                   </View>
                   <View style={{ width: 0, height: 0, borderLeftWidth: 5, borderRightWidth: 5, borderTopWidth: 6, borderLeftColor: 'transparent', borderRightColor: 'transparent', borderTopColor: '#e3ff5c' }} />
                 </View>
               </Marker>
             ) : null,
           )}
-          {/* Simple pins for far baskets (outside radius) — name + pin icon */}
-          {farBaskets.map((basket) =>
-            Marker && basket.hasCoords ? (
-              <Marker key={`far-${basket.id}`} coordinate={{ latitude: basket.latitude as number, longitude: basket.longitude as number }} anchor={{ x: 0.5, y: 1 }} onPress={() => router.push(`/restaurant/${basket.merchantId}` as never)}>
+          {/* Simple pins for far locations (deduplicated by merchant) — name + pin icon */}
+          {farPins.map((pin) =>
+            Marker && pin.hasCoords ? (
+              <Marker key={`far-${pin.merchantId}`} coordinate={{ latitude: pin.latitude as number, longitude: pin.longitude as number }} anchor={{ x: 0.5, y: 1 }} tracksViewChanges={false} onPress={() => router.push(`/restaurant/${pin.merchantId}` as never)}>
                 <View style={{ alignItems: 'center', maxWidth: 120 }}>
-                  <Text style={{ color: '#555', fontSize: 9, fontWeight: '600', textAlign: 'center', marginBottom: 2 }} numberOfLines={1}>{basket.merchantName}</Text>
-                  <View style={{ backgroundColor: '#114b3c', borderRadius: 12, width: 28, height: 28, justifyContent: 'center', alignItems: 'center', shadowColor: '#000', shadowOpacity: 0.15, shadowRadius: 3, shadowOffset: { width: 0, height: 1 }, elevation: 3 }}>
+                  <Text style={{ color: '#fff', fontSize: 9, fontWeight: '600', textAlign: 'center', marginBottom: 2, textShadowColor: 'rgba(0,0,0,0.6)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 3 }} numberOfLines={1}>{pin.merchantName}</Text>
+                  <View style={{ backgroundColor: '#114b3c', borderRadius: 12, width: 28, height: 28, justifyContent: 'center', alignItems: 'center', elevation: 3 }}>
                     <MapPin size={14} color="#fff" />
                   </View>
                   <View style={{ width: 0, height: 0, borderLeftWidth: 4, borderRightWidth: 4, borderTopWidth: 5, borderLeftColor: 'transparent', borderRightColor: 'transparent', borderTopColor: '#114b3c' }} />

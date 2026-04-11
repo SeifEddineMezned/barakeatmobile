@@ -1,9 +1,9 @@
-import React, { useState } from 'react';
-import { View, Text, StyleSheet, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, ScrollView, Alert, ActivityIndicator, Image, Modal } from 'react-native';
+import React, { useState, useEffect, useRef } from 'react';
+import { View, Text, StyleSheet, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, ScrollView, ActivityIndicator, Image, Modal, Animated, Dimensions } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Store, User, ChevronLeft, AlertTriangle } from 'lucide-react-native';
+import { Store, User, ChevronLeft, AlertTriangle, XCircle, Mail } from 'lucide-react-native';
 import { FontAwesome } from '@expo/vector-icons';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { useAuthStore } from '@/src/stores/authStore';
@@ -15,8 +15,85 @@ import type { UserRole, User as UserType } from '@/src/types';
 import { StatusBar } from 'expo-status-bar';
 import * as WebBrowser from 'expo-web-browser';
 import * as AppleAuthentication from 'expo-apple-authentication';
+
+const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get('window');
+
+// Food emojis that fall from above and settle at fixed positions
+// Food positions: top area + sides only — never behind the center buttons
+const FOOD_ITEMS = [
+  { emoji: '🥐', size: 44, finalX: SCREEN_W * 0.06, finalY: SCREEN_H * 0.04 },
+  { emoji: '🍕', size: 40, finalX: SCREEN_W * 0.75, finalY: SCREEN_H * 0.03 },
+  { emoji: '🧁', size: 36, finalX: SCREEN_W * 0.42, finalY: SCREEN_H * 0.01 },
+  { emoji: '🥗', size: 42, finalX: SCREEN_W * 0.02, finalY: SCREEN_H * 0.16 },
+  { emoji: '🍩', size: 36, finalX: SCREEN_W * 0.84, finalY: SCREEN_H * 0.14 },
+  { emoji: '🥑', size: 32, finalX: SCREEN_W * 0.01, finalY: SCREEN_H * 0.78 },
+  { emoji: '🌮', size: 36, finalX: SCREEN_W * 0.85, finalY: SCREEN_H * 0.80 },
+  { emoji: '🍰', size: 38, finalX: SCREEN_W * 0.40, finalY: SCREEN_H * 0.88 },
+];
+
+// Full "welcome chez" in 3 languages, cycling
+const WELCOME_WORDS = ['أهلاً بكم في', 'Welcome to', 'Bienvenue chez'];
 // Required by expo-web-browser — must be called at module level
 WebBrowser.maybeCompleteAuthSession();
+
+// ── Pure-JS SHA-256 for PKCE (no native module needed) ──────────────────────
+// Minimal implementation — only used to hash the code_verifier string.
+function sha256(message: string): string {
+  const K = [
+    0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
+    0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
+    0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
+    0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
+    0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
+    0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
+    0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
+    0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2,
+  ];
+  const rr = (v: number, n: number) => (v >>> n) | (v << (32 - n));
+  const bytes: number[] = [];
+  for (let i = 0; i < message.length; i++) bytes.push(message.charCodeAt(i));
+  bytes.push(0x80);
+  while ((bytes.length % 64) !== 56) bytes.push(0);
+  const bitLen = message.length * 8;
+  for (let i = 56; i >= 0; i -= 8) bytes.push((bitLen / Math.pow(2, i)) & 0xff);
+  let [h0, h1, h2, h3, h4, h5, h6, h7] = [
+    0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+    0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+  ];
+  for (let off = 0; off < bytes.length; off += 64) {
+    const w = new Array<number>(64);
+    for (let i = 0; i < 16; i++)
+      w[i] = (bytes[off + i * 4] << 24) | (bytes[off + i * 4 + 1] << 16) | (bytes[off + i * 4 + 2] << 8) | bytes[off + i * 4 + 3];
+    for (let i = 16; i < 64; i++) {
+      const s0 = rr(w[i - 15], 7) ^ rr(w[i - 15], 18) ^ (w[i - 15] >>> 3);
+      const s1 = rr(w[i - 2], 17) ^ rr(w[i - 2], 19) ^ (w[i - 2] >>> 10);
+      w[i] = (w[i - 16] + s0 + w[i - 7] + s1) | 0;
+    }
+    let [a, b, c, d, e, f, g, h] = [h0, h1, h2, h3, h4, h5, h6, h7];
+    for (let i = 0; i < 64; i++) {
+      const S1 = rr(e, 6) ^ rr(e, 11) ^ rr(e, 25);
+      const ch = (e & f) ^ (~e & g);
+      const t1 = (h + S1 + ch + K[i] + w[i]) | 0;
+      const S0 = rr(a, 2) ^ rr(a, 13) ^ rr(a, 22);
+      const maj = (a & b) ^ (a & c) ^ (b & c);
+      const t2 = (S0 + maj) | 0;
+      h = g; g = f; f = e; e = (d + t1) | 0;
+      d = c; c = b; b = a; a = (t1 + t2) | 0;
+    }
+    h0 = (h0 + a) | 0; h1 = (h1 + b) | 0; h2 = (h2 + c) | 0; h3 = (h3 + d) | 0;
+    h4 = (h4 + e) | 0; h5 = (h5 + f) | 0; h6 = (h6 + g) | 0; h7 = (h7 + h) | 0;
+  }
+  const hashBytes = new Uint8Array(32);
+  [h0, h1, h2, h3, h4, h5, h6, h7].forEach((v, i) => {
+    hashBytes[i * 4] = (v >>> 24) & 0xff;
+    hashBytes[i * 4 + 1] = (v >>> 16) & 0xff;
+    hashBytes[i * 4 + 2] = (v >>> 8) & 0xff;
+    hashBytes[i * 4 + 3] = v & 0xff;
+  });
+  let binary = '';
+  hashBytes.forEach((b) => { binary += String.fromCharCode(b); });
+  return btoa(binary);
+}
 
 // ── Google OAuth helpers ─────────────────────────────────────────────────────
 // Native client IDs for platform-specific OAuth flows with custom scheme redirects.
@@ -32,7 +109,7 @@ const GOOGLE_CLIENT = {
   },
 } as const;
 
-async function buildGoogleAuthUrl(): Promise<{ url: string; redirectUri: string; codeVerifier: string; clientId: string }> {
+function buildGoogleAuthUrl(): { url: string; redirectUri: string; codeVerifier: string; clientId: string } {
   const cfg = Platform.OS === 'ios' ? GOOGLE_CLIENT.ios : GOOGLE_CLIENT.android;
   const redirectUri = `${cfg.scheme}:/oauth2redirect`;
   const codeVerifier = [
@@ -40,13 +117,9 @@ async function buildGoogleAuthUrl(): Promise<{ url: string; redirectUri: string;
     Math.random().toString(36).substring(2),
     Math.random().toString(36).substring(2),
   ].join('');
-  // SHA-256 PKCE using Web Crypto API (available in Hermes, no native module needed)
-  const encoded = new TextEncoder().encode(codeVerifier);
-  const hashBuffer = await globalThis.crypto.subtle.digest('SHA-256', encoded);
-  const hashBytes = new Uint8Array(hashBuffer);
-  let binary = '';
-  hashBytes.forEach((b) => { binary += String.fromCharCode(b); });
-  const codeChallenge = btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  // SHA-256 PKCE — pure JS, no native module required
+  const hashBase64 = sha256(codeVerifier);
+  const codeChallenge = hashBase64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
   const params = new URLSearchParams({
     client_id: cfg.clientId,
     redirect_uri: redirectUri,
@@ -131,6 +204,45 @@ export default function SignInScreen() {
   const [role, setRole] = useState<UserRole>('customer');
   const [step, setStep] = useState<'choose' | 'login'>('choose');
   const [roleMismatchMsg, setRoleMismatchMsg] = useState<string | null>(null);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  // ── Welcome animation state ──────────────────────────────────────────────
+  const [welcomeIdx, setWelcomeIdx] = useState(0);
+  const welcomeFade = useRef(new Animated.Value(1)).current;
+  const buttonsOpacity = useRef(new Animated.Value(0)).current;
+  const foodAnims = useRef(FOOD_ITEMS.map(() => ({
+    y: new Animated.Value(-120),
+    opacity: new Animated.Value(0),
+  }))).current;
+
+  useEffect(() => {
+    if (step !== 'choose') return;
+    // Cycle welcome words: Arabic → English → French
+    let idx = 0;
+    const cycle = () => {
+      Animated.timing(welcomeFade, { toValue: 0, duration: 300, useNativeDriver: true }).start(() => {
+        idx = (idx + 1) % WELCOME_WORDS.length;
+        setWelcomeIdx(idx);
+        Animated.timing(welcomeFade, { toValue: 1, duration: 400, useNativeDriver: true }).start();
+      });
+    };
+    const interval = setInterval(cycle, 2000);
+    // Food drop animation — stagger each item
+    FOOD_ITEMS.forEach((_, i) => {
+      foodAnims[i].y.setValue(-120);
+      foodAnims[i].opacity.setValue(0);
+    });
+    Animated.stagger(120, FOOD_ITEMS.map((_, i) =>
+      Animated.parallel([
+        Animated.spring(foodAnims[i].y, { toValue: 0, friction: 5, tension: 40, useNativeDriver: true, delay: 200 }),
+        Animated.timing(foodAnims[i].opacity, { toValue: 1, duration: 400, useNativeDriver: true }),
+      ])
+    )).start(() => {
+      // After food settles, fade in buttons
+      Animated.timing(buttonsOpacity, { toValue: 1, duration: 500, useNativeDriver: true }).start();
+    });
+    return () => clearInterval(interval);
+  }, [step]);
 
   // ── Apple Sign-In ────────────────────────────────────────────────────────
 
@@ -145,7 +257,7 @@ export default function SignInScreen() {
       });
 
       if (!credential.identityToken) {
-        Alert.alert(t('auth.error'), t('auth.appleAuthError'));
+        setErrorMsg(t('auth.appleAuthError'));
         return;
       }
 
@@ -175,6 +287,7 @@ export default function SignInScreen() {
         email: res.user.email,
         phone: res.user.phone,
         role: mappedRole,
+        gender: (res.user as any).gender ?? null,
       };
 
       signIn(user, res.token);
@@ -189,7 +302,7 @@ export default function SignInScreen() {
       if (err.code === 'ERR_REQUEST_CANCELED') return; // user cancelled
       const msg = getErrorMessage(err);
       console.log('[SignIn] Apple error:', msg);
-      Alert.alert(t('auth.error'), msg);
+      setErrorMsg(msg);
     } finally {
       setAppleLoading(false);
     }
@@ -200,7 +313,7 @@ export default function SignInScreen() {
   const handleGoogleSignIn = async () => {
     try {
       setGoogleLoading(true);
-      const { url, redirectUri, codeVerifier, clientId } = await buildGoogleAuthUrl();
+      const { url, redirectUri, codeVerifier, clientId } = buildGoogleAuthUrl();
       const result = await WebBrowser.openAuthSessionAsync(url, redirectUri);
 
       // User cancelled / dismissed — silent no-op
@@ -209,7 +322,7 @@ export default function SignInScreen() {
       }
 
       if (result.type !== 'success') {
-        Alert.alert(t('auth.error'), t('auth.googleAuthError'));
+        setErrorMsg(t('auth.googleAuthError'));
         return;
       }
 
@@ -217,7 +330,7 @@ export default function SignInScreen() {
       const code = parseCodeFromUrl(result.url);
       if (!code) {
         console.log('[Google] No code in redirect URL:', result.url);
-        Alert.alert(t('auth.error'), t('auth.googleAuthError'));
+        setErrorMsg(t('auth.googleAuthError'));
         return;
       }
 
@@ -255,6 +368,7 @@ export default function SignInScreen() {
         email: res.user.email,
         phone: res.user.phone,
         role: mappedRole,
+        gender: (res.user as any).gender ?? null,
       };
 
       signIn(user, res.token);
@@ -268,7 +382,7 @@ export default function SignInScreen() {
     } catch (err) {
       const msg = getErrorMessage(err);
       console.log('[SignIn] Google error:', msg);
-      Alert.alert(t('auth.error'), msg);
+      setErrorMsg(msg);
     } finally {
       setGoogleLoading(false);
     }
@@ -277,7 +391,7 @@ export default function SignInScreen() {
   const handleSignIn = async () => {
 
     if (!email.trim() || !password.trim()) {
-      Alert.alert(t('auth.error'), t('auth.fillAllFields'));
+      setErrorMsg(t('auth.fillAllFields'));
       return;
     }
     setLoading(true);
@@ -307,6 +421,7 @@ export default function SignInScreen() {
         email: res.user.email,
         phone: res.user.phone,
         role: mappedRole,
+        gender: (res.user as any).gender ?? null,
       };
       signIn(user, res.token);
       console.log('[SignIn] Success, navigating for role:', user.role, '(backend:', backendRole, ')');
@@ -319,15 +434,15 @@ export default function SignInScreen() {
     } catch (err) {
       const msg = getErrorMessage(err);
       console.log('[SignIn] Error:', msg);
-      Alert.alert(t('auth.error'), msg);
+      setErrorMsg(msg);
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <SafeAreaView style={[styles.container, { backgroundColor: '#114b3c' }]}>
-      <StatusBar style="light" />
+    <SafeAreaView style={[styles.container, { backgroundColor: '#fffff8' }]}>
+      <StatusBar style="dark" />
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={styles.keyboardView}
@@ -335,76 +450,134 @@ export default function SignInScreen() {
         <ScrollView contentContainerStyle={styles.scrollContent}>
           <View style={[styles.content, { padding: theme.spacing.xxl }]}>
             {step === 'choose' ? (
-              <>
-                <Text style={{ color: 'rgba(255,255,255,0.7)', fontSize: 16, fontFamily: 'Poppins_400Regular', textAlign: 'center' }}>
-                  {t('auth.welcomeTo', { defaultValue: 'Bienvenue chez' })}
-                </Text>
-                <Text style={{ color: '#eff35c', fontSize: 36, fontWeight: '700', fontFamily: 'Poppins_700Bold', textAlign: 'center', marginTop: 4, marginBottom: theme.spacing.lg }}>
+              <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+                {/* Floating food emojis */}
+                {FOOD_ITEMS.map((item, i) => (
+                  <Animated.Text
+                    key={i}
+                    style={{
+                      position: 'absolute',
+                      left: item.finalX,
+                      top: item.finalY,
+                      fontSize: item.size,
+                      opacity: foodAnims[i].opacity,
+                      transform: [{ translateY: foodAnims[i].y }],
+                    }}
+                  >
+                    {item.emoji}
+                  </Animated.Text>
+                ))}
+
+                {/* Paper bag image */}
+                <Image
+                  source={require('@/assets/images/barakeat_paper_bag.png')}
+                  style={{ width: 130, height: 130, marginBottom: 24 }}
+                  resizeMode="contain"
+                />
+
+                {/* Animated welcome phrase cycling: Arabic → English → French */}
+                <Animated.Text style={{
+                  opacity: welcomeFade,
+                  color: '#114b3c',
+                  fontSize: 24,
+                  fontFamily: 'Poppins_400Regular',
+                  textAlign: 'center',
+                  minHeight: 36,
+                }}>
+                  {WELCOME_WORDS[welcomeIdx]}
+                </Animated.Text>
+
+                <Text style={{
+                  color: '#114b3c',
+                  fontSize: 38,
+                  fontWeight: '700',
+                  fontFamily: 'Poppins_700Bold',
+                  textAlign: 'center',
+                  marginTop: 4,
+                }}>
                   Barakeat.
                 </Text>
-                <Text
-                  style={[
-                    styles.subtitle,
-                    { color: 'rgba(255,255,255,0.6)', ...theme.typography.body, marginBottom: theme.spacing.xxxl, textAlign: 'center' },
-                  ]}
-                >
-                  {t('auth.chooseAccountType')}
-                </Text>
 
-                <View style={{ flexDirection: 'row', gap: 12 }}>
+                {/* Sign-in buttons — fade in after food settles */}
+                <Animated.View style={{ opacity: buttonsOpacity, width: '100%', marginTop: 48, gap: 12 }}>
+                  {/* Google */}
                   <TouchableOpacity
+                    onPress={() => { setRole('customer'); handleGoogleSignIn(); }}
+                    disabled={googleLoading}
+                    activeOpacity={0.8}
                     style={{
-                      flex: 1,
-                      backgroundColor: '#e3ff5c',
-                      borderRadius: theme.radii.r16,
-                      padding: 16,
-                      alignItems: 'center',
+                      flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+                      height: 52, backgroundColor: '#fff', borderRadius: 14,
+                      borderWidth: 1, borderColor: '#e0e0e0',
+                      opacity: googleLoading ? 0.6 : 1,
                     }}
+                  >
+                    {googleLoading ? (
+                      <ActivityIndicator size="small" color="#4285F4" style={{ marginRight: 10 }} />
+                    ) : (
+                      <Image source={{ uri: 'https://developers.google.com/identity/images/g-logo.png' }} style={{ width: 20, height: 20, marginRight: 10 }} resizeMode="contain" />
+                    )}
+                    <Text style={{ color: '#3c4043', fontSize: 15, fontWeight: '600', fontFamily: 'Poppins_500Medium' }}>
+                      {t('auth.continueWithGoogle', { defaultValue: 'Continuer avec Google' })}
+                    </Text>
+                  </TouchableOpacity>
+
+                  {/* Apple — iOS only */}
+                  {Platform.OS === 'ios' && (
+                    <TouchableOpacity
+                      onPress={() => { setRole('customer'); handleAppleSignIn(); }}
+                      disabled={appleLoading}
+                      activeOpacity={0.8}
+                      style={{
+                        flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+                        height: 52, backgroundColor: '#000', borderRadius: 14,
+                        opacity: appleLoading ? 0.6 : 1,
+                      }}
+                    >
+                      {appleLoading ? (
+                        <ActivityIndicator size="small" color="#fff" style={{ marginRight: 10 }} />
+                      ) : (
+                        <FontAwesome name="apple" size={20} color="#fff" style={{ marginRight: 8 }} />
+                      )}
+                      <Text style={{ color: '#fff', fontSize: 15, fontWeight: '600', fontFamily: 'Poppins_500Medium' }}>
+                        {t('auth.continueWithApple', { defaultValue: 'Continuer avec Apple' })}
+                      </Text>
+                    </TouchableOpacity>
+                  )}
+
+                  {/* Email */}
+                  <TouchableOpacity
                     onPress={() => { setRole('customer'); setStep('login'); }}
                     activeOpacity={0.8}
-                    accessibilityLabel={t('auth.customerRole')}
-                    accessibilityRole="button"
-                    accessibilityHint={t('auth.customerRoleDesc')}
-                  >
-                    <View style={{ width: 52, height: 52, borderRadius: 26, backgroundColor: '#114b3c20', justifyContent: 'center', alignItems: 'center', marginBottom: 10 }}>
-                      <User size={26} color="#114b3c" />
-                    </View>
-                    <Text style={{ color: '#114b3c', fontSize: 13, fontFamily: 'Poppins_400Regular', textAlign: 'center' }}>
-                      {t('auth.iAm', { defaultValue: 'Je suis' })}
-                    </Text>
-                    <Text style={{ color: '#114b3c', fontSize: 17, fontWeight: '700', fontFamily: 'Poppins_700Bold', textAlign: 'center' }}>
-                      {t('auth.clientLabel', { defaultValue: 'Client' })}
-                    </Text>
-                  </TouchableOpacity>
-
-                  <TouchableOpacity
                     style={{
-                      flex: 1,
-                      backgroundColor: 'rgba(255,255,255,0.12)',
-                      borderRadius: theme.radii.r16,
-                      padding: 16,
-                      alignItems: 'center',
-                      borderWidth: 1,
-                      borderColor: 'rgba(255,255,255,0.2)',
+                      flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+                      height: 52, backgroundColor: '#114b3c', borderRadius: 14,
                     }}
-                    onPress={() => { setRole('business'); setStep('login'); }}
-                    activeOpacity={0.8}
-                    accessibilityLabel={t('business.auth.switchToBusiness')}
-                    accessibilityRole="button"
-                    accessibilityHint={t('auth.businessRoleDesc')}
                   >
-                    <View style={{ width: 52, height: 52, borderRadius: 26, backgroundColor: 'rgba(255,255,255,0.15)', justifyContent: 'center', alignItems: 'center', marginBottom: 10 }}>
-                      <Store size={26} color="#fff" />
-                    </View>
-                    <Text style={{ color: 'rgba(255,255,255,0.7)', fontSize: 13, fontFamily: 'Poppins_400Regular', textAlign: 'center' }}>
-                      {t('auth.iAm', { defaultValue: 'Je suis' })}
-                    </Text>
-                    <Text style={{ color: '#fff', fontSize: 17, fontWeight: '700', fontFamily: 'Poppins_700Bold', textAlign: 'center' }}>
-                      {t('auth.merchantLabel', { defaultValue: 'Commerçant' })}
+                    <Mail size={18} color="#e3ff5c" style={{ marginRight: 8 }} />
+                    <Text style={{ color: '#e3ff5c', fontSize: 15, fontWeight: '600', fontFamily: 'Poppins_500Medium' }}>
+                      {t('auth.continueWithEmail', { defaultValue: 'Continuer avec e-mail' })}
                     </Text>
                   </TouchableOpacity>
-                </View>
-              </>
+                </Animated.View>
+
+                {/* Bottom links */}
+                <Animated.View style={{ opacity: buttonsOpacity, marginTop: 28, alignItems: 'center', gap: 12 }}>
+                  <TouchableOpacity onPress={() => { setRole('business'); setStep('login'); }}>
+                    <Text style={{ color: '#114b3c', fontSize: 14, fontFamily: 'Poppins_400Regular', textDecorationLine: 'underline' }}>
+                      {t('auth.businessLink', { defaultValue: 'Vous \u00eates un commerce ? Cliquez ici' })}
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity onPress={() => router.push('/auth/sign-up' as never)}>
+                    <Text style={{ color: '#114b3c80', fontSize: 13, fontFamily: 'Poppins_400Regular' }}>
+                      {t('auth.noAccountShort', { defaultValue: 'Pas encore de compte ?' })}{' '}
+                      <Text style={{ fontWeight: '700', color: '#114b3c', textDecorationLine: 'underline' }}>
+                        {t('auth.signUp', { defaultValue: "S'inscrire" })}
+                      </Text>
+                    </Text>
+                  </TouchableOpacity>
+                </Animated.View>
+              </View>
             ) : (
               <>
                 <TouchableOpacity
@@ -413,53 +586,64 @@ export default function SignInScreen() {
                     width: 44,
                     height: 44,
                     borderRadius: 22,
-                    backgroundColor: 'rgba(255,255,255,0.12)',
+                    backgroundColor: '#114b3c15',
                     justifyContent: 'center',
                     alignItems: 'center',
-                    marginBottom: theme.spacing.xl,
+                    marginBottom: theme.spacing.lg,
                   }}
-                  accessibilityLabel={t('common.goBack', { defaultValue: 'Go back' })}
+                  accessibilityLabel={t('common.goBack', { defaultValue: 'Retour' })}
                   accessibilityRole="button"
                 >
-                  <ChevronLeft size={28} color="#fff" />
+                  <ChevronLeft size={28} color="#114b3c" />
                 </TouchableOpacity>
-                <Text
-                  style={[
-                    styles.title,
-                    { color: '#fff', ...theme.typography.h1, marginBottom: theme.spacing.sm },
-                  ]}
-                >
-                  {role === 'customer' ? t('auth.signIn') : t('business.auth.businessSignIn')}
+                <Text style={{ color: '#114b3c', fontSize: 34, fontWeight: '700', fontFamily: 'Poppins_700Bold', textAlign: 'center', marginBottom: 2 }}>
+                  Barakeat.
+                </Text>
+                <Text style={{ color: '#114b3c', fontSize: 20, fontFamily: 'Poppins_400Regular', textAlign: 'center', marginBottom: 6 }}>
+                  {role === 'customer' ? t('auth.signIn', { defaultValue: 'Se connecter' }) : t('business.auth.businessSignIn', { defaultValue: 'Espace commerce' })}
                 </Text>
                 <Text
-                  style={[
-                    styles.subtitle,
-                    { color: 'rgba(255,255,255,0.7)', ...theme.typography.body, marginBottom: theme.spacing.xxl },
-                  ]}
+                  style={{
+                    color: '#114b3c90',
+                    fontSize: 14,
+                    fontFamily: 'Poppins_400Regular',
+                    textAlign: 'center',
+                    lineHeight: 20,
+                    marginBottom: theme.spacing.xxl,
+                    paddingHorizontal: 10,
+                  }}
                 >
-                  {role === 'customer' ? t('auth.customerRoleDesc') : t('auth.businessRoleDesc')}
+                  {role === 'customer'
+                    ? t('auth.tagline', { defaultValue: '\u00c9conomisez, Sauvez la Nourriture et Luttez Contre le Gaspillage !' })
+                    : t('auth.businessTagline', { defaultValue: 'Transformez vos invendus en revenus' })}
                 </Text>
 
             <View style={styles.form}>
               <View style={[styles.inputContainer, { marginBottom: theme.spacing.xl }]}>
-                <Text style={[styles.label, { color: '#fff', ...theme.typography.bodySm }]}>
+                <Text style={[styles.label, { color: '#114b3c', ...theme.typography.bodySm }]}>
                   {t('auth.email')}
                 </Text>
                 <TextInput
                   style={[
                     styles.input,
                     {
-                      backgroundColor: 'rgba(255,255,255,0.12)',
-                      borderColor: 'rgba(255,255,255,0.2)',
-                      borderRadius: theme.radii.r12,
-                      color: '#fff',
+                      backgroundColor: '#fff',
+                      borderColor: '#114b3c30',
+                      borderWidth: 1.5,
+                      borderRadius: 14,
+                      color: '#114b3c',
+                      shadowColor: '#114b3c',
+                      shadowOffset: { width: 0, height: 2 },
+                      shadowOpacity: 0.06,
+                      shadowRadius: 6,
+                      elevation: 2,
                       ...theme.typography.body,
                     },
                   ]}
                   value={email}
                   onChangeText={setEmail}
                   placeholder="you@example.com"
-                  placeholderTextColor="rgba(255,255,255,0.4)"
+                  placeholderTextColor="#114b3c40"
                   keyboardType="email-address"
                   autoCapitalize="none"
                   autoCorrect={false}
@@ -468,24 +652,30 @@ export default function SignInScreen() {
               </View>
 
               <View style={[styles.inputContainer, { marginBottom: theme.spacing.lg }]}>
-                <Text style={[styles.label, { color: '#fff', ...theme.typography.bodySm }]}>
+                <Text style={[styles.label, { color: '#114b3c', ...theme.typography.bodySm }]}>
                   {t('auth.password')}
                 </Text>
                 <TextInput
                   style={[
                     styles.input,
                     {
-                      backgroundColor: 'rgba(255,255,255,0.12)',
-                      borderColor: 'rgba(255,255,255,0.2)',
-                      borderRadius: theme.radii.r12,
-                      color: '#fff',
+                      backgroundColor: '#fff',
+                      borderColor: '#114b3c30',
+                      borderWidth: 1.5,
+                      borderRadius: 14,
+                      color: '#114b3c',
+                      shadowColor: '#114b3c',
+                      shadowOffset: { width: 0, height: 2 },
+                      shadowOpacity: 0.06,
+                      shadowRadius: 6,
+                      elevation: 2,
                       ...theme.typography.body,
                     },
                   ]}
                   value={password}
                   onChangeText={setPassword}
                   placeholder="••••••••"
-                  placeholderTextColor="rgba(255,255,255,0.4)"
+                  placeholderTextColor="#114b3c40"
                   secureTextEntry
                   accessibilityLabel={t('auth.password')}
                 />
@@ -493,124 +683,57 @@ export default function SignInScreen() {
 
               <TouchableOpacity
                 style={styles.forgotPassword}
-                onPress={() => router.push('/auth/forgot-password' as never)}
+                onPress={() => router.push({ pathname: '/auth/forgot-password', params: { role } } as never)}
                 accessibilityLabel={t('auth.forgotPassword')}
                 accessibilityRole="button"
               >
-                <Text style={[{ color: '#e3ff5c', ...theme.typography.bodySm }]}>
+                <Text style={{ color: '#114b3c', ...theme.typography.bodySm, fontWeight: '600' }}>
                   {t('auth.forgotPassword')}
                 </Text>
               </TouchableOpacity>
 
-              <View style={[styles.buttonContainer, { marginTop: theme.spacing.xxxl }]}>
+              <View style={[styles.buttonContainer, { marginTop: theme.spacing.xl }]}>
                 <TouchableOpacity
                   onPress={handleSignIn}
                   disabled={loading}
                   style={{
-                    height: 56,
+                    height: 52,
                     justifyContent: 'center',
                     alignItems: 'center',
                     paddingHorizontal: 32,
-                    backgroundColor: '#e3ff5c',
-                    borderRadius: theme.radii.pill,
+                    backgroundColor: '#114b3c',
+                    borderRadius: 14,
                     opacity: loading ? 0.5 : 1,
                   }}
                   activeOpacity={0.8}
                   accessibilityLabel={loading ? t('common.loading') : t('auth.signIn')}
                   accessibilityRole="button"
                 >
-                  <Text style={{ color: '#114b3c', ...theme.typography.button, textAlign: 'center', fontWeight: '700' as const }}>
+                  <Text style={{ color: '#e3ff5c', fontSize: 16, fontWeight: '700', fontFamily: 'Poppins_700Bold', textAlign: 'center' }}>
                     {loading ? t('common.loading') : t('auth.signIn')}
                   </Text>
                 </TouchableOpacity>
               </View>
 
-              {/* Google sign-in — only for customer, under sign-in button with divider */}
-              {role === 'customer' && (
-                <>
-                  <View style={{ flexDirection: 'row', alignItems: 'center', marginVertical: theme.spacing.lg }}>
-                    <View style={{ flex: 1, height: 1, backgroundColor: 'rgba(255,255,255,0.25)' }} />
-                    <Text style={{ color: 'rgba(255,255,255,0.5)', ...theme.typography.bodySm, marginHorizontal: theme.spacing.lg }}>
-                      {t('auth.or')}
-                    </Text>
-                    <View style={{ flex: 1, height: 1, backgroundColor: 'rgba(255,255,255,0.25)' }} />
-                  </View>
-                  <TouchableOpacity
-                    onPress={handleGoogleSignIn}
-                    disabled={googleLoading || loading}
-                    activeOpacity={0.8}
-                    style={{
-                      flexDirection: 'row',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      alignSelf: 'center',
-                      height: 48,
-                      backgroundColor: '#ffffff',
-                      borderRadius: theme.radii.r12,
-                      paddingHorizontal: 16,
-                      opacity: googleLoading || loading ? 0.6 : 1,
-                    }}
-                    accessibilityLabel={t('auth.continueWithGoogle')}
-                    accessibilityRole="button"
-                  >
-                    {googleLoading ? (
-                      <ActivityIndicator size="small" color="#4285F4" style={{ marginRight: 10 }} />
-                    ) : (
-                      <Image
-                        source={{ uri: 'https://developers.google.com/identity/images/g-logo.png' }}
-                        style={{ width: 20, height: 20, marginRight: 10 }}
-                        resizeMode="contain"
-                      />
-                    )}
-                    <Text style={{ color: '#3c4043', ...theme.typography.body, fontWeight: '600' }}>
-                      {t('auth.continueWithGoogle')}
-                    </Text>
-                  </TouchableOpacity>
-
-                  {/* Apple Sign-In — iOS only */}
-                  {Platform.OS === 'ios' && (
-                    <TouchableOpacity
-                      onPress={handleAppleSignIn}
-                      disabled={appleLoading || loading}
-                      activeOpacity={0.8}
-                      style={{
-                        flexDirection: 'row',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        alignSelf: 'center',
-                        height: 48,
-                        backgroundColor: '#000000',
-                        borderRadius: theme.radii.r12,
-                        paddingHorizontal: 16,
-                        marginTop: 12,
-                        opacity: appleLoading || loading ? 0.6 : 1,
-                      }}
-                      accessibilityLabel={t('auth.continueWithApple')}
-                      accessibilityRole="button"
-                    >
-                      {appleLoading ? (
-                        <ActivityIndicator size="small" color="#fff" style={{ marginRight: 10 }} />
-                      ) : (
-                        <FontAwesome name="apple" size={20} color="#fff" style={{ marginRight: 8 }} />
-                      )}
-                      <Text style={{ color: '#ffffff', ...theme.typography.body, fontWeight: '600' }}>
-                        {t('auth.continueWithApple')}
-                      </Text>
-                    </TouchableOpacity>
-                  )}
-                </>
-              )}
-
-              <View style={[styles.footer, { marginTop: theme.spacing.xxl }]}>
-                <Text style={[{ color: 'rgba(255,255,255,0.7)', ...theme.typography.body }]}>
+              <View style={[styles.footer, { marginTop: theme.spacing.xl }]}>
+                <Text style={{ color: '#114b3c80', ...theme.typography.body }}>
                   {t('auth.noAccount')}{' '}
                 </Text>
                 <TouchableOpacity onPress={() => router.push('/auth/sign-up' as never)} accessibilityLabel={t('auth.signUp')} accessibilityRole="button">
-                  <Text style={[{ color: '#e3ff5c', ...theme.typography.body, fontWeight: '600' as const }]}>
+                  <Text style={{ color: '#114b3c', ...theme.typography.body, fontWeight: '600', textDecorationLine: 'underline' }}>
                     {t('auth.signUp')}
                   </Text>
                 </TouchableOpacity>
               </View>
+
+              {/* Role switch link */}
+              <TouchableOpacity onPress={() => { setRole(role === 'customer' ? 'business' : 'customer'); }} style={{ marginTop: 14, alignSelf: 'center' }}>
+                <Text style={{ color: '#114b3c', fontSize: 13, fontFamily: 'Poppins_400Regular', textDecorationLine: 'underline' }}>
+                  {role === 'customer'
+                    ? t('auth.businessLink', { defaultValue: 'Vous \u00eates un commerce ? Cliquez ici' })
+                    : t('auth.customerLink', { defaultValue: 'Vous \u00eates un client ? Cliquez ici' })}
+                </Text>
+              </TouchableOpacity>
             </View>
               </>
             )}
@@ -636,6 +759,30 @@ export default function SignInScreen() {
             >
               <Text style={{ color: '#e3ff5c', fontSize: 15, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
                 {t('auth.switchRole', { defaultValue: 'Changer de mode' })}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+      {/* Generic error modal — replaces all Alert.alert calls */}
+      <Modal visible={!!errorMsg} transparent animationType="fade" onRequestClose={() => setErrorMsg(null)}>
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 24 }}>
+          <View style={{ backgroundColor: '#fff', borderRadius: 24, padding: 28, width: '100%', maxWidth: 340, alignItems: 'center' }}>
+            <View style={{ backgroundColor: '#ef444418', width: 56, height: 56, borderRadius: 28, justifyContent: 'center', alignItems: 'center', marginBottom: 16 }}>
+              <XCircle size={28} color="#ef4444" />
+            </View>
+            <Text style={{ color: '#1a1a1a', fontSize: 18, fontWeight: '700', fontFamily: 'Poppins_700Bold', textAlign: 'center', marginBottom: 10 }}>
+              {t('auth.error')}
+            </Text>
+            <Text style={{ color: '#666', fontSize: 14, fontFamily: 'Poppins_400Regular', textAlign: 'center', lineHeight: 22, marginBottom: 24 }}>
+              {errorMsg}
+            </Text>
+            <TouchableOpacity
+              onPress={() => setErrorMsg(null)}
+              style={{ backgroundColor: '#114b3c', borderRadius: 14, paddingVertical: 14, width: '100%', alignItems: 'center' }}
+            >
+              <Text style={{ color: '#e3ff5c', fontSize: 15, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
+                {t('common.ok', { defaultValue: 'OK' })}
               </Text>
             </TouchableOpacity>
           </View>

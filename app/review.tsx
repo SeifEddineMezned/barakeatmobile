@@ -5,16 +5,16 @@ import {
   StyleSheet,
   ScrollView,
   TouchableOpacity,
-  Alert,
   KeyboardAvoidingView,
   Platform,
   TextInput,
   Image,
+  Modal,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
-import { X, Star, Camera } from 'lucide-react-native';
+import { X, Star, Camera, XCircle, CheckCircle2 } from 'lucide-react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTheme } from '@/src/theme/ThemeProvider';
@@ -121,11 +121,12 @@ export default function ReviewScreen() {
   const [ratingVariety, setRatingVariety] = useState(0);
   const [comment, setComment] = useState('');
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
+  const [toastMsg, setToastMsg] = useState<{ type: 'success' | 'error'; text: string; onDismiss?: () => void } | null>(null);
 
   const pickImage = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== 'granted') {
-      Alert.alert(t('common.error'), t('common.noPermission'));
+      setToastMsg({ type: 'error', text: t('common.noPermission', { defaultValue: 'Permission refusée.' }) });
       return;
     }
     const result = await ImagePicker.launchImageLibraryAsync({
@@ -163,12 +164,10 @@ export default function ReviewScreen() {
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['reservations'] });
-      Alert.alert(t('common.success'), t('review.success'), [
-        { text: t('common.ok'), onPress: () => router.back() },
-      ]);
+      setToastMsg({ type: 'success', text: t('review.success'), onDismiss: () => router.back() });
     },
     onError: () => {
-      Alert.alert(t('common.error'), t('review.error'));
+      setToastMsg({ type: 'error', text: t('review.error') });
     },
   });
 
@@ -382,6 +381,9 @@ export default function ReviewScreen() {
                 {t('review.photoOptional', { defaultValue: 'Optional' })}
               </Text>
             </TouchableOpacity>
+            <Text style={{ color: theme.colors.muted, fontSize: 11, lineHeight: 16, marginTop: 8, paddingHorizontal: 4 }}>
+              {t('review.photoWarning', { defaultValue: 'En ajoutant une photo, vous acceptez qu\'elle puisse \u00eatre utilis\u00e9e pour promouvoir Barakeat sur nos r\u00e9seaux sociaux et supports marketing.' })}
+            </Text>
 
             {selectedImage && (
               <View
@@ -443,6 +445,29 @@ export default function ReviewScreen() {
           />
         </View>
       </KeyboardAvoidingView>
+
+      {/* Toast modal */}
+      <Modal visible={!!toastMsg} transparent animationType="fade" onRequestClose={() => { toastMsg?.onDismiss?.(); setToastMsg(null); }}>
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 24 }}>
+          <View style={{ backgroundColor: '#fff', borderRadius: 24, padding: 28, width: '100%', maxWidth: 340, alignItems: 'center' }}>
+            <View style={{ backgroundColor: toastMsg?.type === 'success' ? '#114b3c18' : '#ef444418', width: 56, height: 56, borderRadius: 28, justifyContent: 'center', alignItems: 'center', marginBottom: 16 }}>
+              {toastMsg?.type === 'success' ? <CheckCircle2 size={28} color="#114b3c" /> : <XCircle size={28} color="#ef4444" />}
+            </View>
+            <Text style={{ color: '#1a1a1a', fontSize: 18, fontWeight: '700', fontFamily: 'Poppins_700Bold', textAlign: 'center', marginBottom: 10 }}>
+              {toastMsg?.type === 'success' ? t('common.success') : t('auth.error')}
+            </Text>
+            <Text style={{ color: '#666', fontSize: 14, fontFamily: 'Poppins_400Regular', textAlign: 'center', lineHeight: 22, marginBottom: 24 }}>
+              {toastMsg?.text}
+            </Text>
+            <TouchableOpacity
+              onPress={() => { toastMsg?.onDismiss?.(); setToastMsg(null); }}
+              style={{ backgroundColor: '#114b3c', borderRadius: 14, paddingVertical: 14, width: '100%', alignItems: 'center' }}
+            >
+              <Text style={{ color: '#e3ff5c', fontSize: 15, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>OK</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }

@@ -1,8 +1,8 @@
 import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Modal, TextInput, KeyboardAvoidingView, Platform, Alert, Dimensions } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Modal, TextInput, KeyboardAvoidingView, Platform, Dimensions } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
-import { CheckCircle, XCircle, Clock, QrCode, ClipboardList, Check, X as XIcon, ChevronDown, ChevronUp } from 'lucide-react-native';
+import { CheckCircle, XCircle, Clock, QrCode, ClipboardList, Check, X as XIcon, ChevronDown, ChevronUp, AlertTriangle, MessageCircle } from 'lucide-react-native';
 import { useRouter } from 'expo-router';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { StatusBar } from 'expo-status-bar';
@@ -11,6 +11,8 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { fetchTodayOrders, confirmPickup, type TodayReservationFromAPI } from '@/src/services/business';
 import { getErrorMessage, apiClient } from '@/src/lib/api';
 import { DelayedLoader } from '@/src/components/DelayedLoader';
+import { useCustomAlert } from '@/src/components/CustomAlert';
+import { fetchConversationUnreads } from '@/src/services/messages';
 
 // ─── Canonical UI status model ────────────────────────────────────────────────
 // Backend emits:  confirmed | picked_up | cancelled
@@ -23,7 +25,7 @@ import { DelayedLoader } from '@/src/components/DelayedLoader';
 //   cancelled  → "Cancelled"         (completed tab)
 // ─────────────────────────────────────────────────────────────────────────────
 
-type CanonicalStatus = 'confirmed' | 'picked_up' | 'cancelled';
+type CanonicalStatus = 'confirmed' | 'picked_up' | 'cancelled' | 'expired';
 
 interface NormalizedOrder {
   id: string;
@@ -35,6 +37,7 @@ interface NormalizedOrder {
   pickupCode: string;
   status: CanonicalStatus;
   createdAt: string;
+  updatedAt: string;
   customerName: string;
   customerPhone?: string;
 }
@@ -52,6 +55,9 @@ function normalizeStatus(raw: string | undefined): CanonicalStatus {
       return 'picked_up';
     case 'cancelled':
       return 'cancelled';
+    case 'expired':
+    case 'no_show':
+      return 'expired';
     default:
       // Unknown status — treat as incoming/confirmed so it is visible
       return 'confirmed';
@@ -62,7 +68,9 @@ export default function IncomingOrdersScreen() {
   const { t } = useTranslation();
   const theme = useTheme();
   const router = useRouter();
+  const alert = useCustomAlert();
   const [activeTab, setActiveTab] = useState<'incoming' | 'completed' | 'issues'>('incoming');
+  const statsScrollRef = useRef<ScrollView>(null);
   const queryClient = useQueryClient();
   const selectedLocationId = useBusinessStore((s) => s.selectedLocationId);
 
@@ -73,6 +81,14 @@ export default function IncomingOrdersScreen() {
     refetchInterval: 30_000,
     retry: 1,
   });
+
+  const msgUnreadsQuery = useQuery({
+    queryKey: ['conversation-unreads'],
+    queryFn: fetchConversationUnreads,
+    staleTime: 15_000,
+    refetchInterval: 30_000,
+  });
+  const msgUnreads = msgUnreadsQuery.data ?? {};
 
   // Normalize API orders — preserve buyerId so confirmPickup can send it to backend.
   const orders: NormalizedOrder[] = (todayQuery.data ?? []).map((o: TodayReservationFromAPI) => {
@@ -88,6 +104,7 @@ export default function IncomingOrdersScreen() {
       pickupCode: o.pickup_code ?? '',
       status: normalizeStatus(o.status),
       createdAt: o.created_at ?? new Date().toISOString(),
+      updatedAt: (o as any).updated_at ?? o.created_at ?? new Date().toISOString(),
       customerName: o.buyer_name ?? t('business.orders.customer'),
       customerPhone: o.buyer_phone ?? undefined,
     };
@@ -105,11 +122,20 @@ export default function IncomingOrdersScreen() {
   );
 
   const issueOrders = useMemo(
-    () => orders.filter((o) => o.status === 'cancelled'),
+    () => orders.filter((o) => o.status === 'cancelled' || o.status === 'expired'),
     [orders]
   );
 
   const displayedOrders = activeTab === 'incoming' ? incomingOrders : activeTab === 'completed' ? completedOrders : issueOrders;
+
+  // Auto-scroll stat carousel to active tab
+  const statsTabIndex = activeTab === 'incoming' ? 0 : activeTab === 'completed' ? 1 : 2;
+  useEffect(() => {
+    const screenW = Dimensions.get('window').width;
+    const cardW = screenW * 0.38;
+    const gap = 8;
+    statsScrollRef.current?.scrollTo({ x: statsTabIndex * (cardW + gap) - (screenW - cardW) / 2 + cardW / 2, animated: true });
+  }, [statsTabIndex]);
 
   // ─── Verify-pickup modal state ──────────────────────────────────────────────
   const [verifyModalOrderId, setVerifyModalOrderId] = useState<string | null>(null);
@@ -182,13 +208,13 @@ export default function IncomingOrdersScreen() {
   }, []);
 
   const handleCancel = useCallback((orderId: string) => {
-    Alert.alert(
+    alert.showAlert(
       t('business.orders.cancelOrder'),
       '',
       [
-        { text: t('common.cancel'), style: 'cancel' },
+        { text: 'Annuler', style: 'cancel' },
         {
-          text: t('common.confirm'),
+          text: 'Supprimer',
           style: 'destructive',
           onPress: async () => {
             try {
@@ -198,13 +224,13 @@ export default function IncomingOrdersScreen() {
               void queryClient.invalidateQueries({ queryKey: ['today-orders'] });
               void queryClient.invalidateQueries({ queryKey: ['today-orders-count'] });
             } catch (err) {
-              Alert.alert(t('common.error'), getErrorMessage(err));
+              alert.showAlert(t('common.error'), getErrorMessage(err));
             }
           },
         },
       ]
     );
-  }, [queryClient, t]);
+  }, [queryClient, t, alert]);
 
   const getStatusConfig = (status: CanonicalStatus) => {
     switch (status) {
@@ -227,7 +253,14 @@ export default function IncomingOrdersScreen() {
           color: theme.colors.error,
           bg: theme.colors.error + '18',
           icon: XCircle,
-          label: t('business.orders.statusCancelled', { defaultValue: 'Cancelled' }),
+          label: t('business.orders.statusCancelled', { defaultValue: 'Annulé' }),
+        };
+      case 'expired':
+        return {
+          color: theme.colors.accentWarm,
+          bg: theme.colors.accentWarm + '18',
+          icon: AlertTriangle,
+          label: t('business.orders.statusExpired', { defaultValue: 'Expiré' }),
         };
     }
   };
@@ -255,11 +288,6 @@ export default function IncomingOrdersScreen() {
         const screenW = Dimensions.get('window').width;
         const cardW = screenW * 0.38;
         const gap = 8;
-        const statsRef = useRef<ScrollView>(null);
-        const tabIndex = activeTab === 'incoming' ? 0 : activeTab === 'completed' ? 1 : 2;
-        useEffect(() => {
-          statsRef.current?.scrollTo({ x: tabIndex * (cardW + gap) - (screenW - cardW) / 2 + cardW / 2, animated: true });
-        }, [tabIndex]);
 
         const slides = [
           { key: 'incoming' as const, icon: Clock, iconColor: '#e3ff5c', bg: theme.colors.primary, textColor: '#fff', subColor: 'rgba(255,255,255,0.7)', count: incomingOrders.length, label: t('business.orders.pendingPickup', { defaultValue: 'en attente de retrait' }) },
@@ -269,7 +297,7 @@ export default function IncomingOrdersScreen() {
 
         return (
         <ScrollView
-          ref={statsRef}
+          ref={statsScrollRef}
           horizontal
           showsHorizontalScrollIndicator={false}
           style={{ marginTop: theme.spacing.sm, flexGrow: 0 }}
@@ -342,7 +370,7 @@ export default function IncomingOrdersScreen() {
                 },
               ]}
             >
-              {label}{count > 0 ? ` (${count})` : ''}
+              {label}
             </Text>
           </TouchableOpacity>
           );
@@ -423,12 +451,28 @@ export default function IncomingOrdersScreen() {
                     </Text>
                   </View>
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                    <View style={[styles.statusBadge, { backgroundColor: statusConfig.bg, borderRadius: theme.radii.pill, paddingHorizontal: 10, paddingVertical: 5 }]}>
-                      <StatusIcon size={12} color={statusConfig.color} />
-                      <Text style={[{ color: statusConfig.color, ...theme.typography.caption, fontWeight: '600' as const, marginLeft: 4 }]}>
-                        {statusConfig.label}
-                      </Text>
-                    </View>
+                    {isIncoming && (
+                      <TouchableOpacity
+                        onPress={(e) => { e.stopPropagation?.(); router.push({ pathname: '/message/[id]', params: { id: `res-${order.id}`, reservationId: String(order.id), buyerId: String(order.buyerId ?? ''), locationId: String(selectedLocationId ?? '') } } as never); }}
+                        style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: theme.colors.primary + '15', justifyContent: 'center', alignItems: 'center' }}
+                        hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                      >
+                        <MessageCircle size={15} color={theme.colors.primary} />
+                        {(msgUnreads[Number(order.id)] ?? 0) > 0 && (
+                          <View style={{ position: 'absolute', top: -4, right: -4, backgroundColor: '#ef4444', borderRadius: 8, minWidth: 16, height: 16, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 3, borderWidth: 2, borderColor: theme.colors.surface }}>
+                            <Text style={{ color: '#fff', fontSize: 9, fontWeight: '700' }}>{msgUnreads[Number(order.id)] > 9 ? '9+' : msgUnreads[Number(order.id)]}</Text>
+                          </View>
+                        )}
+                      </TouchableOpacity>
+                    )}
+                    {!isIncoming && (
+                      <View style={[styles.statusBadge, { backgroundColor: statusConfig.bg, borderRadius: theme.radii.pill, paddingHorizontal: 10, paddingVertical: 5 }]}>
+                        <StatusIcon size={12} color={statusConfig.color} />
+                        <Text style={[{ color: statusConfig.color, ...theme.typography.caption, fontWeight: '600' as const, marginLeft: 4 }]}>
+                          {statusConfig.label}
+                        </Text>
+                      </View>
+                    )}
                     {isExpanded
                       ? <ChevronUp size={16} color={theme.colors.textSecondary} />
                       : <ChevronDown size={16} color={theme.colors.textSecondary} />}
@@ -455,6 +499,32 @@ export default function IncomingOrdersScreen() {
                           {order.pickupWindow.start} - {order.pickupWindow.end}
                         </Text>
                       </View>
+                      {/* Reservation date for incoming orders */}
+                      {isIncoming && (
+                        <View style={[styles.detailRow, { marginTop: 4 }]}>
+                          <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption }]}>
+                            {t('business.orders.reservedAt', { defaultValue: 'Réservé le' })}
+                          </Text>
+                          <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.bodySm }]}>
+                            {new Date(order.createdAt).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric' })} {new Date(order.createdAt).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}
+                          </Text>
+                        </View>
+                      )}
+                      {/* Date of collection, cancellation, or expiry */}
+                      {!isIncoming && (
+                        <View style={[styles.detailRow, { marginTop: 4 }]}>
+                          <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption }]}>
+                            {order.status === 'picked_up'
+                              ? t('business.orders.collectedAt', { defaultValue: 'Récupéré le' })
+                              : order.status === 'expired'
+                              ? t('business.orders.expiredAt', { defaultValue: 'Expiré le' })
+                              : t('business.orders.cancelledAt', { defaultValue: 'Annulé le' })}
+                          </Text>
+                          <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.bodySm }]}>
+                            {new Date(order.updatedAt).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric' })} {new Date(order.updatedAt).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}
+                          </Text>
+                        </View>
+                      )}
                     </View>
 
                     {/* Action row — only for incoming confirmed orders */}

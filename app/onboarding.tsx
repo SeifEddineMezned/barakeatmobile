@@ -12,11 +12,12 @@ import {
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { ShoppingBag, Package, MapPin, CreditCard } from 'lucide-react-native';
+import { ShoppingBag, Package, MapPin, CreditCard, TrendingUp, Users, ClipboardList, BarChart3 } from 'lucide-react-native';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { StatusBar } from 'expo-status-bar';
 import { PrimaryCTAButton } from '@/src/components/PrimaryCTAButton';
 import { useAuthStore } from '@/src/stores/authStore';
+import { useWalkthroughStore } from '@/src/stores/walkthroughStore';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -28,8 +29,9 @@ interface OnboardingSlide {
 }
 
 export default function OnboardingScreen() {
-  const { demo } = useLocalSearchParams<{ demo?: string }>();
+  const { demo, role: roleParam } = useLocalSearchParams<{ demo?: string; role?: string }>();
   const isDemo = demo === 'true';
+  const isBusiness = roleParam === 'business';
   const { t, i18n } = useTranslation();
   const theme = useTheme();
   const router = useRouter();
@@ -54,32 +56,21 @@ export default function OnboardingScreen() {
     }
   }, [hasCompletedOnboarding, isAuthenticated, user?.role, isDemo]);
 
-  const slides: OnboardingSlide[] = [
-    {
-      id: '1',
-      icon: <ShoppingBag size={80} color={theme.colors.primary} />,
-      titleKey: 'onboarding.slide1.title',
-      descriptionKey: 'onboarding.slide1.description',
-    },
-    {
-      id: '2',
-      icon: <Package size={80} color={theme.colors.primary} />,
-      titleKey: 'onboarding.slide2.title',
-      descriptionKey: 'onboarding.slide2.description',
-    },
-    {
-      id: '3',
-      icon: <MapPin size={80} color={theme.colors.primary} />,
-      titleKey: 'onboarding.slide3.title',
-      descriptionKey: 'onboarding.slide3.description',
-    },
-    {
-      id: '4',
-      icon: <CreditCard size={80} color={theme.colors.primary} />,
-      titleKey: 'onboarding.slide4.title',
-      descriptionKey: 'onboarding.slide4.description',
-    },
+  const customerSlides: OnboardingSlide[] = [
+    { id: '1', icon: <ShoppingBag size={80} color={theme.colors.primary} />, titleKey: 'onboarding.slide1.title', descriptionKey: 'onboarding.slide1.description' },
+    { id: '2', icon: <Package size={80} color={theme.colors.primary} />, titleKey: 'onboarding.slide2.title', descriptionKey: 'onboarding.slide2.description' },
+    { id: '3', icon: <MapPin size={80} color={theme.colors.primary} />, titleKey: 'onboarding.slide3.title', descriptionKey: 'onboarding.slide3.description' },
+    { id: '4', icon: <CreditCard size={80} color={theme.colors.primary} />, titleKey: 'onboarding.slide4.title', descriptionKey: 'onboarding.slide4.description' },
   ];
+
+  const businessSlides: OnboardingSlide[] = [
+    { id: 'b1', icon: <TrendingUp size={80} color={theme.colors.primary} />, titleKey: 'onboarding.biz1.title', descriptionKey: 'onboarding.biz1.description' },
+    { id: 'b2', icon: <Package size={80} color={theme.colors.primary} />, titleKey: 'onboarding.biz2.title', descriptionKey: 'onboarding.biz2.description' },
+    { id: 'b3', icon: <ClipboardList size={80} color={theme.colors.primary} />, titleKey: 'onboarding.biz3.title', descriptionKey: 'onboarding.biz3.description' },
+    { id: 'b4', icon: <BarChart3 size={80} color={theme.colors.primary} />, titleKey: 'onboarding.biz4.title', descriptionKey: 'onboarding.biz4.description' },
+  ];
+
+  const slides = isBusiness ? businessSlides : customerSlides;
 
   const onViewableItemsChanged = useRef(
     ({ viewableItems }: { viewableItems: ViewToken[] }) => {
@@ -93,21 +84,31 @@ export default function OnboardingScreen() {
     itemVisiblePercentThreshold: 50,
   }).current;
 
+  const startWalkthrough = useWalkthroughStore((s) => s.startWalkthrough);
+
   const handleNext = useCallback(() => {
     if (currentIndex < slides.length - 1) {
       flatListRef.current?.scrollToIndex({ index: currentIndex + 1 });
     } else {
-      if (isDemo) { router.back(); return; }
+      if (isDemo) {
+        router.back();
+        setTimeout(() => startWalkthrough(), 500);
+        return;
+      }
       completeOnboarding();
       router.replace('/auth/sign-in' as never);
     }
-  }, [currentIndex, slides.length, completeOnboarding, router, isDemo]);
+  }, [currentIndex, slides.length, completeOnboarding, router, isDemo, startWalkthrough]);
 
   const handleSkip = useCallback(() => {
-    if (isDemo) { router.back(); return; }
+    if (isDemo) {
+      router.back();
+      setTimeout(() => startWalkthrough(), 500);
+      return;
+    }
     completeOnboarding();
     router.replace('/auth/sign-in' as never);
-  }, [completeOnboarding, router, isDemo]);
+  }, [completeOnboarding, router, isDemo, startWalkthrough]);
 
   const changeLanguage = useCallback((lang: string) => {
     i18n.changeLanguage(lang);

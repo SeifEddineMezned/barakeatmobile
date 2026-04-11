@@ -35,7 +35,6 @@ export default function LeaderboardScreen() {
   const selectedAddr = addresses.find((a) => a.id === selectedId);
 
   const [activeFilter, setActiveFilter] = useState<FilterTab>('all');
-  const [showFull, setShowFull] = useState(false);
   const [regionRadius, setRegionRadius] = useState(10); // km
 
   // Extract city from address (use first comma segment or full address)
@@ -54,17 +53,7 @@ export default function LeaderboardScreen() {
     staleTime: 60_000,
   });
 
-  const allEntries = leaderboardQuery.data ?? [];
-
-  // By default show only the user's position with nearby users
-  const entries = (() => {
-    if (showFull || !user?.id) return allEntries;
-    const userIdx = allEntries.findIndex((e) => e.user_id === Number(user.id));
-    if (userIdx === -1) return allEntries; // user not found, show all
-    const start = Math.max(0, userIdx - 2);
-    const end = Math.min(allEntries.length, userIdx + 3);
-    return allEntries.slice(start, end);
-  })();
+  const entries = leaderboardQuery.data ?? [];
 
   const renderEntry = ({ item, index }: { item: LeaderboardEntry; index: number }) => {
     const isCurrentUser = user?.id != null && item.user_id === Number(user.id);
@@ -102,7 +91,7 @@ export default function LeaderboardScreen() {
         >
           <Text
             style={{
-              color: item.rank <= 3 ? '#fff' : theme.colors.textSecondary,
+              color: item.rank <= 3 ? '#fff' : '#1a1a1a',
               ...theme.typography.bodySm,
               fontWeight: '700' as const,
             }}
@@ -342,32 +331,6 @@ export default function LeaderboardScreen() {
             data={entries}
             keyExtractor={(item, index) => `lb-${item.user_id}-${index}`}
             renderItem={renderEntry}
-            ListHeaderComponent={!showFull && entries.length > 0 && entries[0]?.rank > 1 ? (
-              <View style={{ alignItems: 'center', paddingVertical: 8 }}>
-                <Text style={{ color: theme.colors.textSecondary, fontSize: 18, letterSpacing: 4 }}>...</Text>
-              </View>
-            ) : null}
-            ListFooterComponent={
-              <View>
-                {!showFull && entries.length > 0 && entries[entries.length - 1]?.rank < allEntries.length && (
-                  <View style={{ alignItems: 'center', paddingVertical: 8 }}>
-                    <Text style={{ color: theme.colors.textSecondary, fontSize: 18, letterSpacing: 4 }}>...</Text>
-                  </View>
-                )}
-                {allEntries.length > 5 && (
-                  <TouchableOpacity
-                    onPress={() => setShowFull(!showFull)}
-                    style={{ alignItems: 'center', paddingVertical: 14 }}
-                  >
-                    <Text style={{ color: theme.colors.primary, ...theme.typography.bodySm, fontWeight: '600' as const }}>
-                      {showFull
-                        ? t('impact.showLess', { defaultValue: 'Show less' })
-                        : t('impact.showAll', { defaultValue: 'Show full leaderboard' })}
-                    </Text>
-                  </TouchableOpacity>
-                )}
-              </View>
-            }
             ListEmptyComponent={renderEmpty}
             showsVerticalScrollIndicator={false}
             contentContainerStyle={{ paddingBottom: 40 }}

@@ -2,7 +2,7 @@ import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react'
 import { View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity, Modal, Platform, Dimensions, Animated, PanResponder, Image } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
-import { Search, X, RefreshCw, Settings, Bell, MapPin, ChevronDown, Hand } from 'lucide-react-native';
+import { Search, X, RefreshCw, Settings, Bell, MapPin, ChevronDown, Hand, Store, ChevronRight } from 'lucide-react-native';
 
 import { useRouter } from 'expo-router';
 import { useQuery } from '@tanstack/react-query';
@@ -42,6 +42,8 @@ export default function HomeScreen() {
   const insets = useSafeAreaInsets();
   const [searchQuery, setSearchQuery] = useState('');
   const [activeCategory, setActiveCategory] = useState('all');
+  const [addressSuggestions, setAddressSuggestions] = useState<{ display_name: string; lat: string; lon: string }[]>([]);
+  const addressSearchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const { toggleBasketFavorite, isBasketFavorite } = useFavoritesStore();
   const { user } = useAuthStore();
   const [refreshing, setRefreshing] = useState(false);
@@ -298,7 +300,8 @@ export default function HomeScreen() {
         (b) =>
           b.name.toLowerCase().includes(q) ||
           b.merchantName.toLowerCase().includes(q) ||
-          b.category.toLowerCase().includes(q)
+          b.category.toLowerCase().includes(q) ||
+          (b.address && b.address.toLowerCase().includes(q))
       );
     }
 
@@ -338,6 +341,53 @@ export default function HomeScreen() {
 
     return result;
   }, [baskets, activeCategory, searchQuery, selectedAddress]);
+
+  // Location suggestions: when searching, show locations that match by name/address
+  // even if they don't have matching baskets — lets user navigate to the location page
+  const locationSuggestions = useMemo(() => {
+    if (!searchQuery.trim()) return [];
+    const q = searchQuery.toLowerCase();
+    const locations = locationsQuery.data ?? [];
+    // IDs of locations already shown as basket cards
+    const shownIds = new Set(filteredBaskets.map(b => b.merchantId));
+    return locations
+      .filter(loc => {
+        if (shownIds.has(String(loc.id))) return false;
+        const name = (loc.display_name ?? loc.name ?? '').toLowerCase();
+        const addr = (loc.address ?? '').toLowerCase();
+        return name.includes(q) || addr.includes(q);
+      })
+      .slice(0, 5);
+  }, [searchQuery, locationsQuery.data, filteredBaskets]);
+
+  // Nominatim address autocomplete — debounced
+  const fetchAddressSuggestions = useCallback((query: string) => {
+    if (addressSearchTimer.current) clearTimeout(addressSearchTimer.current);
+    if (query.length < 3) { setAddressSuggestions([]); return; }
+    addressSearchTimer.current = setTimeout(async () => {
+      try {
+        const params = new URLSearchParams({
+          format: 'json', q: query, limit: '5',
+          viewbox: '7.5,30.2,11.6,37.5', bounded: '0', 'accept-language': 'fr',
+        });
+        const resp = await fetch(`https://nominatim.openstreetmap.org/search?${params}`);
+        const data = await resp.json();
+        setAddressSuggestions(data ?? []);
+      } catch { setAddressSuggestions([]); }
+    }, 500);
+  }, []);
+
+  const handleSearchChange = useCallback((text: string) => {
+    setSearchQuery(text);
+    fetchAddressSuggestions(text);
+  }, [fetchAddressSuggestions]);
+
+  const handleAddressSuggestionPress = useCallback(async (suggestion: { display_name: string; lat: string; lon: string }) => {
+    const shortLabel = suggestion.display_name.split(',')[0] ?? suggestion.display_name;
+    await useAddressStore.getState().addAddress({ label: shortLabel, lat: parseFloat(suggestion.lat), lng: parseFloat(suggestion.lon) });
+    setSearchQuery('');
+    setAddressSuggestions([]);
+  }, []);
 
   const handleCategoryPress = useCallback((cat: string) => {
     setActiveCategory(cat);
@@ -622,7 +672,7 @@ export default function HomeScreen() {
               placeholder={t('home.searchPlaceholder')}
               placeholderTextColor={theme.colors.muted}
               value={searchQuery}
-              onChangeText={setSearchQuery}
+              onChangeText={handleSearchChange}
               returnKeyType="search"
               textAlignVertical="center"
               accessibilityLabel={t('home.searchPlaceholder')}
@@ -743,21 +793,108 @@ export default function HomeScreen() {
                 </Text>
               </TouchableOpacity>
             </View>
-          ) : filteredBaskets.length === 0 ? (
+          ) : filteredBaskets.length === 0 && locationSuggestions.length === 0 ? (
             <View style={styles.emptyState}>
               <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.body, textAlign: 'center' as const, marginTop: 40, paddingHorizontal: 20 }]}>
                 {t('home.emptyState.noBaskets')}
               </Text>
             </View>
           ) : (
-            filteredBaskets.map((basket) => (
-              <BasketCard
-                key={basket.id}
-                basket={basket}
-                isFavorite={isBasketFavorite(basket.id)}
-                onFavoritePress={() => toggleBasketFavorite(basket.id)}
-              />
-            ))
+            <>
+              {filteredBaskets.map((basket) => (
+                <BasketCard
+                  key={basket.id}
+                  basket={basket}
+                  isFavorite={isBasketFavorite(basket.id)}
+                  onFavoritePress={() => toggleBasketFavorite(basket.id)}
+                />
+              ))}
+
+              {/* Address suggestions from Nominatim */}
+              {searchQuery.trim() && addressSuggestions.length > 0 && (
+                <>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: filteredBaskets.length > 0 || locationSuggestions.length > 0 ? 20 : 0, marginBottom: 14 }}>
+                    <View style={{ flex: 1, height: 1, backgroundColor: theme.colors.divider }} />
+                    <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, marginHorizontal: 12 }}>
+                      {t('home.searchByAddress', { defaultValue: 'Rechercher par adresse' })}
+                    </Text>
+                    <View style={{ flex: 1, height: 1, backgroundColor: theme.colors.divider }} />
+                  </View>
+                  {addressSuggestions.map((s, idx) => (
+                    <TouchableOpacity
+                      key={idx}
+                      onPress={() => handleAddressSuggestionPress(s)}
+                      activeOpacity={0.7}
+                      style={{
+                        flexDirection: 'row', alignItems: 'center',
+                        backgroundColor: theme.colors.surface, borderRadius: 14,
+                        padding: 14, marginBottom: 10,
+                      }}
+                    >
+                      <View style={{ width: 40, height: 40, borderRadius: 20, backgroundColor: '#3b82f612', justifyContent: 'center', alignItems: 'center', marginRight: 12 }}>
+                        <MapPin size={18} color="#3b82f6" />
+                      </View>
+                      <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, flex: 1 }} numberOfLines={2}>
+                        {s.display_name}
+                      </Text>
+                      <ChevronRight size={14} color={theme.colors.textSecondary} />
+                    </TouchableOpacity>
+                  ))}
+                </>
+              )}
+
+              {/* Location suggestions when searching */}
+              {searchQuery.trim() && locationSuggestions.length > 0 && (
+                <>
+                  {/* Divider */}
+                  <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: filteredBaskets.length > 0 ? 20 : 0, marginBottom: 14 }}>
+                    <View style={{ flex: 1, height: 1, backgroundColor: theme.colors.divider }} />
+                    <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, marginHorizontal: 12 }}>
+                      {filteredBaskets.length === 0
+                        ? t('home.noMatchingBaskets', { defaultValue: 'Aucun panier avec ce nom' })
+                        : t('home.otherLocations', { defaultValue: 'Autres commerces' })}
+                    </Text>
+                    <View style={{ flex: 1, height: 1, backgroundColor: theme.colors.divider }} />
+                  </View>
+
+                  {/* Location suggestion cards */}
+                  {locationSuggestions.map((loc) => (
+                    <TouchableOpacity
+                      key={loc.id}
+                      onPress={() => router.push({ pathname: '/restaurant/[id]', params: { id: String(loc.id) } } as never)}
+                      activeOpacity={0.7}
+                      style={{
+                        flexDirection: 'row', alignItems: 'center',
+                        backgroundColor: theme.colors.surface, borderRadius: 14,
+                        padding: 14, marginBottom: 10,
+                      }}
+                    >
+                      {loc.image_url ? (
+                        <Image source={{ uri: loc.image_url }} style={{ width: 44, height: 44, borderRadius: 12, marginRight: 12 }} resizeMode="cover" />
+                      ) : (
+                        <View style={{ width: 44, height: 44, borderRadius: 12, backgroundColor: theme.colors.primary + '12', justifyContent: 'center', alignItems: 'center', marginRight: 12 }}>
+                          <Store size={20} color={theme.colors.primary} />
+                        </View>
+                      )}
+                      <View style={{ flex: 1 }}>
+                        <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '600' }} numberOfLines={1}>
+                          {loc.display_name ?? loc.name}
+                        </Text>
+                        {loc.address ? (
+                          <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 2 }}>
+                            <MapPin size={11} color={theme.colors.textSecondary} style={{ marginRight: 4 }} />
+                            <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, flex: 1 }} numberOfLines={1}>
+                              {loc.address}
+                            </Text>
+                          </View>
+                        ) : null}
+                      </View>
+                      <ChevronRight size={16} color={theme.colors.textSecondary} />
+                    </TouchableOpacity>
+                  ))}
+                </>
+              )}
+            </>
           )}
         </ScrollView>
       </View>
@@ -892,7 +1029,10 @@ const styles = StyleSheet.create({
   },
   searchInput: {
     marginLeft: 10,
-  },
+    paddingVertical: 0,
+    height: 44,
+    includeFontPadding: false,
+  } as any,
   categoriesSection: {},
   categoryPill: {},
   scrollView: {

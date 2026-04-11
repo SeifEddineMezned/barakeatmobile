@@ -1,9 +1,9 @@
 import React, { useCallback, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, Alert, Modal } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, Modal } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import { useRouter } from 'expo-router';
-import { Plus, Clock, Edit3, Trash2, ShoppingBag, MoreVertical, Minus, Camera, X } from 'lucide-react-native';
+import { Plus, Clock, Edit3, Trash2, ShoppingBag, MoreVertical, Minus, Camera, X, MapPin } from 'lucide-react-native';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { StatusBar } from 'expo-status-bar';
 import { useBusinessStore } from '@/src/stores/businessStore';
@@ -13,6 +13,7 @@ import * as ImagePicker from 'expo-image-picker';
 import { getErrorMessage } from '@/src/lib/api';
 import { FeatureFlags } from '@/src/lib/featureFlags';
 import { DelayedLoader } from '@/src/components/DelayedLoader';
+import { useCustomAlert } from '@/src/components/CustomAlert';
 
 export default function MyBasketsScreen() {
   const { t } = useTranslation();
@@ -21,6 +22,7 @@ export default function MyBasketsScreen() {
   const store = useBusinessStore();
   const selectedLocationId = useBusinessStore((s) => s.selectedLocationId);
   const queryClient = useQueryClient();
+  const alert = useCustomAlert();
 
   const basketsQuery = useQuery({
     queryKey: ['my-baskets', selectedLocationId],
@@ -71,7 +73,7 @@ export default function MyBasketsScreen() {
     },
     onError: (err: any) => {
       console.error('[MyBaskets] Save FAILED:', err?.status, err?.message, JSON.stringify(err?.data));
-      Alert.alert(t('common.error'), err?.data?.error ?? err?.message ?? t('errors.serverError'));
+      alert.showAlert(t('common.error'), err?.data?.error ?? err?.message ?? t('errors.serverError'));
     },
   });
 
@@ -102,6 +104,8 @@ export default function MyBasketsScreen() {
       isActive: b.status !== 'deleted' && Number(b.quantity) > 0,
       description: b.description ?? undefined,
       maxPerCustomer: (b as any).max_per_customer ?? 5,
+      updatedAt: b.updated_at ?? undefined,
+      locationName: (b as any).location_name ?? undefined,
     }));
 
   const { toggleBasketActive, updateBasket, profile } = store;
@@ -112,7 +116,7 @@ export default function MyBasketsScreen() {
       void queryClient.invalidateQueries({ queryKey: ['my-baskets'] });
     },
     onError: (err) => {
-      Alert.alert(t('common.error'), getErrorMessage(err));
+      alert.showAlert(t('common.error'), getErrorMessage(err));
     },
   });
   const [menuOpenId, setMenuOpenId] = useState<string | null>(null);
@@ -138,11 +142,11 @@ export default function MyBasketsScreen() {
     if (willBeActive && !isSupermarket) {
       const otherActive = baskets.find((b) => b.id !== id && b.isActive);
       if (otherActive) {
-        Alert.alert(
+        alert.showAlert(
           t('business.baskets.onlyOneActive'),
           `"${otherActive.name}" sera désactivé.`,
           [
-            { text: t('common.cancel'), style: 'cancel' },
+            { text: 'Annuler', style: 'cancel' },
             {
               text: t('common.confirm'),
               onPress: () => toggleBasketActive(id),
@@ -157,13 +161,13 @@ export default function MyBasketsScreen() {
 
   const handleDelete = useCallback((id: string) => {
     setMenuOpenId(null);
-    Alert.alert(
+    alert.showAlert(
       t('business.baskets.deleteConfirm'),
       t('business.baskets.deleteMessage'),
       [
-        { text: t('common.cancel'), style: 'cancel' },
+        { text: 'Annuler', style: 'cancel' },
         {
-          text: t('business.baskets.delete'),
+          text: 'Supprimer',
           style: 'destructive',
           onPress: () => {
             deleteBasketMutation.mutate(id);
@@ -202,7 +206,7 @@ export default function MyBasketsScreen() {
   const handleChangePhoto = useCallback(async (basketId: string) => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== 'granted') {
-      Alert.alert(t('common.error'), t('business.menuItems.photoPermRequired'));
+      alert.showAlert(t('common.error'), t('business.menuItems.photoPermRequired'));
       return;
     }
     const result = await ImagePicker.launchImageLibraryAsync({
@@ -224,7 +228,7 @@ export default function MyBasketsScreen() {
       void queryClient.invalidateQueries({ queryKey: ['my-baskets'] });
       setDetailBasket(prev => prev ? { ...prev, imageUrl: asset.uri } : prev);
     } catch (err: any) {
-      Alert.alert(t('common.error'), err?.message ?? t('errors.serverError'));
+      alert.showAlert(t('common.error'), err?.message ?? t('errors.serverError'));
     }
   }, [queryClient]);
 
@@ -372,6 +376,14 @@ export default function MyBasketsScreen() {
                           <MoreVertical size={18} color={theme.colors.textSecondary} />
                         </TouchableOpacity>
                       </View>
+                      {!selectedLocationId && (basket as any).locationName && (
+                        <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 3 }}>
+                          <MapPin size={10} color={theme.colors.muted} />
+                          <Text style={{ color: theme.colors.muted, fontSize: 11, marginLeft: 4 }} numberOfLines={1}>
+                            {(basket as any).locationName}
+                          </Text>
+                        </View>
+                      )}
                       <View style={[styles.priceRow, { marginTop: 6 }]}>
                         <Text style={[{ color: theme.colors.primary, ...theme.typography.body, fontWeight: '700' as const }]}>
                           {basket.discountedPrice} TND
@@ -453,30 +465,37 @@ export default function MyBasketsScreen() {
             <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ flexGrow: 0 }}>
               {/* Pause pill + close button header */}
               <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 20, paddingTop: 20, marginBottom: 12 }}>
-                <TouchableOpacity
-                  onPress={() => handleToggle(detailBasket!.id)}
-                  style={{
-                    flexDirection: 'row',
-                    alignItems: 'center',
-                    backgroundColor: detailBasket?.isActive ? theme.colors.success + '15' : theme.colors.error + '15',
-                    borderRadius: theme.radii.pill,
-                    paddingHorizontal: 12,
-                    paddingVertical: 6,
-                    gap: 6,
-                  }}
-                >
-                  <View style={{
-                    width: 8, height: 8, borderRadius: 4,
-                    backgroundColor: detailBasket?.isActive ? theme.colors.success : theme.colors.error,
-                  }} />
-                  <Text style={{
-                    color: detailBasket?.isActive ? theme.colors.success : theme.colors.error,
-                    ...theme.typography.caption,
-                    fontWeight: '600',
-                  }}>
-                    {detailBasket?.isActive ? t('business.baskets.active') : t('business.baskets.inactive')}
-                  </Text>
-                </TouchableOpacity>
+                <View>
+                  <TouchableOpacity
+                    onPress={() => handleToggle(detailBasket!.id)}
+                    style={{
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      backgroundColor: detailBasket?.isActive ? '#114b3c18' : '#114b3c10',
+                      borderRadius: theme.radii.pill,
+                      paddingHorizontal: 12,
+                      paddingVertical: 6,
+                      gap: 6,
+                    }}
+                  >
+                    <View style={{
+                      width: 8, height: 8, borderRadius: 4,
+                      backgroundColor: detailBasket?.isActive ? '#114b3c' : '#999',
+                    }} />
+                    <Text style={{
+                      color: '#114b3c',
+                      ...theme.typography.caption,
+                      fontWeight: '600',
+                    }}>
+                      {detailBasket?.isActive ? t('business.baskets.active') : t('business.baskets.inactive')}
+                    </Text>
+                  </TouchableOpacity>
+                  {detailBasket?.updatedAt ? (
+                    <Text style={{ color: theme.colors.muted, fontSize: 10, fontFamily: 'Poppins_400Regular', marginTop: 4, paddingLeft: 4 }}>
+                      {t('business.baskets.lastChanged', { defaultValue: 'Dernier changement' })} : {new Date(detailBasket.updatedAt).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric' })} {new Date(detailBasket.updatedAt).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}
+                    </Text>
+                  ) : null}
+                </View>
                 <TouchableOpacity onPress={() => setDetailBasket(null)}>
                   <X size={22} color={theme.colors.textSecondary} />
                 </TouchableOpacity>
@@ -740,12 +759,12 @@ export default function MyBasketsScreen() {
                   if (detailBasket) {
                     // Validate price: original must be at least 10 TND
                     if (detailBasket.originalPrice > 0 && detailBasket.originalPrice < 10) {
-                      Alert.alert(t('common.error'), t('business.createBasket.minOriginalPrice', { defaultValue: 'Original price must be at least 10 TND.' }));
+                      alert.showAlert(t('common.error'), t('business.createBasket.minOriginalPrice', { defaultValue: 'Le prix original doit être d\'au moins 10 TND.' }));
                       return;
                     }
                     // Validate price: selling price must be at most 50% of original
                     if (detailBasket.originalPrice > 0 && detailBasket.discountedPrice > detailBasket.originalPrice * 0.5) {
-                      Alert.alert(t('common.error'), t('business.createBasket.priceError'));
+                      alert.showAlert(t('common.error'), t('business.createBasket.priceError'));
                       return;
                     }
                     // Validate pickup times are within location hours before saving

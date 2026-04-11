@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TextInput,
-  TouchableOpacity, KeyboardAvoidingView, Platform, Alert, ActivityIndicator, Modal,
+  TouchableOpacity, KeyboardAvoidingView, Platform, ActivityIndicator, Modal,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -18,12 +18,14 @@ import {
 } from '@/src/services/business';
 import { getErrorMessage, apiClient } from '@/src/lib/api';
 import { FeatureFlags } from '@/src/lib/featureFlags';
+import { useCustomAlert } from '@/src/components/CustomAlert';
 
 export default function CreateBasketScreen() {
   const { editId } = useLocalSearchParams<{ editId?: string }>();
   const { t } = useTranslation();
   const theme = useTheme();
   const router = useRouter();
+  const alert = useCustomAlert();
   const { baskets: storeBaskets } = useBusinessStore();
   const selectedLocationId = useBusinessStore((s) => s.selectedLocationId);
   const queryClient = useQueryClient();
@@ -162,6 +164,10 @@ export default function CreateBasketScreen() {
   });
 
   const [priceError, setPriceError] = useState('');
+  const [nameError, setNameError] = useState('');
+  const [descError, setDescError] = useState('');
+  const [origPriceError, setOrigPriceError] = useState('');
+  const [sellingPriceError, setSellingPriceError] = useState('');
   const [aiLoading, setAiLoading] = useState(false);
 
   const handleAISuggest = async () => {
@@ -175,9 +181,9 @@ export default function CreateBasketScreen() {
       if (data.name) setName(data.name);
       if (data.description) setDescription(data.description);
       if (data.price != null) setSellingPrice(String(data.price));
-      Alert.alert(t('business.createBasket.aiSuggestionTitle', { defaultValue: 'Suggestion IA' }), t('business.createBasket.aiSuggestionFilled', { defaultValue: 'Contenu suggéré rempli ! Ajustez-le selon vos besoins.' }));
+      alert.showAlert(t('business.createBasket.aiSuggestionTitle', { defaultValue: 'Suggestion IA' }), t('business.createBasket.aiSuggestionFilled', { defaultValue: 'Contenu suggéré rempli ! Ajustez-le selon vos besoins.' }));
     } catch (err) {
-      Alert.alert(t('common.error'), getErrorMessage(err));
+      alert.showAlert(t('common.error'), getErrorMessage(err));
     } finally {
       setAiLoading(false);
     }
@@ -228,11 +234,12 @@ export default function CreateBasketScreen() {
     const o = parseFloat(orig);
     const d = parseFloat(disc);
     if (o > 0 && o < 10) {
-      setPriceError(t('business.createBasket.minOriginalPrice', { defaultValue: 'Original price must be at least 10 TND.' }));
+      setPriceError(t('business.createBasket.minOriginalPrice', { defaultValue: 'Le prix original doit être d\'au moins 10 TND.' }));
       return false;
     }
+    // Selling price must be at most 50% of original (at least 50% discount)
     if (o > 0 && d > 0 && d > o * 0.5) {
-      setPriceError(t('business.createBasket.priceError'));
+      setPriceError(t('business.createBasket.priceError', { defaultValue: 'Le prix réduit doit être d\'au moins 50% inférieur au prix original.' }));
       return false;
     }
     setPriceError('');
@@ -275,15 +282,16 @@ export default function CreateBasketScreen() {
         menu_item_ids: selectedMenuItemIds.length > 0 ? selectedMenuItemIds : undefined,
         show_menu_items: showMenuItems,
         pickup_instructions: useDefaultPickupInstructions ? undefined : pickupInstructions.trim() || undefined,
+        location_id: selectedLocationId ? Number(selectedLocationId) : undefined,
       });
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['my-baskets'] });
       void queryClient.invalidateQueries({ queryKey: ['locations'] });
-      router.back();
+      setTimeout(() => router.back(), 300);
     },
     onError: (err: any) => {
-      Alert.alert(t('common.error'), getErrorMessage(err));
+      alert.showAlert(t('common.error'), getErrorMessage(err));
     },
   });
 
@@ -311,25 +319,32 @@ export default function CreateBasketScreen() {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['my-baskets'] });
       void queryClient.invalidateQueries({ queryKey: ['locations'] });
-      router.back();
+      setTimeout(() => router.back(), 300);
     },
     onError: (err: any) => {
-      Alert.alert(t('common.error'), getErrorMessage(err));
+      alert.showAlert(t('common.error'), getErrorMessage(err));
     },
   });
 
   const isPending = createMutation.isPending || updateMutation.isPending;
 
+  const requiredMsg = t('common.requiredField', { defaultValue: 'Ce champ est obligatoire.' });
+
   const handleSave = () => {
-    if (!name.trim()) {
-      Alert.alert(t('common.error'), t('business.createBasket.nameRequired'));
-      return;
-    }
+    let hasError = false;
+    // Clear previous errors
+    setNameError('');
+    setDescError('');
+    setOrigPriceError('');
+    setSellingPriceError('');
+
+    if (!name.trim()) { setNameError(requiredMsg); hasError = true; }
+    if (!description.trim()) { setDescError(requiredMsg); hasError = true; }
+    const op = parseFloat(originalPrice);
+    if (!op || op <= 0) { setOrigPriceError(requiredMsg); hasError = true; }
     const sp = parseFloat(sellingPrice);
-    if (!sp || sp <= 0) {
-      Alert.alert(t('common.error'), t('business.createBasket.sellingPriceRequired'));
-      return;
-    }
+    if (!sp || sp <= 0) { setSellingPriceError(requiredMsg); hasError = true; }
+    if (hasError) return;
     if (!validatePrice(originalPrice, sellingPrice)) return;
     const doSave = () => {
       if (isEditing) {
@@ -374,7 +389,7 @@ export default function CreateBasketScreen() {
           <View style={[styles.field, { marginBottom: theme.spacing.xl }]}>
             <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: theme.spacing.sm }}>
               <Text style={{ color: theme.colors.primary, ...theme.typography.body, fontWeight: '700' }}>
-                {t('business.createBasket.name')}
+                {t('business.createBasket.name')} *
               </Text>
               {FeatureFlags.ENABLE_AI_BASKET_SUGGESTIONS && (
                 <TouchableOpacity
@@ -405,42 +420,45 @@ export default function CreateBasketScreen() {
               )}
             </View>
             <TextInput
-              style={[styles.input, { backgroundColor: theme.colors.surface, borderColor: theme.colors.divider, borderRadius: theme.radii.r12, color: theme.colors.textPrimary, ...theme.typography.body, ...theme.shadows.shadowSm }]}
+              style={[styles.input, { backgroundColor: theme.colors.surface, borderColor: nameError ? theme.colors.error : theme.colors.divider, borderRadius: theme.radii.r12, color: theme.colors.textPrimary, ...theme.typography.body, ...theme.shadows.shadowSm }]}
               value={name}
-              onChangeText={setName}
+              onChangeText={(v) => { setName(v); if (v.trim()) setNameError(''); }}
               placeholder={t('business.createBasket.namePlaceholder')}
               placeholderTextColor={theme.colors.muted}
             />
+            {nameError !== '' && <Text style={{ color: theme.colors.error, fontSize: 12, marginTop: 4 }}>{nameError}</Text>}
           </View>
 
           {/* Description */}
           <View style={[styles.field, { marginBottom: theme.spacing.xl }]}>
             <Text style={{ color: theme.colors.primary, ...theme.typography.body, fontWeight: '700', marginBottom: theme.spacing.sm }}>
-              {t('business.createBasket.description')}
+              {t('business.createBasket.description')} *
             </Text>
             <TextInput
-              style={[styles.textArea, { backgroundColor: theme.colors.surface, borderColor: theme.colors.divider, borderRadius: theme.radii.r12, color: theme.colors.textPrimary, ...theme.typography.body, ...theme.shadows.shadowSm }]}
+              style={[styles.textArea, { backgroundColor: theme.colors.surface, borderColor: descError ? theme.colors.error : theme.colors.divider, borderRadius: theme.radii.r12, color: theme.colors.textPrimary, ...theme.typography.body, ...theme.shadows.shadowSm }]}
               value={description}
-              onChangeText={setDescription}
+              onChangeText={(v) => { setDescription(v); if (v.trim()) setDescError(''); }}
               placeholder={t('business.createBasket.descriptionPlaceholder')}
               placeholderTextColor={theme.colors.muted}
               multiline
               numberOfLines={4}
               textAlignVertical="top"
             />
+            {descError !== '' && <Text style={{ color: theme.colors.error, fontSize: 12, marginTop: 4 }}>{descError}</Text>}
           </View>
 
           {/* Prices */}
           <View style={[styles.row, { marginBottom: theme.spacing.xl }]}>
             <View style={[styles.halfField, { marginRight: theme.spacing.md }]}>
               <Text style={{ color: theme.colors.primary, ...theme.typography.body, fontWeight: '700', marginBottom: theme.spacing.sm }}>
-                {t('business.createBasket.originalPrice')}
+                {t('business.createBasket.originalPrice')} *
               </Text>
               <TextInput
-                style={[styles.input, { backgroundColor: theme.colors.surface, borderColor: theme.colors.divider, borderRadius: theme.radii.r12, color: theme.colors.textPrimary, ...theme.typography.body, ...theme.shadows.shadowSm }]}
+                style={[styles.input, { backgroundColor: theme.colors.surface, borderColor: origPriceError ? theme.colors.error : theme.colors.divider, borderRadius: theme.radii.r12, color: theme.colors.textPrimary, ...theme.typography.body, ...theme.shadows.shadowSm }]}
                 value={originalPrice}
                 onChangeText={(v) => {
                   setOriginalPrice(v);
+                  if (v.trim()) setOrigPriceError('');
                   if (v && sellingPrice) validatePrice(v, sellingPrice);
                   else setPriceError('');
                 }}
@@ -448,6 +466,7 @@ export default function CreateBasketScreen() {
                 placeholderTextColor={theme.colors.muted}
                 keyboardType="numeric"
               />
+              {origPriceError !== '' && <Text style={{ color: theme.colors.error, fontSize: 12, marginTop: 4 }}>{origPriceError}</Text>}
             </View>
             <View style={styles.halfField}>
               <Text style={{ color: theme.colors.primary, ...theme.typography.body, fontWeight: '700', marginBottom: theme.spacing.sm }}>
@@ -456,7 +475,7 @@ export default function CreateBasketScreen() {
               <TextInput
                 style={[styles.input, {
                   backgroundColor: theme.colors.surface,
-                  borderColor: priceError ? theme.colors.error : theme.colors.divider,
+                  borderColor: (priceError || sellingPriceError) ? theme.colors.error : theme.colors.divider,
                   borderRadius: theme.radii.r12,
                   color: theme.colors.textPrimary,
                   ...theme.typography.body,
@@ -465,6 +484,7 @@ export default function CreateBasketScreen() {
                 value={sellingPrice}
                 onChangeText={(v) => {
                   setSellingPrice(v);
+                  if (v.trim()) setSellingPriceError('');
                   if (originalPrice && v) validatePrice(originalPrice, v);
                   else setPriceError('');
                 }}
@@ -472,6 +492,7 @@ export default function CreateBasketScreen() {
                 placeholderTextColor={theme.colors.muted}
                 keyboardType="numeric"
               />
+              {sellingPriceError !== '' && <Text style={{ color: theme.colors.error, fontSize: 12, marginTop: 4 }}>{sellingPriceError}</Text>}
             </View>
           </View>
 

@@ -3,6 +3,7 @@ import { apiClient } from '@/src/lib/api';
 export interface CreateReservationRequest {
   restaurant_id?: number;
   location_id?: number;
+  basket_id?: number;
   quantity: number;
 }
 
@@ -74,6 +75,7 @@ export async function createReservation(data: CreateReservationRequest): Promise
   const res = await apiClient.post<ReservationFromAPI | { reservation: ReservationFromAPI } | { data: ReservationFromAPI }>('/api/reservations', {
     location_id: data.location_id,
     restaurant_id: data.restaurant_id,
+    basket_id: data.basket_id,
     quantity: data.quantity,
   });
   const resData = res.data;

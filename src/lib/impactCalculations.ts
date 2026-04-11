@@ -12,11 +12,14 @@
 export const CO2_KG_PER_BASKET = 3.36;
 
 /** XP threshold for the start of each level (index = level - 1).
- *  Must match backend gamification.js levels array exactly:
- *  level 1 = 0xp, level 2 = 20xp, level 3 = 50xp, etc.  */
+ *  50 levels. Band sizes grow from 10 XP (level 1→2) to 200 XP (level 49→50).
+ *  Must match backend gamification.js levels array exactly.  */
 export const XP_THRESHOLDS = [
-  0, 20, 50, 80, 120, 170, 220, 280, 340, 400,
-  470, 550, 640, 730, 830, 940, 1060, 1190, 1330, 1500,
+  0, 10, 24, 42, 64, 90, 119, 152, 189, 230,
+  275, 324, 377, 434, 494, 558, 626, 698, 774, 854,
+  938, 1026, 1117, 1212, 1311, 1414, 1521, 1632, 1747, 1866,
+  1988, 2114, 2244, 2378, 2516, 2658, 2804, 2954, 3107, 3264,
+  3425, 3590, 3759, 3932, 4109, 4290, 4474, 4662, 4854, 5050,
 ];
 
 /**

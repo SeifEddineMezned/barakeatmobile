@@ -64,6 +64,18 @@ export function isPickupExpiredInTz(pickupEnd: string | undefined | null, timezo
 /**
  * Check if the pickup window is currently open (between start and end).
  */
+/**
+ * Format a Date as YYYY-MM-DD in the business timezone.
+ */
+export function formatDateInBusinessTz(date: Date, timezone?: string): string {
+  const tz = timezone || DEFAULT_BUSINESS_TZ;
+  try {
+    return new Intl.DateTimeFormat('en-CA', { timeZone: tz }).format(date);
+  } catch {
+    return date.toISOString().split('T')[0];
+  }
+}
+
 export function isPickupWindowOpenInTz(
   pickupStart: string | undefined | null,
   pickupEnd: string | undefined | null,

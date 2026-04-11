@@ -2,7 +2,7 @@ import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Modal, Dimensions, Image, Animated as RNAnimated, PanResponder } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
-import { TrendingUp, ShoppingBag, Banknote, Clock, Leaf, Star, X, Package, AlertCircle, Store, Settings, Bell, ChevronDown, Check, Building2 } from 'lucide-react-native';
+import { TrendingUp, ShoppingBag, Banknote, Clock, Leaf, Star, X, Package, Store, Settings, Bell, ChevronDown, Check, Building2 } from 'lucide-react-native';
 import { useQuery } from '@tanstack/react-query';
 import { useRouter } from 'expo-router';
 import { useTheme } from '@/src/theme/ThemeProvider';
@@ -296,14 +296,19 @@ export default function BusinessDashboard() {
     dailyRevenue: weeklySeries.map((d: any) => d.revenue ?? 0),
     // dayName may come as 'dayName' (camelCase) or 'day_name' (snake_case);
     // service normalizes but we guard here too.
-    dailyLabels: weeklySeries.map((d: any) =>
-      (d.dayName ?? d.day_name ?? d.day ?? '').toString().substring(0, 3)
-    ),
+    dailyLabels: weeklySeries.map((d: any) => {
+      const raw = (d.dayName ?? d.day_name ?? d.day ?? '').toString();
+      const short = raw.substring(0, 3);
+      // Translate: "Mon"→"Lun", "Monday"→"Lun", etc.
+      return t(`business.dashboard.days.${raw}`, { defaultValue: t(`business.dashboard.days.${short}`, { defaultValue: short }) });
+    }),
     // ─ Monthly chart (baskets per month) ─────────────────
     monthlySales: monthlySeries.map((m: any) => m.baskets_sold ?? 0),
-    monthlyLabels: monthlySeries.map((m: any) =>
-      (m.monthName ?? m.month_name ?? m.month ?? '').toString().substring(0, 3)
-    ),
+    monthlyLabels: monthlySeries.map((m: any) => {
+      const raw = (m.monthName ?? m.month_name ?? m.month ?? '').toString();
+      const short = raw.substring(0, 3);
+      return t(`business.dashboard.months.${raw}`, { defaultValue: t(`business.dashboard.months.${short}`, { defaultValue: short }) });
+    }),
     monthlyRevenueArr: monthlySeries.map((m: any) => m.revenue ?? 0),
     // ─ Status breakdown ───────────────────────────────────
     // API may send 'statusBreakdown' (camelCase) or 'status_breakdown' (snake_case).
@@ -367,28 +372,7 @@ export default function BusinessDashboard() {
 
   const chartWidth = Math.min(SCREEN_WIDTH - 80, 320);
 
-  // Staggered fade-in animations — 5 groups for fine-grained entrance rhythm
-  const fadeAnim1 = React.useRef(new RNAnimated.Value(0)).current;
-  const fadeAnim2 = React.useRef(new RNAnimated.Value(0)).current;
-  const fadeAnim3 = React.useRef(new RNAnimated.Value(0)).current;
-  const fadeAnim4 = React.useRef(new RNAnimated.Value(0)).current;
-  const fadeAnim5 = React.useRef(new RNAnimated.Value(0)).current;
-  // Ensures the entrance animation fires exactly once — when data is ready —
-  // and never re-fires on subsequent refetches or location switches.
-  const animFired = React.useRef(false);
-
-  React.useEffect(() => {
-    if (!isLoading && !animFired.current) {
-      animFired.current = true;
-      RNAnimated.stagger(110, [
-        RNAnimated.timing(fadeAnim1, { toValue: 1, duration: 450, useNativeDriver: true }),
-        RNAnimated.timing(fadeAnim2, { toValue: 1, duration: 450, useNativeDriver: true }),
-        RNAnimated.timing(fadeAnim3, { toValue: 1, duration: 450, useNativeDriver: true }),
-        RNAnimated.timing(fadeAnim4, { toValue: 1, duration: 450, useNativeDriver: true }),
-        RNAnimated.timing(fadeAnim5, { toValue: 1, duration: 450, useNativeDriver: true }),
-      ]).start();
-    }
-  }, [isLoading]);
+  // No fade animation — render at full opacity immediately to avoid "faded" state
 
   if (isLoading) {
     return (
@@ -539,7 +523,7 @@ export default function BusinessDashboard() {
           {t('business.dashboard.title')}
         </Text>
 
-        <RNAnimated.View style={{ opacity: fadeAnim1, transform: [{ translateY: fadeAnim1.interpolate({ inputRange: [0, 1], outputRange: [20, 0] }) }] }}>
+        <View>
           <LinearGradient
             colors={['#16604a', '#0c3829']}
             start={{ x: 0, y: 0 }}
@@ -554,7 +538,19 @@ export default function BusinessDashboard() {
           >
             {/* Label */}
             <Text style={{ color: 'rgba(255,255,255,0.5)', fontSize: 10, fontFamily: 'Poppins_400Regular', letterSpacing: 0.8, textTransform: 'uppercase', marginBottom: 14 }}>
-              {t('business.dashboard.daySummary')}
+              {t('business.dashboard.daySummary')} ({(() => {
+                // Derive the day from the server's weekly data (last entry = server "today")
+                const lastDay = weeklySeries.length > 0 ? weeklySeries[weeklySeries.length - 1] : null;
+                if (lastDay?.day) {
+                  const d = new Date(lastDay.day + 'T12:00:00');
+                  return d.toLocaleDateString('fr-FR', { weekday: 'long' }).replace(/^\w/, (c: string) => c.toUpperCase());
+                }
+                const fullDayName = lastDay?.dayName ?? lastDay?.day_name ?? '';
+                if (fullDayName) {
+                  return t(`business.dashboard.days.${fullDayName}`, { defaultValue: fullDayName });
+                }
+                return new Date().toLocaleDateString('fr-FR', { weekday: 'long' }).replace(/^\w/, (c: string) => c.toUpperCase());
+              })()})
             </Text>
             {/* 4 metrics on same line */}
             <View style={{ flexDirection: 'row' }}>
@@ -585,15 +581,15 @@ export default function BusinessDashboard() {
               <View style={{ flex: 1, alignItems: 'center' }}>
                 <Package size={13} color={theme.colors.secondary} />
                 <Text style={{ color: '#fff', fontSize: 18, fontFamily: 'Poppins_700Bold', marginTop: 4, letterSpacing: -0.4 }}>
-                  <AnimatedNumber value={stats.mealsRescued} />
+                  <AnimatedNumber value={stats.activeBaskets} />
                 </Text>
                 <Text style={{ color: 'rgba(255,255,255,0.5)', fontSize: 10, fontFamily: 'Poppins_400Regular', marginTop: 1 }}>{t('business.dashboard.rescued')}</Text>
               </View>
             </View>
           </LinearGradient>
-        </RNAnimated.View>
+        </View>
 
-        <RNAnimated.View style={{ opacity: fadeAnim2, transform: [{ translateY: fadeAnim2.interpolate({ inputRange: [0, 1], outputRange: [20, 0] }) }] }}>
+        <View>
           <TouchableOpacity
             onPress={handleRatingPress}
             activeOpacity={0.85}
@@ -650,11 +646,11 @@ export default function BusinessDashboard() {
               </View>
             </View>
           </TouchableOpacity>
-        </RNAnimated.View>
+        </View>
 
         <View style={{ paddingHorizontal: theme.spacing.xl, marginTop: theme.spacing.xl }}>
           {/* Section header */}
-          <RNAnimated.View style={{ opacity: fadeAnim3, transform: [{ translateY: fadeAnim3.interpolate({ inputRange: [0, 1], outputRange: [14, 0] }) }] }}>
+          <View>
             <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 14 }}>
               <View style={{ width: 3, height: 16, backgroundColor: theme.colors.primary, borderRadius: 2, marginRight: 8 }} />
               <Text style={{ color: theme.colors.textPrimary, fontSize: 13, fontFamily: 'Poppins_600SemiBold', letterSpacing: 0.3, textTransform: 'uppercase' as const }}>
@@ -662,25 +658,17 @@ export default function BusinessDashboard() {
               </Text>
             </View>
             <View style={styles.statsRow}>
-              <StatMiniCard icon={TrendingUp} value={stats.activeBaskets} label={t('business.dashboard.activeBaskets')} color={theme.colors.primary} theme={theme} />
+              <StatMiniCard icon={Banknote} value={`${stats.monthlyRevenue}`} suffix="TND" label="Revenus ce mois" color={theme.colors.secondaryDark} theme={theme} />
               <View style={{ width: 10 }} />
-              <StatMiniCard icon={Banknote} value={`${stats.monthlyRevenue}`} suffix="TND" label="Revenus ce mois" color={theme.colors.accentWarm} theme={theme} />
+              <StatMiniCard icon={ShoppingBag} value={stats.monthlyBaskets} label="Paniers vendus ce mois" color={theme.colors.accentFresh} theme={theme} />
             </View>
-          </RNAnimated.View>
-          {/* Row 2 — delayed via fadeAnim4 */}
-          <RNAnimated.View style={{ opacity: fadeAnim4, transform: [{ translateY: fadeAnim4.interpolate({ inputRange: [0, 1], outputRange: [14, 0] }) }], marginTop: 10 }}>
-            <View style={styles.statsRow}>
-              <StatMiniCard icon={ShoppingBag} value={stats.monthlyBaskets} label="Paniers ce mois" color={theme.colors.accentFresh} theme={theme} />
-              <View style={{ width: 10 }} />
-              <StatMiniCard icon={AlertCircle} value={stats.pendingOrders} label={t('business.dashboard.pendingOrders')} color={theme.colors.error} theme={theme} />
-            </View>
-          </RNAnimated.View>
+          </View>
         </View>
 
         {/* Order Status Breakdown moved to incoming-orders screen */}
 
         {/* ── Sales This Week + Monthly Performance — animated as group 5 ── */}
-        <RNAnimated.View style={{ opacity: fadeAnim5, transform: [{ translateY: fadeAnim5.interpolate({ inputRange: [0, 1], outputRange: [14, 0] }) }] }}>
+        <View>
         {/* ── Sales This Week (Line Chart) ── */}
         <View style={{ paddingHorizontal: theme.spacing.xl, marginTop: theme.spacing.xxl }}>
           {/* Section header */}
@@ -692,8 +680,8 @@ export default function BusinessDashboard() {
               </Text>
             </View>
             {weeklyRevenueTotal > 0 && (
-              <View style={{ backgroundColor: theme.colors.accentWarm + '15', borderRadius: 20, paddingHorizontal: 10, paddingVertical: 4 }}>
-                <Text style={{ color: theme.colors.accentWarm, fontSize: 11, fontFamily: 'Poppins_600SemiBold' }}>
+              <View style={{ backgroundColor: theme.colors.secondaryDark + '15', borderRadius: 20, paddingHorizontal: 10, paddingVertical: 4 }}>
+                <Text style={{ color: theme.colors.secondaryDark, fontSize: 11, fontFamily: 'Poppins_700Bold' }}>
                   {`${weeklyRevenueTotal.toFixed(0)} TND`}
                 </Text>
               </View>
@@ -749,7 +737,7 @@ export default function BusinessDashboard() {
           {/* Section header */}
           <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
             <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-              <View style={{ width: 3, height: 16, backgroundColor: theme.colors.accentWarm, borderRadius: 2, marginRight: 8 }} />
+              <View style={{ width: 3, height: 16, backgroundColor: theme.colors.secondaryDark, borderRadius: 2, marginRight: 8 }} />
               <Text style={{ color: theme.colors.textPrimary, fontSize: 13, fontFamily: 'Poppins_600SemiBold', letterSpacing: 0.3, textTransform: 'uppercase' as const }}>
                 {'Performance mensuelle'}
               </Text>
@@ -778,7 +766,7 @@ export default function BusinessDashboard() {
             {/* Panel header strip — LinearGradient accent */}
             <View style={{ paddingHorizontal: 16, paddingTop: 14, paddingBottom: 8, flexDirection: 'row', alignItems: 'center' }}>
               <LinearGradient
-                colors={[theme.colors.accentWarm, '#f5c842']}
+                colors={[theme.colors.secondaryDark, theme.colors.secondary]}
                 start={{ x: 0, y: 0 }}
                 end={{ x: 1, y: 1 }}
                 style={{ width: 3, height: 14, borderRadius: 2, marginRight: 8 }}
@@ -805,7 +793,7 @@ export default function BusinessDashboard() {
                   <Text style={{ color: theme.colors.textSecondary, fontSize: 11, fontFamily: 'Poppins_400Regular' }}>
                     {'Revenus ce mois:\u00A0'}
                   </Text>
-                  <Text style={{ color: theme.colors.accentWarm, fontSize: 11, fontFamily: 'Poppins_600SemiBold' }}>
+                  <Text style={{ color: theme.colors.secondaryDark, fontSize: 11, fontFamily: 'Poppins_600SemiBold' }}>
                     {`${stats.monthlyRevenue.toFixed(0)} TND`}
                   </Text>
                 </View>
@@ -813,7 +801,7 @@ export default function BusinessDashboard() {
             </View>
           </View>
         </View>
-        </RNAnimated.View>
+        </View>
 
         <View style={{ height: 40 }} />
       </ScrollView>

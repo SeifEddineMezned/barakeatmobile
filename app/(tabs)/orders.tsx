@@ -1,14 +1,15 @@
 import React, { useState, useMemo, useCallback, useEffect, useRef } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Alert, Animated, Dimensions, Modal, TextInput, ActivityIndicator } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Animated, Dimensions, Modal, TextInput, ActivityIndicator, KeyboardAvoidingView, Platform } from 'react-native';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import { useRouter } from 'expo-router';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { RefreshCw, ShoppingBag, AlertTriangle, Clock, X, Zap } from 'lucide-react-native';
+import { RefreshCw, ShoppingBag, AlertTriangle, Clock, X, Zap, XCircle } from 'lucide-react-native';
 import { useTheme } from '@/src/theme/ThemeProvider';
-import { isPickupExpiredInTz, getNowInBusinessTz } from '@/src/utils/timezone';
+import { isPickupExpiredInTz, getNowInBusinessTz, formatDateInBusinessTz } from '@/src/utils/timezone';
 import { useAuthStore } from '@/src/stores/authStore';
 import { fetchMyReservations, cancelReservation, hideReservation, type ReservationFromAPI } from '@/src/services/reservations';
+import { fetchConversationUnreads } from '@/src/services/messages';
 import { fetchGamificationStats } from '@/src/services/gamification';
 import { getErrorMessage } from '@/src/lib/api';
 import { calcMoneySaved, calcCO2Saved, calcLevelProgress } from '@/src/lib/impactCalculations';
@@ -233,9 +234,13 @@ export default function OrdersScreen() {
   const { t } = useTranslation();
   const theme = useTheme();
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const queryClient = useQueryClient();
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
-  const [activeTab, setActiveTab] = useState<'upcoming' | 'past'>('upcoming');
+  const [activeTab, setActiveTab] = useState<'upcoming' | 'completed' | 'issues'>('upcoming');
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const ordersScrollY = useRef(new Animated.Value(0)).current;
+  const ordersHeaderBg = ordersScrollY.interpolate({ inputRange: [0, 30], outputRange: ['transparent', '#ffffff'], extrapolate: 'clamp' });
 
   // Cancel flow state
   const [cancelTarget, setCancelTarget] = useState<{
@@ -245,7 +250,17 @@ export default function OrdersScreen() {
   const [cancelStep, setCancelStep] = useState<'warning' | 'reason' | 'done'>('warning');
   const [cancelReason, setCancelReason] = useState('');
   const [cancelReasonOther, setCancelReasonOther] = useState('');
+  const [showOtherReasonModal, setShowOtherReasonModal] = useState(false);
+  const [otherReasonDraft, setOtherReasonDraft] = useState('');
   const xpLossAnim = useRef(new Animated.Value(0)).current;
+
+  // Reset other-reason modal when cancel flow closes
+  useEffect(() => {
+    if (!cancelTarget) {
+      setShowOtherReasonModal(false);
+      setOtherReasonDraft('');
+    }
+  }, [cancelTarget]);
 
   const reservationsQuery = useQuery({
     queryKey: ['reservations'],
@@ -254,6 +269,15 @@ export default function OrdersScreen() {
     staleTime: 30_000,
     retry: 2,
   });
+
+  const msgUnreadsQuery = useQuery({
+    queryKey: ['conversation-unreads'],
+    queryFn: fetchConversationUnreads,
+    enabled: isAuthenticated,
+    staleTime: 15_000,
+    refetchInterval: 30_000,
+  });
+  const msgUnreads = msgUnreadsQuery.data ?? {};
 
   const gamificationQuery = useQuery({
     queryKey: ['gamification-stats'],
@@ -274,18 +298,9 @@ export default function OrdersScreen() {
       return { prev };
     },
     onSuccess: (_, { quantity, locationId }) => {
-      // Deduct XP from gamification cache
-      const xpToDeduct = (quantity ?? 1) * 10;
-      queryClient.setQueryData<any>(['gamification-stats'], (old: any) => {
-        if (!old) return old;
-        const inner = old?.stats ?? old;
-        const newXp = Math.max(0, Number(inner?.xp ?? 0) - xpToDeduct);
-        const { level } = calcLevelProgress(newXp);
-        const mealsSaved = Math.max(0, (inner?.meals_saved ?? 0) - (quantity ?? 1));
-        const updates = { xp: newXp, level, meals_saved: mealsSaved };
-        if (old?.stats) return { ...old, stats: { ...old.stats, ...updates } };
-        return { ...old, ...updates };
-      });
+      // Refetch authoritative gamification stats from backend.
+      // Cancelling a confirmed (not picked_up) order has no effect on real XP.
+      void queryClient.invalidateQueries({ queryKey: ['gamification-stats'] });
       // Restore basket: invalidate location & basket queries so quantity ticks back up
       if (locationId) {
         void queryClient.invalidateQueries({ queryKey: ['location', locationId] });
@@ -301,7 +316,7 @@ export default function OrdersScreen() {
     onError: (err, _, ctx) => {
       if ((ctx as any)?.prev) queryClient.setQueryData(['reservations'], (ctx as any).prev);
       setCancelTarget(null);
-      Alert.alert(t('common.error'), getErrorMessage(err));
+      setErrorMsg(getErrorMessage(err));
     },
     onSettled: () => {
       void queryClient.invalidateQueries({ queryKey: ['reservations'] });
@@ -324,11 +339,10 @@ export default function OrdersScreen() {
     const dateStr = rr.pickup_date ?? rr.reservation_date ?? rr.created_at ?? rr.createdAt;
     if (!dateStr) return false;
     const reservationDate = new Date(dateStr);
-    // Use business timezone for "today" comparison
-    const bizNow = getNowInBusinessTz();
+    // Use business timezone for BOTH dates to avoid UTC vs local mismatch
     const now = new Date();
-    const todayStr = new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Tunis' }).format(now); // YYYY-MM-DD
-    const resDateStr = reservationDate.toISOString().split('T')[0];
+    const todayStr = formatDateInBusinessTz(now);
+    const resDateStr = formatDateInBusinessTz(reservationDate);
     // Past date = expired
     if (resDateStr < todayStr) return true;
     // Same date: check if pickup end time has passed in business timezone
@@ -351,25 +365,28 @@ export default function OrdersScreen() {
     [reservations, isPickupExpiredCheck]
   );
 
-  const pastOrders = useMemo(
-    () => reservations.filter((r) => {
-      const status = (r.status ?? '').toLowerCase();
-      // Explicitly past statuses
-      if (status === 'collected' || status === 'cancelled' || status === 'completed' || status === 'expired' || status === 'picked_up') return true;
-      // Upcoming status but pickup expired = show in past
-      if ((status === 'reserved' || status === 'ready' || status === 'pending' || status === 'confirmed') && isPickupExpiredCheck(r)) return true;
-      return false;
-    }),
-    [reservations, isPickupExpiredCheck]
-  );
-
-  const completedReservations = useMemo(
+  // "Terminées" — only actually collected/picked_up orders
+  const completedOrders = useMemo(
     () => reservations.filter((r) => {
       const status = (r.status ?? '').toLowerCase();
       return status === 'collected' || status === 'completed' || status === 'picked_up';
     }),
     [reservations]
   );
+
+  // "Problèmes" — cancelled, expired, or confirmed-but-pickup-expired
+  const issueOrders = useMemo(
+    () => reservations.filter((r) => {
+      const status = (r.status ?? '').toLowerCase();
+      if (status === 'cancelled' || status === 'expired') return true;
+      if ((status === 'reserved' || status === 'ready' || status === 'pending' || status === 'confirmed') && isPickupExpiredCheck(r)) return true;
+      return false;
+    }),
+    [reservations, isPickupExpiredCheck]
+  );
+
+  // Alias for impact calculations (only picked_up counts)
+  const completedReservations = completedOrders;
 
   const moneySaved = useMemo(() => {
     const gStats = gamificationQuery.data as any;
@@ -385,61 +402,24 @@ export default function OrdersScreen() {
     return calcCO2Saved(mealsSaved);
   }, [completedReservations.length, gamificationQuery.data]);
 
-  const totalOrders = reservations.length;
+  // Prefer backend meals_saved (same source as profile.tsx) for consistency
+  const totalOrders = useMemo(() => {
+    const gStats = gamificationQuery.data as any;
+    const gStatsInner = gStats?.stats ?? gStats;
+    return gStatsInner?.meals_saved ?? completedReservations.length;
+  }, [completedReservations.length, gamificationQuery.data]);
 
 
-  const displayedOrders = activeTab === 'upcoming' ? upcomingOrders : pastOrders;
+  const displayedOrders = activeTab === 'upcoming' ? upcomingOrders : activeTab === 'completed' ? completedOrders : issueOrders;
 
-  // Auto-cancel expired orders (pickup end time passed)
-  const expireCancelledRef = useRef<Set<string>>(new Set());
-  useEffect(() => {
-    if (!upcomingOrders.length) return;
-    const now = new Date();
-    const expiredIds: string[] = [];
-    for (const r of upcomingOrders) {
-      const id = String(r.id);
-      if (expireCancelledRef.current.has(id)) continue;
-      const { end } = getPickupTimes(r);
-      if (!end) continue;
-      const [eh, em] = end.split(':').map(Number);
-      if (isNaN(eh) || isNaN(em)) continue;
-
-      // Check reservation date — if not today, it's expired
-      const createdAt = (r as any).created_at ?? (r as any).createdAt;
-      const reservationDate = createdAt ? new Date(createdAt).toDateString() : now.toDateString();
-      const isToday = reservationDate === now.toDateString();
-
-      if (!isToday) {
-        expiredIds.push(id);
-        continue;
-      }
-
-      const endDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), eh, em);
-      if (now > endDate) {
-        expiredIds.push(id);
-      }
-    }
-
-    if (expiredIds.length > 0) {
-      expiredIds.forEach(async (id) => {
-        expireCancelledRef.current.add(id);
-        try {
-          await cancelReservation(id);
-        } catch (e) {
-          console.log('[Orders] Auto-cancel failed for', id, e);
-        }
-      });
-      // Refetch after a short delay to update the list
-      setTimeout(() => {
-        void queryClient.invalidateQueries({ queryKey: ['reservations'] });
-      }, 1500);
-    }
-  }, [upcomingOrders, queryClient]);
+  // Expired orders are handled by the isPickupExpiredCheck filter above —
+  // they move to the "past" tab automatically. We do NOT auto-cancel from the client
+  // because timezone differences between the user's phone and the server (Tunisia)
+  // could cause valid reservations to be incorrectly cancelled.
 
   const handleCancelRequest = useCallback((id: string, quantity: number, locationId?: string, merchantName?: string) => {
     const gStats = queryClient.getQueryData<any>(['gamification-stats']);
-    const gStatsInner = gStats?.stats ?? gStats;
-    const xp = Number(gStatsInner?.xp ?? 0);
+    const xp = gStats?.xp ?? (typeof gStats?.level === 'object' ? (gStats.level.xp ?? 0) : 0);
     const xpLoss = quantity * 10;
     const { level: levelBefore } = calcLevelProgress(xp);
     const { level: levelAfter } = calcLevelProgress(Math.max(0, xp - xpLoss));
@@ -451,7 +431,7 @@ export default function OrdersScreen() {
 
   const handleConfirmCancel = useCallback(() => {
     if (!cancelTarget || cancelMutation.isPending) return;
-    const finalReason = cancelReason === 'Other'
+    const finalReason = cancelReason === 'Autre'
       ? (cancelReasonOther.trim() || 'Other')
       : cancelReason;
     cancelMutation.mutate({
@@ -530,13 +510,8 @@ export default function OrdersScreen() {
     );
   }
 
-  const ordersScrollY = useRef(new Animated.Value(0)).current;
-  const ordersHeaderBg = ordersScrollY.interpolate({ inputRange: [0, 30], outputRange: ['transparent', '#ffffff'], extrapolate: 'clamp' });
-
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]} edges={['top']}>
-      {/* Sticky white header overlay */}
-      <Animated.View style={{ position: 'absolute', top: 0, left: 0, right: 0, zIndex: 10, backgroundColor: ordersHeaderBg, paddingTop: 50, paddingBottom: 8, borderBottomWidth: 0.5, borderBottomColor: 'rgba(0,0,0,0.06)' }} pointerEvents="none" />
 
       <ScrollView
         style={styles.content}
@@ -614,25 +589,53 @@ export default function OrdersScreen() {
                     flex: 1,
                     paddingVertical: theme.spacing.md,
                     borderBottomWidth: 2,
-                    borderBottomColor: activeTab === 'past' ? theme.colors.primary : 'transparent',
+                    borderBottomColor: activeTab === 'completed' ? theme.colors.primary : 'transparent',
                   },
                 ]}
-                onPress={() => setActiveTab('past')}
+                onPress={() => setActiveTab('completed')}
                 accessibilityRole="button"
-                accessibilityLabel={t('orders.past')}
-                accessibilityState={{ selected: activeTab === 'past' }}
+                accessibilityLabel={t('orders.completed', { defaultValue: 'Terminées' })}
+                accessibilityState={{ selected: activeTab === 'completed' }}
               >
                 <Text
                   style={[
                     {
-                      color: activeTab === 'past' ? theme.colors.primary : theme.colors.textSecondary,
+                      color: activeTab === 'completed' ? theme.colors.primary : theme.colors.textSecondary,
                       ...theme.typography.body,
-                      fontWeight: activeTab === 'past' ? ('600' as const) : ('400' as const),
+                      fontWeight: activeTab === 'completed' ? ('600' as const) : ('400' as const),
                       textAlign: 'center',
                     },
                   ]}
                 >
-                  {t('orders.past')}
+                  {t('orders.completed', { defaultValue: 'Terminées' })}
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.tab,
+                  {
+                    flex: 1,
+                    paddingVertical: theme.spacing.md,
+                    borderBottomWidth: 2,
+                    borderBottomColor: activeTab === 'issues' ? theme.colors.error : 'transparent',
+                  },
+                ]}
+                onPress={() => setActiveTab('issues')}
+                accessibilityRole="button"
+                accessibilityLabel={t('orders.issues', { defaultValue: 'Problèmes' })}
+                accessibilityState={{ selected: activeTab === 'issues' }}
+              >
+                <Text
+                  style={[
+                    {
+                      color: activeTab === 'issues' ? theme.colors.error : theme.colors.textSecondary,
+                      ...theme.typography.body,
+                      fontWeight: activeTab === 'issues' ? ('600' as const) : ('400' as const),
+                      textAlign: 'center',
+                    },
+                  ]}
+                >
+                  {t('orders.issues', { defaultValue: 'Problèmes' })}
                 </Text>
               </TouchableOpacity>
             </View>
@@ -703,6 +706,7 @@ export default function OrdersScreen() {
                     onCancel={handleCancelRequest}
                     onHide={handleHide}
                     overrideExpired={expired}
+                    messageUnreadCount={msgUnreads[Number(reservation.id)] ?? 0}
                   />
                 );
               })
@@ -839,22 +843,19 @@ export default function OrdersScreen() {
                   ))}
 
                   {cancelReason === 'Autre' && (
-                    <TextInput
+                    <TouchableOpacity
+                      onPress={() => { setOtherReasonDraft(cancelReasonOther); setShowOtherReasonModal(true); }}
                       style={{
                         borderWidth: 1, borderColor: theme.colors.divider,
                         borderRadius: 12, padding: 12, marginBottom: 8,
-                        color: theme.colors.textPrimary,
-                        backgroundColor: theme.colors.bg,
-                        fontSize: 14, lineHeight: 20,
-                        minHeight: 68, textAlignVertical: 'top',
+                        backgroundColor: theme.colors.bg, minHeight: 48,
+                        justifyContent: 'center',
                       }}
-                      placeholder={t('orders.cancelReasonPlaceholder', { defaultValue: 'Dites-nous en plus (optionnel)...' })}
-                      placeholderTextColor={theme.colors.muted}
-                      value={cancelReasonOther}
-                      onChangeText={setCancelReasonOther}
-                      multiline
-                      maxLength={200}
-                    />
+                    >
+                      <Text style={{ color: cancelReasonOther ? theme.colors.textPrimary : theme.colors.muted, fontSize: 14 }}>
+                        {cancelReasonOther || t('orders.cancelReasonPlaceholder', { defaultValue: 'Appuyez pour écrire votre raison...' })}
+                      </Text>
+                    </TouchableOpacity>
                   )}
 
                   <View style={{ flexDirection: 'row', gap: 12, marginTop: 8 }}>
@@ -930,6 +931,63 @@ export default function OrdersScreen() {
         </View>
       </Modal>
 
+      {/* Error modal */}
+      <Modal visible={!!errorMsg} transparent animationType="fade" onRequestClose={() => setErrorMsg(null)}>
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 24 }}>
+          <View style={{ backgroundColor: '#fff', borderRadius: 24, padding: 28, width: '100%', maxWidth: 340, alignItems: 'center' }}>
+            <View style={{ backgroundColor: '#ef444418', width: 56, height: 56, borderRadius: 28, justifyContent: 'center', alignItems: 'center', marginBottom: 16 }}>
+              <XCircle size={28} color="#ef4444" />
+            </View>
+            <Text style={{ color: '#1a1a1a', fontSize: 18, fontWeight: '700', fontFamily: 'Poppins_700Bold', textAlign: 'center', marginBottom: 10 }}>
+              {t('auth.error')}
+            </Text>
+            <Text style={{ color: '#666', fontSize: 14, fontFamily: 'Poppins_400Regular', textAlign: 'center', lineHeight: 22, marginBottom: 24 }}>
+              {errorMsg}
+            </Text>
+            <TouchableOpacity onPress={() => setErrorMsg(null)} style={{ backgroundColor: '#114b3c', borderRadius: 14, paddingVertical: 14, width: '100%', alignItems: 'center' }}>
+              <Text style={{ color: '#e3ff5c', fontSize: 15, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>OK</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* "Autre" reason text input modal */}
+      <Modal visible={showOtherReasonModal} transparent animationType="fade" onRequestClose={() => setShowOtherReasonModal(false)}>
+        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+          <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 24 }}>
+            <View style={{ backgroundColor: theme.colors.surface, borderRadius: 20, padding: 24, width: '100%', maxWidth: 360 }}>
+              <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3, marginBottom: 16 }}>
+                {t('orders.otherReasonTitle', { defaultValue: 'Raison de l\'annulation' })}
+              </Text>
+              <TextInput
+                style={{
+                  borderWidth: 1, borderColor: theme.colors.divider,
+                  borderRadius: 12, padding: 12,
+                  color: theme.colors.textPrimary,
+                  backgroundColor: theme.colors.bg,
+                  fontSize: 14, lineHeight: 20,
+                  minHeight: 100, textAlignVertical: 'top',
+                }}
+                placeholder={t('orders.cancelReasonPlaceholder', { defaultValue: 'Dites-nous en plus...' })}
+                placeholderTextColor={theme.colors.muted}
+                value={otherReasonDraft}
+                onChangeText={setOtherReasonDraft}
+                multiline
+                maxLength={200}
+                autoFocus
+              />
+              <TouchableOpacity
+                onPress={() => { setCancelReasonOther(otherReasonDraft); setShowOtherReasonModal(false); }}
+                style={{ backgroundColor: '#114b3c', borderRadius: 14, paddingVertical: 14, alignItems: 'center', marginTop: 16 }}
+              >
+                <Text style={{ color: '#e3ff5c', fontWeight: '700', fontSize: 15 }}>
+                  {t('common.done', { defaultValue: 'Terminé' })}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
     </SafeAreaView>
   );
 }

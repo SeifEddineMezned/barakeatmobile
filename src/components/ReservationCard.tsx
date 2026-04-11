@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Animated, Image, ActivityIndicator, Linking } from 'react-native';
 import { useTranslation } from 'react-i18next';
-import { MapPin, Clock, Navigation, X as XIcon, QrCode, Star, ChevronDown, ChevronUp, ShoppingBag } from 'lucide-react-native';
+import { MapPin, Clock, Navigation, X as XIcon, QrCode, Star, ChevronDown, ChevronUp, ShoppingBag, MessageCircle } from 'lucide-react-native';
 import { useRouter } from 'expo-router';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { getNowInBusinessTz } from '@/src/utils/timezone';
@@ -13,6 +13,7 @@ interface ReservationCardProps {
   onCancel?: (id: string, quantity: number, locationId?: string, merchantName?: string) => void;
   onHide?: (id: string) => void;
   overrideExpired?: boolean;
+  messageUnreadCount?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -95,7 +96,7 @@ function resolvePickupWindow(
 // Component
 // ---------------------------------------------------------------------------
 
-export function ReservationCard({ reservation, onCancel, onHide: _onHide, overrideExpired }: ReservationCardProps) {
+export function ReservationCard({ reservation, onCancel, onHide: _onHide, overrideExpired, messageUnreadCount = 0 }: ReservationCardProps) {
   const { t } = useTranslation();
   const theme = useTheme();
   const router = useRouter();
@@ -124,8 +125,8 @@ export function ReservationCard({ reservation, onCancel, onHide: _onHide, overri
     (r.price_tier ? Number(r.price_tier) * quantity : 0);
   const rawStatus = (reservation.status ?? 'reserved').toLowerCase();
   const status = overrideExpired ? 'expired' : rawStatus;
-  const latitude = basket?.latitude ?? (basket as any)?.lat ?? 0;
-  const longitude = basket?.longitude ?? (basket as any)?.lng ?? 0;
+  const latitude = Number(r.latitude ?? basket?.latitude ?? (basket as any)?.lat ?? 0);
+  const longitude = Number(r.longitude ?? basket?.longitude ?? (basket as any)?.lng ?? 0);
 
   // Order date
   const orderDate: Date | null = r.pickup_date
@@ -165,8 +166,9 @@ export function ReservationCard({ reservation, onCancel, onHide: _onHide, overri
 
   const handleDirections = () => {
     if (latitude && longitude) {
-      const url = `https://www.google.com/maps/search/?api=1&query=${latitude},${longitude}`;
-      void Linking.openURL(url);
+      void Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${latitude},${longitude}`);
+    } else if (address) {
+      void Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(address)}`);
     }
   };
 
@@ -202,6 +204,7 @@ export function ReservationCard({ reservation, onCancel, onHide: _onHide, overri
 
   const isUpcoming = status === 'reserved' || status === 'ready' || status === 'pending' || status === 'confirmed';
   const isPast = status === 'collected' || status === 'completed' || status === 'picked_up';
+  const hasReview = (r as any).has_review === true;
 
   // Live pickup countdown for upcoming orders (business timezone aware)
   const [tick, setTick] = useState(0);
@@ -298,7 +301,7 @@ export function ReservationCard({ reservation, onCancel, onHide: _onHide, overri
               )}
               {orderDate && (
                 <Text style={[{ color: theme.colors.muted, ...theme.typography.caption }]}>
-                  {orderDate.toLocaleDateString()}
+                  {orderDate.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric' })}
                 </Text>
               )}
             </View>
@@ -314,25 +317,38 @@ export function ReservationCard({ reservation, onCancel, onHide: _onHide, overri
             ) : null}
           </View>
 
-          {/* Right: status badge + chevron */}
-          <View style={{ flexDirection: 'column', alignItems: 'flex-end', gap: 4, marginLeft: 8 }}>
-            <View
-              accessibilityLabel={`${t('orders.status', { defaultValue: 'Status' })}: ${getStatusLabel()}`}
-              style={{
-                backgroundColor: getStatusColor() + '20',
-                borderRadius: theme.radii.r8,
-                paddingHorizontal: theme.spacing.sm,
-                paddingVertical: 3,
-              }}
-            >
-              <Text style={[{ color: getStatusColor(), ...theme.typography.caption, fontWeight: '600' as const }]}>
-                {getStatusLabel()}
-              </Text>
-            </View>
-            {isExpanded
-              ? <ChevronUp size={16} color={theme.colors.muted} />
-              : <ChevronDown size={16} color={theme.colors.muted} />}
+          {/* Right: chat icon (upcoming) or status badge (past) */}
+          <View style={{ alignItems: 'flex-end', marginLeft: 8 }}>
+            {isUpcoming ? (
+              <TouchableOpacity
+                onPress={(e) => { e.stopPropagation?.(); router.push({ pathname: '/message/[id]', params: { id: `res-${reservation.id}`, reservationId: String(reservation.id), buyerId: String(r.buyer_id ?? ''), locationId: String(r.location_id ?? r.restaurant_id ?? basket?.merchantId ?? '') } } as never); }}
+                style={{ width: 34, height: 34, borderRadius: 17, backgroundColor: theme.colors.primary + '15', justifyContent: 'center', alignItems: 'center' }}
+                hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+              >
+                <MessageCircle size={17} color={theme.colors.primary} />
+                {messageUnreadCount > 0 && (
+                  <View style={{ position: 'absolute', top: -4, right: -4, backgroundColor: '#ef4444', borderRadius: 8, minWidth: 16, height: 16, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 3, borderWidth: 2, borderColor: theme.colors.surface }}>
+                    <Text style={{ color: '#fff', fontSize: 9, fontWeight: '700' }}>{messageUnreadCount > 9 ? '9+' : messageUnreadCount}</Text>
+                  </View>
+                )}
+              </TouchableOpacity>
+            ) : (
+              <View
+                accessibilityLabel={`${t('orders.status', { defaultValue: 'Status' })}: ${getStatusLabel()}`}
+                style={{ backgroundColor: getStatusColor() + '20', borderRadius: theme.radii.r8, paddingHorizontal: theme.spacing.sm, paddingVertical: 3 }}
+              >
+                <Text style={[{ color: getStatusColor(), ...theme.typography.caption, fontWeight: '600' as const }]}>
+                  {getStatusLabel()}
+                </Text>
+              </View>
+            )}
           </View>
+        </View>
+        {/* Chevron — bottom right */}
+        <View style={{ alignItems: 'flex-end', paddingTop: 6, paddingRight: 4 }}>
+          {isExpanded
+            ? <ChevronUp size={16} color={theme.colors.muted} />
+            : <ChevronDown size={16} color={theme.colors.muted} />}
         </View>
       </TouchableOpacity>
 
@@ -342,179 +358,104 @@ export function ReservationCard({ reservation, onCancel, onHide: _onHide, overri
           <View style={[styles.divider, { marginVertical: theme.spacing.md, backgroundColor: theme.colors.divider }]} />
 
           <View style={styles.details}>
-            {pickupWindow && (
-              <View style={[styles.row, { marginBottom: theme.spacing.md }]}>
-                <Clock size={16} color={theme.colors.textSecondary} />
-                <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.bodySm, marginLeft: theme.spacing.sm }]}>
-                  {pickupWindow.start} – {pickupWindow.end}
-                </Text>
-              </View>
-            )}
-
-            {address ? (
-              <View style={[styles.row, { marginBottom: theme.spacing.md }]}>
-                <MapPin size={16} color={theme.colors.textSecondary} />
-                <Text
-                  style={[{ color: theme.colors.textSecondary, ...theme.typography.bodySm, marginLeft: theme.spacing.sm, flex: 1 }]}
-                  numberOfLines={1}
-                >
-                  {address}
-                </Text>
-                {latitude !== 0 && longitude !== 0 && (
-                  <TouchableOpacity onPress={handleDirections} style={{ backgroundColor: theme.colors.primary, borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4, flexDirection: 'row', alignItems: 'center', gap: 3, marginLeft: 6 }}>
-                    <Navigation size={11} color="#fff" />
-                    <Text style={{ color: '#fff', fontSize: 10, fontWeight: '600' }}>{t('basket.directions')}</Text>
-                  </TouchableOpacity>
-                )}
-              </View>
-            ) : null}
-
-            {/* Basket photo */}
-            {((basket as any)?.image_url || (basket as any)?.cover_image_url) && (
-              <Image
-                source={{ uri: (basket as any)?.image_url ?? (basket as any)?.cover_image_url }}
-                style={{ width: '100%', height: 120, borderRadius: theme.radii.r12, marginBottom: theme.spacing.md }}
-                resizeMode="cover"
-              />
-            )}
-
-            {/* Price — above pickup code */}
-            {total > 0 && (
-              <View style={{ backgroundColor: theme.colors.bg, borderRadius: theme.radii.r12, padding: theme.spacing.md, marginBottom: theme.spacing.md, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-                <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm }}>{t('reserve.total', { defaultValue: 'Total' })}</Text>
-                <Text style={{ color: theme.colors.primary, ...theme.typography.h3, fontWeight: '700' }}>{total} TND</Text>
-              </View>
-            )}
-
-            {/* Show pickup code only for upcoming orders */}
-            {isUpcoming && pickupCode ? (
-              <View
-                style={[
-                  styles.pickupCodeContainer,
-                  {
-                    backgroundColor: theme.colors.primary,
-                    borderRadius: theme.radii.r12,
-                    padding: theme.spacing.lg,
-                    marginTop: theme.spacing.md,
-                  },
-                ]}
-              >
-                <View style={styles.pickupCodeRow}>
-                  <View style={{ flex: 1 }}>
-                    <Text style={[{ color: 'rgba(255,255,255,0.7)', ...theme.typography.caption, marginBottom: theme.spacing.xs }]}>
-                      {t('orders.pickupCode')}
-                    </Text>
-                    <Text
-                      style={[{ color: '#fff', ...theme.typography.h2, fontWeight: '700' as const, letterSpacing: 2 }]}
-                    >
-                      {pickupCode}
-                    </Text>
+            {/* Info rows — same structure as order confirmed notification */}
+            <View style={{ backgroundColor: '#114b3c08', borderRadius: 14, padding: 14, gap: 0 }}>
+              {/* Row 1: Address + itinerary */}
+              {address ? (
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 8 }}>
+                  <View style={{ width: 30, height: 30, borderRadius: 15, backgroundColor: '#114b3c', justifyContent: 'center', alignItems: 'center' }}>
+                    <MapPin size={13} color="#e3ff5c" />
                   </View>
+                  <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '600', flex: 1 }} numberOfLines={1}>
+                    {address}
+                  </Text>
+                  <TouchableOpacity onPress={handleDirections} style={{ backgroundColor: '#114b3c', borderRadius: 10, width: 30, height: 30, justifyContent: 'center', alignItems: 'center' }}>
+                    <Navigation size={13} color="#e3ff5c" />
+                  </TouchableOpacity>
+                </View>
+              ) : null}
+              {/* Row 2: Quantity */}
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 8, borderTopWidth: address ? 1 : 0, borderTopColor: theme.colors.divider }}>
+                <View style={{ width: 30, height: 30, borderRadius: 15, backgroundColor: '#114b3c', justifyContent: 'center', alignItems: 'center' }}>
+                  <ShoppingBag size={13} color="#e3ff5c" />
+                </View>
+                <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '600', flex: 1 }}>
+                  {quantity} {quantity > 1 ? t('basket.baskets', { defaultValue: 'paniers' }) : t('basket.basket', { defaultValue: 'panier' })}
+                </Text>
+              </View>
+              {/* Row 2: Price */}
+              {total > 0 && (
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 8, borderTopWidth: 1, borderTopColor: theme.colors.divider }}>
+                  <View style={{ width: 30, height: 30, borderRadius: 15, backgroundColor: '#114b3c', justifyContent: 'center', alignItems: 'center' }}>
+                    <Text style={{ color: '#e3ff5c', fontSize: 9, fontWeight: '700' }}>TND</Text>
+                  </View>
+                  <Text style={{ color: theme.colors.primary, ...theme.typography.body, fontWeight: '700', flex: 1 }}>
+                    {total} TND
+                  </Text>
+                </View>
+              )}
+              {/* Row 3: Pickup time */}
+              {pickupWindow && (
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 8, borderTopWidth: 1, borderTopColor: theme.colors.divider }}>
+                  <View style={{ width: 30, height: 30, borderRadius: 15, backgroundColor: '#114b3c', justifyContent: 'center', alignItems: 'center' }}>
+                    <Clock size={13} color="#e3ff5c" />
+                  </View>
+                  <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '600', flex: 1 }}>
+                    {t('notifications.pickupAt', { defaultValue: 'Retrait' })} : {pickupWindow.start} - {pickupWindow.end}
+                  </Text>
+                </View>
+              )}
+            </View>
+
+            {/* Pickup code — dark div, only for upcoming */}
+            {isUpcoming && pickupCode ? (
+              <View style={{ backgroundColor: '#114b3c', borderRadius: 14, padding: 14, marginTop: 10, alignItems: 'center' }}>
+                <Text style={{ color: 'rgba(255,255,255,0.6)', fontSize: 11, marginBottom: 4 }}>
+                  {t('orders.pickupCode')}
+                </Text>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                  <Text style={{ color: '#e3ff5c', fontSize: 22, fontWeight: '700', fontFamily: 'Poppins_700Bold', letterSpacing: 4 }}>
+                    {pickupCode}
+                  </Text>
                   <TouchableOpacity
                     onPress={handleToggleQR}
-                    accessibilityLabel={t('orders.showQrCode', { defaultValue: 'Show QR code' })}
-                    accessibilityRole="button"
-                    style={[
-                      styles.qrButton,
-                      {
-                        backgroundColor: 'rgba(255,255,255,0.2)',
-                        borderRadius: theme.radii.r12,
-                        padding: theme.spacing.md,
-                      },
-                    ]}
+                    style={{ backgroundColor: 'rgba(255,255,255,0.15)', borderRadius: 10, padding: 8 }}
                   >
-                    {qrLoading ? (
-                      <ActivityIndicator size="small" color="#fff" />
-                    ) : (
-                      <QrCode size={22} color="#fff" />
-                    )}
+                    {qrLoading ? <ActivityIndicator size="small" color="#fff" /> : <QrCode size={18} color="#fff" />}
                   </TouchableOpacity>
                 </View>
                 {qrExpanded && qrDataUrl ? (
-                  <View style={[styles.qrContainer, { marginTop: theme.spacing.lg, alignItems: 'center' }]}>
-                    <Image
-                      source={{ uri: qrDataUrl }}
-                      style={{ width: 180, height: 180, borderRadius: theme.radii.r8 }}
-                      resizeMode="contain"
-                    />
-                    <Text style={[{ color: 'rgba(255,255,255,0.7)', ...theme.typography.caption, marginTop: theme.spacing.sm, textAlign: 'center' }]}>
-                      {t('orders.showQrCode')}
-                    </Text>
-                  </View>
+                  <Image source={{ uri: qrDataUrl }} style={{ width: 160, height: 160, borderRadius: 8, marginTop: 12 }} resizeMode="contain" />
                 ) : null}
               </View>
             ) : null}
 
-            {/* Footer row: review only (price + directions moved above) */}
-            <View style={[styles.footer, { marginTop: theme.spacing.md }]}>
-              <View />
-              <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
-                {isPast && (
+            {/* Footer: review (past) + cancel (upcoming) */}
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 10 }}>
+              <View style={{ flexDirection: 'row', gap: 8 }}>
+                {isPast && !hasReview && (
                   <TouchableOpacity
-                    accessibilityLabel={t('orders.leaveReview')}
-                    accessibilityRole="button"
-                    style={[
-                      {
-                        backgroundColor: theme.colors.accentWarm,
-                        borderRadius: theme.radii.r12,
-                        paddingHorizontal: theme.spacing.md,
-                        paddingVertical: theme.spacing.sm,
-                        flexDirection: 'row',
-                        alignItems: 'center',
-                      },
-                    ]}
                     onPress={() => {
                       const lid = String(r.location_id ?? r.restaurant_id ?? basket?.merchantId ?? '');
-                      router.push({
-                        pathname: '/review',
-                        params: {
-                          reservationId: String(reservation.id),
-                          locationId: lid,
-                          locationName: merchantName,
-                          locationLogo: r.restaurant?.image_url ?? r.restaurant_image ?? r.org_image_url ?? '',
-                          basketImage: basket?.image_url ?? (basket as any)?.imageUrl ?? (basket as any)?.cover_image_url ?? '',
-                          basketName: basketTypeName,
-                          quantity: String(quantity),
-                          total: String(total),
-                        },
-                      } as never);
+                      router.push({ pathname: '/review', params: { reservationId: String(reservation.id), locationId: lid, locationName: merchantName, locationLogo: r.restaurant?.image_url ?? r.restaurant_image ?? r.org_image_url ?? '', basketImage: basket?.image_url ?? (basket as any)?.imageUrl ?? (basket as any)?.cover_image_url ?? '', basketName: basketTypeName, quantity: String(quantity), total: String(total) } } as never);
                     }}
+                    style={{ backgroundColor: theme.colors.accentWarm, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 8, flexDirection: 'row', alignItems: 'center', gap: 4 }}
                   >
-                    <Star size={14} color="#fff" fill="#fff" />
-                    <Text
-                      style={[{ color: '#fff', ...theme.typography.caption, fontWeight: '600' as const, marginLeft: 4 }]}
-                    >
-                      {t('orders.leaveReview')}
-                    </Text>
+                    <Star size={12} color="#fff" fill="#fff" />
+                    <Text style={{ color: '#fff', fontSize: 12, fontWeight: '600' }}>{t('orders.leaveReview')}</Text>
                   </TouchableOpacity>
                 )}
               </View>
+              {isUpcoming && onCancel && (
+                <TouchableOpacity
+                  onPress={() => onCancel(reservation.id, quantity, String(r.location_id ?? r.restaurant_id ?? ''), merchantName)}
+                  style={{ flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10, backgroundColor: theme.colors.error + '12' }}
+                >
+                  <XIcon size={12} color={theme.colors.error} />
+                  <Text style={{ color: theme.colors.error, fontSize: 12, fontWeight: '600' }}>{t('orders.cancelBtn', { defaultValue: 'Annuler' })}</Text>
+                </TouchableOpacity>
+              )}
             </View>
-
-            {/* Cancel Order — full-width prominent button, only for upcoming */}
-            {isUpcoming && onCancel && (
-              <TouchableOpacity
-                onPress={() => onCancel(
-                  reservation.id,
-                  quantity,
-                  String(r.location_id ?? r.restaurant_id ?? ''),
-                  merchantName,
-                )}
-                style={{
-                  flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7,
-                  marginTop: 12, paddingVertical: 12,
-                  backgroundColor: theme.colors.error,
-                  borderRadius: theme.radii.r12,
-                }}
-                accessibilityLabel={t('orders.cancelTitle', { defaultValue: 'Cancel order' })}
-                accessibilityRole="button"
-              >
-                <XIcon size={15} color="#fff" />
-                <Text style={{ color: '#fff', ...theme.typography.bodySm, fontWeight: '600' as const }}>
-                  {t('orders.cancelTitle', { defaultValue: 'Cancel Order' })}
-                </Text>
-              </TouchableOpacity>
-            )}
           </View>
         </View>
       )}

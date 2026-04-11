@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Alert } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
@@ -11,11 +11,13 @@ import { fetchMyProfile, fetchMyBaskets, updateLocationById } from '@/src/servic
 import { useBusinessStore } from '@/src/stores/businessStore';
 import { useAuthStore } from '@/src/stores/authStore';
 import { DelayedLoader } from '@/src/components/DelayedLoader';
+import { useCustomAlert } from '@/src/components/CustomAlert';
 
 export default function AvailabilityScreen() {
   const { t } = useTranslation();
   const theme = useTheme();
   const router = useRouter();
+  const alert = useCustomAlert();
   const queryClient = useQueryClient();
   const selectedLocationId = useBusinessStore((s) => s.selectedLocationId);
   const { user } = useAuthStore();
@@ -67,12 +69,12 @@ export default function AvailabilityScreen() {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['my-profile'] });
       void queryClient.invalidateQueries({ queryKey: ['my-baskets'] });
-      Alert.alert(t('common.success'), t('business.availability.saved'));
+      alert.showAlert(t('common.success'), t('business.availability.saved'));
       router.back();
     },
     onError: (err: any) => {
       const msg = err?.message ?? t('common.errorOccurred');
-      Alert.alert(t('common.error'), msg);
+      alert.showAlert(t('common.error'), msg);
     },
   });
 

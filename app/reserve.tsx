@@ -37,18 +37,8 @@ export default function ReserveScreen() {
   const [codeCopied, setCodeCopied] = useState(false);
   const [streakData, setStreakData] = useState<StreakUpdateResult | null>(null);
   const setCelebration = useCelebrationStore((s) => s.setPending);
-  const pendingCelebrationRef = React.useRef<any>(null);
-
   const dismissConfirmAndNavigate = () => {
     setShowConfirmation(false);
-    // Fire celebration AFTER modal is fully gone (small delay to avoid modal collision)
-    setTimeout(() => {
-      if (pendingCelebrationRef.current) {
-        setCelebration(pendingCelebrationRef.current);
-        pendingCelebrationRef.current = null;
-      }
-    }, 400);
-    router.replace('/(tabs)/orders' as never);
   };
 
   // Gamification stats query
@@ -148,7 +138,7 @@ export default function ReserveScreen() {
 
   const reserveMutation = useMutation({
     // Use the real resolved id, not the basket id
-    mutationFn: () => createReservation({ location_id: Number(resolvedLocationId), quantity }),
+    mutationFn: () => createReservation({ location_id: Number(resolvedLocationId), basket_id: basketId ? Number(basketId) : undefined, quantity }),
     onSuccess: async (data) => {
       console.log('[Reserve] Reservation created:', data.id);
       const pickupCode = data.pickup_code ?? data.pickupCode ?? '';
@@ -165,37 +155,19 @@ export default function ReserveScreen() {
       void queryClient.invalidateQueries({ queryKey: ['baskets-by-location', resolvedLocationId] });
       void queryClient.invalidateQueries({ queryKey: ['basket', basketId] });
 
-      // Capture pre-reservation XP before optimistic update (used for celebration levelBefore calc)
+      // Capture pre-reservation XP from the CURRENT cache (not component snapshot)
+      // This ensures second/third reservations read the updated value
       const xpGained = (quantity ?? 1) * 10;
-      const preReservationGamData = gamificationQuery.data as any;
-      const preRawLevel = preReservationGamData?.level;
-      const preIsLevelObject = preRawLevel !== null && typeof preRawLevel === 'object';
-      const preReservationXp: number = preIsLevelObject
-        ? Number(preRawLevel?.xp ?? 0)
-        : Number(preReservationGamData?.xp ?? 0);
+      const cachedGam = queryClient.getQueryData<any>(['gamification-stats']);
+      const cachedLevel = cachedGam?.level;
+      // Read XP from DB values (use ?? not || to avoid 0 being falsy)
+      const preReservationXp: number =
+        cachedGam?.xp ?? (typeof cachedLevel === 'object' ? (cachedLevel?.xp ?? 0) : 0);
 
-      // Cancel any in-flight gamification refetch so it doesn't overwrite our optimistic update
-      await queryClient.cancelQueries({ queryKey: ['gamification-stats'] });
-
-      // Optimistically update gamification cache so profile shows new level immediately
-      queryClient.setQueryData<any>(['gamification-stats'], (old: any) => {
-        if (!old) return old;
-        const inner = old?.stats ?? old;
-        const currentXp = Number(inner?.xp ?? 0);
-        const newXp = currentXp + xpGained;
-        const { level } = calcLevelProgress(newXp);
-        const mealsSaved = (inner?.meals_saved ?? 0) + (quantity ?? 1);
-        const updates = { xp: newXp, level, meals_saved: mealsSaved };
-        if (old?.stats) return { ...old, stats: { ...old.stats, ...updates } };
-        return { ...old, ...updates };
-      });
-
-      // Prevent background refetch from overwriting optimistic XP for 2 minutes
-      // (backend only counts picked_up reservations, so a refetch would reset XP to the old value)
-      queryClient.setQueryDefaults(['gamification-stats'], { staleTime: 10 * 60_000 });
-      // Reset stale timer by re-setting the data with fresh updatedAt
-      const currentGamData = queryClient.getQueryData(['gamification-stats']);
-      if (currentGamData) queryClient.setQueryData(['gamification-stats'], currentGamData);
+      // Force refetch gamification from DB (backend now persists xp/level)
+      // Await so the cache is updated before user navigates to profile
+      await queryClient.invalidateQueries({ queryKey: ['gamification-stats'] });
+      await queryClient.refetchQueries({ queryKey: ['gamification-stats'] });
 
       // Update streak only — do NOT invalidate gamification-stats here
       try {
@@ -239,38 +211,35 @@ export default function ReserveScreen() {
       //   console.log('[Reserve] Notification scheduling failed (non-critical):', e);
       // }
 
-      // Fetch QR code
-      if (data.id) {
-        try {
-          const qrCodeUrl = await fetchReservationQRCode(String(data.id));
-          if (qrCodeUrl) {
-            setConfirmData((prev) => prev ? { ...prev, qrCodeUrl } : prev);
-          }
-        } catch (qrErr) {
-          console.log('[Reserve] QR fetch failed (non-critical):', qrErr);
-        }
-      }
+      // Fetch QR code in background while bouncing/success phases play
+      let qrUrl: string | undefined;
+      fetchReservationQRCode(String(data.id)).then(url => { qrUrl = url; }).catch(() => {});
 
-      // Phase 1 (bouncing) → Phase 2 (success) after 3s
+      // Pre-compute celebration data
+      const { level: levelBefore, xpProgress: pBefore } = calcLevelProgress(preReservationXp);
+      const { level: levelAfter, xpProgress: pAfter, xpInLevel, xpBandSize } = calcLevelProgress(preReservationXp + xpGained);
+
+      // Phase 1 (bouncing) → Phase 2 (success) after 3s → then fire celebration
       setTimeout(() => {
         setConfirmPhase('success');
-        // Phase 2 (success) → Phase 3 (details) after another 4s (or user taps)
-        setTimeout(() => setConfirmPhase('details'), 4000);
+        // Phase 2 (success) → dismiss and fire XP celebration after 3s
+        setTimeout(() => {
+          setShowConfirmation(false);
+          setCelebration({
+            xpGained,
+            levelBefore,
+            levelAfter,
+            xpProgressBefore: pBefore,
+            xpProgress: pAfter,
+            xpInLevel,
+            xpBandSize,
+            streakChanged: !!(streakData?.streak_changed && (streakData?.current_streak ?? 0) > 0),
+            newStreak: streakData?.current_streak ?? 0,
+            confirmData: { pickupCode, pickupStart, pickupEnd, address, locationName, basketName, basketImage: basketImage ?? undefined, quantity, price, qrCodeUrl: qrUrl },
+          });
+          router.replace('/(tabs)/orders' as never);
+        }, 3000);
       }, 3000);
-
-      // Pre-compute celebration data but DON'T fire it yet — store it for later
-      const { level: levelBefore } = calcLevelProgress(preReservationXp);
-      const { level: levelAfter, xpProgress: pAfter, xpInLevel, xpBandSize } = calcLevelProgress(preReservationXp + xpGained);
-      pendingCelebrationRef.current = {
-        xpGained,
-        levelBefore,
-        levelAfter,
-        xpProgress: pAfter,
-        xpInLevel,
-        xpBandSize,
-        streakChanged: !!(streakData?.streak_changed && (streakData?.current_streak ?? 0) > 0),
-        newStreak: streakData?.current_streak ?? 0,
-      };
     },
     onError: (err) => {
       const msg = getErrorMessage(err);
@@ -619,7 +588,7 @@ export default function ReserveScreen() {
             >
               <Image
                 source={require('@/assets/images/barakeat_paper_bag.png')}
-                style={{ width: 140, height: 140, borderRadius: 28, marginBottom: 24, borderWidth: 3, borderColor: '#e3ff5c' }}
+                style={{ width: 140, height: 140, marginBottom: 24 }}
                 resizeMode="cover"
               />
               <View style={{ backgroundColor: '#e3ff5c', width: 48, height: 48, borderRadius: 24, justifyContent: 'center', alignItems: 'center', marginBottom: 20 }}>

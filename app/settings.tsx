@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState, useRef } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Switch, Alert, Modal, TextInput, Linking, Animated, PanResponder } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Switch, Alert, Modal, TextInput, Linking, Animated, PanResponder, KeyboardAvoidingView, Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
@@ -10,6 +10,7 @@ import {
 } from 'lucide-react-native';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { StatusBar } from 'expo-status-bar';
+import { useQueryClient } from '@tanstack/react-query';
 import { useAuthStore } from '@/src/stores/authStore';
 import { useSplashStore } from '@/src/stores/splashStore';
 import { logout, deleteAccount as deleteAccountApi } from '@/src/services/auth';
@@ -51,6 +52,7 @@ export default function SettingsScreen() {
   const { user } = useAuthStore();
   const signOut = useAuthStore((s) => s.signOut);
   const triggerSplash = useSplashStore((s) => s.triggerSplash);
+  const queryClient = useQueryClient();
 
   const [notifications, setNotifications] = useState(true);
   const PUSH_ENABLED_KEY = '@barakeat_push_enabled';
@@ -139,7 +141,7 @@ export default function SettingsScreen() {
 
   const handleDemoRoleSwitch = useCallback(() => {
     // Navigate to onboarding with demo flag to bypass auth redirect
-    router.push('/onboarding?demo=true' as never);
+    router.push(`/onboarding?demo=true&role=${user?.role ?? 'customer'}` as never);
   }, [router]);
 
   const handleFAQPress = useCallback(() => {
@@ -251,6 +253,7 @@ export default function SettingsScreen() {
     try {
       await deleteAccountApi();
       await signOut();
+      queryClient.clear();
       triggerSplash(false);
       router.replace('/auth/sign-in' as never);
     } catch (err: any) {
@@ -264,9 +267,10 @@ export default function SettingsScreen() {
   const handleSignOut = useCallback(async () => {
     await logout();
     await signOut();
+    queryClient.clear(); // Clear all cached data so next login gets fresh data
     triggerSplash(false); // false = sign-out, no welcome modal
     router.replace('/auth/sign-in' as never);
-  }, [signOut, router, triggerSplash]);
+  }, [signOut, router, triggerSplash, queryClient]);
 
   const handleOpenSettings = useCallback(() => {
     Linking.openSettings();
