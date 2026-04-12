@@ -1,7 +1,8 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   View, Text, TouchableOpacity, ScrollView,
-  TextInput, Platform, StyleSheet,
+  TextInput, Platform, StyleSheet, ActivityIndicator,
+  Keyboard,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MapPin, Home, Briefcase, Plus, ChevronLeft, Check, Trash2, Edit3, Navigation } from 'lucide-react-native';
@@ -32,6 +33,111 @@ export default function AddressPickerScreen() {
   const [step, setStep] = useState<Step>('list');
   const [pendingRegion, setPendingRegion] = useState({ lat: 36.8065, lng: 10.1815 });
   const mapRef = useRef<any>(null);
+
+  // ── Autocomplete state ─────────────────────────────────────────────────────
+  const [addressSearch, setAddressSearch] = useState('');
+  const [suggestions, setSuggestions] = useState<NominatimResult[]>([]);
+  const [suggestionLoading, setSuggestionLoading] = useState(false);
+  const [suggestionError, setSuggestionError] = useState<string | null>(null);
+  const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const abortCtrl = useRef<AbortController | null>(null);
+
+  const fetchSuggestions = useCallback(async (query: string) => {
+    // Cancel previous in-flight request
+    abortCtrl.current?.abort();
+    const controller = new AbortController();
+    abortCtrl.current = controller;
+
+    setSuggestionLoading(true);
+    setSuggestionError(null);
+
+    try {
+      const url =
+        `https://nominatim.openstreetmap.org/search?` +
+        `q=${encodeURIComponent(query)}&format=json&limit=6&addressdetails=1&countrycodes=tn`;
+
+      const res = await fetch(url, {
+        signal: controller.signal,
+        headers: {
+          'Accept': 'application/json',
+          // Nominatim requires a meaningful User-Agent per usage policy
+          'User-Agent': 'BarakeatMobileApp/1.0 (contactbarakeat@gmail.com)',
+        },
+      });
+
+      if (!res.ok) {
+        throw new Error(`Geocoding error: ${res.status} ${res.statusText}`);
+      }
+
+      const data: NominatimResult[] = await res.json();
+      console.log('[AddressPicker] Nominatim results:', data.length, 'for query:', query);
+      setSuggestions(data);
+      if (data.length === 0) {
+        setSuggestionError(null); // not an error, just no results
+      }
+    } catch (err: any) {
+      if (err?.name === 'AbortError') {
+        // Stale request cancelled — don't touch state
+        return;
+      }
+      console.error('[AddressPicker] fetchSuggestions failed:', err);
+      setSuggestionError(t('addressPicker.searchError', { defaultValue: 'Search failed. Check your connection.' }));
+      setSuggestions([]);
+    } finally {
+      setSuggestionLoading(false);
+    }
+  }, [t]);
+
+  const handleSearchChange = useCallback((text: string) => {
+    setAddressSearch(text);
+    setSuggestionError(null);
+
+    // Clear suggestions immediately on empty input
+    if (!text.trim()) {
+      setSuggestions([]);
+      setSuggestionLoading(false);
+      if (debounceTimer.current) clearTimeout(debounceTimer.current);
+      abortCtrl.current?.abort();
+      return;
+    }
+
+    // Debounce: only fire after 400 ms of no typing
+    if (debounceTimer.current) clearTimeout(debounceTimer.current);
+    debounceTimer.current = setTimeout(() => {
+      void fetchSuggestions(text.trim());
+    }, 400);
+  }, [fetchSuggestions]);
+
+  const handleSuggestionSelect = useCallback((item: NominatimResult) => {
+    const lat = parseFloat(item.lat);
+    const lng = parseFloat(item.lon);
+    setAddressSearch(item.display_name);
+    setSuggestions([]);
+    setSuggestionError(null);
+    setPendingRegion({ lat, lng });
+    mapRef.current?.animateToRegion(
+      { latitude: lat, longitude: lng, latitudeDelta: 0.01, longitudeDelta: 0.01 },
+      600,
+    );
+    Keyboard.dismiss();
+  }, []);
+
+  // Cleanup debounce + abort on unmount
+  useEffect(() => {
+    return () => {
+      if (debounceTimer.current) clearTimeout(debounceTimer.current);
+      abortCtrl.current?.abort();
+    };
+  }, []);
+
+  // Reset search when switching steps
+  useEffect(() => {
+    setAddressSearch('');
+    setSuggestions([]);
+    setSuggestionError(null);
+    setSuggestionLoading(false);
+  }, [step]);
+  // ── End autocomplete state ─────────────────────────────────────────────────
 
   const goToCurrentLocation = async () => {
     try {
@@ -219,6 +325,63 @@ export default function AddressPickerScreen() {
       {/* ── Step: Map Pin Picker (new address) ─────────────── */}
       {step === 'map' && (
         <View style={{ flex: 1 }}>
+          {/* Search bar + dropdown — must be ABOVE the map layer */}
+          <View style={styles.searchContainer}>
+            <View style={[styles.searchBar, { backgroundColor: theme.colors.surface, borderRadius: theme.radii.r12, ...theme.shadows.shadowMd }]}>
+              <MapPin size={16} color={theme.colors.primary} />
+              <TextInput
+                style={[theme.typography.body, styles.searchInput, { color: theme.colors.textPrimary }]}
+                placeholder={t('addressPicker.searchPlaceholder', { defaultValue: 'Search address or place…' })}
+                placeholderTextColor={theme.colors.muted}
+                value={addressSearch}
+                onChangeText={handleSearchChange}
+                autoCorrect={false}
+                returnKeyType="search"
+                accessibilityLabel={t('addressPicker.searchPlaceholder', { defaultValue: 'Search address or place…' })}
+              />
+              {suggestionLoading && <ActivityIndicator size="small" color={theme.colors.primary} style={{ marginLeft: 6 }} />}
+              {addressSearch.length > 0 && !suggestionLoading && (
+                <TouchableOpacity
+                  onPress={() => handleSearchChange('')}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                >
+                  <Text style={{ color: theme.colors.muted, fontSize: 18, lineHeight: 20 }}>✕</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+
+            {/* Dropdown — rendered only when there is something to show */}
+            {(suggestions.length > 0 || !!suggestionError || (!suggestionLoading && !suggestionError && addressSearch.trim().length >= 2 && suggestions.length === 0)) && (
+              <View style={[styles.suggestionsDropdown, { backgroundColor: theme.colors.surface, ...theme.shadows.shadowLg }]}>
+                {suggestionError ? (
+                  <View style={styles.suggestionStateRow}>
+                    <Text style={[theme.typography.bodySm, { color: theme.colors.error ?? '#e53e3e' }]}>{suggestionError}</Text>
+                  </View>
+                ) : suggestions.length === 0 && !suggestionLoading && addressSearch.trim().length >= 2 ? (
+                  <View style={styles.suggestionStateRow}>
+                    <Text style={[theme.typography.bodySm, { color: theme.colors.muted }]}>
+                      {t('addressPicker.noResults', { defaultValue: 'No results found' })}
+                    </Text>
+                  </View>
+                ) : (
+                  suggestions.map((item, idx) => (
+                    <TouchableOpacity
+                      key={`${item.place_id}_${idx}`}
+                      onPress={() => handleSuggestionSelect(item)}
+                      style={[styles.suggestionRow, idx < suggestions.length - 1 && { borderBottomWidth: 1, borderBottomColor: theme.colors.divider }]}
+                      activeOpacity={0.7}
+                    >
+                      <MapPin size={14} color={theme.colors.primary} style={{ marginRight: 10, flexShrink: 0 }} />
+                      <Text style={[theme.typography.bodySm, { color: theme.colors.textPrimary, flex: 1 }]} numberOfLines={2}>
+                        {item.display_name}
+                      </Text>
+                    </TouchableOpacity>
+                  ))
+                )}
+              </View>
+            )}
+          </View>
+
           <View style={{ flex: 1 }}>
             {MapView && Platform.OS !== 'web' ? (
               <MapView
@@ -279,6 +442,63 @@ export default function AddressPickerScreen() {
       {/* ── Step: Edit existing address location ────────────── */}
       {step === 'edit' && editingAddress && (
         <View style={{ flex: 1 }}>
+          {/* Search bar + dropdown — must be ABOVE the map layer */}
+          <View style={styles.searchContainer}>
+            <View style={[styles.searchBar, { backgroundColor: theme.colors.surface, borderRadius: theme.radii.r12, ...theme.shadows.shadowMd }]}>
+              <MapPin size={16} color={theme.colors.primary} />
+              <TextInput
+                style={[theme.typography.body, styles.searchInput, { color: theme.colors.textPrimary }]}
+                placeholder={t('addressPicker.searchPlaceholder', { defaultValue: 'Search address or place…' })}
+                placeholderTextColor={theme.colors.muted}
+                value={addressSearch}
+                onChangeText={handleSearchChange}
+                autoCorrect={false}
+                returnKeyType="search"
+                accessibilityLabel={t('addressPicker.searchPlaceholder', { defaultValue: 'Search address or place…' })}
+              />
+              {suggestionLoading && <ActivityIndicator size="small" color={theme.colors.primary} style={{ marginLeft: 6 }} />}
+              {addressSearch.length > 0 && !suggestionLoading && (
+                <TouchableOpacity
+                  onPress={() => handleSearchChange('')}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                >
+                  <Text style={{ color: theme.colors.muted, fontSize: 18, lineHeight: 20 }}>✕</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+
+            {/* Dropdown */}
+            {(suggestions.length > 0 || suggestionError || (!suggestionLoading && addressSearch.trim().length >= 2 && suggestions.length === 0 && !suggestionError === false)) && (
+              <View style={[styles.suggestionsDropdown, { backgroundColor: theme.colors.surface, ...theme.shadows.shadowLg }]}>
+                {suggestionError ? (
+                  <View style={styles.suggestionStateRow}>
+                    <Text style={[theme.typography.bodySm, { color: theme.colors.error ?? '#e53e3e' }]}>{suggestionError}</Text>
+                  </View>
+                ) : suggestions.length === 0 && !suggestionLoading && addressSearch.trim().length >= 2 ? (
+                  <View style={styles.suggestionStateRow}>
+                    <Text style={[theme.typography.bodySm, { color: theme.colors.muted }]}>
+                      {t('addressPicker.noResults', { defaultValue: 'No results found' })}
+                    </Text>
+                  </View>
+                ) : (
+                  suggestions.map((item, idx) => (
+                    <TouchableOpacity
+                      key={`${item.place_id}_${idx}`}
+                      onPress={() => handleSuggestionSelect(item)}
+                      style={[styles.suggestionRow, idx < suggestions.length - 1 && { borderBottomWidth: 1, borderBottomColor: theme.colors.divider }]}
+                      activeOpacity={0.7}
+                    >
+                      <MapPin size={14} color={theme.colors.primary} style={{ marginRight: 10, flexShrink: 0 }} />
+                      <Text style={[theme.typography.bodySm, { color: theme.colors.textPrimary, flex: 1 }]} numberOfLines={2}>
+                        {item.display_name}
+                      </Text>
+                    </TouchableOpacity>
+                  ))
+                )}
+              </View>
+            )}
+          </View>
+
           <View style={{ flex: 1 }}>
             {MapView && Platform.OS !== 'web' ? (
               <MapView
@@ -399,6 +619,14 @@ export default function AddressPickerScreen() {
   );
 }
 
+// Nominatim response shape (minimal — only fields we use)
+interface NominatimResult {
+  place_id: number;
+  display_name: string;
+  lat: string;
+  lon: string;
+}
+
 const styles = StyleSheet.create({
   container: {
     flex: 1,
@@ -429,6 +657,48 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     borderBottomWidth: 1,
   },
+  // ── Search / autocomplete ──────────────────────────────────────
+  // Wraps the input bar + the dropdown together. Must sit ABOVE the map
+  // on both iOS (zIndex) and Android (elevation).
+  searchContainer: {
+    position: 'absolute',
+    top: 12,
+    left: 12,
+    right: 12,
+    zIndex: 50,
+    elevation: 50,
+  },
+  searchBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: Platform.OS === 'ios' ? 10 : 4,
+    minHeight: 46,
+  },
+  searchInput: {
+    flex: 1,
+    marginLeft: 8,
+    marginRight: 4,
+    // fontSize handled by theme.typography.body
+  },
+  suggestionsDropdown: {
+    marginTop: 4,
+    borderRadius: 12,
+    overflow: 'hidden',
+    maxHeight: 280,
+  },
+  suggestionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  suggestionStateRow: {
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+    alignItems: 'center',
+  },
+  // ── Map center pin ─────────────────────────────────────────────
   centerPin: {
     position: 'absolute',
     top: '50%',
@@ -450,7 +720,7 @@ const styles = StyleSheet.create({
   },
   tooltip: {
     position: 'absolute',
-    top: 16,
+    top: 78, // pushed down to clear search bar
     alignSelf: 'center',
     flexDirection: 'row',
     alignItems: 'center',
