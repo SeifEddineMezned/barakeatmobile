@@ -909,5 +909,33 @@
     "title": "No Internet Connection",
     "message": "Please check your network connection and try again.",
     "retry": "Retry"
+  },
+  "wallet": {
+    "title": "Barakeat Credits",
+    "credits": "Barakeat Credits",
+    "earnCreditsShort": "Earn and spend credits",
+    "balance": "Balance",
+    "history": "History",
+    "noTransactions": "No transactions yet.",
+    "reward": "Reward",
+    "referral": "Referral",
+    "refund": "Refund",
+    "payment": "Payment",
+    "adminCredit": "Credit",
+    "codeRedeem": "Gift Code",
+    "earnCredits": "How to earn credits",
+    "earnDesc": "Earn credits by referring friends, keeping order streaks, and more!",
+    "payWithCredits": "Pay with Barakeat credits",
+    "insufficientBalance": "Insufficient balance",
+    "redeemTitle": "Enter a code",
+    "redeemSubtitle": "Have a gift code? Enter it here.",
+    "redeemPlaceholder": "GIFT CODE",
+    "redeemButton": "Redeem",
+    "redeemSuccess": "Credits added successfully!",
+    "redeemErrorInvalid": "This code is invalid.",
+    "redeemErrorExpired": "This code has expired.",
+    "redeemErrorAlreadyUsed": "You have already used this code.",
+    "redeemErrorMaxUses": "This code has reached its maximum number of uses.",
+    "redeemErrorGeneric": "Something went wrong. Please try again."
   }
-}
+}

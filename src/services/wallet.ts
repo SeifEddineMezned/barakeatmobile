@@ -3,7 +3,7 @@ import { apiClient } from '@/src/lib/api';
 export interface WalletTransaction {
   id: number;
   wallet_id: number;
-  type: 'reward' | 'referral' | 'refund' | 'payment' | 'admin_credit';
+  type: 'reward' | 'referral' | 'refund' | 'payment' | 'admin_credit' | 'code_redeem';
   amount: number;
   description?: string;
   reference_id?: number;
@@ -14,6 +14,13 @@ export interface WalletData {
   balance: number;
   currency: string;
   transactions: WalletTransaction[];
+}
+
+export interface RedeemCodeResponse {
+  success: boolean;
+  message: string;
+  balance: number;
+  transaction: WalletTransaction;
 }
 
 export async function fetchWallet(): Promise<WalletData> {
@@ -38,4 +45,9 @@ export async function creditWallet(data: {
 }): Promise<{ balance: number }> {
   const res = await apiClient.post<any>('/api/wallet/credit', data);
   return { balance: res.data?.balance ?? 0 };
+}
+
+export async function redeemCode(code: string): Promise<RedeemCodeResponse> {
+  const res = await apiClient.post<any>('/api/wallet/redeem', { code: code.trim().toUpperCase() });
+  return res.data as RedeemCodeResponse;
 }

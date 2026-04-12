@@ -1151,9 +1151,20 @@
     "refund": "Remboursement",
     "payment": "Paiement",
     "adminCredit": "Crédit",
+    "codeRedeem": "Code cadeau",
     "earnCredits": "Comment gagner des crédits",
     "earnDesc": "Gagnez des crédits en parrainant des amis, en maintenant des séries de commandes, et plus encore !",
     "payWithCredits": "Payer avec crédits Barakeat",
-    "insufficientBalance": "Solde insuffisant"
+    "insufficientBalance": "Solde insuffisant",
+    "redeemTitle": "Entrer un code",
+    "redeemSubtitle": "Vous avez un code cadeau ? Saisissez-le ici.",
+    "redeemPlaceholder": "CODE CADEAU",
+    "redeemButton": "Valider",
+    "redeemSuccess": "Crédits ajoutés avec succès !",
+    "redeemErrorInvalid": "Ce code est invalide.",
+    "redeemErrorExpired": "Ce code a expiré.",
+    "redeemErrorAlreadyUsed": "Vous avez déjà utilisé ce code.",
+    "redeemErrorMaxUses": "Ce code a atteint son nombre maximum d'utilisations.",
+    "redeemErrorGeneric": "Une erreur est survenue. Veuillez réessayer."
   }
 }

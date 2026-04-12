@@ -917,5 +917,33 @@
     "title": "لا يوجد اتصال بالإنترنت",
     "message": "يرجى التحقق من اتصال الشبكة والمحاولة مرة أخرى.",
     "retry": "إعادة المحاولة"
+  },
+  "wallet": {
+    "title": "نقاط بركات",
+    "credits": "نقاط بركات",
+    "earnCreditsShort": "اكسب واستخدم النقاط",
+    "balance": "الرصيد",
+    "history": "السجل",
+    "noTransactions": "لا توجد معاملات بعد.",
+    "reward": "مكافأة",
+    "referral": "إحالة",
+    "refund": "استرداد",
+    "payment": "دفع",
+    "adminCredit": "رصيد",
+    "codeRedeem": "رمز هدية",
+    "earnCredits": "كيفية كسب النقاط",
+    "earnDesc": "اكسب النقاط عن طريق دعوة الأصدقاء، الحفاظ على سلسلة الطلبات، والمزيد!",
+    "payWithCredits": "الدفع بنقاط بركات",
+    "insufficientBalance": "رصيد غير كافٍ",
+    "redeemTitle": "إدخال رمز",
+    "redeemSubtitle": "هل لديك رمز هدية؟ أدخله هنا.",
+    "redeemPlaceholder": "رمز الهدية",
+    "redeemButton": "تأكيد",
+    "redeemSuccess": "تم إضافة النقاط بنجاح!",
+    "redeemErrorInvalid": "هذا الرمز غير صالح.",
+    "redeemErrorExpired": "انتهت صلاحية هذا الرمز.",
+    "redeemErrorAlreadyUsed": "لقد استخدمت هذا الرمز بالفعل.",
+    "redeemErrorMaxUses": "وصل هذا الرمز إلى الحد الأقصى من الاستخدامات.",
+    "redeemErrorGeneric": "حدث خطأ ما. يرجى المحاولة مرة أخرى."
   }
 }
