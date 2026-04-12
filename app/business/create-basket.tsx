@@ -514,7 +514,7 @@ export default function CreateBasketScreen() {
             </Text>
             <View style={{ flexDirection: 'row', alignItems: 'center' }}>
               <TouchableOpacity
-                onPress={() => setQuantity(Math.max(1, quantity - 1))}
+                onPress={() => setQuantity(Math.max(0, quantity - 1))}
                 style={{ backgroundColor: theme.colors.surface, borderRadius: 10, width: 42, height: 42, justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: theme.colors.divider }}
               >
                 <Minus size={16} color={theme.colors.textPrimary} />
@@ -527,7 +527,11 @@ export default function CreateBasketScreen() {
                   borderWidth: 1, borderColor: theme.colors.divider,
                 }]}
                 value={String(quantity)}
-                onChangeText={(v) => { const n = parseInt(v); if (!isNaN(n) && n >= 1) setQuantity(n); }}
+                onChangeText={(v) => {
+                  if (v === '' || v === undefined) { setQuantity(0); return; }
+                  const n = parseInt(v, 10);
+                  if (!isNaN(n) && n >= 0) setQuantity(n);
+                }}
                 keyboardType="number-pad"
               />
               <TouchableOpacity
