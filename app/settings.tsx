@@ -145,8 +145,12 @@ export default function SettingsScreen() {
   }, [router]);
 
   const handleFAQPress = useCallback(() => {
+    // Reset sheet state before opening so it always starts at half, clean
+    sheetY.setValue(0);
+    sheetStateRef.current = 'half';
+    setSheetState('half');
     setShowFaqModal(true);
-  }, []);
+  }, [sheetY]);
 
   // Bottom sheet: 3 states — closed / half / full
   // Only use translateY for closing (slide down off screen), use height change for expand/collapse
@@ -156,8 +160,10 @@ export default function SettingsScreen() {
   useEffect(() => { sheetStateRef.current = sheetState; }, [sheetState]);
 
   const sheetPan = useRef(PanResponder.create({
-    onStartShouldSetPanResponder: () => true,
-    onMoveShouldSetPanResponder: (_, g) => Math.abs(g.dy) > 8,
+    // Only claim gesture when movement is clearly vertical — lets the ScrollView
+    // claim horizontal or ambiguous touches first.
+    onStartShouldSetPanResponder: () => false,
+    onMoveShouldSetPanResponder: (_, g) => Math.abs(g.dy) > 8 && Math.abs(g.dy) > Math.abs(g.dx),
     onPanResponderMove: (_, g) => {
       if (g.dy > 0) sheetY.setValue(g.dy);
     },
@@ -166,32 +172,41 @@ export default function SettingsScreen() {
       if (g.dy > 80 || g.vy > 0.5) {
         // Swipe down
         if (state === 'full') {
-          // Full → half (just change state, snap back)
+          // Full → half (snap back, change height via state)
           sheetStateRef.current = 'half';
           setSheetState('half');
           Animated.spring(sheetY, { toValue: 0, friction: 8, useNativeDriver: true }).start();
         } else {
-          // Half → close (slide off)
+          // Half → close: animate slide-off, then reset state AFTER animation
           Animated.timing(sheetY, { toValue: 600, duration: 200, useNativeDriver: true }).start(() => {
-            setShowFaqModal(false); setShowLegalModal(null); sheetY.setValue(0);
-            sheetStateRef.current = 'half'; setSheetState('half');
+            // Reset sheetY BEFORE clearing modal so next open starts clean
+            sheetY.setValue(0);
+            sheetStateRef.current = 'half';
+            setSheetState('half');
+            setShowFaqModal(false);
+            setShowLegalModal(null);
           });
         }
       } else if (g.dy < -50) {
-        // Swipe up → expand (just change state)
+        // Swipe up → expand
         sheetStateRef.current = 'full';
         setSheetState('full');
         Animated.spring(sheetY, { toValue: 0, friction: 8, useNativeDriver: true }).start();
       } else {
-        // Snap back
+        // Snap back to resting position
         Animated.spring(sheetY, { toValue: 0, friction: 8, useNativeDriver: true }).start();
       }
     },
   })).current;
+
   const closeSheet = useCallback(() => {
     Animated.timing(sheetY, { toValue: 600, duration: 200, useNativeDriver: true }).start(() => {
-      setShowFaqModal(false); setShowLegalModal(null); sheetY.setValue(0);
-      sheetStateRef.current = 'half'; setSheetState('half');
+      // Order matters: reset animated value FIRST, then unmount modal
+      sheetY.setValue(0);
+      sheetStateRef.current = 'half';
+      setSheetState('half');
+      setShowFaqModal(false);
+      setShowLegalModal(null);
     });
   }, [sheetY]);
 
@@ -533,7 +548,13 @@ export default function SettingsScreen() {
                 borderTopWidth: i > 0 ? 1 : 0,
                 borderTopColor: theme.colors.divider,
               }]}
-              onPress={() => setShowLegalModal(item.key)}
+              onPress={() => {
+                // Reset sheet state before opening so it always starts clean
+                sheetY.setValue(0);
+                sheetStateRef.current = 'half';
+                setSheetState('half');
+                setShowLegalModal(item.key);
+              }}
               accessibilityLabel={item.label}
               accessibilityRole="button"
             >
@@ -649,18 +670,25 @@ export default function SettingsScreen() {
               transform: [{ translateY: sheetY }],
             }]}
           >
-            <View {...sheetPan.panHandlers} style={{ paddingTop: 6, paddingBottom: 4 }}>
-              <View style={[styles.bottomModalHandle, { backgroundColor: theme.colors.divider, alignSelf: 'center', marginTop: 4, marginBottom: 4 }]} />
+            {/* Drag handle — PanResponder lives ONLY here, not on the content area */}
+            <View {...sheetPan.panHandlers} style={{ paddingTop: 6, paddingBottom: 4, alignItems: 'center' }}>
+              <View style={[styles.bottomModalHandle, { backgroundColor: theme.colors.divider, marginTop: 4, marginBottom: 4 }]} />
             </View>
-            <View style={[styles.bottomModalHeader, { padding: theme.spacing.xl }]}>
+            <View style={[styles.bottomModalHeader, { paddingHorizontal: theme.spacing.xl, paddingBottom: theme.spacing.md }]}>
               <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h2 }]}>
                 {t('profile.faq')}
               </Text>
-              <TouchableOpacity onPress={closeSheet}>
+              <TouchableOpacity onPress={closeSheet} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
                 <X size={20} color={theme.colors.textSecondary} />
               </TouchableOpacity>
             </View>
-            <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingHorizontal: theme.spacing.xl, paddingBottom: 40 }} scrollEnabled={sheetState === 'full'}>
+            {/* scrollEnabled is always true — content is readable in half AND full state */}
+            <ScrollView
+              style={{ flex: 1 }}
+              contentContainerStyle={{ paddingHorizontal: theme.spacing.xl, paddingBottom: 40 }}
+              showsVerticalScrollIndicator
+              nestedScrollEnabled
+            >
               <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.body, lineHeight: 24 }]}>
                 {t('profile.faqContent')}
               </Text>
@@ -683,24 +711,31 @@ export default function SettingsScreen() {
               transform: [{ translateY: sheetY }],
             }]}
           >
-            <View {...sheetPan.panHandlers} style={{ paddingTop: 6, paddingBottom: 4 }}>
-              <View style={[styles.bottomModalHandle, { backgroundColor: theme.colors.divider, alignSelf: 'center', marginTop: 4, marginBottom: 4 }]} />
+            {/* Drag handle — PanResponder lives ONLY here, not on the content area */}
+            <View {...sheetPan.panHandlers} style={{ paddingTop: 6, paddingBottom: 4, alignItems: 'center' }}>
+              <View style={[styles.bottomModalHandle, { backgroundColor: theme.colors.divider, marginTop: 4, marginBottom: 4 }]} />
             </View>
-            <View style={[styles.bottomModalHeader, { padding: theme.spacing.xl }]}>
+            <View style={[styles.bottomModalHeader, { paddingHorizontal: theme.spacing.xl, paddingBottom: theme.spacing.md }]}>
               <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h2 }]}>
                 {showLegalModal === 'terms' ? t('profile.termsAndConditions') :
-                 showLegalModal === 'cookies' ? t('profile.cookies') :
-                 t('profile.privacyPolicy')}
+                  showLegalModal === 'cookies' ? t('profile.cookies') :
+                    t('profile.privacyPolicy')}
               </Text>
-              <TouchableOpacity onPress={closeSheet}>
+              <TouchableOpacity onPress={closeSheet} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
                 <X size={20} color={theme.colors.textSecondary} />
               </TouchableOpacity>
             </View>
-            <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingHorizontal: theme.spacing.xl, paddingBottom: 40 }} scrollEnabled={sheetState === 'full'}>
+            {/* scrollEnabled is always true — content is readable in half AND full state */}
+            <ScrollView
+              style={{ flex: 1 }}
+              contentContainerStyle={{ paddingHorizontal: theme.spacing.xl, paddingBottom: 40 }}
+              showsVerticalScrollIndicator
+              nestedScrollEnabled
+            >
               <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.body, lineHeight: 24 }]}>
                 {showLegalModal === 'terms' ? t('legal.termsContent') :
-                 showLegalModal === 'cookies' ? t('legal.cookiesContent') :
-                 t('legal.privacyContent')}
+                  showLegalModal === 'cookies' ? t('legal.cookiesContent') :
+                    t('legal.privacyContent')}
               </Text>
             </ScrollView>
           </Animated.View>
