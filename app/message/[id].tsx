@@ -64,7 +64,8 @@ export default function ChatScreen() {
   const sendMutation = useMutation({
     mutationFn: async (msg: string) => {
       if (conversationId) {
-        return sendMessage(conversationId, msg);
+        const result = await sendMessage(conversationId, msg);
+        return { message: result, conversationId, isNew: false };
       }
       // No conversation yet — create one (for buyer initiating first message)
       const buyerId = Number(params.buyerId || user?.id || 0);
@@ -74,14 +75,30 @@ export default function ChatScreen() {
         location_id: params.locationId ? Number(params.locationId) : undefined,
         message: msg,
       });
-      setResolvedConvId(result.conversation.id);
-      return result.message;
+      return { 
+        message: result.message, 
+        conversationId: result.conversation.id,
+        conversation: result.conversation,
+        isNew: true 
+      };
     },
-    onSuccess: () => {
+    onSuccess: (data) => {
       setText('');
-      void queryClient.invalidateQueries({ queryKey: ['messages', conversationId] });
+      
+      if (data.isNew && data.conversation) {
+        setResolvedConvId(data.conversationId);
+        // Pre-populate cache so the first message appears immediately
+        queryClient.setQueryData(['messages', data.conversationId], {
+          conversation: data.conversation,
+          messages: [data.message]
+        });
+      }
+
+      void queryClient.invalidateQueries({ queryKey: ['messages', data.conversationId] });
       void queryClient.invalidateQueries({ queryKey: ['conversations'] });
-      if (reservationId) void queryClient.invalidateQueries({ queryKey: ['conversation-by-reservation', reservationId] });
+      if (reservationId) {
+        void queryClient.invalidateQueries({ queryKey: ['conversation-by-reservation', reservationId] });
+      }
     },
   });
 
