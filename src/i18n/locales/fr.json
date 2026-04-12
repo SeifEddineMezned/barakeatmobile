@@ -351,9 +351,9 @@
     "faq": "FAQ",
     "faqContent": "Questions fréquemment posées\n\n• Comment réserver un panier ?\nParcourez les paniers disponibles, sélectionnez-en un, choisissez la quantité et l'heure de retrait, puis confirmez.\n\n• Qu'est-ce qu'un panier surprise ?\nUn panier surprise contient une variété d'articles invendus du commerçant. Le contenu varie quotidiennement selon la disponibilité.\n\n• Comment fonctionnent les créneaux de retrait ?\nSélectionnez un créneau horaire qui vous convient. Arrivez pendant ce créneau pour récupérer votre panier.\n\n• Quels modes de paiement sont acceptés ?\nPayez directement au commerçant lors du retrait de votre panier (espèces ou carte sur place).\n\n• Comment annuler une réservation ?\nRendez-vous dans l'onglet Commandes, sélectionnez votre commande et appuyez sur Annuler.\n\n• Les paniers sont-ils les mêmes chaque jour ?\nNon, le contenu varie selon les invendus du jour. C'est ce qui fait la surprise !",
     "about": "À Propos",
-    "mission": "Notre mission est de lutter contre le gaspillage alimentaire en connectant les gens avec des paniers surprise de commerçants locaux.",
+    "mission": "Notre mission est de lutter contre le gaspillage alimentaire en Tunisie en vous permettant de sauver les invendus de vos commerces préférés à petit prix avant qu’ils ne soient jetés.",
     "motto": "Parce que la bonne nourriture mérite une seconde chance",
-    "availability": "Disponible à Grand Tunis pour le lancement",
+    "availability": "Disponible sur le Grand Tunis pour le lancement",
     "signOut": "Déconnexion",
     "personalInfo": "Informations personnelles",
     "name": "Nom",
@@ -566,14 +566,45 @@
       "revenueLegend": "Revenus",
       "noData": "Aucune donnée disponible",
       "days": {
-        "Mon": "Lun", "Tue": "Mar", "Wed": "Mer", "Thu": "Jeu", "Fri": "Ven", "Sat": "Sam", "Sun": "Dim",
-        "Monday": "Lun", "Tuesday": "Mar", "Wednesday": "Mer", "Thursday": "Jeu", "Friday": "Ven", "Saturday": "Sam", "Sunday": "Dim"
+        "Mon": "Lun",
+        "Tue": "Mar",
+        "Wed": "Mer",
+        "Thu": "Jeu",
+        "Fri": "Ven",
+        "Sat": "Sam",
+        "Sun": "Dim",
+        "Monday": "Lun",
+        "Tuesday": "Mar",
+        "Wednesday": "Mer",
+        "Thursday": "Jeu",
+        "Friday": "Ven",
+        "Saturday": "Sam",
+        "Sunday": "Dim"
       },
       "months": {
-        "Jan": "Jan", "Feb": "Fév", "Mar": "Mar", "Apr": "Avr", "May": "Mai", "Jun": "Jun",
-        "Jul": "Jul", "Aug": "Aoû", "Sep": "Sep", "Oct": "Oct", "Nov": "Nov", "Dec": "Déc",
-        "January": "Jan", "February": "Fév", "March": "Mar", "April": "Avr", "June": "Jun",
-        "July": "Jul", "August": "Aoû", "September": "Sep", "October": "Oct", "November": "Nov", "December": "Déc"
+        "Jan": "Jan",
+        "Feb": "Fév",
+        "Mar": "Mar",
+        "Apr": "Avr",
+        "May": "Mai",
+        "Jun": "Jun",
+        "Jul": "Jul",
+        "Aug": "Aoû",
+        "Sep": "Sep",
+        "Oct": "Oct",
+        "Nov": "Nov",
+        "Dec": "Déc",
+        "January": "Jan",
+        "February": "Fév",
+        "March": "Mar",
+        "April": "Avr",
+        "June": "Jun",
+        "July": "Jul",
+        "August": "Aoû",
+        "September": "Sep",
+        "October": "Oct",
+        "November": "Nov",
+        "December": "Déc"
       }
     },
     "baskets": {
@@ -601,7 +632,13 @@
       "sameAllDays": "Même pour tous les jours",
       "withinHours": "Doit être dans les horaires du commerce",
       "days": {
-        "mon": "Lundi", "tue": "Mardi", "wed": "Mercredi", "thu": "Jeudi", "fri": "Vendredi", "sat": "Samedi", "sun": "Dimanche"
+        "mon": "Lundi",
+        "tue": "Mardi",
+        "wed": "Mercredi",
+        "thu": "Jeudi",
+        "fri": "Vendredi",
+        "sat": "Samedi",
+        "sun": "Dimanche"
       },
       "dailyReinit": "Réinit.",
       "lastChanged": "Dernier changement"
