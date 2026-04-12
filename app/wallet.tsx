@@ -247,7 +247,8 @@ export default function WalletScreen() {
   const renderTransaction = ({ item }: { item: WalletTransaction }) => {
     const cfg = TYPE_CONFIG[item.type] ?? TYPE_CONFIG.admin_credit;
     const Icon = cfg.icon;
-    const isPositive = item.amount > 0;
+    const amountVal = Number(item.amount) || 0;
+    const isPositive = amountVal > 0;
 
     return (
       <View
@@ -300,7 +301,7 @@ export default function WalletScreen() {
           }}
         >
           {isPositive ? '+' : ''}
-          {item.amount.toFixed(0)} {t('wallet.credits', { defaultValue: 'crédits' })}
+          {amountVal.toFixed(0)} {t('wallet.credits', { defaultValue: 'crédits' })}
         </Text>
       </View>
     );
