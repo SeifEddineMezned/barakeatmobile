@@ -26,7 +26,7 @@ import { useWalkthroughStore } from "@/src/stores/walkthroughStore";
 import { fetchGamificationStats } from "@/src/services/gamification";
 import { apiClient } from "@/src/lib/api";
 import { Search, ShoppingBag, Trophy, LayoutDashboard, Package, BarChart3 } from "lucide-react-native";
-// import { registerForPushNotifications } from "@/src/services/pushNotifications";
+import * as Notifications from 'expo-notifications';
 import * as NavigationBar from "expo-navigation-bar";
 import { initSentry } from "@/src/lib/sentry";
 import { OfflineBanner } from "@/src/components/OfflineBanner";
@@ -205,11 +205,37 @@ function RootLayoutInner() {
     })();
   }, [isAuthenticated, isRestoringSession]);
 
-  // Register for push notifications (disabled for Expo Go compatibility)
-  // useEffect(() => {
-  //   if (!isAuthenticated || isRestoringSession) return;
-  //   void registerForPushNotifications();
-  // }, [isAuthenticated, isRestoringSession]);
+  // Register for push notifications and handle taps
+  useEffect(() => {
+    if (!isAuthenticated || isRestoringSession) return;
+    
+    const setupPush = async () => {
+      const { registerForPushNotifications } = await import('@/src/services/pushNotifications');
+      await registerForPushNotifications();
+    };
+    void setupPush();
+
+    // Handle notification tap
+    const responseListener = Notifications.addNotificationResponseReceivedListener(response => {
+      const data = response.notification.request.content.data;
+      if (data?.screen) {
+        let route = data.screen;
+        if (data.conversationId) {
+          route = route.replace('[id]', String(data.conversationId));
+        } else if (data.entityId) {
+          route = route.replace('[id]', String(data.entityId));
+        }
+        // Small delay to ensure navigation is ready
+        setTimeout(() => {
+          router.push(route as any);
+        }, 500);
+      }
+    });
+
+    return () => {
+      Notifications.removeNotificationSubscription(responseListener);
+    };
+  }, [isAuthenticated, isRestoringSession]);
 
   const startWalkthrough = useWalkthroughStore((s) => s.startWalkthrough);
 

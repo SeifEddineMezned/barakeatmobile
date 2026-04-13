@@ -3,6 +3,7 @@ import { combine } from 'zustand/middleware';
 import { User } from '@/src/types';
 import { getToken, getUser, clearSession, saveUser } from '@/src/lib/session';
 import { saveToken } from '@/src/lib/session';
+import { unregisterPushToken } from '@/src/services/pushNotifications';
 
 export const useAuthStore = create(
   combine(
@@ -24,6 +25,7 @@ export const useAuthStore = create(
 
       signOut: async () => {
         console.log('[AuthStore] signOut');
+        await unregisterPushToken();
         await clearSession();
         set({ user: null, token: null, isAuthenticated: false });
       },

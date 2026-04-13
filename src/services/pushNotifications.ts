@@ -51,7 +51,9 @@ export async function registerForPushNotifications(): Promise<string | null> {
 
     // Send token to backend
     try {
-      await apiClient.put('/api/auth/push-token', { pushToken: token });
+      if (token) {
+        await apiClient.put('/api/users/push-token', { pushToken: token });
+      }
     } catch {
       console.log('[Push] Failed to save token to backend');
     }
@@ -60,6 +62,15 @@ export async function registerForPushNotifications(): Promise<string | null> {
   } catch (error) {
     console.log('[Push] Registration error:', error);
     return null;
+  }
+}
+
+export async function unregisterPushToken(): Promise<void> {
+  if (isExpoGo) return;
+  try {
+    await apiClient.delete('/api/users/push-token');
+  } catch {
+    console.log('[Push] Failed to remove token from backend');
   }
 }
 
