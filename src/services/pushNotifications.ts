@@ -6,22 +6,15 @@ import { apiClient } from '@/src/lib/api';
 // Expo Go does not support push notifications from SDK 53+
 const isExpoGo = Constants.appOwnership === 'expo';
 
-if (!isExpoGo) {
-  Notifications.setNotificationHandler({
-    handleNotification: async () => ({
-      shouldShowAlert: true,
-      shouldPlaySound: true,
-      shouldSetBadge: false,
-    }),
-  });
-}
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldShowAlert: true,
+    shouldPlaySound: true,
+    shouldSetBadge: false,
+  }),
+});
 
 export async function registerForPushNotifications(): Promise<string | null> {
-  if (isExpoGo) {
-    console.log('[Push] Skipping push registration in Expo Go');
-    return null;
-  }
-
   try {
     const { status: existingStatus } = await Notifications.getPermissionsAsync();
     let finalStatus = existingStatus;
@@ -66,7 +59,6 @@ export async function registerForPushNotifications(): Promise<string | null> {
 }
 
 export async function unregisterPushToken(): Promise<void> {
-  if (isExpoGo) return;
   try {
     await apiClient.delete('/api/users/push-token');
   } catch {

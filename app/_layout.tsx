@@ -233,7 +233,7 @@ function RootLayoutInner() {
     });
 
     return () => {
-      Notifications.removeNotificationSubscription(responseListener);
+      responseListener.remove();
     };
   }, [isAuthenticated, isRestoringSession]);
 
