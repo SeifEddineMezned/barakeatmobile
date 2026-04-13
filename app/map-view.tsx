@@ -314,6 +314,8 @@ export default function MapViewScreen() {
     ? { latitude: selectedAddr.lat, longitude: selectedAddr.lng }
     : DEFAULT_CENTER; // Always default to Tunisia, device GPS only for blue dot
 
+  const radiusCenter = userLocation ?? center;
+
   const sheetHeight = useRef(new Animated.Value(COLLAPSED_HEIGHT)).current;
   // 3-state: 0 = collapsed, 1 = expanded (half), 2 = full
   const sheetLevelRef = useRef(0);
@@ -367,13 +369,12 @@ export default function MapViewScreen() {
     return baskets.filter((b) => b.name.toLowerCase().includes(q) || b.merchantName.toLowerCase().includes(q));
   }, [baskets, searchQuery]);
 
-  // All baskets with coords + distance
   const allCoordsBaskets: BasketWithDist[] = useMemo(() => {
     return filteredBaskets
       .filter((b) => b.hasCoords)
-      .map((b) => ({ ...b, dist: getDistance(center.latitude, center.longitude, b.latitude as number, b.longitude as number) }))
+      .map((b) => ({ ...b, dist: getDistance(radiusCenter.latitude, radiusCenter.longitude, b.latitude as number, b.longitude as number) }))
       .sort((a, b) => a.dist - b.dist);
-  }, [filteredBaskets, center]);
+  }, [filteredBaskets, radiusCenter]);
 
   // Only those within radius (for the bottom sheet list + rich pins)
   const nearbyBaskets = useMemo(() => allCoordsBaskets.filter((b) => b.dist <= radius), [allCoordsBaskets, radius]);
@@ -528,7 +529,7 @@ export default function MapViewScreen() {
             </Marker>
           )}
           {Circle && (
-            <Circle center={center} radius={radius * 1000} fillColor={`rgba(17, 75, 60, ${circleFill.toFixed(3)})`} strokeColor={`rgba(17, 75, 60, ${circleStroke.toFixed(3)})`} strokeWidth={2.5} />
+            <Circle center={radiusCenter} radius={radius * 1000} fillColor={`rgba(17, 75, 60, ${circleFill.toFixed(3)})`} strokeColor={`rgba(17, 75, 60, ${circleStroke.toFixed(3)})`} strokeWidth={2.5} />
           )}
         </MapView>
       ) : (
@@ -740,7 +741,7 @@ export default function MapViewScreen() {
                   </View>
                   {filteredBaskets
                     .filter(b => b.hasCoords && b.isActive && b.quantityLeft > 0)
-                    .map(b => ({ ...b, dist: getDistance(center.latitude, center.longitude, b.latitude as number, b.longitude as number) }))
+                    .map(b => ({ ...b, dist: getDistance(radiusCenter.latitude, radiusCenter.longitude, b.latitude as number, b.longitude as number) }))
                     .sort((a, b) => a.dist - b.dist)
                     .map((basket) => (
                       <TouchableOpacity key={basket.id} onPress={() => router.push(`/basket/${basket.id}` as never)} activeOpacity={0.9} style={{ flexDirection: 'row', padding: 12, backgroundColor: theme.colors.bg, borderRadius: 12, marginBottom: 8 }}>
