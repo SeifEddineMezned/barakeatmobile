@@ -3,7 +3,7 @@ import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Animated, Activit
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
-import { X, Minus, Plus, Banknote, CreditCard, Check, AlertTriangle, Copy, Download, Zap, ShoppingBag } from 'lucide-react-native';
+import { X, Minus, Plus, Banknote, CreditCard, Check, AlertTriangle, Copy, Download, Zap, ShoppingBag, Wallet } from 'lucide-react-native';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { StatusBar } from 'expo-status-bar';
@@ -11,6 +11,7 @@ import { PrimaryCTAButton } from '@/src/components/PrimaryCTAButton';
 import { fetchLocationById } from '@/src/services/restaurants';
 import { fetchBasketById } from '@/src/services/baskets';
 import { createReservation, fetchReservationQRCode } from '@/src/services/reservations';
+import { fetchWallet } from '@/src/services/wallet';
 import { updateStreak, fetchGamificationStats, type StreakUpdateResult } from '@/src/services/gamification';
 // import { scheduleLocalNotification } from '@/src/services/pushNotifications';
 import { getErrorMessage } from '@/src/lib/api';
@@ -18,6 +19,7 @@ import { calcLevelProgress } from '@/src/lib/impactCalculations';
 import { FeatureFlags } from '@/src/lib/featureFlags';
 import { isPickupWindowOpenInTz } from '@/src/utils/timezone';
 import { useCelebrationStore } from '@/src/stores/celebrationStore';
+import { BottomSheet } from '@/src/components/BottomSheet';
 
 export default function ReserveScreen() {
   const { basketId } = useLocalSearchParams();
@@ -26,13 +28,13 @@ export default function ReserveScreen() {
   const router = useRouter();
   const queryClient = useQueryClient();
   const [quantity, setQuantity] = useState(1);
-  const [paymentMethod, setPaymentMethod] = useState<'cash' | 'card'>('cash');
+  const [paymentMethod, setPaymentMethod] = useState<'cash' | 'card' | 'credits'>('cash');
   const [showConfirmModal, setShowConfirmModal] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   // Confirmation animation state
   const [showConfirmation, setShowConfirmation] = useState(false);
-  const [confirmPhase, setConfirmPhase] = useState<'bouncing' | 'success' | 'details'>('bouncing');
+  const [confirmPhase, setConfirmPhase] = useState<'bouncing' | 'success'>('bouncing');
   const [confirmData, setConfirmData] = useState<{ pickupCode: string; pickupStart: string; pickupEnd: string; address: string; qrCodeUrl?: string; basketImageUrl?: string; locationName?: string } | null>(null);
   const [codeCopied, setCodeCopied] = useState(false);
   const [streakData, setStreakData] = useState<StreakUpdateResult | null>(null);
@@ -47,6 +49,14 @@ export default function ReserveScreen() {
     queryFn: fetchGamificationStats,
     staleTime: 60_000,
   });
+
+  // Wallet query — drives the "Pay with credits" tile balance + sufficient-funds check
+  const walletQuery = useQuery({
+    queryKey: ['wallet'],
+    queryFn: fetchWallet,
+    staleTime: 30_000,
+  });
+  const walletBalance = Number(walletQuery.data?.balance ?? 0);
 
   const handleCopyCode = async () => {
     if (!confirmData?.pickupCode) return;
@@ -97,7 +107,8 @@ export default function ReserveScreen() {
     queryKey: ['basket', basketId],
     queryFn: () => fetchBasketById(String(basketId)),
     enabled: !!basketId,
-    staleTime: 60_000,
+    staleTime: 0,
+    refetchOnMount: 'always',
   });
 
   // ── Step 2: Derive the real location/restaurant id from the basket payload ──
@@ -138,7 +149,11 @@ export default function ReserveScreen() {
 
   const reserveMutation = useMutation({
     // Use the real resolved id, not the basket id
-    mutationFn: () => createReservation({ location_id: Number(resolvedLocationId), basket_id: basketId ? Number(basketId) : undefined, quantity }),
+    mutationFn: () => createReservation({ location_id: Number(resolvedLocationId), basket_id: basketId ? Number(basketId) : undefined, quantity, payment_method: paymentMethod }),
+    onError: (error: any) => {
+      console.log('[Reserve] Reservation failed:', error);
+      setErrorMessage(getErrorMessage(error));
+    },
     onSuccess: async (data) => {
       console.log('[Reserve] Reservation created:', data.id);
       const pickupCode = data.pickup_code ?? data.pickupCode ?? '';
@@ -148,26 +163,35 @@ export default function ReserveScreen() {
       setConfirmPhase('bouncing');
       startBouncingAnimation();
 
-      // Only invalidate customer-side queries (not business-side like today-orders)
-      void queryClient.invalidateQueries({ queryKey: ['reservations'] });
+      // Force refetch customer-side queries so orders tab shows the new reservation immediately
+      await queryClient.invalidateQueries({ queryKey: ['reservations'] });
+      void queryClient.refetchQueries({ queryKey: ['reservations'] });
       void queryClient.invalidateQueries({ queryKey: ['locations'] });
       void queryClient.invalidateQueries({ queryKey: ['location', resolvedLocationId] });
       void queryClient.invalidateQueries({ queryKey: ['baskets-by-location', resolvedLocationId] });
       void queryClient.invalidateQueries({ queryKey: ['basket', basketId] });
+      // Favorites tab uses a flat ['baskets'] list — invalidate so its basket-count chips update too.
+      void queryClient.invalidateQueries({ queryKey: ['baskets'] });
+      // If paid with credits, refresh the wallet so the new balance appears immediately
+      if (paymentMethod === 'credits') {
+        void queryClient.invalidateQueries({ queryKey: ['wallet'] });
+      }
 
-      // Capture pre-reservation XP from the CURRENT cache (not component snapshot)
-      // This ensures second/third reservations read the updated value
+      // Force refetch gamification from DB FIRST so the celebration reads the
+      // authoritative post-order XP rather than whatever stale value the cache held.
       const xpGained = (quantity ?? 1) * 10;
-      const cachedGam = queryClient.getQueryData<any>(['gamification-stats']);
-      const cachedLevel = cachedGam?.level;
-      // Read XP from DB values (use ?? not || to avoid 0 being falsy)
-      const preReservationXp: number =
-        cachedGam?.xp ?? (typeof cachedLevel === 'object' ? (cachedLevel?.xp ?? 0) : 0);
-
-      // Force refetch gamification from DB (backend now persists xp/level)
-      // Await so the cache is updated before user navigates to profile
       await queryClient.invalidateQueries({ queryKey: ['gamification-stats'] });
       await queryClient.refetchQueries({ queryKey: ['gamification-stats'] });
+
+      // Read the FRESH XP (post-order, after backend persisted).
+      const freshGam = queryClient.getQueryData<any>(['gamification-stats']);
+      const freshLevel = freshGam?.level;
+      const freshXp: number =
+        freshGam?.xp ?? (typeof freshLevel === 'object' ? (freshLevel?.xp ?? 0) : 0);
+      // Derive pre-order XP by subtracting the gained amount. This is tolerant of
+      // minor backend-vs-client formula drift — if the backend gave more/less XP
+      // than quantity*10, the celebration still reflects the real level change.
+      const preReservationXp: number = Math.max(0, freshXp - xpGained);
 
       // Update streak only — do NOT invalidate gamification-stats here
       try {
@@ -215,9 +239,11 @@ export default function ReserveScreen() {
       let qrUrl: string | undefined;
       fetchReservationQRCode(String(data.id)).then(url => { qrUrl = url; }).catch(() => {});
 
-      // Pre-compute celebration data
+      // Pre-compute celebration data using the FRESH (backend-authoritative) XP.
+      // levelAfter / xpInLevel / xpBandSize come from the real post-order XP;
+      // levelBefore is derived by subtracting the gained amount.
       const { level: levelBefore, xpProgress: pBefore } = calcLevelProgress(preReservationXp);
-      const { level: levelAfter, xpProgress: pAfter, xpInLevel, xpBandSize } = calcLevelProgress(preReservationXp + xpGained);
+      const { level: levelAfter, xpProgress: pAfter, xpInLevel, xpBandSize } = calcLevelProgress(freshXp);
 
       // Phase 1 (bouncing) → Phase 2 (success) after 3s → then fire celebration
       setTimeout(() => {
@@ -262,11 +288,19 @@ export default function ReserveScreen() {
   const isPickupWindowOpen = () => isPickupWindowOpenInTz(pickupStart, pickupEnd);
 
   const handleConfirm = () => {
+    if (reserveMutation.isPending) return; // Prevent double-tap
     // Frontend validation: check basket pickup window
     if (!isPickupWindowOpen()) {
       setErrorMessage(t('errors.pickupExpired', { defaultValue: 'The pickup window has expired.' }));
       return;
     }
+    // Guard: credits selection may be stale if quantity was bumped up after selecting.
+    if (paymentMethod === 'credits' && walletBalance < price * quantity) {
+      setErrorMessage(t('errors.insufficientCredits', { defaultValue: 'Solde insuffisant' }));
+      return;
+    }
+    // Show the no-show warning only for cash (prepaid credit orders are already
+    // paid, so the "don't ghost the merchant" copy doesn't apply).
     if (paymentMethod === 'cash') {
       setShowConfirmModal(true);
     } else {
@@ -275,6 +309,7 @@ export default function ReserveScreen() {
   };
 
   const confirmAndReserve = () => {
+    if (reserveMutation.isPending) return; // Prevent double-tap
     setShowConfirmModal(false);
     reserveMutation.mutate();
   };
@@ -318,7 +353,7 @@ export default function ReserveScreen() {
             <Image source={{ uri: basketImage }} style={{ width: 64, height: 64, borderRadius: theme.radii.r12, marginRight: theme.spacing.md }} resizeMode="cover" accessibilityLabel={basketName} />
           ) : (
             <View style={{ width: 64, height: 64, borderRadius: theme.radii.r12, marginRight: theme.spacing.md, backgroundColor: theme.colors.primary + '10', justifyContent: 'center', alignItems: 'center' }}>
-              <Zap size={24} color={theme.colors.primary} />
+              <ShoppingBag size={24} color={theme.colors.primary} />
             </View>
           )}
           <View style={{ flex: 1 }}>
@@ -389,9 +424,11 @@ export default function ReserveScreen() {
           )}
           <View style={[styles.totalRow, { marginTop: theme.spacing.lg, paddingTop: theme.spacing.lg, borderTopWidth: 1, borderTopColor: theme.colors.divider }]}>
             <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3 }]}>{t('reserve.total')}</Text>
-            <Text style={[{ color: theme.colors.primary, ...theme.typography.h2, fontWeight: '700' as const }]}>
-              {price * quantity} TND
-            </Text>
+            <View style={{ alignItems: 'flex-end' }}>
+              <Text style={[{ color: theme.colors.primary, ...theme.typography.h2, fontWeight: '700' as const }]}>
+                {price * quantity} TND
+              </Text>
+            </View>
           </View>
         </View>
 
@@ -455,6 +492,45 @@ export default function ReserveScreen() {
                 </Text>
               </TouchableOpacity>
             )}
+            {(() => {
+              const orderTotal = price * quantity;
+              const hasEnough = walletBalance >= orderTotal;
+              const missing = Math.max(0, orderTotal - walletBalance);
+              const selected = paymentMethod === 'credits';
+              const selectable = hasEnough && orderTotal > 0;
+              return (
+                <TouchableOpacity
+                  onPress={() => { if (selectable) setPaymentMethod('credits'); }}
+                  disabled={!selectable}
+                  style={{
+                    flex: 1,
+                    backgroundColor: selected ? theme.colors.primary + '12' : theme.colors.bg,
+                    borderRadius: theme.radii.r16,
+                    padding: 16,
+                    borderWidth: selected ? 2 : 1,
+                    borderColor: selected ? theme.colors.primary : theme.colors.divider,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    opacity: selectable ? 1 : 0.55,
+                  }}
+                  accessibilityLabel={t('reserve.payCredits', { defaultValue: 'Pay with my credits' })}
+                  accessibilityRole="radio"
+                  accessibilityState={{ selected, disabled: !selectable }}
+                >
+                  <View style={{ width: 48, height: 48, borderRadius: 24, backgroundColor: selected ? theme.colors.primary + '18' : theme.colors.divider + '60', justifyContent: 'center', alignItems: 'center' }}>
+                    <Wallet size={24} color={selected ? theme.colors.primary : theme.colors.textSecondary} />
+                  </View>
+                  <Text style={{ color: selected ? theme.colors.primary : theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '600', marginTop: 8, textAlign: 'center' }}>
+                    {t('reserve.payCredits', { defaultValue: 'Pay with credits' })}
+                  </Text>
+                  <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, marginTop: 4, textAlign: 'center' }}>
+                    {hasEnough
+                      ? t('reserve.payCreditsBalance', { defaultValue: 'Solde : {{balance}} TND', balance: walletBalance.toFixed(2) })
+                      : t('reserve.payCreditsShort', { defaultValue: '{{missing}} TND manquants', missing: missing.toFixed(2) })}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })()}
           </View>
         </View>
       </ScrollView>
@@ -470,56 +546,52 @@ export default function ReserveScreen() {
               ? t('orders.status.expired', { defaultValue: 'Expired' })
               : t('reserve.confirmReservation')
           }
-          disabled={totalAvailable <= 0 || !isPickupWindowOpen()}
+          disabled={totalAvailable <= 0 || !isPickupWindowOpen() || reserveMutation.isPending}
           loading={reserveMutation.isPending}
         />
       </View>
 
-      {/* Custom confirmation modal (replaces Alert.alert) */}
-      <Modal visible={showConfirmModal} transparent animationType="fade" onRequestClose={() => setShowConfirmModal(false)}>
-        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 24 }}>
-          <View style={{ backgroundColor: theme.colors.surface, borderRadius: 24, padding: 24, width: '100%', maxWidth: 340, ...theme.shadows.shadowLg }}>
-            <View style={{ alignItems: 'center', marginBottom: 16 }}>
-              <View style={{ width: 56, height: 56, borderRadius: 28, backgroundColor: theme.colors.primary + '14', justifyContent: 'center', alignItems: 'center' }}>
-                <AlertTriangle size={28} color={theme.colors.primary} />
-              </View>
-            </View>
-            <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3, textAlign: 'center', marginBottom: 12 }}>
+      {/* Cash-warning confirmation — bottom sheet. Quieter and more modern
+          than the old centered icon-in-a-circle alert: inline amber warning
+          icon, body copy in neutral tone, actions as a tight button row. */}
+      <BottomSheet visible={showConfirmModal} onClose={() => setShowConfirmModal(false)}>
+        <View style={{ paddingHorizontal: 20, paddingTop: 4 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+            <AlertTriangle size={22} color={theme.colors.warning} />
+            <Text style={{ flex: 1, color: theme.colors.textPrimary, fontSize: 17, fontFamily: 'Poppins_700Bold', fontWeight: '700', letterSpacing: -0.2 }}>
               {t('reserve.confirmTitle', { defaultValue: 'Confirm Reservation' })}
             </Text>
-            <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm, textAlign: 'center', lineHeight: 20, marginBottom: 8 }}>
-              {t('reserve.cashWarningIntro', { defaultValue: 'Ready to pick up this basket?\n\nIf your plans change, please cancel early, it frees up the spot for someone else.' })}
-            </Text>
-            <View style={{ backgroundColor: theme.colors.error + '12', borderRadius: 12, padding: 12, marginBottom: 24, borderLeftWidth: 3, borderLeftColor: theme.colors.error }}>
-              <Text style={{ color: theme.colors.error, ...theme.typography.bodySm, fontWeight: '700', textAlign: 'center', lineHeight: 20 }}>
-                {t('reserve.cashWarningBan', { defaultValue: 'Repeated no shows without cancelling may lead to a temporary pause on your reservations.' })}
+          </View>
+          <Text style={{ color: theme.colors.textSecondary, ...theme.typography.body, lineHeight: 21, marginBottom: 8 }}>
+            {t('reserve.cashWarningIntro', { defaultValue: 'Ready to pick up this basket?\n\nIf your plans change, please cancel early, it frees up the spot for someone else.' })}
+          </Text>
+          <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm, lineHeight: 19, marginBottom: 20 }}>
+            {t('reserve.cashWarningBan', { defaultValue: 'Repeated no shows without cancelling may lead to a temporary pause on your reservations.' })}
+          </Text>
+          <View style={{ flexDirection: 'row', gap: 10 }}>
+            <TouchableOpacity
+              onPress={() => setShowConfirmModal(false)}
+              style={{ flex: 1, paddingVertical: 14, borderRadius: 12, borderWidth: 1, borderColor: theme.colors.divider, alignItems: 'center', backgroundColor: theme.colors.surfaceMuted }}
+              accessibilityLabel={t('reserve.notYet', { defaultValue: 'Not Yet' })}
+              accessibilityRole="button"
+            >
+              <Text style={{ color: theme.colors.textPrimary, ...theme.typography.body, fontWeight: '600' }}>
+                {t('reserve.notYet', { defaultValue: 'Not Yet' })}
               </Text>
-            </View>
-            <View style={{ flexDirection: 'row', gap: 12 }}>
-              <TouchableOpacity
-                onPress={() => setShowConfirmModal(false)}
-                style={{ flex: 1, paddingVertical: 14, borderRadius: 14, borderWidth: 1, borderColor: theme.colors.divider, alignItems: 'center' }}
-                accessibilityLabel={t('reserve.notYet', { defaultValue: 'Not Yet' })}
-                accessibilityRole="button"
-              >
-                <Text style={{ color: theme.colors.textSecondary, ...theme.typography.body, fontWeight: '600' }}>
-                  {t('reserve.notYet', { defaultValue: 'Not Yet' })}
-                </Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                onPress={confirmAndReserve}
-                style={{ flex: 1, paddingVertical: 14, borderRadius: 14, backgroundColor: theme.colors.primary, alignItems: 'center' }}
-                accessibilityLabel={t('reserve.yesReserve', { defaultValue: 'Reserve!' })}
-                accessibilityRole="button"
-              >
-                <Text style={{ color: '#fff', ...theme.typography.body, fontWeight: '600' }}>
-                  {t('reserve.yesReserve', { defaultValue: 'Reserve!' })}
-                </Text>
-              </TouchableOpacity>
-            </View>
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={confirmAndReserve}
+              style={{ flex: 1, paddingVertical: 14, borderRadius: 12, backgroundColor: theme.colors.primary, alignItems: 'center' }}
+              accessibilityLabel={t('reserve.yesReserve', { defaultValue: 'Reserve!' })}
+              accessibilityRole="button"
+            >
+              <Text style={{ color: '#fff', ...theme.typography.body, fontWeight: '600' }}>
+                {t('reserve.yesReserve', { defaultValue: 'Reserve!' })}
+              </Text>
+            </TouchableOpacity>
           </View>
         </View>
-      </Modal>
+      </BottomSheet>
 
       {/* Custom error modal (replaces Alert.alert for errors) */}
       <Modal visible={!!errorMessage} transparent animationType="fade" onRequestClose={() => setErrorMessage(null)}>
@@ -580,12 +652,8 @@ export default function ReserveScreen() {
             </View>
 
           ) : confirmPhase === 'success' ? (
-            /* Phase 2: Confirmed with paper bag */
-            <TouchableOpacity
-              activeOpacity={1}
-              onPress={() => setConfirmPhase('details')}
-              style={{ alignItems: 'center', justifyContent: 'center', flex: 1 }}
-            >
+            /* Phase 2: Confirmed with paper bag — auto-advances to XP celebration */
+            <View style={{ alignItems: 'center', justifyContent: 'center', flex: 1 }}>
               <Image
                 source={require('@/assets/images/barakeat_paper_bag.png')}
                 style={{ width: 140, height: 140, marginBottom: 24 }}
@@ -602,104 +670,9 @@ export default function ReserveScreen() {
                   {confirmData.locationName}
                 </Text>
               ) : null}
-              <Text style={{ color: 'rgba(255,255,255,0.4)', ...theme.typography.caption, marginTop: 16 }}>
-                {t('reserve.tapToContinue', { defaultValue: 'Appuyez pour voir les détails' })}
-              </Text>
-            </TouchableOpacity>
+            </View>
 
-          ) : (
-            /* Phase 3: Details with code, QR, pickup info */
-            <>
-              <ScrollView contentContainerStyle={{ alignItems: 'center', paddingHorizontal: 24, paddingTop: 60, paddingBottom: 40 }} showsVerticalScrollIndicator={false}>
-                {confirmData?.basketImageUrl ? (
-                  <Image source={{ uri: confirmData.basketImageUrl }} style={{ width: 64, height: 64, borderRadius: 16, marginBottom: 16, borderWidth: 2, borderColor: '#e3ff5c' }} resizeMode="cover" />
-                ) : (
-                  <View style={{ backgroundColor: '#e3ff5c', width: 56, height: 56, borderRadius: 28, justifyContent: 'center', alignItems: 'center', marginBottom: 16 }}>
-                    <ShoppingBag size={28} color="#114b3c" />
-                  </View>
-                )}
-                <Text style={{ color: '#fff', fontSize: 26, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
-                  {t('reserve.success.title', { defaultValue: 'Order Confirmed!' })}
-                </Text>
-                {confirmData?.locationName ? (
-                  <Text style={{ color: 'rgba(255,255,255,0.65)', fontSize: 14, fontFamily: 'Poppins_400Regular', marginTop: 4 }}>
-                    {confirmData.locationName}
-                  </Text>
-                ) : null}
-
-                {/* Pickup code card */}
-                <View style={{ backgroundColor: 'rgba(255,255,255,0.12)', borderRadius: 24, padding: 24, marginTop: 28, width: '100%', alignItems: 'center' }}>
-                  <Text style={{ color: 'rgba(255,255,255,0.6)', ...theme.typography.caption, textAlign: 'center', marginBottom: 8 }}>
-                    {t('reserve.success.pickupCode', { defaultValue: 'Pickup Code' })}
-                  </Text>
-
-                  {/* Code display with copy button */}
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 16 }}>
-                    <View style={{ backgroundColor: 'rgba(227,255,92,0.15)', borderRadius: 16, paddingVertical: 12, paddingHorizontal: 24 }}>
-                      <Text style={{ color: '#e3ff5c', fontSize: 30, fontWeight: '700', fontFamily: 'Poppins_700Bold', letterSpacing: 6, textAlign: 'center' }}>
-                        {confirmData?.pickupCode}
-                      </Text>
-                    </View>
-                    <TouchableOpacity
-                      onPress={handleCopyCode}
-                      style={{ backgroundColor: codeCopied ? 'rgba(227,255,92,0.3)' : 'rgba(255,255,255,0.15)', borderRadius: 14, padding: 12 }}
-                      accessibilityLabel={codeCopied ? t('reserve.success.copied', { defaultValue: 'Copied' }) : t('reserve.success.copyCode', { defaultValue: 'Copy pickup code' })}
-                      accessibilityRole="button"
-                    >
-                      {codeCopied ? <Check size={20} color="#e3ff5c" /> : <Copy size={20} color="#fff" />}
-                    </TouchableOpacity>
-                  </View>
-
-                  {/* QR Code */}
-                  {confirmData?.qrCodeUrl ? (
-                    <View style={{ alignItems: 'center', marginBottom: 16 }}>
-                      <View style={{ backgroundColor: '#fff', borderRadius: 16, padding: 12 }}>
-                        <Image source={{ uri: confirmData.qrCodeUrl }} style={{ width: 160, height: 160 }} resizeMode="contain" />
-                      </View>
-                      <Text style={{ color: 'rgba(255,255,255,0.5)', ...theme.typography.caption, textAlign: 'center', marginTop: 8 }}>
-                        {t('reserve.success.scanQR', { defaultValue: 'Show this QR to the merchant' })}
-                      </Text>
-                    </View>
-                  ) : null}
-
-                  {/* Share button */}
-                  <TouchableOpacity
-                    onPress={handleShareQR}
-                    style={{ flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: 'rgba(255,255,255,0.12)', borderRadius: 14, paddingVertical: 10, paddingHorizontal: 20 }}
-                  >
-                    <Download size={16} color="#fff" />
-                    <Text style={{ color: '#fff', ...theme.typography.bodySm, fontWeight: '600' }}>
-                      {t('reserve.shareCode', { defaultValue: 'Share pickup info' })}
-                    </Text>
-                  </TouchableOpacity>
-                </View>
-
-                {/* Pickup details card */}
-                <View style={{ backgroundColor: 'rgba(255,255,255,0.08)', borderRadius: 16, padding: 20, marginTop: 16, width: '100%', gap: 12 }}>
-                  <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-                    <Text style={{ color: 'rgba(255,255,255,0.6)', ...theme.typography.bodySm }}>{t('reserve.when', { defaultValue: 'When' })}</Text>
-                    <Text style={{ color: '#fff', ...theme.typography.bodySm, fontWeight: '600' }}>{confirmData?.pickupStart} - {confirmData?.pickupEnd}</Text>
-                  </View>
-                  <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-                    <Text style={{ color: 'rgba(255,255,255,0.6)', ...theme.typography.bodySm }}>{t('reserve.where', { defaultValue: 'Where' })}</Text>
-                    <Text style={{ color: '#fff', ...theme.typography.bodySm, fontWeight: '600', flex: 1, textAlign: 'right', marginLeft: 16 }} numberOfLines={2}>{confirmData?.address || ''}</Text>
-                  </View>
-                </View>
-
-                {/* Go to orders — the only action */}
-                <TouchableOpacity
-                  onPress={() => { dismissConfirmAndNavigate(); }}
-                  style={{ backgroundColor: '#e3ff5c', borderRadius: 16, paddingVertical: 16, alignItems: 'center', marginTop: 24, width: '100%' }}
-                  accessibilityLabel={t('reserve.goToOrders', { defaultValue: 'Mes commandes' })}
-                  accessibilityRole="button"
-                >
-                  <Text style={{ color: '#114b3c', ...theme.typography.body, fontWeight: '700', fontSize: 16 }}>
-                    {t('reserve.goToOrders', { defaultValue: 'Mes commandes' })}
-                  </Text>
-                </TouchableOpacity>
-              </ScrollView>
-            </>
-          )}
+          ) : null}
         </View>
       </Modal>
     </SafeAreaView>

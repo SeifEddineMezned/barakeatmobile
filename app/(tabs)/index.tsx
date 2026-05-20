@@ -1,10 +1,10 @@
 import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react';
-import { View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity, Modal, Platform, Dimensions, Animated, PanResponder, Image } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity, Modal, Platform, Dimensions, Animated, Image, RefreshControl } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import { Search, X, RefreshCw, Settings, Bell, MapPin, ChevronDown, Hand, Store, ChevronRight } from 'lucide-react-native';
 
-import { useRouter } from 'expo-router';
+import { useRouter, useFocusEffect } from 'expo-router';
 import { useQuery } from '@tanstack/react-query';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { BasketCard } from '@/src/components/BasketCard';
@@ -18,6 +18,7 @@ import { normalizeLocationToBasket } from '@/src/utils/normalizeRestaurant';
 import { useHeroStore } from '@/src/stores/heroStore';
 import { useAddressStore } from '@/src/stores/addressStore';
 import { useNotificationStore } from '@/src/stores/notificationStore';
+import { useWalkthroughStore } from '@/src/stores/walkthroughStore';
 import { fetchHeroSlides, type HeroSlide } from '@/src/services/heroSlides';
 import { isPickupExpiredInTz } from '@/src/utils/timezone';
 import { StatusBar } from 'expo-status-bar';
@@ -79,121 +80,26 @@ export default function HomeScreen() {
   }, [heroHeight]);
 
   const snapHero = useCallback((visible: boolean) => {
+    // Smoother, slightly slower expand/collapse. Higher friction damps the
+    // bounce; lower tension stretches the animation so it doesn't snap.
     Animated.spring(heroHeight, {
       toValue: visible ? 1 : 0,
       useNativeDriver: false,
-      friction: 12,
-      tension: 50,
+      friction: 18,
+      tension: 22,
     }).start();
     setHeroVisible(visible);
     setHeroVisibleGlobal(visible);
   }, [heroHeight, setHeroVisibleGlobal]);
 
-  // Pull-to-refresh animation state
-  const refreshTriggeredRef = useRef(false);
-  const handleRefreshRef = useRef<() => void>(() => {});
-  const pullDistance = useRef(new Animated.Value(0)).current;
-  const refreshSpin = useRef(new Animated.Value(0)).current;
-  const [pulling, setPulling] = useState(false);
-
-  // PanResponder on the entire content section (search + cards area)
-  // Uses capture phase to intercept before ScrollView claims the gesture
-  // Track whether we've claimed the gesture to prevent stuck states
-  const gestureClaimedRef = useRef(false);
-
-  const contentPanResponder = useMemo(() =>
-    PanResponder.create({
-      onStartShouldSetPanResponder: () => false,
-      onMoveShouldSetPanResponder: (_, g) => {
-        // Fallback: also claim on the non-capture phase for Android compatibility
-        if (gestureClaimedRef.current) return true;
-        if (Math.abs(g.dy) <= Math.abs(g.dx) || Math.abs(g.dy) < 8) return false;
-        if (heroRawRef.current > 0.05 && g.dy < -8) return true;
-        if (heroRawRef.current < 0.95 && g.dy > 8 && scrollOffsetRef.current <= 2) return true;
-        if (heroRawRef.current > 0.9 && g.dy > 8 && scrollOffsetRef.current <= 2) return true;
-        return false;
-      },
-      onMoveShouldSetPanResponderCapture: (_, g) => {
-        // Only intercept clearly vertical gestures (lower thresholds for reliability)
-        if (Math.abs(g.dy) <= Math.abs(g.dx) || Math.abs(g.dy) < 8) return false;
-        // Swipe up while hero is at least partially visible → capture to hide hero
-        if (heroRawRef.current > 0.05 && g.dy < -8) { gestureClaimedRef.current = true; return true; }
-        // Swipe down while hero is not fully visible AND scroll is at top → capture to show hero
-        if (heroRawRef.current < 0.95 && g.dy > 8 && scrollOffsetRef.current <= 2) { gestureClaimedRef.current = true; return true; }
-        // Swipe down while hero is FULLY visible AND scroll at top → capture for pull-to-refresh
-        if (heroRawRef.current > 0.9 && g.dy > 8 && scrollOffsetRef.current <= 2) { gestureClaimedRef.current = true; return true; }
-        return false;
-      },
-      onPanResponderGrant: () => {
-        dragStartRef.current = heroRawRef.current;
-        refreshTriggeredRef.current = false;
-        gestureClaimedRef.current = true;
-      },
-      onPanResponderMove: (_, g) => {
-        // If hero is fully visible and pulling down → pull-to-refresh gesture
-        if (dragStartRef.current > 0.9 && g.dy > 0) {
-          setPulling(true);
-          // Animate pull distance — follows finger with diminishing return
-          pullDistance.setValue(Math.min(g.dy * 0.6, 150));
-          return;
-        }
-        const newVal = dragStartRef.current + (g.dy / HERO_HEIGHT);
-        heroHeight.setValue(Math.max(0, Math.min(1, newVal)));
-      },
-      onPanResponderRelease: (_, g) => {
-        gestureClaimedRef.current = false;
-        // Pull-to-refresh: if hero was fully visible and user pulled down enough
-        if (dragStartRef.current > 0.9 && g.dy > 40) {
-          // Keep icon at fixed position, spin it, wait 1s, then refresh
-          setPulling(false);
-          setRefreshing(true);
-          // Loop spin while refreshing
-          const spinLoop = Animated.loop(
-            Animated.timing(refreshSpin, {
-              toValue: 1,
-              duration: 700,
-              useNativeDriver: true,
-            })
-          );
-          spinLoop.start();
-          // 1 second delay, then actually refresh
-          setTimeout(async () => {
-            await Promise.allSettled([
-              locationsQuery.refetch(),
-              reviewsQuery.refetch(),
-            ]);
-            spinLoop.stop();
-            refreshSpin.setValue(0);
-            pullDistance.setValue(0);
-            setRefreshing(false);
-          }, 1000);
-          return;
-        }
-        // Cancelled pull — snap back
-        if (dragStartRef.current > 0.9 && g.dy > 0) {
-          Animated.timing(pullDistance, { toValue: 0, duration: 200, useNativeDriver: false }).start(() => setPulling(false));
-          return;
-        }
-        // Always snap to a definitive end state (0 or 1) — never leave in between
-        const currentVal = heroRawRef.current;
-        if (g.vy < -0.3 || currentVal < 0.4) {
-          snapHero(false);
-        } else if (g.vy > 0.3 || currentVal > 0.6) {
-          snapHero(true);
-        } else {
-          snapHero(currentVal >= 0.5);
-        }
-      },
-      onPanResponderTerminate: () => {
-        // If gesture is terminated (e.g. by ScrollView on Android), snap to nearest end state
-        gestureClaimedRef.current = false;
-        const currentVal = heroRawRef.current;
-        if (currentVal > 0 && currentVal < 1) {
-          snapHero(currentVal >= 0.5);
-        }
-      },
-    })
-  , [snapHero, heroHeight]);
+  // Hero collapse is now driven directly by the inner ScrollView's offset.
+  // When the list scrolls down past a tiny threshold, the hero snaps closed;
+  // when the list returns to the top (onScrollEndDrag at offset 0), it snaps
+  // open. This unifies iOS & Android and fixes the Samsung bug where a custom
+  // gesture captured the pan so the list stopped scrolling. Pull-to-refresh
+  // uses RefreshControl — native, cross-platform, and plays nicely with scroll.
+  const snapHeroRef = useRef(snapHero);
+  snapHeroRef.current = snapHero;
 
   const animatedHeroHeight = heroHeight.interpolate({
     inputRange: [0, 1],
@@ -215,7 +121,9 @@ export default function HomeScreen() {
   const locationsQuery = useQuery({
     queryKey: ['locations'],
     queryFn: fetchLocations,
-    staleTime: 60_000,
+    staleTime: 30_000,
+    refetchInterval: 60_000,
+    refetchOnMount: 'always',
     retry: 2,
   });
 
@@ -256,6 +164,15 @@ export default function HomeScreen() {
     staleTime: 120_000,
     retry: 0,
   });
+
+  // Refetch when the home tab regains focus (tabs stay mounted across navigation,
+  // so refetchOnMount isn't enough — the business could edit a basket, switch
+  // back to home, and see stale data otherwise).
+  useFocusEffect(
+    useCallback(() => {
+      locationsQuery.refetch();
+    }, [locationsQuery])
+  );
 
   // Build card data: one card per location
   const baskets = useMemo(() => {
@@ -402,11 +319,6 @@ export default function HomeScreen() {
     setRefreshing(false);
   }, [locationsQuery, reviewsQuery]);
 
-  // Keep ref in sync so PanResponder can call it
-  useEffect(() => {
-    handleRefreshRef.current = handleRefresh;
-  }, [handleRefresh]);
-
   const firstName = user?.firstName ?? user?.name?.split(' ')[0] ?? '';
   const userGender = (user as any)?.gender ?? null; // 'male', 'female', or null
 
@@ -417,6 +329,14 @@ export default function HomeScreen() {
     staleTime: 15_000, // 15s — hero slides are admin-edited, keep fresh
   });
   const dynamicSlides = heroSlidesQuery.data ?? [];
+
+  // Refetch hero slides when the home tab regains focus — ensures admin edits
+  // in /admin show up on already-installed apps the next time the user re-opens.
+  useFocusEffect(
+    useCallback(() => {
+      heroSlidesQuery.refetch();
+    }, [heroSlidesQuery])
+  );
 
   // Total pages = 1 (welcome) + dynamic slides
   const totalCarouselPages = 1 + dynamicSlides.length;
@@ -439,12 +359,6 @@ export default function HomeScreen() {
   const mapMarkers = baskets
     .filter((b) => b.hasCoords)
     .map((b) => ({ id: b.id, name: b.merchantName, lat: b.latitude as number, lng: b.longitude as number }));
-
-  // Debug: log map marker status
-  console.log(`[Map] Total baskets: ${baskets.length}, with coords: ${mapMarkers.length}`);
-  baskets.forEach(b => {
-    console.log(`[Map] "${b.merchantName}" hasCoords=${b.hasCoords} lat=${b.latitude} lng=${b.longitude}`);
-  });
 
   return (
     <Animated.View style={[styles.container, { backgroundColor: containerBg }]}>
@@ -487,29 +401,48 @@ export default function HomeScreen() {
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, height: 34 }}>
           {/* Spacer — the map button is rendered by the tab layout overlay so it can animate between tabs */}
           <View pointerEvents="none" style={{ width: 34, height: 34 }} />
-          <TouchableOpacity onPress={() => router.push('/settings' as never)} accessibilityLabel={t('settings.title', { defaultValue: 'Settings' })} accessibilityRole="button">
+          {/* Fixed 34x34 touch targets so the Settings / Bell icons sit on
+              the same horizontal centerline as the map-button spacer. Without
+              the explicit box, Android collapses each TouchableOpacity to the
+              20px icon and the icons drift to the top of the row. */}
+          <TouchableOpacity
+            onPress={() => router.push('/settings' as never)}
+            accessibilityLabel={t('settings.title', { defaultValue: 'Settings' })}
+            accessibilityRole="button"
+            style={{ width: 34, height: 34, justifyContent: 'center', alignItems: 'center' }}
+          >
             <Settings size={20} color={heroVisible ? '#e3ff5c' : theme.colors.textPrimary} />
           </TouchableOpacity>
-          <TouchableOpacity onPress={() => router.push('/notifications' as never)} accessibilityLabel={t('notifications.title', { defaultValue: 'Notifications' })} accessibilityRole="button">
-            <Bell size={20} color={heroVisible ? '#e3ff5c' : theme.colors.textPrimary} />
-            {unreadCount > 0 && (
-              <View style={{
-                position: 'absolute',
-                top: -4,
-                right: -6,
-                backgroundColor: theme.colors.error,
-                borderRadius: 8,
-                minWidth: 16,
-                height: 16,
-                justifyContent: 'center',
-                alignItems: 'center',
-                paddingHorizontal: 4,
-              }}>
-                <Text style={{ color: '#fff', fontSize: 10, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
-                  {unreadCount > 99 ? '99+' : unreadCount}
-                </Text>
-              </View>
-            )}
+          <TouchableOpacity
+            onPress={() => router.push('/notifications' as never)}
+            accessibilityLabel={t('notifications.title', { defaultValue: 'Notifications' })}
+            accessibilityRole="button"
+            style={{ width: 34, height: 34, justifyContent: 'center', alignItems: 'center' }}
+          >
+            {/* Anchor for the badge — sized to the icon so the badge sits
+                just above/right of the bell glyph the same way it did before
+                the 34x34 touch target was added. */}
+            <View>
+              <Bell size={20} color={heroVisible ? '#e3ff5c' : theme.colors.textPrimary} />
+              {unreadCount > 0 && (
+                <View style={{
+                  position: 'absolute',
+                  top: -4,
+                  right: -6,
+                  backgroundColor: theme.colors.error,
+                  borderRadius: 8,
+                  minWidth: 16,
+                  height: 16,
+                  justifyContent: 'center',
+                  alignItems: 'center',
+                  paddingHorizontal: 4,
+                }}>
+                  <Text style={{ color: '#fff', fontSize: 10, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
+                    {unreadCount > 99 ? '99+' : unreadCount}
+                  </Text>
+                </View>
+              )}
+            </View>
           </TouchableOpacity>
         </View>
       </View>
@@ -521,6 +454,7 @@ export default function HomeScreen() {
           horizontal
           pagingEnabled
           showsHorizontalScrollIndicator={false}
+          nestedScrollEnabled
           onMomentumScrollEnd={(e) => {
             const page = Math.round(e.nativeEvent.contentOffset.x / carouselWidth);
             setCarouselPage(page);
@@ -628,9 +562,9 @@ export default function HomeScreen() {
         </View>
       </Animated.View>
 
-      {/* Content section with curved top — panHandlers on entire section for hero show/hide */}
+      {/* Content section with curved top — hero collapse is driven by the
+          ScrollView below, so no gesture wrapper is needed. */}
       <View
-        {...contentPanResponder.panHandlers}
         style={{
           flex: 1,
           backgroundColor: theme.colors.bg,
@@ -686,46 +620,42 @@ export default function HomeScreen() {
           </View>
         </View>
 
-        {/* Pull-to-refresh icon — appears below search bar, follows finger down, spins on release */}
-        {(pulling || refreshing) && (
-          <Animated.View style={{
-            alignItems: 'center',
-            height: pulling
-              ? pullDistance.interpolate({ inputRange: [0, 150], outputRange: [0, 100], extrapolate: 'clamp' })
-              : 40,
-            justifyContent: 'flex-start',
-            paddingTop: pulling
-              ? pullDistance.interpolate({ inputRange: [0, 150], outputRange: [0, 60], extrapolate: 'clamp' })
-              : 10,
-          }}>
-            <Animated.View style={{
-              opacity: pulling
-                ? pullDistance.interpolate({ inputRange: [0, 20], outputRange: [0, 1], extrapolate: 'clamp' })
-                : 1,
-              transform: [{
-                rotate: refreshing
-                  ? refreshSpin.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] })
-                  : pullDistance.interpolate({ inputRange: [0, 150], outputRange: ['0deg', '270deg'], extrapolate: 'clamp' }),
-              }],
-            }}>
-              <RefreshCw size={20} color={theme.colors.primary} />
-            </Animated.View>
-          </Animated.View>
-        )}
-
-        {/* Scrollable content — Fix 2: paddingBottom accounts for floating tab bar + safe area */}
+        {/* Scrollable content — Fix 2: paddingBottom accounts for floating tab bar + safe area.
+            The scroll offset drives the hero collapse: crossing ~4px closes it,
+            returning to 0 on release opens it. onScrollEndDrag handles the
+            overscroll case where velocity is positive but offset is clamped to 0. */}
         <ScrollView
           style={styles.scrollView}
           contentContainerStyle={{ paddingHorizontal: theme.spacing.xl, paddingTop: theme.spacing.lg, paddingBottom: 120 }}
           showsVerticalScrollIndicator={false}
           scrollEventThrottle={16}
-          onScroll={(e) => { scrollOffsetRef.current = e.nativeEvent.contentOffset.y; }}
+          nestedScrollEnabled={true}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={() => { void handleRefresh(); }}
+              tintColor={theme.colors.primary}
+              colors={[theme.colors.primary]}
+            />
+          }
+          onScroll={(e) => {
+            const y = e.nativeEvent.contentOffset.y;
+            scrollOffsetRef.current = y;
+            // Collapse as soon as the user scrolls past the top. Expand only
+            // when they return all the way to offset 0.
+            if (y > 4 && heroRawRef.current > 0.5) snapHeroRef.current(false);
+            else if (y <= 0 && heroRawRef.current < 0.5) snapHeroRef.current(true);
+          }}
+          onScrollEndDrag={(e) => {
+            if (e.nativeEvent.contentOffset.y <= 0) snapHeroRef.current(true);
+          }}
         >
           {/* Fix 2: categories section — explicit height + paddingVertical to prevent Android bottom cut */}
           <View style={[styles.categoriesSection, { marginBottom: theme.spacing.lg }]}>
             <ScrollView
               horizontal
               showsHorizontalScrollIndicator={false}
+              nestedScrollEnabled
               contentContainerStyle={{ paddingRight: theme.spacing.xl, paddingVertical: 4 }}
             >
               {availableCategories.map((cat) => {
@@ -801,14 +731,37 @@ export default function HomeScreen() {
             </View>
           ) : (
             <>
-              {filteredBaskets.map((basket) => (
-                <BasketCard
-                  key={basket.id}
-                  basket={basket}
-                  isFavorite={isBasketFavorite(basket.id)}
-                  onFavoritePress={() => toggleBasketFavorite(basket.id)}
-                />
-              ))}
+              {filteredBaskets.map((basket, idx) => {
+                const isFirst = idx === 0;
+                const card = (
+                  <BasketCard
+                    key={basket.id}
+                    basket={basket}
+                    isFavorite={isBasketFavorite(basket.id)}
+                    onFavoritePress={() => toggleBasketFavorite(basket.id)}
+                  />
+                );
+                // Wrap the first card in a measured View — the walkthrough
+                // overlay reads firstBasketCard + favoriteHeart from the
+                // store. Heart sits at top:10, right:10 inside the image
+                // (~32×32), so derive its rect from the card's window coords.
+                if (!isFirst) return card;
+                return (
+                  <View
+                    key={basket.id}
+                    onLayout={(e) => {
+                      (e.target as any)?.measureInWindow?.((x: number, y: number, w: number, h: number) => {
+                        if (w <= 0 || h <= 0) return;
+                        const set = useWalkthroughStore.getState().setMeasuredRect;
+                        set('firstBasketCard', { x, y, w, h });
+                        set('favoriteHeart', { x: x + w - 44, y: y + 8, w: 34, h: 34 });
+                      });
+                    }}
+                  >
+                    {card}
+                  </View>
+                );
+              })}
 
               {/* Address suggestions from Nominatim */}
               {searchQuery.trim() && addressSuggestions.length > 0 && (

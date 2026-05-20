@@ -1,10 +1,10 @@
 import React, { useState, useRef } from 'react';
 import {
   View, Text, TouchableOpacity, ScrollView,
-  TextInput, Platform, StyleSheet,
+  TextInput, Platform, StyleSheet, Modal,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { MapPin, Home, Briefcase, Plus, ChevronLeft, Check, Trash2, Edit3, Navigation } from 'lucide-react-native';
+import { MapPin, Home, Briefcase, Plus, ChevronLeft, Check, Trash2, Edit3, Navigation, AlertTriangle } from 'lucide-react-native';
 import * as Location from 'expo-location';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { useAddressStore, type SavedAddress } from '@/src/stores/addressStore';
@@ -45,6 +45,8 @@ export default function AddressPickerScreen() {
   };
   const [labelInput, setLabelInput] = useState('');
   const [editingAddress, setEditingAddress] = useState<SavedAddress | null>(null);
+  // Address pending-delete: stored as the full object so the modal can show its label
+  const [addressPendingDelete, setAddressPendingDelete] = useState<SavedAddress | null>(null);
 
   // Default: show map of the currently selected address
   const selectedAddress = addresses.find((a) => a.id === selectedId) ?? null;
@@ -69,12 +71,18 @@ export default function AddressPickerScreen() {
   const handleEditAddress = (addr: SavedAddress) => {
     setEditingAddress(addr);
     setPendingRegion({ lat: addr.lat, lng: addr.lng });
+    setLabelInput(addr.label);
     setStep('edit');
   };
 
   const handleEditConfirm = () => {
     if (editingAddress) {
-      void updateAddress(editingAddress.id, { lat: pendingRegion.lat, lng: pendingRegion.lng });
+      const trimmed = labelInput.trim();
+      void updateAddress(editingAddress.id, {
+        lat: pendingRegion.lat,
+        lng: pendingRegion.lng,
+        label: trimmed || editingAddress.label,
+      });
     }
     reset();
   };
@@ -85,6 +93,37 @@ export default function AddressPickerScreen() {
     const label = labelInput.trim() || t('addressPicker.defaultLabel', { defaultValue: 'Mon adresse' });
     void addAddress({ label, lat: pendingRegion.lat, lng: pendingRegion.lng });
     reset();
+  };
+
+  // Search for location by text (Nominatim / OpenStreetMap autocomplete)
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<{ name: string; lat: number; lng: number }[]>([]);
+  const searchTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const handleSearchLocation = (text: string) => {
+    setSearchQuery(text);
+    if (searchTimeout.current) clearTimeout(searchTimeout.current);
+    if (!text.trim()) { setSearchResults([]); return; }
+    searchTimeout.current = setTimeout(async () => {
+      try {
+        // Use Nominatim for real place name suggestions
+        const query = encodeURIComponent(text.trim());
+        const resp = await fetch(
+          `https://nominatim.openstreetmap.org/search?q=${query}&format=json&addressdetails=1&limit=5&countrycodes=tn`,
+          { headers: { 'Accept-Language': 'fr' } }
+        );
+        const data = await resp.json();
+        setSearchResults(
+          data.map((place: any) => ({
+            name: place.display_name,
+            lat: parseFloat(place.lat),
+            lng: parseFloat(place.lon),
+          }))
+        );
+      } catch {
+        setSearchResults([]);
+      }
+    }, 400);
   };
 
   const title =
@@ -172,7 +211,7 @@ export default function AddressPickerScreen() {
                   <TouchableOpacity
                     key={addr.id}
                     onPress={() => handleSelectAddress(addr)}
-                    style={[styles.addrRow, { borderBottomColor: theme.colors.divider }]}
+                    style={[styles.addrRow, { borderBottomColor: theme.colors.divider, backgroundColor: isSelected ? theme.colors.primary + '15' : 'transparent', borderRadius: 12, borderWidth: isSelected ? 1.5 : 0, borderColor: isSelected ? theme.colors.primary + '40' : 'transparent', marginBottom: 4, paddingHorizontal: 12 }]}
                   >
                     <Icon size={20} color={isSelected ? theme.colors.primary : theme.colors.textSecondary} />
                     <View style={{ flex: 1, marginLeft: 14 }}>
@@ -200,9 +239,7 @@ export default function AddressPickerScreen() {
                       <Edit3 size={16} color={theme.colors.primary} />
                     </TouchableOpacity>
                     <TouchableOpacity
-                      onPress={() => {
-                        void removeAddress(addr.id);
-                      }}
+                      onPress={() => setAddressPendingDelete(addr)}
                       hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                       style={{ marginLeft: 10 }}
                     >
@@ -219,6 +256,35 @@ export default function AddressPickerScreen() {
       {/* ── Step: Map Pin Picker (new address) ─────────────── */}
       {step === 'map' && (
         <View style={{ flex: 1 }}>
+          {/* Search bar */}
+          <View style={{ paddingHorizontal: 16, paddingVertical: 10, backgroundColor: theme.colors.bg, zIndex: 10 }}>
+            <TextInput
+              value={searchQuery}
+              onChangeText={handleSearchLocation}
+              placeholder={t('addressPicker.searchPlace', { defaultValue: 'Rechercher une adresse ou un lieu...' })}
+              placeholderTextColor={theme.colors.muted}
+              style={{ height: 42, backgroundColor: theme.colors.surface, borderRadius: 12, paddingHorizontal: 14, color: theme.colors.textPrimary, ...theme.typography.bodySm, borderWidth: 1, borderColor: theme.colors.divider }}
+            />
+            {searchResults.length > 0 && (
+              <View style={{ backgroundColor: theme.colors.surface, borderRadius: 12, marginTop: 6, borderWidth: 1, borderColor: theme.colors.divider, overflow: 'hidden' }}>
+                {searchResults.map((r, i) => (
+                  <TouchableOpacity
+                    key={i}
+                    onPress={() => {
+                      setPendingRegion({ lat: r.lat, lng: r.lng });
+                      mapRef.current?.animateToRegion({ latitude: r.lat, longitude: r.lng, latitudeDelta: 0.005, longitudeDelta: 0.005 }, 400);
+                      setSearchQuery('');
+                      setSearchResults([]);
+                    }}
+                    style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 14, borderTopWidth: i > 0 ? 1 : 0, borderTopColor: theme.colors.divider }}
+                  >
+                    <MapPin size={14} color={theme.colors.primary} />
+                    <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, marginLeft: 10, flex: 1 }} numberOfLines={2}>{r.name}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
+          </View>
           <View style={{ flex: 1 }}>
             {MapView && Platform.OS !== 'web' ? (
               <MapView
@@ -279,6 +345,35 @@ export default function AddressPickerScreen() {
       {/* ── Step: Edit existing address location ────────────── */}
       {step === 'edit' && editingAddress && (
         <View style={{ flex: 1 }}>
+          {/* Search bar */}
+          <View style={{ paddingHorizontal: 16, paddingVertical: 10, backgroundColor: theme.colors.bg, zIndex: 10 }}>
+            <TextInput
+              value={searchQuery}
+              onChangeText={handleSearchLocation}
+              placeholder={t('addressPicker.searchPlace', { defaultValue: 'Rechercher une adresse ou un lieu...' })}
+              placeholderTextColor={theme.colors.muted}
+              style={{ height: 42, backgroundColor: theme.colors.surface, borderRadius: 12, paddingHorizontal: 14, color: theme.colors.textPrimary, ...theme.typography.bodySm, borderWidth: 1, borderColor: theme.colors.divider }}
+            />
+            {searchResults.length > 0 && (
+              <View style={{ backgroundColor: theme.colors.surface, borderRadius: 12, marginTop: 6, borderWidth: 1, borderColor: theme.colors.divider, overflow: 'hidden' }}>
+                {searchResults.map((r, i) => (
+                  <TouchableOpacity
+                    key={i}
+                    onPress={() => {
+                      setPendingRegion({ lat: r.lat, lng: r.lng });
+                      mapRef.current?.animateToRegion({ latitude: r.lat, longitude: r.lng, latitudeDelta: 0.005, longitudeDelta: 0.005 }, 400);
+                      setSearchQuery('');
+                      setSearchResults([]);
+                    }}
+                    style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 14, borderTopWidth: i > 0 ? 1 : 0, borderTopColor: theme.colors.divider }}
+                  >
+                    <MapPin size={14} color={theme.colors.primary} />
+                    <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, marginLeft: 10, flex: 1 }} numberOfLines={2}>{r.name}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
+          </View>
           <View style={{ flex: 1 }}>
             {MapView && Platform.OS !== 'web' ? (
               <MapView
@@ -313,12 +408,24 @@ export default function AddressPickerScreen() {
             <View style={[styles.tooltip, { backgroundColor: 'rgba(0,0,0,0.75)' }]}>
               <Edit3 size={14} color="#fff" />
               <Text style={[theme.typography.caption, { color: '#fff', marginLeft: 6 }]}>
-                {t('addressPicker.editLocation')} — {editingAddress.label}
+                {t('addressPicker.editLocation')}
               </Text>
             </View>
           </View>
 
           <View style={[styles.mapFooter, { backgroundColor: theme.colors.bg, gap: 10 }]}>
+            {/* Editable label — lets the user rename "Maman" → "Travail" etc. */}
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, paddingHorizontal: 14, paddingVertical: 10, borderWidth: 1, borderColor: theme.colors.divider }}>
+              <Edit3 size={14} color={theme.colors.primary} />
+              <TextInput
+                value={labelInput}
+                onChangeText={setLabelInput}
+                placeholder={editingAddress.label}
+                placeholderTextColor={theme.colors.muted}
+                style={{ flex: 1, color: theme.colors.textPrimary, ...theme.typography.bodySm }}
+                maxLength={40}
+              />
+            </View>
             <TouchableOpacity
               onPress={goToCurrentLocation}
               style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 12, borderRadius: theme.radii.r16, borderWidth: 1, borderColor: theme.colors.divider, backgroundColor: theme.colors.surface }}
@@ -395,6 +502,56 @@ export default function AddressPickerScreen() {
           </TouchableOpacity>
         </View>
       )}
+
+      {/* Delete-address confirmation — extra guard so a misplaced tap on the trash
+          icon doesn't silently remove a saved location. */}
+      <Modal
+        visible={addressPendingDelete !== null}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setAddressPendingDelete(null)}
+      >
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 24 }}>
+          <View style={{ backgroundColor: theme.colors.surface, borderRadius: 20, padding: 24, width: '100%', maxWidth: 340, alignItems: 'center' }}>
+            <View style={{ backgroundColor: theme.colors.error + '15', width: 56, height: 56, borderRadius: 28, justifyContent: 'center', alignItems: 'center', marginBottom: 16 }}>
+              <AlertTriangle size={28} color={theme.colors.error} />
+            </View>
+            <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3, textAlign: 'center', marginBottom: 8 }}>
+              {t('addressPicker.deleteConfirmTitle', { defaultValue: 'Supprimer cette adresse ?' })}
+            </Text>
+            {addressPendingDelete && (
+              <Text style={{ color: theme.colors.textSecondary, ...theme.typography.body, textAlign: 'center', marginBottom: 8 }}>
+                <Text style={{ fontWeight: '700' }}>{addressPendingDelete.label}</Text>
+              </Text>
+            )}
+            <Text style={{ color: theme.colors.error, ...theme.typography.bodySm, textAlign: 'center', marginBottom: 24, fontWeight: '600', lineHeight: 20 }}>
+              {t('addressPicker.deleteIrreversible', { defaultValue: 'Cette action est irréversible.' })}
+            </Text>
+            <View style={{ flexDirection: 'row', gap: 10, width: '100%' }}>
+              <TouchableOpacity
+                onPress={() => setAddressPendingDelete(null)}
+                style={{ flex: 1, backgroundColor: theme.colors.bg, borderRadius: 12, paddingVertical: 14, alignItems: 'center', borderWidth: 1, borderColor: theme.colors.divider }}
+              >
+                <Text style={{ color: theme.colors.textPrimary, ...theme.typography.body, fontWeight: '600' }}>
+                  {t('common.cancel', { defaultValue: 'Annuler' })}
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => {
+                  const id = addressPendingDelete?.id;
+                  setAddressPendingDelete(null);
+                  if (id) void removeAddress(id);
+                }}
+                style={{ flex: 1, backgroundColor: theme.colors.error, borderRadius: 12, paddingVertical: 14, alignItems: 'center' }}
+              >
+                <Text style={{ color: '#fff', ...theme.typography.body, fontWeight: '600' }}>
+                  {t('common.delete', { defaultValue: 'Supprimer' })}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }

@@ -1,14 +1,16 @@
-export type UserRole = 'customer' | 'business';
+export type UserRole = 'customer' | 'business' | 'admin';
 
 export type TeamRole = 'admin' | 'restricted' | 'custom';
 
 export interface TeamPermission {
-  dashboard: boolean;
-  baskets: boolean;
-  orders: boolean;
-  profile: boolean;
-  team: boolean;
-  financial: boolean;
+  confirm_pickup: boolean;
+  edit_quantities: boolean;
+  edit_basket_info: boolean;
+  create_delete_baskets: boolean;
+  view_history: boolean;
+  messaging: boolean;
+  cancel_order: boolean;
+  [key: string]: boolean;
 }
 
 export interface TeamMember {

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { View, Text, StyleSheet, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, ScrollView, ActivityIndicator, Image, Modal, Animated, Dimensions } from 'react-native';
+import { PasswordInput } from '@/src/components/PasswordInput';
 import { useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -11,6 +12,7 @@ import { useSplashStore } from '@/src/stores/splashStore';
 import { login, loginWithGoogle, loginWithApple } from '@/src/services/auth';
 import { clearSession } from '@/src/lib/session';
 import { getErrorMessage } from '@/src/lib/api';
+import { FeatureFlags } from '@/src/lib/featureFlags';
 import type { UserRole, User as UserType } from '@/src/types';
 import { StatusBar } from 'expo-status-bar';
 import * as WebBrowser from 'expo-web-browser';
@@ -247,6 +249,10 @@ export default function SignInScreen() {
   // ── Apple Sign-In ────────────────────────────────────────────────────────
 
   const handleAppleSignIn = async () => {
+    if (FeatureFlags.IS_PROTOTYPE) {
+      setErrorMsg(t('auth.prototypeMode', { defaultValue: 'L\'application est en mode prototype. La connexion n\'est pas disponible. Utilisez le mode d\u00e9mo pour d\u00e9couvrir l\'application.' }));
+      return;
+    }
     try {
       setAppleLoading(true);
       const credential = await AppleAuthentication.signInAsync({
@@ -311,6 +317,10 @@ export default function SignInScreen() {
   // ── Google OAuth ─────────────────────────────────────────────────────────
 
   const handleGoogleSignIn = async () => {
+    if (FeatureFlags.IS_PROTOTYPE) {
+      setErrorMsg(t('auth.prototypeMode', { defaultValue: 'L\'application est en mode prototype. La connexion n\'est pas disponible. Utilisez le mode d\u00e9mo pour d\u00e9couvrir l\'application.' }));
+      return;
+    }
     try {
       setGoogleLoading(true);
       const { url, redirectUri, codeVerifier, clientId } = buildGoogleAuthUrl();
@@ -389,7 +399,10 @@ export default function SignInScreen() {
   };
 
   const handleSignIn = async () => {
-
+    if (FeatureFlags.IS_PROTOTYPE) {
+      setErrorMsg(t('auth.prototypeMode', { defaultValue: 'L\'application est en mode prototype. La connexion n\'est pas disponible. Utilisez le mode d\u00e9mo pour d\u00e9couvrir l\'application.' }));
+      return;
+    }
     if (!email.trim() || !password.trim()) {
       setErrorMsg(t('auth.fillAllFields'));
       return;
@@ -576,6 +589,13 @@ export default function SignInScreen() {
                       </Text>
                     </Text>
                   </TouchableOpacity>
+                  {FeatureFlags.ENABLE_ADMIN_SIGN_IN_LINK && (
+                  <TouchableOpacity onPress={() => router.push('/admin/sign-in' as never)}>
+                    <Text style={{ color: '#114b3c60', fontSize: 12, fontFamily: 'Poppins_400Regular' }}>
+                      {t('auth.adminLink', { defaultValue: 'Admin Barakeat' })}
+                    </Text>
+                  </TouchableOpacity>
+                  )}
                 </Animated.View>
               </View>
             ) : (
@@ -655,28 +675,21 @@ export default function SignInScreen() {
                 <Text style={[styles.label, { color: '#114b3c', ...theme.typography.bodySm }]}>
                   {t('auth.password')}
                 </Text>
-                <TextInput
-                  style={[
-                    styles.input,
-                    {
-                      backgroundColor: '#fff',
-                      borderColor: '#114b3c30',
-                      borderWidth: 1.5,
-                      borderRadius: 14,
-                      color: '#114b3c',
-                      shadowColor: '#114b3c',
-                      shadowOffset: { width: 0, height: 2 },
-                      shadowOpacity: 0.06,
-                      shadowRadius: 6,
-                      elevation: 2,
-                      ...theme.typography.body,
-                    },
-                  ]}
+                <PasswordInput
+                  containerStyle={{
+                    backgroundColor: '#fff',
+                    borderColor: '#114b3c',
+                    shadowColor: '#114b3c',
+                    shadowOffset: { width: 0, height: 2 },
+                    shadowOpacity: 0.06,
+                    shadowRadius: 6,
+                    elevation: 2,
+                  }}
+                  style={[styles.input, { color: '#114b3c', borderWidth: 0, ...theme.typography.body }]}
                   value={password}
                   onChangeText={setPassword}
                   placeholder="••••••••"
                   placeholderTextColor="#114b3c40"
-                  secureTextEntry
                   accessibilityLabel={t('auth.password')}
                 />
               </View>

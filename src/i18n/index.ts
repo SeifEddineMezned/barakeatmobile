@@ -25,7 +25,10 @@ void i18n
     fallbackLng: 'fr',
     interpolation: {
       escapeValue: false,
+      // Don't show raw {{variable}} for missing params — render empty string instead
+      defaultVariables: {},
     },
+    missingInterpolationHandler: () => '',
   });
 
 i18n.on('languageChanged', (lng) => {

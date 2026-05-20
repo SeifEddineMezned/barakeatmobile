@@ -1,16 +1,19 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Animated, Image, ActivityIndicator, Linking } from 'react-native';
 import { useTranslation } from 'react-i18next';
-import { MapPin, Clock, Navigation, X as XIcon, QrCode, Star, ChevronDown, ChevronUp, ShoppingBag, MessageCircle } from 'lucide-react-native';
+import { MapPin, Clock, Navigation, X as XIcon, QrCode, Star, ChevronDown, ChevronUp, ShoppingBag, MessageCircle, Flag } from 'lucide-react-native';
 import { useRouter } from 'expo-router';
 import { useTheme } from '@/src/theme/ThemeProvider';
-import { getNowInBusinessTz } from '@/src/utils/timezone';
+import { getNowInBusinessTz, toBizDayMinutes } from '@/src/utils/timezone';
+import { orderIdToCode } from '@/src/utils/orderCode';
 import type { ReservationFromAPI } from '@/src/services/reservations';
 import { fetchReservationQRCode } from '@/src/services/reservations';
+import { useOrdersStore } from '@/src/stores/ordersStore';
+import { StatusDot } from '@/src/components/StatusDot';
 
 interface ReservationCardProps {
   reservation: ReservationFromAPI;
-  onCancel?: (id: string, quantity: number, locationId?: string, merchantName?: string) => void;
+  onCancel?: (id: string, quantity: number, locationId?: string, merchantName?: string, paymentMethod?: 'cash' | 'card' | 'credits') => void;
   onHide?: (id: string) => void;
   overrideExpired?: boolean;
   messageUnreadCount?: number;
@@ -172,23 +175,23 @@ export function ReservationCard({ reservation, onCancel, onHide: _onHide, overri
     }
   };
 
-  const getStatusColor = () => {
+  const getStatusTone = (): 'info' | 'warn' | 'success' | 'danger' | 'neutral' => {
     switch (status) {
       case 'reserved':
       case 'pending':
       case 'confirmed':
-        return theme.colors.primary;
+        return 'info';
       case 'ready':
-        return theme.colors.secondary;
+        return 'warn';
       case 'collected':
       case 'completed':
       case 'picked_up':
-        return theme.colors.success;
+        return 'success';
       case 'cancelled':
       case 'expired':
-        return theme.colors.error;
+        return 'danger';
       default:
-        return theme.colors.textSecondary;
+        return 'neutral';
     }
   };
 
@@ -205,6 +208,14 @@ export function ReservationCard({ reservation, onCancel, onHide: _onHide, overri
   const isUpcoming = status === 'reserved' || status === 'ready' || status === 'pending' || status === 'confirmed';
   const isPast = status === 'collected' || status === 'completed' || status === 'picked_up';
   const hasReview = (r as any).has_review === true;
+  // Once the customer has filed a claim / report on this reservation, hide
+  // both Report and Review actions — they've already communicated their
+  // issue and shouldn't be pushed back into the same flow. Tracked locally
+  // (ordersStore) until the backend reliably returns has_claim.
+  const reportedIds = useOrdersStore((s) => s.reportedReservationIds);
+  const hasReport = (r as any).has_claim === true
+    || (r as any).has_report === true
+    || reportedIds.includes(String(reservation.id));
 
   // Live pickup countdown for upcoming orders (business timezone aware)
   const [tick, setTick] = useState(0);
@@ -220,9 +231,12 @@ export function ReservationCard({ reservation, onCancel, onHide: _onHide, overri
     const [eh, em] = (pickupWindow.end ?? '').split(':').map(Number);
     if (isNaN(sh) || isNaN(eh)) return null;
     const bizNow = getNowInBusinessTz();
-    const nowMin = bizNow.hours * 60 + bizNow.minutes;
-    const startMin = sh * 60 + sm;
-    const endMin = eh * 60 + em;
+    // Compare in business-day minutes so overnight windows (e.g. 18:00 → 02:59)
+    // work correctly — raw clock minutes would always flag evening times as past
+    // an after-midnight end time.
+    const nowMin = toBizDayMinutes(bizNow.hours * 60 + bizNow.minutes);
+    const startMin = toBizDayMinutes(sh * 60 + sm);
+    const endMin = toBizDayMinutes(eh * 60 + em);
 
     if (nowMin < startMin) {
       const diff = startMin - nowMin;
@@ -333,22 +347,25 @@ export function ReservationCard({ reservation, onCancel, onHide: _onHide, overri
                 )}
               </TouchableOpacity>
             ) : (
-              <View
-                accessibilityLabel={`${t('orders.status', { defaultValue: 'Status' })}: ${getStatusLabel()}`}
-                style={{ backgroundColor: getStatusColor() + '20', borderRadius: theme.radii.r8, paddingHorizontal: theme.spacing.sm, paddingVertical: 3 }}
-              >
-                <Text style={[{ color: getStatusColor(), ...theme.typography.caption, fontWeight: '600' as const }]}>
-                  {getStatusLabel()}
-                </Text>
+              <View accessibilityLabel={`${t('orders.status', { defaultValue: 'Status' })}: ${getStatusLabel()}`}>
+                <StatusDot tone={getStatusTone()} label={getStatusLabel()} />
               </View>
             )}
           </View>
         </View>
-        {/* Chevron — bottom right */}
-        <View style={{ alignItems: 'flex-end', paddingTop: 6, paddingRight: 4 }}>
-          {isExpanded
-            ? <ChevronUp size={16} color={theme.colors.muted} />
-            : <ChevronDown size={16} color={theme.colors.muted} />}
+        {/* Bottom row: order ID (collapsed only) + chevron */}
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingTop: 6, paddingRight: 4 }}>
+          <View />
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            {!isExpanded && (
+              <Text style={{ color: theme.colors.muted, ...theme.typography.caption }}>
+                {orderIdToCode(reservation.id)}
+              </Text>
+            )}
+            {isExpanded
+              ? <ChevronUp size={16} color={theme.colors.muted} />
+              : <ChevronDown size={16} color={theme.colors.muted} />}
+          </View>
         </View>
       </TouchableOpacity>
 
@@ -358,6 +375,12 @@ export function ReservationCard({ reservation, onCancel, onHide: _onHide, overri
           <View style={[styles.divider, { marginVertical: theme.spacing.md, backgroundColor: theme.colors.divider }]} />
 
           <View style={styles.details}>
+            {/* Order ID */}
+            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
+              <Text style={{ color: theme.colors.muted, ...theme.typography.caption }}>
+                {t('orders.orderId', { defaultValue: 'Commande' })} {orderIdToCode(reservation.id)}
+              </Text>
+            </View>
             {/* Info rows — same structure as order confirmed notification */}
             <View style={{ backgroundColor: '#114b3c08', borderRadius: 14, padding: 14, gap: 0 }}>
               {/* Row 1: Address + itinerary */}
@@ -432,8 +455,17 @@ export function ReservationCard({ reservation, onCancel, onHide: _onHide, overri
 
             {/* Footer: review (past) + cancel (upcoming) */}
             <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 10 }}>
-              <View style={{ flexDirection: 'row', gap: 8 }}>
-                {isPast && !hasReview && (
+              <View style={{ flexDirection: 'row', gap: 8, flex: 1, justifyContent: 'flex-end' }}>
+                {isPast && !hasReport && (
+                  <TouchableOpacity
+                    onPress={() => router.push({ pathname: '/claim', params: { reservationId: String(reservation.id), locationName: merchantName } } as never)}
+                    style={{ borderRadius: 10, paddingHorizontal: 12, paddingVertical: 8, flexDirection: 'row', alignItems: 'center', gap: 4, borderWidth: 1, borderColor: theme.colors.muted + '40' }}
+                  >
+                    <Flag size={12} color={theme.colors.muted} />
+                    <Text style={{ color: theme.colors.muted, fontSize: 12, fontWeight: '600' }}>{t('orders.reportIssue', { defaultValue: 'Signaler' })}</Text>
+                  </TouchableOpacity>
+                )}
+                {isPast && !hasReview && !hasReport && (
                   <TouchableOpacity
                     onPress={() => {
                       const lid = String(r.location_id ?? r.restaurant_id ?? basket?.merchantId ?? '');
@@ -447,12 +479,16 @@ export function ReservationCard({ reservation, onCancel, onHide: _onHide, overri
                 )}
               </View>
               {isUpcoming && onCancel && (
+                // Quiet destructive trigger — red text only, no bg/border.
+                // The real red confirm lives in the sheet that follows.
                 <TouchableOpacity
-                  onPress={() => onCancel(reservation.id, quantity, String(r.location_id ?? r.restaurant_id ?? ''), merchantName)}
-                  style={{ flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10, backgroundColor: theme.colors.error + '12' }}
+                  onPress={() => onCancel(reservation.id, quantity, String(r.location_id ?? r.restaurant_id ?? ''), merchantName, (r.payment_method ?? (reservation as any).payment_method) as any)}
+                  style={{ paddingHorizontal: 10, paddingVertical: 8 }}
+                  hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
                 >
-                  <XIcon size={12} color={theme.colors.error} />
-                  <Text style={{ color: theme.colors.error, fontSize: 12, fontWeight: '600' }}>{t('orders.cancelBtn', { defaultValue: 'Annuler' })}</Text>
+                  <Text style={{ color: theme.colors.error, fontSize: 13, fontFamily: 'Poppins_600SemiBold', fontWeight: '600' }}>
+                    {t('orders.cancelBtn', { defaultValue: 'Annuler' })}
+                  </Text>
                 </TouchableOpacity>
               )}
             </View>

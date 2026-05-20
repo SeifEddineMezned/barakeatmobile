@@ -10,6 +10,7 @@ import {
   TextInput,
   Image,
   Modal,
+  Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -123,20 +124,46 @@ export default function ReviewScreen() {
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const [toastMsg, setToastMsg] = useState<{ type: 'success' | 'error'; text: string; onDismiss?: () => void } | null>(null);
 
-  const pickImage = async () => {
+  // We store the picked image as a data URL (data:image/jpeg;base64,…) so it can
+  // be submitted directly to the backend, which uploads data URLs to Cloudinary.
+  // The data URL also works as <Image source={{ uri }} /> input, so we reuse the
+  // same state for both preview and upload.
+  const assetToDataUrl = (asset: ImagePicker.ImagePickerAsset): string | null => {
+    if (!asset.base64) return null;
+    const mime = asset.mimeType || 'image/jpeg';
+    return `data:${mime};base64,${asset.base64}`;
+  };
+
+  const launchLibrary = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== 'granted') {
-      setToastMsg({ type: 'error', text: t('common.noPermission', { defaultValue: 'Permission refusée.' }) });
-      return;
+    if (status !== 'granted') { setToastMsg({ type: 'error', text: t('common.noPermission', { defaultValue: 'Permission refusée.' }) }); return; }
+    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: 'images', allowsEditing: true, quality: 0.7, base64: true });
+    if (!result.canceled && result.assets?.[0]) {
+      const dataUrl = assetToDataUrl(result.assets[0]);
+      if (dataUrl) setSelectedImage(dataUrl);
     }
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: 'images',
-      allowsEditing: true,
-      quality: 0.7,
-    });
-    if (!result.canceled && result.assets && result.assets.length > 0) {
-      setSelectedImage(result.assets[0].uri);
+  };
+
+  const launchCamera = async () => {
+    const { status } = await ImagePicker.requestCameraPermissionsAsync();
+    if (status !== 'granted') { setToastMsg({ type: 'error', text: t('common.noPermission', { defaultValue: 'Permission refusée.' }) }); return; }
+    const result = await ImagePicker.launchCameraAsync({ allowsEditing: true, quality: 0.7, base64: true });
+    if (!result.canceled && result.assets?.[0]) {
+      const dataUrl = assetToDataUrl(result.assets[0]);
+      if (dataUrl) setSelectedImage(dataUrl);
     }
+  };
+
+  const pickImage = () => {
+    Alert.alert(
+      t('common.addPhoto', { defaultValue: 'Ajouter une photo' }),
+      undefined,
+      [
+        { text: t('common.takePhoto', { defaultValue: 'Prendre une photo' }), onPress: launchCamera },
+        { text: t('common.chooseFromGallery', { defaultValue: 'Choisir depuis la galerie' }), onPress: launchLibrary },
+        { text: t('common.cancel', { defaultValue: 'Annuler' }), style: 'cancel' },
+      ]
+    );
   };
 
   const overallRating = Math.round(
@@ -159,7 +186,10 @@ export default function ReviewScreen() {
         rating_quality: ratingQuality,
         rating_variety: ratingVariety,
         comment: comment.trim() || undefined,
-        image_url: selectedImage || undefined,
+        // Backend expects a data URL (data:image/…;base64,…) — selectedImage is now
+        // stored in that form after the fix above. Previously we sent a local file
+        // URI under the wrong field name and the photo was silently dropped.
+        image_data_url: selectedImage || undefined,
       });
     },
     onSuccess: () => {

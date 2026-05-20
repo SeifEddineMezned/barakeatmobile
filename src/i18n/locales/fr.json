@@ -27,11 +27,38 @@
     "optional": "optionnel",
     "or": "OU",
     "seeLess": "Voir moins",
-    "seeMore": "...voir plus",
+    "seeMore": "Voir plus",
     "and": "et",
     "screenNotFound": "Cette page n'existe pas.",
     "goHome": "Retour à l'accueil",
-    "errorOccurredDesc": "Une erreur inattendue s'est produite. Veuillez réessayer."
+    "errorOccurredDesc": "Une erreur inattendue s'est produite. Veuillez réessayer.",
+    "wrongAccountTitle": "Mauvais type de compte",
+    "wrongAccountBusinessMessage": "L'interface business nécessite un compte business. Veuillez vous déconnecter et vous reconnecter avec un compte business.",
+    "wrongAccountCustomerMessage": "L'interface client nécessite un compte client. Veuillez vous déconnecter et vous reconnecter avec un compte client.",
+    "signOutAndSignIn": "Se déconnecter",
+    "takePhoto": "Prendre une photo",
+    "chooseFromGallery": "Choisir depuis la galerie",
+    "cameraPermRequired": "L'accès à la caméra est requis.",
+    "photoPermRequired": "L'accès à la galerie photo est requis."
+  },
+  "claims": {
+    "title": "Signaler un problème",
+    "regarding": "Concernant :",
+    "selectReason": "Raison de la réclamation",
+    "foodQuality": "Qualité du repas",
+    "wrongInfo": "Informations incorrectes",
+    "hygiene": "Hygiène",
+    "notReceived": "Commande non reçue",
+    "other": "Autre",
+    "description": "Description (optionnel)",
+    "descPlaceholder": "Décrivez le problème...",
+    "addPhotoOptional": "Ajouter une photo (optionnel)",
+    "insertOrTakePhoto": "Insérer ou prendre une photo",
+    "changePhoto": "Changer la photo",
+    "submit": "Envoyer la réclamation",
+    "submitted": "Réclamation envoyée",
+    "refDesc": "Votre numéro de référence :",
+    "tapToCopy": "Appuyez pour copier"
   },
   "onboarding": {
     "slide1": {
@@ -135,6 +162,8 @@
     "discover": "Découvrir",
     "greeting": "Découvrir",
     "searchPlaceholder": "Rechercher paniers, commerçants...",
+    "searchResults": "Résultats",
+    "noSearchResults": "Aucun résultat trouvé",
     "emptyState": {
       "noBaskets": "Désolé, de nouveaux partenaires arrivent très bientôt près de chez vous.",
       "exploreMap": "Explorer la Carte",
@@ -176,9 +205,12 @@
     }
   },
   "basket": {
+    "basket": "panier",
+    "baskets": "paniers",
     "surpriseBasket": "Panier Surprise",
     "pickupWindow": "Retrait",
     "distance": "de distance",
+    "noAddressSet": "Aucune adresse",
     "quantity": "restant",
     "payOnPickup": "Paiement sur Place",
     "description": "Description",
@@ -250,6 +282,11 @@
     "payCashDesc": "Payez le commerçant au retrait",
     "payCard": "Payer par carte",
     "payCardDesc": "Bientôt disponible",
+    "payCredits": "Payer avec Crédits Barakeat",
+    "payCreditsDesc": "Débité de votre portefeuille",
+    "payCreditsBalance": "Solde : {{balance}} TND",
+    "payCreditsShort": "{{missing}} TND manquants",
+    "totalInCredits": "{{credits}} TND",
     "cashWarning": "Prêt à récupérer ce panier ?\n\nSi vos plans changent, annulez tôt, cela libère la place pour quelqu'un d'autre.\n\nAttention : des absences répétées sans annulation peuvent entraîner une pause temporaire de vos réservations.",
     "cashWarningIntro": "Prêt à récupérer ce panier ?\n\nSi vos plans changent, annulez tôt, cela libère la place pour quelqu'un d'autre.",
     "cashWarningBan": "Des absences répétées sans annulation peuvent entraîner une pause temporaire de vos réservations.",
@@ -305,7 +342,15 @@
     "pickupExpiring": "Retrait bientôt terminé !",
     "surpriseBag": "Panier Surprise",
     "noUpcoming": "Aucune commande à venir",
-    "noPast": "Aucune commande passée"
+    "noPast": "Aucune commande passée",
+    "cancelConfirmTitle": "Annuler cette commande ?",
+    "cancelConsequences": "Si vous annulez :",
+    "cancelXpLoss": "Vous perdez",
+    "cancelLevelDrop": "Niveau",
+    "cancelBasketReturned": "Le panier est rendu au commerce",
+    "cancelIrreversible": "Cette action est irréversible et ne peut pas être annulée.",
+    "keepOrder": "Garder",
+    "cancelContinue": "Annuler"
   },
   "review": {
     "title": "Laisser un avis",
@@ -339,7 +384,9 @@
     "emptyStarredTitle": "Aucun panier sauvegardé",
     "emptyStarredDesc": "Appuyez sur l'icône marque-page d'un panier pour le sauvegarder et il apparaîtra ici.",
     "findBasket": "Trouver un Panier Surprise",
-    "count": "{{count}} favoris"
+    "count": "{{count}} favoris",
+    "addToFavorites": "Ajouter aux favoris",
+    "removeFromFavorites": "Retirer des favoris"
   },
   "profile": {
     "title": "Profil",
@@ -389,6 +436,9 @@
     "genderFemale": "Femme",
     "genderNotSet": "Non défini",
     "businessesTried": "Commerces essayés",
+    "orderCount": "{{count}} commande(s)",
+    "places": "commerces",
+    "entries": "entrées",
     "deleteAccount": "Supprimer le compte",
     "deleteAccountConfirm": "Êtes-vous sûr de vouloir supprimer définitivement votre compte ? Cette action est irréversible.",
     "deleteAccountSoon": "La suppression de compte sera disponible dans une prochaine mise à jour.",
@@ -451,7 +501,9 @@
     "dragToMove": "Déplacez la carte pour repositionner le repère",
     "label_home": "Maison",
     "label_work": "Travail",
-    "customNamePlaceholder": "Ou entrez un nom personnalisé..."
+    "customNamePlaceholder": "Ou entrez un nom personnalisé...",
+    "deleteConfirmTitle": "Supprimer cette adresse ?",
+    "deleteIrreversible": "Cette action est irréversible."
   },
   "map": {
     "title": "A Proximite",
@@ -493,26 +545,42 @@
     "notif_title_new_reservation": "Nouvelle réservation",
     "notif_title_reservation_cancelled": "Réservation annulée",
     "notif_title_pickup_confirmed": "Retrait confirmé",
+    "notif_title_basket_picked_up": "Panier récupéré",
+    "notif_message_basket_picked_up": "{{customerName}} a récupéré {{quantity}} panier(s) chez {{location}}.",
     "notif_title_review_received": "Nouvel avis",
     "notif_title_new_review": "Nouvel avis",
-    "notif_message_new_reservation": "{{customerName}} a réservé {{count}} panier(s) dans votre commerce",
-    "notif_message_reservation_cancelled": "{{customerName}} a annulé {{count}} réservation(s)",
+    "notif_message_new_reservation": "{{customerName}} a réservé {{count}} panier(s) chez {{location}}",
+    "notif_message_reservation_cancelled": "{{customerName}} a annulé {{count}} réservation(s) chez {{location}}",
+    "notif_message_business_cancelled_internal": "La commande de {{customerName}} ({{count}} panier(s)) chez {{location}} a été annulée par le commerce",
+    "notif_message_buyer_cancellation": "Votre réservation chez {{location}} ({{count}} panier(s)) a été annulée.",
+    "notif_title_business_cancelled": "Commande annulée par le commerce",
+    "notif_message_business_cancelled_buyer": "Votre réservation chez {{location}} ({{count}} panier(s)) a été annulée par le commerce.",
     "notif_title_order_confirmed": "Commande confirmée",
     "notif_message_order_confirmed": "Votre commande chez {{location}} est confirmée !",
     "notif_message_pickup_confirmed": "Votre retrait chez {{restaurant}} a été confirmé ! Évaluez votre expérience ?",
     "filterHidden": "Masquées",
+    "seeAll": "Voir toutes les notifications",
     "notif_message_review_received": "Un client vous a laissé un avis",
     "notif_new_review": "{{customerName}} vous a laissé un avis de {{rating}} étoile(s)",
     "notif_title_streak_expired": "Série expirée",
     "notif_message_streak_expired": "Votre série de {{streak}} jour(s) a expiré après 7 jours d'inactivité. Commandez pour en démarrer une nouvelle !",
     "notif_title_streak_expiring": "Série bientôt expirée !",
     "notif_message_streak_expiring": "Il vous reste {{daysLeft}} jour(s) pour garder votre série de {{streak}} jour(s). Commandez maintenant !",
+    "notif_title_new_message": "Nouveau message",
+    "notif_message_new_message": "{{senderName}} vous a envoyé un message.",
+    "notif_title_new_reply": "Nouveau message",
+    "notif_message_new_reply": "{{senderName}} vous a envoyé un message.",
+    "notif_title_favorite_available": "Vos favoris disponibles",
+    "notif_message_favorite_available": "Offrez-vous un panier de {{location}} !",
     "pickupStartsTitle": "C'est l'heure du retrait !",
     "pickupStartsBody": "Votre commande est prête à être récupérée.",
     "pickupEndingSoonTitle": "Retrait bientôt terminé !",
     "pickupEndingSoonBody": "Votre créneau de retrait se termine dans 30 minutes.",
     "favoriteNewBasket": "Nouveau panier disponible !",
     "favoriteNewBasketBody": "Un de vos commerces favoris a un panier disponible aujourd'hui.",
+    "mask": "Masquer",
+    "unmask": "Démasquer",
+    "markRead": "Marquer lu",
     "basket": "Panier",
     "location": "Commerce",
     "customer": "Client",
@@ -534,6 +602,18 @@
     "location": "Emplacement",
     "selectLocation": "Sélectionner un emplacement",
     "unnamedLocation": "Emplacement sans nom",
+    "noLocation": {
+      "title": "Ajoutez votre premier point de vente",
+      "description": "Pour commencer à vendre, créez un emplacement avec adresse, horaires de retrait et prix.",
+      "cta": "Ajouter un emplacement",
+      "profileHint": "Aucun emplacement sélectionné. Ajoutez-en un depuis Gestion d'équipe.",
+      "tutorialTitle": "Créez votre premier point de vente",
+      "tutorialDesc": "Avant de pouvoir vendre, ajoutez un emplacement avec son adresse, ses prix et ses horaires de retrait."
+    },
+    "locationSwitcher": {
+      "noLocationYet": "Aucun emplacement",
+      "selectLocation": "Sélectionner un emplacement"
+    },
     "dashboard": {
       "title": "Tableau de bord",
       "tabLabel": "Accueil",
@@ -580,6 +660,7 @@
       "title": "Mes Paniers",
       "addBasket": "Ajouter",
       "editBasket": "Modifier le panier",
+      "editBasketShort": "Modifier",
       "active": "Actif",
       "inactive": "Inactif",
       "soldOut": "Épuisé",
@@ -600,6 +681,8 @@
       "maxPerCustomer": "Max paniers par client",
       "sameAllDays": "Même pour tous les jours",
       "withinHours": "Doit être dans les horaires du commerce",
+      "timeOutOfRange": "L'heure de retrait doit être dans les horaires du commerce ({{start}} - {{end}})",
+      "endBeforeStart": "L'heure de fin doit être après l'heure de début",
       "days": {
         "mon": "Lundi", "tue": "Mardi", "wed": "Mercredi", "thu": "Jeudi", "fri": "Vendredi", "sat": "Samedi", "sun": "Dimanche"
       },
@@ -610,6 +693,7 @@
       "title": "Commandes",
       "incoming": "En cours",
       "completed": "Terminées",
+      "pendingPickup": "en attente de retrait",
       "markReady": "Marquer prêt",
       "markCollected": "Collecté",
       "cancelOrder": "Annuler",
@@ -617,6 +701,18 @@
       "customer": "Client",
       "noOrders": "Aucune commande",
       "noOrdersToday": "Aucune commande aujourd'hui",
+      "issues": "Problèmes",
+      "issues_one": "annulée",
+      "issues_other": "annulées",
+      "cancelledBy": "Annulé par",
+      "cancelledByBuyer": "le client",
+      "cancelledByBusiness": "le commerce",
+      "cancelledByMember": "{{name}} (commerce)",
+      "cancelReason": "Motif",
+      "filterToday": "Aujourd'hui",
+      "filterMonth": "Ce mois",
+      "filterYear": "Cette année",
+      "filterAll": "Tout",
       "noOrdersDesc": "Les commandes apparaîtront ici lorsque des clients réserveront vos paniers surprise.",
       "callCustomer": "Appeler",
       "statusReserved": "Réservé",
@@ -635,7 +731,18 @@
       "pickupConfirmed": "Retrait confirmé !",
       "orderMovedToPickedUp": "Commande déplacée vers collecté.",
       "statusReadyForPickup": "Prêt au retrait",
-      "statusPickedUp": "Collecté"
+      "statusPickedUp": "Vendus",
+      "statusPickedUp_one": "vendu",
+      "statusPickedUp_other": "vendus",
+      "statusPickedUpCard": "Vendu",
+      "paymentMethod": "Paiement",
+      "paymentCash": "Espèces",
+      "paymentCredits": "Payé en crédits",
+      "cancelOrderConfirm": "Le client sera remboursé si la commande a été payée par carte ou en crédits. Cette action est irréversible.",
+      "cancelHelpTitle": "À propos de l'annulation",
+      "cancelHelpDesc": "N'annulez qu'en cas d'imprévu : stock manquant, fermeture inattendue, etc. Le client sera notifié et remboursé s'il a payé en avance. Des annulations répétées peuvent affecter votre visibilité.",
+      "confirmCancel": "Annuler la commande",
+      "reservedAt": "Réservé le"
     },
     "profile": {
       "title": "Profil",
@@ -680,7 +787,13 @@
     },
     "team": {
       "members": "Membres",
+      "membersAtLocation": "{{location}}",
+      "membersAllLocations": "Tous les emplacements",
       "owner": "Propriétaire",
+      "removeMember": "Retirer le membre",
+      "removeMemberConfirm": "Êtes-vous sûr de vouloir retirer",
+      "removeMemberIrreversible": "Cette action est irréversible et retire immédiatement l'accès du membre à l'organisation.",
+      "confirmRemove": "Retirer",
       "locations": "Emplacements",
       "assignLocation": "Assigner à un emplacement",
       "tempPasswordLabel": "Mot de passe",
@@ -717,24 +830,62 @@
       "addMemberTitle": "Ajouter un membre",
       "addMemberBtn": "Ajouter le membre",
       "fieldName": "Nom complet",
-      "fieldNamePlaceholder": "Ex: Ahmed Ben Ali",
+      "fieldNamePlaceholder": "Nom complet du membre",
       "fieldEmail": "Email",
       "fieldEmailPlaceholder": "membre@example.com",
       "fieldPassword": "Mot de passe temporaire",
       "fieldPasswordPlaceholder": "Mot de passe",
       "fieldRole": "Rôle",
-      "roleFullAccess": "Accès complet",
-      "roleFullAccessDesc": "Peut tout gérer",
+      "roleOrgAdmin": "Admin de l'organisation",
+      "roleOrgAdminDesc": "Accès total à tous les emplacements et toutes les fonctionnalités",
+      "roleFullAccess": "Admin d'emplacement",
+      "roleFullAccessDesc": "Accès complet aux emplacements assignés",
       "roleOrdersOnly": "Commandes uniquement",
       "roleOrdersOnlyDesc": "Peut gérer les réservations uniquement",
       "roleViewOnly": "Lecture seule",
       "roleViewOnlyDesc": "Accès en lecture à tout",
       "advancedPermissions": "Permissions avancées",
-      "permAvailability": "Disponibilité",
-      "permReservations": "Commandes",
-      "permProfile": "Profil",
-      "permMenu": "Menu",
-      "permTeam": "Équipe",
+      "permAvailability": "Disponibilité & Horaires",
+      "permAvailD1": "Modifier les quantités de paniers disponibles",
+      "permAvailD2": "Mettre en pause / reprendre les ventes",
+      "permAvailD3": "Modifier les horaires de retrait",
+      "permReservations": "Commandes & Retraits",
+      "permResD1": "Voir les commandes entrantes",
+      "permResD2": "Confirmer les retraits (scan QR)",
+      "permResD3": "Consulter les statistiques de vente",
+      "permProfile": "Profil du commerce",
+      "permProfD1": "Modifier le nom, description et catégorie",
+      "permProfD2": "Changer les photos (logo et couverture)",
+      "permProfD3": "Modifier le numéro de téléphone et l'adresse",
+      "permMenu": "Paniers & Menu",
+      "permMenuD1": "Créer de nouveaux paniers",
+      "permMenuD2": "Modifier le prix et la description",
+      "permMenuD3": "Supprimer des paniers existants",
+      "permTeam": "Gestion d'équipe",
+      "permTeamD1": "Voir la liste des membres",
+      "permTeamD2": "Ajouter ou retirer des membres",
+      "permTeamD3": "Modifier les rôles et permissions",
+      "permAvailDesc": "Modifier les quantités, mettre en pause les ventes, changer les horaires de retrait",
+      "permResDesc": "Voir les commandes entrantes, confirmer les retraits (scan QR), consulter les statistiques",
+      "permProfDesc": "Modifier le nom, description, photos, téléphone et adresse",
+      "permMenuDesc": "Créer, modifier le prix/description, et supprimer des paniers",
+      "permTeamDescShort": "Voir, ajouter, retirer des membres et modifier leurs rôles",
+      "grantAdminAccess": "Accorder l'accès admin",
+      "grantAdminAccessDesc": "Donne accès à tout: gestion d'équipe, profil du commerce, et toutes les permissions",
+      "permConfirmPickup": "Confirmer les retraits",
+      "permConfirmPickupDesc": "Scanner le QR / saisir le code pour confirmer le retrait d'un client",
+      "permEditQuantities": "Modifier les quantités",
+      "permEditQuantitiesDesc": "Changer la quantité disponible des paniers, mettre en pause les ventes",
+      "permEditBasketInfo": "Modifier les paniers",
+      "permEditBasketInfoDesc": "Modifier le prix, description, horaires de retrait et instructions",
+      "permCreateDeleteBaskets": "Créer et supprimer des paniers",
+      "permCreateDeleteBasketsDesc": "Ajouter de nouveaux paniers ou supprimer des paniers existants",
+      "permViewHistory": "Historique et statistiques",
+      "permViewHistoryDesc": "Voir les stats de vente, l'historique des commandes et les graphiques de performance",
+      "permMessaging": "Messagerie clients",
+      "permMessagingDesc": "Envoyer et recevoir des messages avec les clients",
+      "permCancelOrder": "Annuler des commandes",
+      "permCancelOrderDesc": "Annuler les commandes entrantes et rembourser les clients en crédits",
       "searchAddress": "Rechercher une adresse...",
       "noPermission": "Vous n'avez pas la permission d'accéder à cette page.",
       "sendCredentials": "Envoyer les identifiants par email",
@@ -746,7 +897,35 @@
       "emailBody": "Message",
       "emailBodyPlaceholder": "Écrivez votre message...",
       "sendEmailBtn": "Envoyer",
-      "emailSent": "Email envoyé avec succès."
+      "emailSent": "Email envoyé avec succès.",
+      "emailSendFailed": "L'envoi de l'email a échoué",
+      "changeRole": "Changer le rôle",
+      "roleMember": "Membre",
+      "roleMemberDesc": "Accès limité par permissions pour l'emplacement actuel",
+      "roleLocationAdmin": "Admin de l'emplacement",
+      "roleLocationAdminDesc": "Accès complet à cet emplacement uniquement",
+      "reassignLocation": "Réassigner à un emplacement",
+      "assignAllLocations": "Tous les emplacements (admin)",
+      "editLocation": "Modifier l'emplacement",
+      "locationUpdated": "Emplacement mis à jour.",
+      "locationNamePlaceholder": "Ex : Succursale Centre-ville",
+      "locationAddressPlaceholder": "Adresse complète",
+      "fieldPhone": "Téléphone",
+      "fieldCategory": "Catégorie",
+      "bagDescription": "Description du sac",
+      "bagDescriptionPlaceholder": "Ce que le sac contient généralement",
+      "irreversible": "Cette action est irréversible.",
+      "removeMemberFailed": "Échec du retrait du membre",
+      "removeMemberOnlyMembership": "Leur compte business sera entièrement supprimé car ils ne font partie d'aucun autre emplacement.",
+      "removeMemberOtherLocations": "Ils restent membres de : {{locations}}. Seule cette assignation sera supprimée.",
+      "otherLocations": "d'autres emplacements",
+      "category": {
+        "bakery": "Boulangerie",
+        "restaurant": "Restaurant",
+        "grocery": "Épicerie",
+        "cafe": "Café",
+        "supermarket": "Supermarché"
+      }
     },
     "createBasket": {
       "title": "Nouveau Panier",
@@ -803,7 +982,7 @@
     "scan": {
       "title": "Vérifier le retrait",
       "enterCode": "Entrez le code de retrait",
-      "codePlaceholder": "ABC123",
+      "codePlaceholder": "ABCD1234",
       "verify": "Vérifier le code",
       "codeTooShort": "Le code doit contenir au moins 4 caractères.",
       "codeNotFound": "Aucune commande trouvée pour ce code.",
@@ -834,7 +1013,10 @@
       "paused": "Restaurant en pause",
       "active": "Restaurant actif",
       "save": "Enregistrer",
-      "saved": "Disponibilité mise à jour."
+      "saved": "Disponibilité mise à jour.",
+      "conflictTitle": "Paniers hors créneau",
+      "conflictMessage": "{{count}} panier(s) ont des horaires en dehors du nouveau créneau du commerce ({{start}}-{{end}}). Leurs horaires seront ajustés pour rester dans ce créneau. Continuer ?",
+      "adjustAndSave": "Ajuster et enregistrer"
     },
     "menuItems": {
       "title": "Articles du menu",
@@ -871,6 +1053,7 @@
     "restaurantPaused": "Ce restaurant est actuellement indisponible.",
     "noBaskets": "Aucun panier disponible pour le moment.",
     "alreadyReserved": "Vous avez d\u00e9j\u00e0 une r\u00e9servation pour aujourd'hui.",
+    "maxQuantity": "Maximum 20 paniers par commande.",
     "pickupExpired": "Le cr\u00e9neau de retrait a expir\u00e9.",
     "reservationNotFound": "R\u00e9servation non trouv\u00e9e.",
     "unauthorized": "Veuillez vous connecter pour continuer.",
@@ -908,6 +1091,12 @@
     "suggestionsDesc": "Notifier des nouveaux lieux ou recommandations",
     "promotions": "Promotions",
     "promotionsDesc": "Notifier des offres sp\u00e9ciales",
+    "newOrders": "Nouvelles commandes",
+    "newOrdersDesc": "Notifier quand un client r\u00e9serve un panier",
+    "basketPickedUp": "Paniers r\u00e9cup\u00e9r\u00e9s",
+    "basketPickedUpDesc": "Notifier quand un panier est r\u00e9cup\u00e9r\u00e9",
+    "cancellations": "Annulations",
+    "cancellationsDesc": "Notifier quand une commande est annul\u00e9e",
     "permissions": "Autorisations",
     "camera": "Cam\u00e9ra",
     "location": "Localisation",
@@ -950,6 +1139,10 @@
     "lastOrder": "Dernière commande",
     "expiresLabel": "Expire dans",
     "expiresIn": "Expire dans {{days}} jour(s)",
+    "expires": "Expire",
+    "expiresOn": "{{date}}",
+    "expiresInDays_one": "dans {{count}} jour",
+    "expiresInDays_other": "dans {{count}} jours",
     "expiresSoon": "Expire bientôt !",
     "description": "Votre série compte les semaines consécutives avec au moins une commande. Elle se réinitialise après 7 jours d'inactivité.",
     "daysUnit": "jours"
@@ -1019,6 +1212,9 @@
   "walkthrough": {
     "next": "Suivant",
     "done": "C'est parti !",
+    "finishDemo": "OK, terminer la démo",
+    "exitDemo": "Quitter la démo",
+    "tapToContinue": "Appuyez sur le bouton entouré pour continuer.",
     "discover": {
       "title": "Explorer",
       "desc": "Parcourez les paniers surprise disponibles autour de vous. Filtrez par catégorie, distance ou prix."
@@ -1036,6 +1232,10 @@
       "desc": "Votre niveau, vos badges, vos statistiques d'impact et vos paramètres. Suivez votre progression !"
     },
     "biz": {
+      "addLocation": {
+        "title": "Ajoutez votre premier emplacement",
+        "desc": "Avant de cr\u00e9er des paniers ou de recevoir des commandes, ajoutez l'adresse de votre commerce. Appuyez sur le bouton vert pour commencer."
+      },
       "dashboard": {
         "title": "Tableau de bord",
         "desc": "Vue d'ensemble de vos ventes, commandes du jour et statistiques. Tout en un coup d'\u0153il."
@@ -1046,15 +1246,15 @@
       },
       "basketCreate": {
         "title": "Cr\u00e9er un panier",
-        "desc": "Appuyez sur le bouton + pour cr\u00e9er un nouveau panier surprise. D\u00e9finissez le nom, le prix, la quantit\u00e9 et les horaires de retrait."
+        "desc": "Appuyez sur le bouton + Ajouter un panier pour ouvrir le formulaire. Vous y d\u00e9finirez le nom, la description, le prix original, le prix r\u00e9duit, la quantit\u00e9 et les horaires de retrait, puis vous appuierez sur Enregistrer. La visite reprendra quand vous reviendrez."
       },
       "orders": {
         "title": "Commandes",
-        "desc": "Visualisez les r\u00e9servations entrantes, v\u00e9rifiez les codes de retrait et confirmez les collectes."
+        "desc": "Voici la page des commandes \u2014 pour le moment elle est vide. Appuyez sur Suivant pour voir ce qui se passe quand une commande arrive."
       },
       "pickup": {
         "title": "Confirmer un retrait",
-        "desc": "Quand un client arrive, appuyez sur Confirmer le retrait et entrez le code \u00e0 4 chiffres. Vous pouvez aussi scanner son QR code."
+        "desc": "Deux fa\u00e7ons de valider un retrait : 1) bouton Confirmer sur la commande — le client dicte son code \u00e0 4 chiffres et vous le saisissez. 2) Ce bouton QR (entour\u00e9) — ouvre le scanner pour lire directement le code QR du client. Essayez-le maintenant."
       },
       "profile": {
         "title": "Profil & param\u00e8tres",
@@ -1063,13 +1263,170 @@
       "team": {
         "title": "Gestion d'\u00e9quipe",
         "desc": "Invitez des membres, attribuez des r\u00f4les (admin, membre) et assignez-les \u00e0 des emplacements sp\u00e9cifiques."
+      },
+      "settingsDemo": {
+        "title": "Relancer la visite",
+        "desc": "Vous pouvez revenir ici \u00e0 tout moment et appuyer sur \u00ab Mode d\u00e9mo \u00bb pour revoir cette visite guid\u00e9e.",
+        "hint": "Rep\u00e9rez la ligne Mode d\u00e9mo surlign\u00e9e."
+      },
+      "demoBasketName": "Panier Surprise (d\u00e9mo)",
+      "demoBasketDesc": "D\u00e9monstration \u2014 modifications sans effet sur vos paniers r\u00e9els.",
+      "demoOrderBasket": "Panier Surprise",
+      "demoOrderCustomer": "Sami (d\u00e9mo)",
+      "demoNotifTitle": "Nouvelle r\u00e9servation",
+      "demoNotifMessage": "Sami a r\u00e9serv\u00e9 2 Paniers Surprise.",
+      "formPickup": {
+        "title": "Heure de retrait",
+        "desc": "Le cr\u00e9neau pendant lequel vos clients viendront r\u00e9cup\u00e9rer leur panier. Cochez la case uniquement si ce panier a un horaire diff\u00e9rent de celui de votre commerce \u2014 sinon laissez d\u00e9coch\u00e9 et les horaires de votre profil seront utilis\u00e9s (vous les verrez plus tard)."
+      },
+      "formReinit": {
+        "title": "R\u00e9initialisation quotidienne",
+        "desc": "Combien de paniers vous remettez en stock chaque jour."
+      },
+      "formConfirm": {
+        "title": "Confirmer la cr\u00e9ation",
+        "desc": "Appuyez ici pour publier votre panier. (En d\u00e9mo, rien ne sera envoy\u00e9.)"
+      },
+      "demoBasket": {
+        "title": "Votre panier de d\u00e9mo",
+        "desc": "Voici \u00e0 quoi ressemble un panier publi\u00e9 dans la liste."
+      },
+      "basketQty": {
+        "title": "Modifier la quantit\u00e9",
+        "desc": "Appuyez sur la carte du panier entour\u00e9e pour ouvrir le formulaire de disponibilit\u00e9. Vous pourrez y ajuster la quantit\u00e9 du jour avec les boutons +/-, sans recr\u00e9er le panier."
+      },
+      "modalMinus": {
+        "title": "Diminuer la quantit\u00e9",
+        "desc": "Appuyez sur \u2212 pour retirer un panier de la quantit\u00e9 du jour."
+      },
+      "modalPlus": {
+        "title": "Augmenter la quantit\u00e9",
+        "desc": "Appuyez sur + pour ajouter un panier \u00e0 la quantit\u00e9 du jour."
+      },
+      "modalSave": {
+        "title": "Enregistrer",
+        "desc": "Appuyez sur \u00ab Enregistrer \u00bb pour valider la nouvelle disponibilit\u00e9. (En d\u00e9mo, rien n'est envoy\u00e9.)"
+      },
+      "basketCardQty": {
+        "title": "Quantit\u00e9 mise \u00e0 jour",
+        "desc": "La nouvelle quantit\u00e9 est visible sur la carte du panier. Appuyez sur \u00ab Suivant \u00bb pour continuer."
+      },
+      "orderArrives": {
+        "title": "Une commande arrive !",
+        "desc": "Une nouvelle commande vient d'arriver."
+      },
+      "orderCard": {
+        "title": "Une commande !",
+        "desc": "Appuyez sur la carte pour voir tous les d\u00e9tails de la commande."
+      },
+      "orderChat": {
+        "title": "Contacter le client",
+        "desc": "Appuyez sur l'icône de chat pour ouvrir la conversation avec le client."
+      },
+      "chatBack": {
+        "title": "Retour à la commande",
+        "desc": "Voici la conversation avec le client. Appuyez sur la flèche de retour en haut à gauche pour revenir aux commandes et continuer la démo."
+      },
+      "orderConfirm": {
+        "title": "Confirmer le retrait",
+        "desc": "Appuyez sur le bouton entour\u00e9 pour ouvrir la fen\u00eatre de validation du retrait."
+      },
+      "verifyInput": {
+        "title": "Entrer le code de retrait",
+        "desc": "Le client vous montre son code de retrait. Tapez-le ici, par exemple DEMO1, puis appuyez sur \u00ab Confirmer le code \u00bb pour valider la commande \u2014 ou appuyez sur Suivant pour continuer la d\u00e9mo.",
+        "short": "Tapez DEMO1"
+      },
+      "notifPopup": {
+        "desc": "Une nouvelle commande vient d'arriver. Appuyez sur \u00ab Voir la commande \u00bb pour la consulter."
+      },
+      "qrFab": {
+        "title": "Raccourci scan QR",
+        "desc": "Pas envie de parcourir la liste ? Appuyez sur ce bouton (en bas à droite) pour ouvrir directement le scanner."
+      },
+      "scanQrBack": {
+        "title": "Scanner le QR du client",
+        "desc": "Voici l'écran de scan. En vrai, vous scanneriez le code QR affiché sur le téléphone du client. Appuyez sur le bouton « × » entouré (en haut à gauche) pour revenir aux commandes et continuer la démo."
+      },
+      "scanManual": {
+        "title": "Saisir le code \u00e0 la main",
+        "desc": "Pas de QR ? Le bouton entour\u00e9 (en haut \u00e0 droite) bascule vers la saisie manuelle du code de retrait."
+      },
+      "profileTeam": {
+        "title": "Gestion d'\u00e9quipe",
+        "desc": "Appuyez sur la carte entour\u00e9e pour ouvrir la gestion d'\u00e9quipe."
+      },
+      "teamOrg": {
+        "title": "Votre organisation",
+        "desc": "Voici un aper\u00e7u de votre organisation : nombre de membres et de points de vente. C'est le p\u00e9rim\u00e8tre global que vous g\u00e9rez ici."
+      },
+      "teamMembers": {
+        "title": "Vos membres",
+        "desc": "Tous les membres de l'\u00e9quipe apparaissent ici. Vous pouvez en inviter de nouveaux, ajuster leurs r\u00f4les et permissions, ou les retirer."
+      },
+      "teamLocations": {
+        "title": "Vos emplacements",
+        "desc": "Tous vos points de vente apparaissent ici. Vous pouvez en ajouter de nouveaux, les modifier ou les retirer."
+      },
+      "teamAddLocation": {
+        "title": "Ajouter un emplacement",
+        "desc": "Appuyez sur le bouton \u00ab + \u00bb entour\u00e9 pour ajouter un nouveau point de vente."
+      },
+      "teamAddMember": {
+        "title": "Ajouter un membre",
+        "desc": "Appuyez sur le bouton \u00ab + \u00bb entour\u00e9 pour inviter un nouveau membre \u00e0 l'\u00e9quipe."
+      },
+      "profileInfo": {
+        "title": "Infos commerce",
+        "desc": "Modifiez votre adresse, vos horaires et vos coordonn\u00e9es."
+      }
+    },
+    "customer": {
+      "firstCard": {
+        "title": "Un panier disponible",
+        "desc": "Appuyez sur la carte pour voir le d\u00e9tail et r\u00e9server."
+      },
+      "openMap": {
+        "title": "Ouvrir la carte",
+        "desc": "Appuyez sur ce bouton pour voir tous les paniers autour de vous sur une carte."
+      },
+      "heart": {
+        "title": "Mettre en favori",
+        "desc": "Retrouvez vos commerces pr\u00e9f\u00e9r\u00e9s dans l'onglet Favoris."
+      },
+      "wallet": {
+        "title": "Vos cr\u00e9dits",
+        "desc": "Utilisables comme moyen de paiement \u00e0 tout moment."
+      },
+      "recharge": {
+        "title": "Recharger",
+        "desc": "Ajoutez des cr\u00e9dits ou utilisez un code cadeau."
+      },
+      "notif": {
+        "title": "Notifications",
+        "desc": "Suivez vos commandes et r\u00e9ductions en temps r\u00e9el."
+      },
+      "radius": {
+        "title": "Rayon de recherche",
+        "desc": "Ajustez la distance maximale autour de votre adresse."
+      },
+      "category": {
+        "title": "Filtres par cat\u00e9gorie",
+        "desc": "Affinez par type de commerce (restaurant, boulangerie\u2026)."
+      },
+      "cash": {
+        "title": "Paiement en esp\u00e8ces",
+        "desc": "Lisez la note avant de confirmer votre r\u00e9servation."
+      },
+      "pickup": {
+        "title": "Code de retrait",
+        "desc": "Pr\u00e9sentez ce code au commer\u00e7ant pour r\u00e9cup\u00e9rer votre panier."
       }
     }
   },
   "legal": {
-    "privacyContent": "POLITIQUE DE CONFIDENTIALITÉ\n\nDate d'entrée en vigueur : 2 avril 2026\n\nBarakeat (\"nous\", \"notre\") exploite l'application mobile Barakeat Surprise Baskets. Cette politique de confidentialité explique comment nous collectons, utilisons, divulguons et protégeons vos informations.\n\n1. INFORMATIONS COLLECTÉES\n\nInformations personnelles : Lors de la création de votre compte, nous collectons votre nom, adresse email, numéro de téléphone et mot de passe (stocké de manière sécurisée). Si vous vous connectez via Google ou Apple, nous recevons votre nom et email de ces services.\n\nDonnées de localisation : Avec votre permission, nous collectons la localisation de votre appareil pour afficher les commerçants et paniers à proximité. Nous accédons à la localisation uniquement lorsque l'application est en cours d'utilisation.\n\nDonnées d'utilisation : Nous collectons des informations sur vos interactions avec l'application, y compris les commandes passées, avis soumis et préférences sélectionnées.\n\n2. UTILISATION DES INFORMATIONS\n\n- Fournir et maintenir notre service\n- Traiter vos réservations et commandes\n- Vous envoyer des rappels de collecte et confirmations de commande\n- Personnaliser votre expérience\n- Calculer les statistiques d'impact environnemental\n- Opérer les fonctionnalités de gamification\n\n3. PARTAGE DES DONNÉES\n\nNous partageons des informations limitées avec :\n- Les partenaires restaurateurs : Votre nom et code de collecte lors d'une réservation\n- Les fournisseurs de services : Hébergement (Railway), notifications push (Expo)\n\nNous ne vendons PAS vos données personnelles.\n\n4. VOS DROITS\n\nVous avez le droit de :\n- Accéder à vos données personnelles\n- Corriger les données inexactes\n- Supprimer votre compte et les données associées\n- Retirer le consentement pour le suivi de localisation\n\n5. CONTACT\n\nPour les questions de confidentialité : contactbarakeat@gmail.com",
-    "termsContent": "CONDITIONS GÉNÉRALES D'UTILISATION\n\nDate d'entrée en vigueur : 2 avril 2026\n\nBienvenue sur Barakeat Surprise Baskets. En utilisant notre application, vous acceptez ces conditions.\n\n1. ACCEPTATION DES CONDITIONS\n\nEn accédant ou en utilisant l'application Barakeat, vous acceptez d'être lié par ces Conditions Générales et notre Politique de Confidentialité.\n\n2. INSCRIPTION\n\nVous devez fournir des informations exactes lors de la création de votre compte. Vous êtes responsable de la confidentialité de vos identifiants. Vous devez avoir au moins 13 ans pour utiliser ce service.\n\n3. DESCRIPTION DU SERVICE\n\nBarakeat connecte les clients avec des commerçants locaux proposant des paniers surprise de nourriture excédentaire à prix réduits. Nous agissons comme une plateforme intermédiaire.\n\n4. RÉSERVATIONS ET PAIEMENTS\n\nLes réservations sont soumises à disponibilité. Le paiement se fait directement au commerçant lors de la collecte. La confirmation de réservation fournit un code de collecte.\n\n5. POLITIQUE DE COLLECTE\n\nVous devez récupérer votre panier pendant le créneau de collecte spécifié. Les paniers non récupérés peuvent être perdus sans remboursement.\n\n6. PANIERS SURPRISE\n\nLe contenu des paniers varie quotidiennement. Les articles spécifiques ne sont pas garantis. Si vous avez des allergies alimentaires, informez directement le commerçant.\n\n7. ANNULATION\n\nLes annulations avant le début du créneau de collecte sont gratuites. Les annulations tardives peuvent affecter votre compte.\n\n8. LIMITATION DE RESPONSABILITÉ\n\nBarakeat est une plateforme connectant acheteurs et vendeurs. Nous ne sommes pas responsables de la qualité ou de la sécurité des aliments.\n\n9. LOI APPLICABLE\n\nCes conditions sont régies par les lois de la Tunisie.\n\n10. CONTACT\n\nQuestions : contactbarakeat@gmail.com",
-    "cookiesContent": "POLITIQUE DE COOKIES ET STOCKAGE LOCAL\n\nDate d'entrée en vigueur : 2 avril 2026\n\n1. CE QUE NOUS UTILISONS\n\nEn tant qu'application mobile, Barakeat n'utilise pas de cookies de navigateur. Nous utilisons les mécanismes de stockage local suivants :\n\n- Stockage sécurisé : Votre jeton d'authentification est stocké en utilisant le stockage sécurisé de votre appareil.\n- AsyncStorage : Nous stockons vos préférences localement (langue, notifications, adresse sélectionnée).\n\n2. OBJECTIF\n\nCes données locales sont utilisées exclusivement pour :\n- Vous garder connecté entre les sessions\n- Mémoriser vos paramètres\n- Fournir une expérience personnalisée\n\n3. VOTRE CONTRÔLE\n\nVous pouvez effacer toutes les données locales en vous déconnectant ou en désinstallant l'application.\n\n4. CONTACT\n\nQuestions : contactbarakeat@gmail.com"
+    "privacyContent": "POLITIQUE DE CONFIDENTIALITÉ\n\nDate d'entrée en vigueur : 2 avril 2026\n\nBarakeat (\"nous\", \"notre\") exploite l'application mobile Barakeat Surprise Baskets. Cette politique de confidentialité explique comment nous collectons, utilisons, divulguons et protégeons vos informations.\n\n1. INFORMATIONS COLLECTÉES\n\nInformations personnelles : Lors de la création de votre compte, nous collectons votre nom, adresse email, numéro de téléphone et mot de passe (stocké de manière sécurisée). Si vous vous connectez via Google ou Apple, nous recevons votre nom et email de ces services.\n\nDonnées de localisation : Avec votre permission, nous collectons la localisation de votre appareil pour afficher les commerçants et paniers à proximité. Nous accédons à la localisation uniquement lorsque l'application est en cours d'utilisation.\n\nDonnées d'utilisation : Nous collectons des informations sur vos interactions avec l'application, y compris les commandes passées, avis soumis et préférences sélectionnées.\n\nHistorique des commandes : Nous conservons un historique complet de vos réservations, annulations et collectes.\n\nCrédits et portefeuille : Votre solde de crédits Barakeat, les transactions et codes promotionnels utilisés.\n\nPréférences alimentaires : Vos préférences de nourriture (régime, allergies, goûts) si vous les renseignez.\n\nAdresses enregistrées : Les adresses que vous sauvegardez (domicile, travail, etc.) avec leurs coordonnées GPS.\n\n2. UTILISATION DES INFORMATIONS\n\n- Fournir et maintenir notre service\n- Traiter vos réservations et commandes\n- Vous envoyer des rappels de collecte et confirmations de commande\n- Personnaliser votre expérience\n- Calculer les statistiques d'impact environnemental\n- Opérer les fonctionnalités de gamification\n\n3. PARTAGE DES DONNÉES\n\nNous partageons des informations limitées avec :\n- Les partenaires restaurateurs : Votre nom et code de collecte lors d'une réservation\n- Les fournisseurs de services : Hébergement (Railway), notifications push (Expo)\n\nNous ne vendons PAS vos données personnelles.\n\n4. VOS DROITS\n\nVous avez le droit de :\n- Accéder à vos données personnelles\n- Corriger les données inexactes\n- Supprimer votre compte et les données associées\n- Retirer le consentement pour le suivi de localisation\n\n5. CONTACT\n\nPour les questions de confidentialité : contact@barakeat.tn",
+    "termsContent": "CONDITIONS GÉNÉRALES D'UTILISATION\n\nDate d'entrée en vigueur : 2 avril 2026\n\nBienvenue sur Barakeat Surprise Baskets. En utilisant notre application, vous acceptez ces conditions.\n\n1. ACCEPTATION DES CONDITIONS\n\nEn accédant ou en utilisant l'application Barakeat, vous acceptez d'être lié par ces Conditions Générales et notre Politique de Confidentialité.\n\n2. INSCRIPTION\n\nVous devez fournir des informations exactes lors de la création de votre compte. Vous êtes responsable de la confidentialité de vos identifiants. Vous devez avoir au moins 13 ans pour utiliser ce service.\n\n3. DESCRIPTION DU SERVICE\n\nBarakeat connecte les clients avec des commerçants locaux proposant des paniers surprise de nourriture excédentaire à prix réduits. Nous agissons comme une plateforme intermédiaire.\n\n4. RÉSERVATIONS ET PAIEMENTS\n\nLes réservations sont soumises à disponibilité. Le paiement se fait directement au commerçant lors de la collecte. La confirmation de réservation fournit un code de collecte.\n\n5. POLITIQUE DE COLLECTE\n\nVous devez récupérer votre panier pendant le créneau de collecte spécifié. Les paniers non récupérés peuvent être perdus sans remboursement.\n\n6. PANIERS SURPRISE\n\nLe contenu des paniers varie quotidiennement. Les articles spécifiques ne sont pas garantis. Si vous avez des allergies alimentaires, informez directement le commerçant.\n\n7. ANNULATION\n\nLes annulations avant le début du créneau de collecte sont gratuites. Les annulations tardives peuvent affecter votre compte.\n\n8. LIMITATION DE RESPONSABILITÉ\n\nBarakeat est une plateforme connectant acheteurs et vendeurs. Nous ne sommes pas responsables de la qualité ou de la sécurité des aliments.\n\n9. LOI APPLICABLE\n\nCes conditions sont régies par les lois de la Tunisie.\n\n10. CONTACT\n\nQuestions : contact@barakeat.tn",
+    "cookiesContent": "POLITIQUE DE COOKIES ET STOCKAGE LOCAL\n\nDate d'entrée en vigueur : 2 avril 2026\n\n1. CE QUE NOUS UTILISONS\n\nEn tant qu'application mobile, Barakeat n'utilise pas de cookies de navigateur. Nous utilisons les mécanismes de stockage local suivants :\n\n- Stockage sécurisé : Votre jeton d'authentification est stocké en utilisant le stockage sécurisé de votre appareil.\n- AsyncStorage : Nous stockons vos préférences localement (langue, notifications, adresse sélectionnée).\n\n2. OBJECTIF\n\nCes données locales sont utilisées exclusivement pour :\n- Vous garder connecté entre les sessions\n- Mémoriser vos paramètres\n- Fournir une expérience personnalisée\n\n3. VOTRE CONTRÔLE\n\nVous pouvez effacer toutes les données locales en vous déconnectant ou en désinstallant l'application.\n\n4. CONTACT\n\nQuestions : contact@barakeat.tn"
   },
   "offline": {
     "title": "Pas de connexion Internet",
@@ -1096,16 +1453,10 @@
     "messageLabel": "Message",
     "messagePlaceholder": "Écrivez un message au client..."
   },
-  "notif_title_new_message": "Nouveau message",
-  "notif_message_new_message": "{{senderName}} vous a envoyé un message.",
-  "notif_title_new_reply": "Nouvelle réponse",
-  "notif_message_new_reply": "{{senderName}} a répondu à votre message.",
-  "notif_title_favorite_available": "Vos favoris disponibles",
-  "notif_message_favorite_available": "Offrez-vous un panier de {{location}} !",
   "wallet": {
     "title": "Crédits Barakeat",
     "credits": "Crédits Barakeat",
-    "earnCreditsShort": "Gagnez et utilisez des crédits",
+    "earnCreditsShort": "Gagnez et utilisez vos crédits Barakeat",
     "balance": "Solde",
     "history": "Historique",
     "noTransactions": "Aucune transaction.",
@@ -1114,9 +1465,21 @@
     "refund": "Remboursement",
     "payment": "Paiement",
     "adminCredit": "Crédit",
-    "earnCredits": "Comment gagner des crédits",
+    "earnCredits": "Comment gagner des crédits Barakeat",
     "earnDesc": "Gagnez des crédits en parrainant des amis, en maintenant des séries de commandes, et plus encore !",
-    "payWithCredits": "Payer avec crédits Barakeat",
-    "insufficientBalance": "Solde insuffisant"
+    "payWithCredits": "Payer avec Crédits Barakeat",
+    "insufficientBalance": "Solde insuffisant",
+    "giftCode": "Code Cadeau",
+    "enterGiftCode": "ENTREZ VOTRE CODE",
+    "applyCode": "Appliquer",
+    "codeRedeemed": "+{{amount}} TND ajoutés !",
+    "invalidCode": "Code invalide",
+    "scanGiftCode": "Scanner un code QR",
+    "scanGiftCodeTitle": "Scanner le code",
+    "scanProcessing": "Traitement…",
+    "scanHint": "Pointez la caméra vers le QR code du bon.",
+    "cameraPermTitle": "Accès caméra requis",
+    "cameraPermDesc": "Autorisez la caméra pour scanner les QR codes des bons.",
+    "allowCamera": "Autoriser la caméra"
   }
 }

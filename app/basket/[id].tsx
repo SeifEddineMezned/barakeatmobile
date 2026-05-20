@@ -1,11 +1,12 @@
 import React, { useState, useRef } from 'react';
-import { View, Text, StyleSheet, ScrollView, Image, TouchableOpacity, Linking, Modal, TextInput, Animated } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Image, TouchableOpacity, Linking, Modal, TextInput, Animated, Alert, useWindowDimensions } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import { useQuery } from '@tanstack/react-query';
 import { isPickupExpiredInTz } from '@/src/utils/timezone';
 import { MapPin, Clock, Navigation, ChevronLeft, Star, ShoppingBag, RefreshCw, Flag, X, Tag, Package, Bookmark, AlertTriangle, Camera } from 'lucide-react-native';
 import { useFavoritesStore } from '@/src/stores/favoritesStore';
+import { useAuthStore } from '@/src/stores/authStore';
 import * as ImagePicker from 'expo-image-picker';
 import { useCustomAlert } from '@/src/components/CustomAlert';
 import { useTheme } from '@/src/theme/ThemeProvider';
@@ -60,7 +61,8 @@ const reviewStyles = StyleSheet.create({
 });
 
 export default function BasketDetailsScreen() {
-  const { id } = useLocalSearchParams();
+  const { id, businessPreview } = useLocalSearchParams<{ id: string; businessPreview?: string }>();
+  const isBizPreview = businessPreview === 'true';
   const { t } = useTranslation();
   const theme = useTheme();
   const router = useRouter();
@@ -75,6 +77,20 @@ export default function BasketDetailsScreen() {
   const [reportDetails, setReportDetails] = useState('');
   const [reportImage, setReportImage] = useState<string | null>(null);
   const [reportLoading, setReportLoading] = useState(false);
+
+  // Business preview: check if member can edit basket info
+  const bizCtxQuery = useQuery({
+    queryKey: ['my-context'],
+    queryFn: async () => {
+      const { fetchMyContext } = await import('@/src/services/teams');
+      return fetchMyContext();
+    },
+    enabled: isBizPreview,
+    staleTime: 10_000,
+  });
+  const bizRole = bizCtxQuery.data?.role ?? 'member';
+  const bizPerms = bizCtxQuery.data?.permissions ?? {};
+  const canEditBasketFromPreview = isBizPreview && (bizRole === 'owner' || bizRole === 'admin' || (bizPerms as any).edit_basket_info === 'write' || (bizPerms as any).edit_basket_info === true);
 
   const scrollY = useRef(new Animated.Value(0)).current;
 
@@ -109,6 +125,8 @@ export default function BasketDetailsScreen() {
     queryKey: ['basket', id],
     queryFn: () => fetchBasketById(String(id)),
     enabled: !!id,
+    staleTime: 0,
+    refetchOnMount: 'always',
     retry: 2,
   });
 
@@ -160,6 +178,10 @@ export default function BasketDetailsScreen() {
   // Must be called before early returns (Rules of Hooks)
   const { isBasketTypeStarred, toggleStarredBasketType } = useFavoritesStore();
   const isStarred = isBasketTypeStarred(String(id));
+  const authUser = useAuthStore((s) => s.user);
+  const isBusiness = authUser?.role === 'business';
+  const { width: screenWidth } = useWindowDimensions();
+  const isWideScreen = screenWidth > 600;
 
   if (restaurantQuery.isLoading) {
     return (
@@ -256,6 +278,7 @@ export default function BasketDetailsScreen() {
           <ChevronLeft size={22} color={theme.colors.textPrimary} />
         </TouchableOpacity>
 
+        {!isBusiness && (
         <View style={{ position: 'absolute', top: 52, right: 16, flexDirection: 'row', gap: 8 }}>
           <TouchableOpacity
             onPress={() => toggleStarredBasketType(String(id))}
@@ -263,14 +286,14 @@ export default function BasketDetailsScreen() {
           >
             <Bookmark size={18} color={isStarred ? '#e3ff5c' : '#fff'} fill={isStarred ? '#e3ff5c' : 'transparent'} />
           </TouchableOpacity>
-          {/* Report button removed per CEO request */}
         </View>
+        )}
 
         {/* Quantity / category badges — bottom-right of photo, fade out with image */}
         <Animated.View style={{ position: 'absolute', bottom: 12, right: theme.spacing.lg, flexDirection: 'row', gap: 6, opacity: heroImageOpacity }}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: '#e3ff5c', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4 }}>
-            <ShoppingBag size={12} color="#114b3c" />
-            <Text style={{ color: '#114b3c', fontSize: 11, fontWeight: '700', marginLeft: 4 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: basket.quantityLeft <= 0 ? theme.colors.error : '#e3ff5c', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4 }}>
+            <ShoppingBag size={12} color={basket.quantityLeft <= 0 ? '#fff' : '#114b3c'} />
+            <Text style={{ color: basket.quantityLeft <= 0 ? '#fff' : '#114b3c', fontSize: 11, fontWeight: '700', marginLeft: 4 }}>
               {basket.quantityLeft}
             </Text>
           </View>
@@ -330,9 +353,9 @@ export default function BasketDetailsScreen() {
           </Text>
         </View>
         <View style={{ flexDirection: 'row', gap: 4 }}>
-          <View style={{ backgroundColor: '#e3ff5c', borderRadius: 6, paddingHorizontal: 7, paddingVertical: 3, flexDirection: 'row', alignItems: 'center' }}>
-            <ShoppingBag size={10} color="#114b3c" />
-            <Text style={{ color: '#114b3c', fontSize: 10, fontWeight: '700', marginLeft: 3 }}>{basket.quantityLeft >= 10 ? '9+' : basket.quantityLeft}</Text>
+          <View style={{ backgroundColor: basket.quantityLeft <= 0 ? theme.colors.error : '#e3ff5c', borderRadius: 6, paddingHorizontal: 7, paddingVertical: 3, flexDirection: 'row', alignItems: 'center' }}>
+            <ShoppingBag size={10} color={basket.quantityLeft <= 0 ? '#fff' : '#114b3c'} />
+            <Text style={{ color: basket.quantityLeft <= 0 ? '#fff' : '#114b3c', fontSize: 10, fontWeight: '700', marginLeft: 3 }}>{basket.quantityLeft >= 10 ? '9+' : basket.quantityLeft}</Text>
           </View>
           {categoryLabel ? (
             <View style={{ backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 6, paddingHorizontal: 7, paddingVertical: 3 }}>
@@ -576,52 +599,62 @@ export default function BasketDetailsScreen() {
         </View>
       </Animated.ScrollView>
 
-      {/* Sticky bottom bar: price + reserve button */}
-      <View
-        style={{
-          position: 'absolute',
-          bottom: 0,
-          left: 0,
-          right: 0,
-          backgroundColor: theme.colors.surface,
-          paddingHorizontal: theme.spacing.lg,
-          paddingVertical: theme.spacing.lg,
-          paddingBottom: theme.spacing.xl,
-          borderTopWidth: 1,
-          borderTopColor: theme.colors.divider,
-          ...theme.shadows.shadowLg,
-          flexDirection: 'row',
-          alignItems: 'center',
-          gap: 75,
-          justifyContent: 'center',
-        }}
-      >
-        <View>
-          {basket.originalPrice > 0 && basket.originalPrice > basket.discountedPrice && (
-            <Text style={{ color: theme.colors.muted, ...theme.typography.caption, textDecorationLine: 'line-through' }}>
-              {basket.originalPrice} TND
+      {/* Sticky bottom bar */}
+      {isBizPreview ? (
+        // Business preview — price + edit button
+        <View style={{ position: 'absolute', bottom: 0, left: 0, right: 0, backgroundColor: theme.colors.surface, paddingHorizontal: isWideScreen ? 40 : theme.spacing.lg, paddingVertical: theme.spacing.lg, paddingBottom: theme.spacing.xl, borderTopWidth: 1, borderTopColor: theme.colors.divider, ...theme.shadows.shadowLg, flexDirection: 'row', alignItems: 'center', justifyContent: isWideScreen ? 'space-between' : 'center', gap: isWideScreen ? 0 : 75 }}>
+          <View>
+            {basket.originalPrice > 0 && basket.originalPrice > basket.discountedPrice && (
+              <Text style={{ color: theme.colors.muted, ...theme.typography.caption, textDecorationLine: 'line-through' }}>
+                {basket.originalPrice} TND
+              </Text>
+            )}
+            <Text style={{ color: theme.colors.primary, fontSize: 22, fontWeight: '800', fontFamily: 'Poppins_700Bold' }}>
+              {basket.discountedPrice} TND
             </Text>
-          )}
-          <Text style={{ color: theme.colors.primary, fontSize: 22, fontWeight: '800', fontFamily: 'Poppins_700Bold' }}>
-            {basket.discountedPrice} TND
-          </Text>
+          </View>
+          <View style={{ width: isWideScreen ? 260 : 180 }}>
+            <PrimaryCTAButton
+              onPress={() => router.push(`/business/create-basket?editId=${id}` as never)}
+              compact
+              borderRadius={16}
+              title={t(
+                isWideScreen ? 'business.baskets.editBasket' : 'business.baskets.editBasketShort',
+                { defaultValue: isWideScreen ? 'Modifier le panier' : 'Modifier' },
+              )}
+            />
+          </View>
         </View>
-        <View style={{ width: 180 }}>
-          <PrimaryCTAButton
-            onPress={handleReserve}
-            compact
-            borderRadius={16}
-            title={
-              basket.quantityLeft <= 0
-                ? t('basket.soldOut')
-                : isPickupExpiredInTz(basket.pickupWindow?.end)
-                ? t('orders.status.expired')
-                : t('basket.reserve')
-            }
-            disabled={basket.quantityLeft <= 0 || isPickupExpiredInTz(basket.pickupWindow?.end)}
-          />
+      ) : (
+        // Customer view — price + reserve button
+        <View style={{ position: 'absolute', bottom: 0, left: 0, right: 0, backgroundColor: theme.colors.surface, paddingHorizontal: isWideScreen ? 40 : theme.spacing.lg, paddingVertical: theme.spacing.lg, paddingBottom: theme.spacing.xl, borderTopWidth: 1, borderTopColor: theme.colors.divider, ...theme.shadows.shadowLg, flexDirection: 'row', alignItems: 'center', justifyContent: isWideScreen ? 'space-between' : 'center', gap: isWideScreen ? 0 : 75 }}>
+          <View>
+            {basket.originalPrice > 0 && basket.originalPrice > basket.discountedPrice && (
+              <Text style={{ color: theme.colors.muted, ...theme.typography.caption, textDecorationLine: 'line-through' }}>
+                {basket.originalPrice} TND
+              </Text>
+            )}
+            <Text style={{ color: theme.colors.primary, fontSize: 22, fontWeight: '800', fontFamily: 'Poppins_700Bold' }}>
+              {basket.discountedPrice} TND
+            </Text>
+          </View>
+          <View style={{ width: isWideScreen ? 260 : 180 }}>
+            <PrimaryCTAButton
+              onPress={handleReserve}
+              compact
+              borderRadius={16}
+              title={
+                basket.quantityLeft <= 0
+                  ? t('basket.soldOut')
+                  : isPickupExpiredInTz(basket.pickupWindow?.end)
+                  ? t('orders.status.expired')
+                  : t('basket.reserve')
+              }
+              disabled={basket.quantityLeft <= 0 || isPickupExpiredInTz(basket.pickupWindow?.end)}
+            />
+          </View>
         </View>
-      </View>
+      )}
 
       {/* Menu item description popup */}
       <Modal visible={!!selectedMenuItem} transparent animationType="fade" onRequestClose={() => setSelectedMenuItem(null)}>
@@ -663,11 +696,26 @@ export default function BasketDetailsScreen() {
             />
             {/* Photo (optional) */}
             <TouchableOpacity
-              onPress={async () => {
-                const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-                if (status !== 'granted') return;
-                const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: 'images', allowsEditing: true, quality: 0.7 });
-                if (!result.canceled && result.assets?.[0]) setReportImage(result.assets[0].uri);
+              onPress={() => {
+                Alert.alert(
+                  t('common.addPhoto', { defaultValue: 'Ajouter une photo' }),
+                  undefined,
+                  [
+                    { text: t('common.takePhoto', { defaultValue: 'Prendre une photo' }), onPress: async () => {
+                      const { status } = await ImagePicker.requestCameraPermissionsAsync();
+                      if (status !== 'granted') return;
+                      const result = await ImagePicker.launchCameraAsync({ allowsEditing: true, quality: 0.7 });
+                      if (!result.canceled && result.assets?.[0]) setReportImage(result.assets[0].uri);
+                    }},
+                    { text: t('common.chooseFromGallery', { defaultValue: 'Choisir depuis la galerie' }), onPress: async () => {
+                      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+                      if (status !== 'granted') return;
+                      const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: 'images', allowsEditing: true, quality: 0.7 });
+                      if (!result.canceled && result.assets?.[0]) setReportImage(result.assets[0].uri);
+                    }},
+                    { text: t('common.cancel', { defaultValue: 'Annuler' }), style: 'cancel' },
+                  ]
+                );
               }}
               style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: theme.spacing.lg, paddingVertical: 10, paddingHorizontal: 14, backgroundColor: theme.colors.bg, borderRadius: theme.radii.r12, borderWidth: 1, borderColor: theme.colors.divider }}
             >

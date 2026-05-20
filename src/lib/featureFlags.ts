@@ -49,6 +49,11 @@ export const FeatureFlags = {
   ENABLE_REVIEWS: true,
   ENABLE_REPORTS: true,
 
+  // Exposes the "Admin Barakeat" link at the bottom of the sign-in screen.
+  // Disabled for public builds; the admin interface is still reachable by
+  // direct navigation to /admin/sign-in, this flag only controls the link.
+  ENABLE_ADMIN_SIGN_IN_LINK: false,
+
   // ── B1: Cross-platform (iOS + Android) fixes ────────────────────────────
   // Uses useSafeAreaInsets() everywhere instead of hardcoded Platform values.
   ENABLE_CROSS_PLATFORM_FIXES: true,
@@ -129,12 +134,21 @@ export const FeatureFlags = {
   // ── All-locations view ────────────────────────────────────────────────────
   ENABLE_ALL_LOCATIONS_VIEW: false,  // Show "All locations" option in business location dropdown
 
+  // ── Intra-business messaging ──────────────────────────────────────────────
+  ENABLE_INTRA_BUSINESS_MESSAGING: false,  // Allow business team members to message each other within the same location/org
+
   // ── Previously disabled ──────────────────────────────────────────────────
   ENABLE_MAX_PER_CUSTOMER: false,  // Per-basket cap on how many a single customer can reserve
   ENABLE_GROWING_TREE: false,
   ENABLE_SPLASH_ANIMATION: false,
   IS_PROTOTYPE: false,
 } as const;
+
+// ── Daily reset schedule (not a boolean flag — separate constant) ──────────
+// The cron job resets basket quantities at this time (Tunisia time).
+// Expiry stays active from pickup end until this time the next morning.
+export const DAILY_RESET_HOUR = 3;
+export const DAILY_RESET_MINUTE = 30;
 
 export type FeatureFlag = keyof typeof FeatureFlags;
 

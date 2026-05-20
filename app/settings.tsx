@@ -1,20 +1,25 @@
 import React, { useCallback, useEffect, useState, useRef } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Switch, Alert, Modal, TextInput, Linking, Animated, PanResponder, KeyboardAvoidingView, Platform } from 'react-native';
+import { PasswordInput } from '@/src/components/PasswordInput';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import { useRouter } from 'expo-router';
 import {
   ArrowLeft, Globe, Bell as BellIcon, Shield, HelpCircle, Info, LogOut,
-  ChevronRight, Lock, FileText, Headphones, X, Trash2, Camera, MapPin, Image, AlertTriangle, Mail, ExternalLink,
+  ChevronRight, Lock, FileText, Headphones, X, Trash2, Camera, MapPin, Image, AlertTriangle, Mail, ExternalLink, Hand,
 } from 'lucide-react-native';
+import { Dimensions } from 'react-native';
+import Svg, { Path } from 'react-native-svg';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { StatusBar } from 'expo-status-bar';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAuthStore } from '@/src/stores/authStore';
 import { useSplashStore } from '@/src/stores/splashStore';
+import { useWalkthroughStore } from '@/src/stores/walkthroughStore';
 import { logout, deleteAccount as deleteAccountApi } from '@/src/services/auth';
-import { updatePassword } from '@/src/services/profile';
+import { updatePassword, fetchUserProfile } from '@/src/services/profile';
+import { fetchMyContext } from '@/src/services/teams';
 import i18n from '@/src/i18n';
 import Constants from 'expo-constants';
 import { Camera as ExpoCamera } from 'expo-camera';
@@ -30,11 +35,16 @@ const LANGUAGES = [
 const NOTIF_PREFS_KEY = '@barakeat_notif_prefs';
 
 interface NotifPrefs {
+  // Customer prefs
   orderConfirmed: boolean;
   pickupReminder: boolean;
   favoritesUpdates: boolean;
   suggestions: boolean;
   promotions: boolean;
+  // Business prefs
+  newOrders: boolean;
+  basketPickedUp: boolean;
+  cancellations: boolean;
 }
 
 const DEFAULT_NOTIF_PREFS: NotifPrefs = {
@@ -43,6 +53,9 @@ const DEFAULT_NOTIF_PREFS: NotifPrefs = {
   favoritesUpdates: true,
   suggestions: false,
   promotions: false,
+  newOrders: true,
+  basketPickedUp: true,
+  cancellations: true,
 };
 
 export default function SettingsScreen() {
@@ -53,6 +66,16 @@ export default function SettingsScreen() {
   const signOut = useAuthStore((s) => s.signOut);
   const triggerSplash = useSplashStore((s) => s.triggerSplash);
   const queryClient = useQueryClient();
+
+  // Business context for showing organization/location name
+  const isBusiness = user?.role === 'business';
+  const bizCtx = useQuery({ queryKey: ['my-context'], queryFn: fetchMyContext, enabled: isBusiness, staleTime: 60_000 });
+  const bizName = bizCtx.data?.organization_name || bizCtx.data?.location_name;
+
+  // Fetch fresh user name from DB (users table) — for business users, user.name in
+  // the auth store may contain the location name instead of the personal name
+  const profileQuery = useQuery({ queryKey: ['user-profile'], queryFn: fetchUserProfile, enabled: isBusiness, staleTime: 60_000 });
+  const userName = isBusiness ? ((profileQuery.data as any)?.name || user?.name) : user?.name;
 
   const [notifications, setNotifications] = useState(true);
   const PUSH_ENABLED_KEY = '@barakeat_push_enabled';
@@ -74,6 +97,30 @@ export default function SettingsScreen() {
   const [cameraStatus, setCameraStatus] = useState<string>('Not Set');
   const [locationStatus, setLocationStatus] = useState<string>('Not Set');
   const [photoLibraryStatus, setPhotoLibraryStatus] = useState<string>('Not Set');
+
+  // ── Walkthrough final-stage overlay ──────────────────────────────────────
+  // Rendered when the business walkthrough reaches its settings step. We
+  // measure the Demo Mode row in window coordinates so the cutout sits
+  // exactly on top of it, no matter how the user scrolls.
+  const showSettingsOverlay = useWalkthroughStore((s) => s.showSettingsOverlay);
+  const skipWalkthrough = useWalkthroughStore((s) => s.skipWalkthrough);
+  const demoRowRef = useRef<View>(null);
+  const [demoRect, setDemoRect] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
+  const measureDemoRow = useCallback(() => {
+    requestAnimationFrame(() => {
+      demoRowRef.current?.measureInWindow((x, y, w, h) => {
+        if (w > 0 && h > 0) setDemoRect({ x, y, w, h });
+      });
+    });
+  }, []);
+  // Re-measure when the overlay is (re-)requested; the row's layout may have
+  // finalized after the first paint.
+  useEffect(() => {
+    if (showSettingsOverlay) {
+      const id = setTimeout(measureDemoRow, 150);
+      return () => clearTimeout(id);
+    }
+  }, [showSettingsOverlay, measureDemoRow]);
 
   // Load notification preferences from AsyncStorage
   useEffect(() => {
@@ -118,12 +165,15 @@ export default function SettingsScreen() {
     checkPermissions();
   }, []);
 
-  // Save notification preferences
+  // Save notification preferences locally AND sync to backend
   const updateNotifPref = useCallback(async (key: keyof NotifPrefs, value: boolean) => {
     const updated = { ...notifPrefs, [key]: value };
     setNotifPrefs(updated);
     try {
       await AsyncStorage.setItem(NOTIF_PREFS_KEY, JSON.stringify(updated));
+      // Sync to backend (fire-and-forget)
+      const { apiClient } = require('@/src/lib/api');
+      apiClient.put('/api/auth/notification-preferences', updated).catch(() => {});
     } catch (err) {
       console.log('[Settings] Error saving notif prefs:', err);
     }
@@ -140,9 +190,23 @@ export default function SettingsScreen() {
   }, []);
 
   const handleDemoRoleSwitch = useCallback(() => {
-    // Navigate to onboarding with demo flag to bypass auth redirect
-    router.push(`/onboarding?demo=true&role=${user?.role ?? 'customer'}` as never);
-  }, [router]);
+    // Replay the interactive walkthrough overlay (cutout tour) — NOT the
+    // /onboarding marketing carousel. The user reaches this entry-point
+    // explicitly, so we reset the persisted "completed" flag and start the
+    // tour from step 0 BEFORE navigating. Starting the walkthrough first
+    // means that when the dashboard mounts a frame later, the overlay
+    // reads step=0 on its first render and paints the highlight
+    // immediately — no perceptible "plain dashboard" flash in between.
+    const { resetWalkthroughCompletion, startWalkthrough } = useWalkthroughStore.getState();
+    resetWalkthroughCompletion();
+    startWalkthrough();
+    // The customer overlay lives in (tabs) and the business one in
+    // (business) — both are reachable from settings.
+    const isBiz = user?.role === 'business' || (user as any)?.type === 'restaurant';
+    try {
+      router.replace(isBiz ? '/(business)/dashboard' : '/(tabs)/' as never);
+    } catch {}
+  }, [router, user]);
 
   const handleFAQPress = useCallback(() => {
     setShowFaqModal(true);
@@ -276,13 +340,27 @@ export default function SettingsScreen() {
     Linking.openSettings();
   }, []);
 
-  const NOTIF_ITEMS: { key: keyof NotifPrefs; labelKey: string; descKey: string }[] = [
-    { key: 'orderConfirmed', labelKey: 'settings.orderConfirmed', descKey: 'settings.orderConfirmedDesc' },
-    { key: 'pickupReminder', labelKey: 'settings.pickupReminder', descKey: 'settings.pickupReminderDesc' },
-    { key: 'favoritesUpdates', labelKey: 'settings.favoritesUpdates', descKey: 'settings.favoritesUpdatesDesc' },
-    { key: 'suggestions', labelKey: 'settings.suggestions', descKey: 'settings.suggestionsDesc' },
-    { key: 'promotions', labelKey: 'settings.promotions', descKey: 'settings.promotionsDesc' },
-  ];
+  const bizRole = bizCtx.data?.role ?? 'member';
+  const bizPerms = bizCtx.data?.permissions ?? {};
+  const isAdminOrOwner = bizRole === 'owner' || bizRole === 'admin';
+  const hasConfirmPickup = isAdminOrOwner || (bizPerms as any).confirm_pickup === 'write' || (bizPerms as any).confirm_pickup === true;
+
+  const NOTIF_ITEMS: { key: keyof NotifPrefs; labelKey: string; descKey: string }[] = isBusiness
+    ? [
+        // Business items — only show relevant ones based on permissions
+        ...(hasConfirmPickup ? [{ key: 'newOrders' as keyof NotifPrefs, labelKey: 'settings.newOrders', descKey: 'settings.newOrdersDesc' }] : []),
+        ...(hasConfirmPickup ? [{ key: 'basketPickedUp' as keyof NotifPrefs, labelKey: 'settings.basketPickedUp', descKey: 'settings.basketPickedUpDesc' }] : []),
+        { key: 'cancellations' as keyof NotifPrefs, labelKey: 'settings.cancellations', descKey: 'settings.cancellationsDesc' },
+        { key: 'suggestions', labelKey: 'settings.suggestions', descKey: 'settings.suggestionsDesc' },
+      ]
+    : [
+        // Customer items
+        { key: 'orderConfirmed', labelKey: 'settings.orderConfirmed', descKey: 'settings.orderConfirmedDesc' },
+        { key: 'pickupReminder', labelKey: 'settings.pickupReminder', descKey: 'settings.pickupReminderDesc' },
+        { key: 'favoritesUpdates', labelKey: 'settings.favoritesUpdates', descKey: 'settings.favoritesUpdatesDesc' },
+        { key: 'suggestions', labelKey: 'settings.suggestions', descKey: 'settings.suggestionsDesc' },
+        { key: 'promotions', labelKey: 'settings.promotions', descKey: 'settings.promotionsDesc' },
+      ];
 
   const PERMISSION_ITEMS = [
     { labelKey: 'settings.camera', status: cameraStatus, icon: Camera },
@@ -302,6 +380,34 @@ export default function SettingsScreen() {
         </Text>
       </View>
       <ScrollView contentContainerStyle={{ padding: theme.spacing.xl }} showsVerticalScrollIndicator={false}>
+        {/* User identity card */}
+        {user && (
+          <View style={[{ backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, ...theme.shadows.shadowSm, marginBottom: theme.spacing.xl, padding: theme.spacing.lg, flexDirection: 'row', alignItems: 'center' }]}>
+            <View style={{ width: 48, height: 48, borderRadius: 24, backgroundColor: theme.colors.primary + '15', justifyContent: 'center', alignItems: 'center' }}>
+              <Text style={{ color: theme.colors.primary, fontSize: 20, fontWeight: '700' }}>
+                {(userName ?? user.email ?? '?').charAt(0).toUpperCase()}
+              </Text>
+            </View>
+            <View style={{ flex: 1, marginLeft: 14 }}>
+              {userName ? (
+                <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
+                  {userName}
+                </Text>
+              ) : null}
+              {bizName ? (
+                <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, marginTop: 2 }}>
+                  {bizName}
+                </Text>
+              ) : null}
+              {user.email ? (
+                <Text style={{ color: theme.colors.muted, ...theme.typography.caption, marginTop: 2 }}>
+                  {user.email}
+                </Text>
+              ) : null}
+            </View>
+          </View>
+        )}
+
         {/* Language */}
         <Text style={[styles.sectionHeader, { color: theme.colors.textSecondary, ...theme.typography.caption, marginBottom: theme.spacing.sm }]}>
           {t('profile.language')}
@@ -335,7 +441,25 @@ export default function SettingsScreen() {
         <View style={[{ backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, ...theme.shadows.shadowSm, padding: theme.spacing.lg, marginBottom: theme.spacing.xl, flexDirection: 'row', alignItems: 'center' }]}>
           <BellIcon size={20} color={theme.colors.textSecondary} />
           <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.body, flex: 1, marginLeft: 12 }]}>{t('settings.pushNotifications')}</Text>
-          <Switch value={notifications} onValueChange={(val) => { setNotifications(val); void AsyncStorage.setItem(PUSH_ENABLED_KEY, String(val)); }} trackColor={{ false: theme.colors.divider, true: theme.colors.primary + '50' }} thumbColor={notifications ? theme.colors.primary : theme.colors.muted} accessibilityLabel={t('settings.pushNotifications')} accessibilityRole="switch" />
+          <Switch value={notifications} onValueChange={async (val) => {
+            setNotifications(val);
+            void AsyncStorage.setItem(PUSH_ENABLED_KEY, String(val));
+            if (val) {
+              // Request system permission and register for push notifications
+              const { registerForPushNotifications } = require('@/src/services/pushNotifications');
+              const token = await registerForPushNotifications();
+              if (!token) {
+                Alert.alert(
+                  t('settings.pushPermissionDenied', { defaultValue: 'Notifications désactivées' }),
+                  t('settings.pushPermissionDeniedDesc', { defaultValue: 'Activez les notifications dans les réglages de votre appareil pour recevoir des alertes.' }),
+                  [
+                    { text: t('common.cancel', { defaultValue: 'Annuler' }), style: 'cancel' },
+                    { text: t('settings.openSettings', { defaultValue: 'Réglages' }), onPress: () => Linking.openSettings() },
+                  ]
+                );
+              }
+            }
+          }} trackColor={{ false: theme.colors.divider, true: theme.colors.primary + '50' }} thumbColor={notifications ? theme.colors.primary : theme.colors.muted} accessibilityLabel={t('settings.pushNotifications')} accessibilityRole="switch" />
         </View>
 
         {/* Notification Preferences — only shown when push notifications are ON */}
@@ -448,6 +572,8 @@ export default function SettingsScreen() {
           </TouchableOpacity>
 
           <TouchableOpacity
+            ref={demoRowRef as any}
+            onLayout={measureDemoRow}
             style={[styles.menuItem, { padding: theme.spacing.lg }]}
             onPress={handleDemoRoleSwitch}
             accessibilityLabel={t('profile.demoMode')}
@@ -472,7 +598,7 @@ export default function SettingsScreen() {
         <View style={[{ backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, ...theme.shadows.shadowSm, marginBottom: theme.spacing.xl }]}>
           <TouchableOpacity
             style={[styles.menuItem, { padding: theme.spacing.lg, borderBottomWidth: 1, borderBottomColor: theme.colors.divider }]}
-            onPress={handleFAQPress}
+            onPress={() => router.push('/faq' as never)}
             accessibilityLabel={t('profile.faq')}
             accessibilityRole="button"
           >
@@ -533,7 +659,7 @@ export default function SettingsScreen() {
                 borderTopWidth: i > 0 ? 1 : 0,
                 borderTopColor: theme.colors.divider,
               }]}
-              onPress={() => setShowLegalModal(item.key)}
+              onPress={() => router.push({ pathname: '/legal', params: { type: item.key } } as never)}
               accessibilityLabel={item.label}
               accessibilityRole="button"
             >
@@ -559,16 +685,18 @@ export default function SettingsScreen() {
           <Text style={[{ color: theme.colors.error, ...theme.typography.body, marginLeft: 12 }]}>{t('profile.signOut')}</Text>
         </TouchableOpacity>
 
-        {/* Delete Account */}
+        {/* Delete Account — quiet destructive trigger. The loud red confirm
+            lives inside the two-step modal below. */}
         <TouchableOpacity
           onPress={deleteAccount}
           disabled={deleteLoading}
-          style={[{ backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, ...theme.shadows.shadowSm, padding: theme.spacing.lg, flexDirection: 'row', justifyContent: 'center', alignItems: 'center', opacity: deleteLoading ? 0.5 : 1 }]}
+          style={{ paddingVertical: theme.spacing.md, alignItems: 'center', opacity: deleteLoading ? 0.5 : 1 }}
           accessibilityLabel={t('profile.deleteAccount')}
           accessibilityRole="button"
         >
-          <Trash2 size={20} color="#e53e3e" />
-          <Text style={[{ color: '#e53e3e', ...theme.typography.body, marginLeft: 12 }]}>{t('profile.deleteAccount')}</Text>
+          <Text style={{ color: theme.colors.error, fontSize: 14, fontFamily: 'Poppins_600SemiBold', fontWeight: '600' }}>
+            {t('profile.deleteAccount')}
+          </Text>
         </TouchableOpacity>
 
         {/* App Version */}
@@ -711,6 +839,13 @@ export default function SettingsScreen() {
       <Modal visible={showSupportModal} transparent animationType="fade" onRequestClose={() => setShowSupportModal(false)}>
         <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', alignItems: 'center', padding: 24 }}>
           <View style={{ backgroundColor: theme.colors.surface, borderRadius: 20, padding: 24, width: '100%', maxWidth: 340, alignItems: 'center', ...theme.shadows.shadowLg }}>
+            <TouchableOpacity
+              onPress={() => setShowSupportModal(false)}
+              style={{ position: 'absolute', top: 12, right: 12, width: 32, height: 32, borderRadius: 16, backgroundColor: theme.colors.bg, justifyContent: 'center', alignItems: 'center', zIndex: 1 }}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
+              <X size={18} color={theme.colors.textSecondary} />
+            </TouchableOpacity>
             <View style={{ backgroundColor: theme.colors.primary + '15', width: 56, height: 56, borderRadius: 28, justifyContent: 'center', alignItems: 'center', marginBottom: 16 }}>
               <Headphones size={26} color={theme.colors.primary} />
             </View>
@@ -721,14 +856,11 @@ export default function SettingsScreen() {
               {t('profile.supportDesc', { defaultValue: 'Envoyez-nous un email et nous vous répondrons dans les plus brefs délais.' })}
             </Text>
             <TouchableOpacity
-              onPress={() => { Linking.openURL('mailto:contactbarakeat@gmail.com'); setShowSupportModal(false); }}
+              onPress={() => { Linking.openURL('mailto:contact@barakeat.tn'); setShowSupportModal(false); }}
               style={{ backgroundColor: theme.colors.primary, borderRadius: 14, paddingVertical: 14, width: '100%', alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 8 }}
             >
               <Mail size={16} color="#e3ff5c" />
-              <Text style={{ color: '#e3ff5c', fontWeight: '700', fontSize: 15 }}>contactbarakeat@gmail.com</Text>
-            </TouchableOpacity>
-            <TouchableOpacity onPress={() => setShowSupportModal(false)} style={{ marginTop: 12 }}>
-              <Text style={{ color: theme.colors.textSecondary, ...theme.typography.body }}>{t('common.close', { defaultValue: 'Fermer' })}</Text>
+              <Text style={{ color: '#e3ff5c', fontWeight: '700', fontSize: 15 }}>contact@barakeat.tn</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -738,6 +870,13 @@ export default function SettingsScreen() {
       <Modal visible={showAboutModal} transparent animationType="fade" onRequestClose={() => setShowAboutModal(false)}>
         <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', alignItems: 'center', padding: 24 }}>
           <View style={{ backgroundColor: theme.colors.surface, borderRadius: 20, padding: 24, width: '100%', maxWidth: 360, alignItems: 'center', ...theme.shadows.shadowLg }}>
+            <TouchableOpacity
+              onPress={() => setShowAboutModal(false)}
+              style={{ position: 'absolute', top: 12, right: 12, width: 32, height: 32, borderRadius: 16, backgroundColor: theme.colors.bg, justifyContent: 'center', alignItems: 'center', zIndex: 1 }}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
+              <X size={18} color={theme.colors.textSecondary} />
+            </TouchableOpacity>
             <View style={{ backgroundColor: '#114b3c', width: 56, height: 56, borderRadius: 28, justifyContent: 'center', alignItems: 'center', marginBottom: 16 }}>
               <Info size={26} color="#e3ff5c" />
             </View>
@@ -755,13 +894,10 @@ export default function SettingsScreen() {
             </Text>
             <TouchableOpacity
               onPress={() => Linking.openURL('https://barakeat.tn')}
-              style={{ backgroundColor: '#114b3c', borderRadius: 14, paddingVertical: 12, width: '100%', alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 8, marginBottom: 8 }}
+              style={{ backgroundColor: '#114b3c', borderRadius: 14, paddingVertical: 12, width: '100%', alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 8 }}
             >
               <ExternalLink size={16} color="#e3ff5c" />
               <Text style={{ color: '#e3ff5c', fontWeight: '700', fontSize: 14 }}>barakeat.tn</Text>
-            </TouchableOpacity>
-            <TouchableOpacity onPress={() => setShowAboutModal(false)} style={{ marginTop: 8 }}>
-              <Text style={{ color: theme.colors.textSecondary, ...theme.typography.body }}>{t('common.close', { defaultValue: 'Fermer' })}</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -807,6 +943,7 @@ export default function SettingsScreen() {
 
       {/* Change Password Modal */}
       <Modal visible={showPasswordModal} transparent animationType="fade" onRequestClose={() => setShowPasswordModal(false)}>
+        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
         <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setShowPasswordModal(false)}>
           <View
             style={[styles.modalContent, { backgroundColor: theme.colors.surface, borderRadius: theme.radii.r24, padding: theme.spacing.xl, ...theme.shadows.shadowLg }]}
@@ -820,37 +957,37 @@ export default function SettingsScreen() {
             <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.bodySm, marginBottom: theme.spacing.sm }]}>
               {t('profile.currentPassword')}
             </Text>
-            <TextInput
-              style={{ height: 48, backgroundColor: theme.colors.bg, borderRadius: theme.radii.r12, paddingHorizontal: 16, color: theme.colors.textPrimary, ...theme.typography.body, marginBottom: theme.spacing.lg }}
+            <PasswordInput
+              containerStyle={{ backgroundColor: theme.colors.bg, marginBottom: theme.spacing.lg }}
+              style={{ color: theme.colors.textPrimary, ...theme.typography.body }}
               value={currentPw}
               onChangeText={setCurrentPw}
               placeholder={t('profile.currentPassword')}
               placeholderTextColor={theme.colors.muted}
-              secureTextEntry
               accessibilityLabel={t('profile.currentPassword')}
             />
             <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.bodySm, marginBottom: theme.spacing.sm }]}>
               {t('profile.newPasswordLabel')}
             </Text>
-            <TextInput
-              style={{ height: 48, backgroundColor: theme.colors.bg, borderRadius: theme.radii.r12, paddingHorizontal: 16, color: theme.colors.textPrimary, ...theme.typography.body, marginBottom: theme.spacing.lg }}
+            <PasswordInput
+              containerStyle={{ backgroundColor: theme.colors.bg, marginBottom: theme.spacing.lg }}
+              style={{ color: theme.colors.textPrimary, ...theme.typography.body }}
               value={newPw}
               onChangeText={setNewPw}
               placeholder={t('profile.newPasswordLabel')}
               placeholderTextColor={theme.colors.muted}
-              secureTextEntry
               accessibilityLabel={t('profile.newPasswordLabel')}
             />
             <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.bodySm, marginBottom: theme.spacing.sm }]}>
               {t('profile.confirmPasswordLabel')}
             </Text>
-            <TextInput
-              style={{ height: 48, backgroundColor: theme.colors.bg, borderRadius: theme.radii.r12, paddingHorizontal: 16, color: theme.colors.textPrimary, ...theme.typography.body, marginBottom: theme.spacing.lg }}
+            <PasswordInput
+              containerStyle={{ backgroundColor: theme.colors.bg, marginBottom: theme.spacing.lg }}
+              style={{ color: theme.colors.textPrimary, ...theme.typography.body }}
               value={confirmPw}
               onChangeText={setConfirmPw}
               placeholder={t('profile.confirmPasswordLabel')}
               placeholderTextColor={theme.colors.muted}
-              secureTextEntry
               accessibilityLabel={t('profile.confirmPasswordLabel')}
             />
             <TouchableOpacity
@@ -874,8 +1011,121 @@ export default function SettingsScreen() {
             </TouchableOpacity>
           </View>
         </TouchableOpacity>
+        </KeyboardAvoidingView>
       </Modal>
+
+      {showSettingsOverlay && demoRect && (
+        <SettingsDemoOverlay
+          rect={demoRect}
+          onDone={skipWalkthrough}
+          theme={theme}
+          t={t}
+        />
+      )}
     </SafeAreaView>
+  );
+}
+
+function SettingsDemoOverlay({ rect, onDone, theme, t }: { rect: { x: number; y: number; w: number; h: number }; onDone: () => void; theme: any; t: any }) {
+  const SCREEN_W = Dimensions.get('window').width;
+  const SCREEN_H = Dimensions.get('window').height;
+  // Pad the hole by 4px so the highlight ring sits outside the row border.
+  const pad = 4;
+  const x = rect.x - pad;
+  const y = rect.y - pad;
+  const w = rect.w + pad * 2;
+  const h = rect.h + pad * 2;
+  const radius = 14;
+
+  // Tooltip above the row if the row is in the bottom half, else below.
+  const below = (y + h / 2) < SCREEN_H / 2;
+  const tooltipTop = below ? y + h + 20 : undefined;
+  const tooltipBottom = !below ? SCREEN_H - y + 20 : undefined;
+
+  // SVG even-odd path: full-screen rect + inner rounded-rect drawn with
+  // opposite winding so the rounded hole is cut out cleanly. Replaces an
+  // older 4-rectangle + 4-corner-cap construction whose caps overlapped
+  // the rounded edges of the row and made the halo border look like it
+  // was fading out at the corners.
+  const r = Math.max(0, Math.min(radius, w / 2, h / 2));
+  const x2 = x + w;
+  const y2 = y + h;
+  const cutoutPath = [
+    `M0 0 H${SCREEN_W} V${SCREEN_H} H0 Z`,
+    `M${x + r} ${y}`,
+    `H${x2 - r}`,
+    `A${r} ${r} 0 0 1 ${x2} ${y + r}`,
+    `V${y2 - r}`,
+    `A${r} ${r} 0 0 1 ${x2 - r} ${y2}`,
+    `H${x + r}`,
+    `A${r} ${r} 0 0 1 ${x} ${y2 - r}`,
+    `V${y + r}`,
+    `A${r} ${r} 0 0 1 ${x + r} ${y}`,
+    'Z',
+  ].join(' ');
+
+  return (
+    <View pointerEvents="box-none" style={{ ...StyleSheet.absoluteFillObject, zIndex: 9999 }}>
+      {/* Visual dim with rounded cutout — SVG follows the row's rounded
+          corners exactly so the halo border isn't cropped at the curves. */}
+      <View pointerEvents="none" style={StyleSheet.absoluteFillObject}>
+        <Svg width={SCREEN_W} height={SCREEN_H} style={StyleSheet.absoluteFillObject} pointerEvents="none">
+          <Path d={cutoutPath} fill="rgba(0,0,0,0.55)" fillRule="evenodd" />
+        </Svg>
+      </View>
+
+      {/* Highlight ring */}
+      <View
+        pointerEvents="none"
+        style={{
+          position: 'absolute', left: x, top: y, width: w, height: h,
+          borderRadius: radius, borderWidth: 3, borderColor: '#e3ff5c', backgroundColor: 'transparent',
+        }}
+      />
+
+      {/* Tooltip */}
+      <View
+        style={{
+          position: 'absolute',
+          top: tooltipTop,
+          bottom: tooltipBottom,
+          left: Math.max(16, Math.min(SCREEN_W / 2 - 140, SCREEN_W - 296)),
+          width: 280,
+          backgroundColor: '#fff',
+          borderRadius: 20,
+          padding: 20,
+          shadowColor: '#000', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.15, shadowRadius: 20, elevation: 10,
+        }}
+      >
+        <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 10 }}>
+          <View style={{ width: 44, height: 44, borderRadius: 22, backgroundColor: '#114b3c12', justifyContent: 'center', alignItems: 'center', marginRight: 12 }}>
+            <Shield size={22} color="#114b3c" />
+          </View>
+          <Text style={{ color: '#114b3c', fontSize: 17, fontWeight: '700', fontFamily: 'Poppins_700Bold', flex: 1 }}>
+            {t('walkthrough.biz.settingsDemo.title', { defaultValue: 'Relancer le guide' })}
+          </Text>
+        </View>
+        <Text style={{ color: '#666', fontSize: 13, fontFamily: 'Poppins_400Regular', lineHeight: 19, marginBottom: 12 }}>
+          {t('walkthrough.biz.settingsDemo.desc', { defaultValue: "Vous pouvez revenir ici et appuyer sur « Mode démo » à tout moment pour revoir cette visite guidée." })}
+        </Text>
+        <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 14, backgroundColor: '#114b3c0f', paddingHorizontal: 10, paddingVertical: 8, borderRadius: 10 }}>
+          <Hand size={14} color="#114b3c" />
+          <Text style={{ color: '#114b3c', fontSize: 12, fontFamily: 'Poppins_600SemiBold', marginLeft: 6, flex: 1 }}>
+            {t('walkthrough.biz.settingsDemo.hint', { defaultValue: 'Repérez la ligne Mode démo surlignée.' })}
+          </Text>
+        </View>
+        <View style={{ flexDirection: 'row', justifyContent: 'flex-end' }}>
+          <TouchableOpacity
+            onPress={onDone}
+            style={{ backgroundColor: '#114b3c', borderRadius: 12, paddingHorizontal: 20, paddingVertical: 10 }}
+          >
+            <Text style={{ color: '#e3ff5c', fontSize: 14, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
+              {t('walkthrough.finishDemo', { defaultValue: 'OK, terminer la démo' })}
+            </Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </View>
   );
 }
 

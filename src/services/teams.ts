@@ -78,6 +78,14 @@ export interface TeamContextFromAPI {
   organization_name?: string;
   location_id?: number;
   location_name?: string;
+  /**
+   * Every location this user belongs to in the first org (deduped, non-null).
+   * For a multi-location assignment the backend returns one row per membership;
+   * we aggregate them here so the business tab layout can power its location
+   * dropdown off this list. Empty = org-wide access (org admin) or no location
+   * scoping at all.
+   */
+  location_ids?: number[];
   role?: string;
   permissions?: Record<string, string>;
 }
@@ -98,14 +106,31 @@ export async function fetchMyContext(): Promise<TeamContextFromAPI> {
     return {};
   }
 
+  // The backend JOINs organization_members, so multi-location users have one
+  // row per membership for the same org. Collapse the rows for the first org
+  // into a single context object and aggregate every non-null location_id
+  // across them.
   const first = orgs[0];
+  const firstOrgRows = orgs.filter((o: any) => o.id === first.id);
+  // Primary role: admin wins over member if any row says admin — a user with
+  // 2 location-admin rows should render as admin, not member.
+  const primaryRow = firstOrgRows.find((r: any) => r.my_role === 'admin' || r.my_role === 'owner') ?? first;
+  const locationIdSet = new Set<number>();
+  for (const r of firstOrgRows) {
+    const lid = r.my_location_id;
+    if (lid != null) locationIdSet.add(Number(lid));
+  }
   return {
     organization_id: first.id,
     organization_name: first.name,
-    role: first.my_role ?? first.role,
-    location_id: first.my_location_id ?? first.location_id,
-    location_name: first.location_name,
-    permissions: typeof first.my_permissions === 'string' ? JSON.parse(first.my_permissions) : (first.my_permissions ?? undefined),
+    role: primaryRow.my_role ?? primaryRow.role,
+    // Keep `location_id` populated with the first membership's location so
+    // existing consumers that read a single value still work (e.g. gestion
+    // d'équipe's "location admin" scope logic).
+    location_id: primaryRow.my_location_id ?? first.my_location_id ?? undefined,
+    location_ids: Array.from(locationIdSet),
+    location_name: primaryRow.location_name ?? first.location_name,
+    permissions: typeof primaryRow.my_permissions === 'string' ? JSON.parse(primaryRow.my_permissions) : (primaryRow.my_permissions ?? undefined),
   };
 }
 
@@ -191,6 +216,7 @@ export async function updateMember(
     permissions?: Record<string, string>;
     status?: string;
     restaurant_id?: number | string;
+    location_id?: number | string | null;
   }
 ): Promise<any> {
   console.log('[Teams] Updating member:', memberId);
@@ -237,6 +263,8 @@ export async function addLocation(
     price_tier?: number;
     pickup_start_time?: string;
     pickup_end_time?: string;
+    pickup_instructions?: string | null;
+    bag_description?: string | null;
     latitude?: number;
     longitude?: number;
   }
@@ -254,6 +282,34 @@ export async function addLocation(
 export async function deleteLocation(orgId: number | string, locationId: number | string): Promise<void> {
   console.log('[Teams] Deleting location:', locationId, 'from org:', orgId);
   await apiClient.delete(`/api/teams/organizations/${orgId}/locations/${locationId}`);
+}
+
+// ---------------------------------------------------------
+// Update an existing location's fields. Backend's allow-list is
+// name/address/phone/category/pickup_instructions/pickup_start_time/
+// pickup_end_time/latitude/longitude/status/is_paused/bag_description.
+// ---------------------------------------------------------
+export async function updateLocation(
+  orgId: number | string,
+  locationId: number | string,
+  updates: {
+    name?: string;
+    address?: string;
+    phone?: string;
+    category?: string;
+    pickup_instructions?: string | null;
+    pickup_start_time?: string;
+    pickup_end_time?: string;
+    latitude?: number;
+    longitude?: number;
+    is_paused?: boolean;
+    bag_description?: string | null;
+  }
+): Promise<OrgLocationFromAPI> {
+  console.log('[Teams] Updating location:', locationId, 'of org:', orgId);
+  const res = await apiClient.put<any>(`/api/teams/organizations/${orgId}/locations/${locationId}`, updates);
+  const data = res.data;
+  return (data?.location ?? data) as OrgLocationFromAPI;
 }
 
 export async function sendMemberCredentials(orgId: number | string, memberId: number | string, password?: string): Promise<void> {

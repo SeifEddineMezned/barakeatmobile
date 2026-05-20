@@ -91,10 +91,18 @@ export function calcLevelProgress(xp: number) {
     }
   }
 
+  // At the max level, clamp progress to full instead of fabricating a fake band —
+  // otherwise corrupt/stale XP inputs produce nonsensical displays like "93060/500".
+  if (level >= XP_THRESHOLDS.length) {
+    const currentLevelThreshold = XP_THRESHOLDS[XP_THRESHOLDS.length - 1];
+    const xpBandSize = 1; // no next band; show full bar
+    return { level, xpInLevel: xpBandSize, xpBandSize, xpProgress: 1 };
+  }
+
   const currentLevelThreshold = XP_THRESHOLDS[level - 1] ?? 0;
-  const nextLevelThreshold = XP_THRESHOLDS[level] ?? currentLevelThreshold + 500;
-  const xpInLevel = Math.max(0, xp - currentLevelThreshold);
+  const nextLevelThreshold = XP_THRESHOLDS[level];
   const xpBandSize = Math.max(1, nextLevelThreshold - currentLevelThreshold);
+  const xpInLevel = Math.min(xpBandSize, Math.max(0, xp - currentLevelThreshold));
   const xpProgress = Math.min(1, xpInLevel / xpBandSize);
 
   return { level, xpInLevel, xpBandSize, xpProgress };

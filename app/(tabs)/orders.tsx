@@ -1,17 +1,16 @@
 import React, { useState, useMemo, useCallback, useEffect, useRef } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Animated, Dimensions, Modal, TextInput, ActivityIndicator, KeyboardAvoidingView, Platform } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Animated, Dimensions, Modal } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import { useRouter } from 'expo-router';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { RefreshCw, ShoppingBag, AlertTriangle, Clock, X, Zap, XCircle } from 'lucide-react-native';
+import { RefreshCw, ShoppingBag, AlertTriangle, Clock, XCircle, Zap } from 'lucide-react-native';
 import { useTheme } from '@/src/theme/ThemeProvider';
-import { isPickupExpiredInTz, getNowInBusinessTz, formatDateInBusinessTz } from '@/src/utils/timezone';
+import { isPickupExpiredInTz, getNowInBusinessTz, getBusinessDayDateStr, toBizDayMinutes } from '@/src/utils/timezone';
 import { useAuthStore } from '@/src/stores/authStore';
-import { fetchMyReservations, cancelReservation, hideReservation, type ReservationFromAPI } from '@/src/services/reservations';
+import { fetchMyReservations, hideReservation } from '@/src/services/reservations';
 import { fetchConversationUnreads } from '@/src/services/messages';
 import { fetchGamificationStats } from '@/src/services/gamification';
-import { getErrorMessage } from '@/src/lib/api';
 import { calcMoneySaved, calcCO2Saved, calcLevelProgress } from '@/src/lib/impactCalculations';
 import { ReservationCard } from '@/src/components/ReservationCard';
 import { DelayedLoader } from '@/src/components/DelayedLoader';
@@ -24,13 +23,14 @@ function PickupCountdown({ startTime, endTime, theme, t }: { startTime: string; 
     return () => clearInterval(timer);
   }, []);
 
-  // Use business timezone for countdown
+  // Use business timezone for countdown, in business-day minutes so overnight
+  // windows (e.g. 18:00 → 02:59) are handled correctly.
   const bizNow = getNowInBusinessTz();
-  const nowMinutes = bizNow.hours * 60 + bizNow.minutes;
+  const nowMinutes = toBizDayMinutes(bizNow.hours * 60 + bizNow.minutes);
   const [sh, sm] = startTime.split(':').map(Number);
   const [eh, em] = endTime.split(':').map(Number);
-  const startMinutes = sh * 60 + sm;
-  const endMinutes = eh * 60 + em;
+  const startMinutes = toBizDayMinutes(sh * 60 + sm);
+  const endMinutes = toBizDayMinutes(eh * 60 + em);
 
   const isBeforePickup = nowMinutes < startMinutes;
   const isDuringPickup = nowMinutes >= startMinutes && nowMinutes <= endMinutes;
@@ -74,18 +74,19 @@ function CarouselBanner({ moneySaved, co2Saved, totalOrders, upcomingOrders, get
   const cardWidth = screenWidth - 2 * 20; // padding
   const [activeSlide, setActiveSlide] = useState(0);
 
-  // Find closest upcoming order by pickup end time (using business timezone)
+  // Find closest upcoming order by pickup end time (using business timezone,
+  // in business-day minutes so overnight windows compute a positive diff).
   const closestOrder = useMemo(() => {
     if (!upcomingOrders.length) return null;
     const bizNow = getNowInBusinessTz();
-    const nowMinutes = bizNow.hours * 60 + bizNow.minutes;
+    const nowMinutes = toBizDayMinutes(bizNow.hours * 60 + bizNow.minutes);
     let closest: any = null;
     let closestDiff = Infinity;
     for (const r of upcomingOrders) {
       const { start, end } = getPickupTimes(r);
       if (!end) continue;
       const [eh, em] = end.split(':').map(Number);
-      const endMinutes = eh * 60 + em;
+      const endMinutes = toBizDayMinutes(eh * 60 + em);
       const diff = endMinutes - nowMinutes;
       if (diff > 0 && diff < closestDiff) {
         closestDiff = diff;
@@ -222,14 +223,6 @@ function CarouselBanner({ moneySaved, co2Saved, totalOrders, upcomingOrders, get
   );
 }
 
-const CANCEL_REASONS = [
-  { key: 'changed_mind', label: 'J\'ai changé d\'avis' },
-  { key: 'cant_make_it', label: 'Je ne peux pas me déplacer' },
-  { key: 'ordered_mistake', label: 'Commandé par erreur' },
-  { key: 'emergency', label: 'Urgence' },
-  { key: 'other', label: 'Autre' },
-];
-
 export default function OrdersScreen() {
   const { t } = useTranslation();
   const theme = useTheme();
@@ -237,36 +230,43 @@ export default function OrdersScreen() {
   const insets = useSafeAreaInsets();
   const queryClient = useQueryClient();
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
+  const currentUser = useAuthStore((s) => s.user);
+  // Backend endpoint `/api/reservations/my/reservations` is buyer-only — if a
+  // business user ends up rendering this tab (e.g. during a role-mismatch
+  // redirect frame) we must NOT fire the query; otherwise every 15 s poll
+  // logs a 403. Treat `role` and `type` as customer-equivalent.
+  const isBuyer = (() => {
+    const role = String(currentUser?.role ?? '').toLowerCase();
+    const typ = String((currentUser as any)?.type ?? '').toLowerCase();
+    const isBiz = role === 'business' || role === 'restaurant' || typ === 'restaurant' || typ === 'business';
+    return !isBiz;
+  })();
   const [activeTab, setActiveTab] = useState<'upcoming' | 'completed' | 'issues'>('upcoming');
+  // Customer orders page shows all history; filter UI was removed (kept on business side only).
+  const dateFilter: 'all' | 'today' | 'month' | 'year' = 'all';
+  const issueTypeFilter: 'all' | 'expired' | 'cancelled' = 'all';
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const ordersScrollY = useRef(new Animated.Value(0)).current;
   const ordersHeaderBg = ordersScrollY.interpolate({ inputRange: [0, 30], outputRange: ['transparent', '#ffffff'], extrapolate: 'clamp' });
 
-  // Cancel flow state
-  const [cancelTarget, setCancelTarget] = useState<{
+  // Cancel-warning modal state. The warning stays as a lightweight popup here;
+  // only after the user confirms they want to cancel do we navigate to the
+  // full-page /cancel-reservation screen to pick a reason.
+  const [cancelWarning, setCancelWarning] = useState<{
     id: string; quantity: number; locationId?: string; merchantName?: string;
     xpLoss: number; levelBefore: number; levelAfter: number;
+    // 'cash' payments get no refund; 'card' / 'credits' do. The warning text
+    // and the confirmation button color flip on this.
+    paymentMethod?: 'cash' | 'card' | 'credits';
   } | null>(null);
-  const [cancelStep, setCancelStep] = useState<'warning' | 'reason' | 'done'>('warning');
-  const [cancelReason, setCancelReason] = useState('');
-  const [cancelReasonOther, setCancelReasonOther] = useState('');
-  const [showOtherReasonModal, setShowOtherReasonModal] = useState(false);
-  const [otherReasonDraft, setOtherReasonDraft] = useState('');
-  const xpLossAnim = useRef(new Animated.Value(0)).current;
-
-  // Reset other-reason modal when cancel flow closes
-  useEffect(() => {
-    if (!cancelTarget) {
-      setShowOtherReasonModal(false);
-      setOtherReasonDraft('');
-    }
-  }, [cancelTarget]);
 
   const reservationsQuery = useQuery({
     queryKey: ['reservations'],
     queryFn: fetchMyReservations,
-    enabled: isAuthenticated,
-    staleTime: 30_000,
+    enabled: isAuthenticated && isBuyer,
+    staleTime: 10_000,
+    refetchInterval: 15_000,
+    refetchOnMount: 'always',
     retry: 2,
   });
 
@@ -274,8 +274,8 @@ export default function OrdersScreen() {
     queryKey: ['conversation-unreads'],
     queryFn: fetchConversationUnreads,
     enabled: isAuthenticated,
-    staleTime: 15_000,
-    refetchInterval: 30_000,
+    staleTime: 5_000,
+    refetchInterval: 10_000,
   });
   const msgUnreads = msgUnreadsQuery.data ?? {};
 
@@ -284,43 +284,6 @@ export default function OrdersScreen() {
     queryFn: fetchGamificationStats,
     enabled: isAuthenticated,
     staleTime: 60_000,
-  });
-
-  const cancelMutation = useMutation({
-    mutationFn: ({ id, reason }: { id: string; reason?: string; quantity?: number; locationId?: string }) =>
-      cancelReservation(id, reason),
-    onMutate: async ({ id }) => {
-      await queryClient.cancelQueries({ queryKey: ['reservations'] });
-      const prev = queryClient.getQueryData(['reservations']);
-      queryClient.setQueryData<ReservationFromAPI[]>(['reservations'], (old) =>
-        old ? old.filter((r) => String(r.id) !== String(id)) : []
-      );
-      return { prev };
-    },
-    onSuccess: (_, { quantity, locationId }) => {
-      // Refetch authoritative gamification stats from backend.
-      // Cancelling a confirmed (not picked_up) order has no effect on real XP.
-      void queryClient.invalidateQueries({ queryKey: ['gamification-stats'] });
-      // Restore basket: invalidate location & basket queries so quantity ticks back up
-      if (locationId) {
-        void queryClient.invalidateQueries({ queryKey: ['location', locationId] });
-        void queryClient.invalidateQueries({ queryKey: ['baskets-by-location', locationId] });
-      }
-      void queryClient.invalidateQueries({ queryKey: ['locations'] });
-      // Show done step with XP loss animation
-      setCancelStep('done');
-      xpLossAnim.setValue(0);
-      Animated.spring(xpLossAnim, { toValue: 1, friction: 5, tension: 60, useNativeDriver: true }).start();
-      setTimeout(() => setCancelTarget(null), 2400);
-    },
-    onError: (err, _, ctx) => {
-      if ((ctx as any)?.prev) queryClient.setQueryData(['reservations'], (ctx as any).prev);
-      setCancelTarget(null);
-      setErrorMsg(getErrorMessage(err));
-    },
-    onSettled: () => {
-      void queryClient.invalidateQueries({ queryKey: ['reservations'] });
-    },
   });
 
   const hideMutation = useMutation({
@@ -332,21 +295,35 @@ export default function OrdersScreen() {
 
   const reservations = reservationsQuery.data ?? [];
 
-  // Helper: check if reservation's pickup time has ended (business timezone aware)
+  // Helper: check if reservation's pickup time has ended (business timezone aware).
+  // Uses BUSINESS-DAY date comparison (not calendar date) so overnight pickup
+  // windows (e.g. 18:00 → 02:59) stay valid past midnight until the 03:30 reset.
   const isPickupExpiredCheck = useCallback((r: any) => {
     const rr = r as any;
-    // Determine the reservation's date
-    const dateStr = rr.pickup_date ?? rr.reservation_date ?? rr.created_at ?? rr.createdAt;
-    if (!dateStr) return false;
-    const reservationDate = new Date(dateStr);
-    // Use business timezone for BOTH dates to avoid UTC vs local mismatch
-    const now = new Date();
-    const todayStr = formatDateInBusinessTz(now);
-    const resDateStr = formatDateInBusinessTz(reservationDate);
-    // Past date = expired
-    if (resDateStr < todayStr) return true;
-    // Same date: check if pickup end time has passed in business timezone
-    if (resDateStr === todayStr) {
+    // Never expire a reservation created less than 5 minutes ago
+    const createdAt = rr.created_at ?? rr.createdAt;
+    if (createdAt) {
+      const ageMs = Date.now() - new Date(createdAt).getTime();
+      if (ageMs < 5 * 60 * 1000) return false;
+    }
+    // Resolve the reservation's business-day date. reservation_date from the
+    // backend is a pure "YYYY-MM-DD" string; prefer it as-is (no UTC parsing).
+    // Fall back to createdAt timestamp converted to its business-day date.
+    let resBizDate: string | null = null;
+    const rawResDate = rr.pickup_date ?? rr.reservation_date;
+    if (typeof rawResDate === 'string' && rawResDate.length >= 10) {
+      resBizDate = rawResDate.substring(0, 10);
+    } else if (createdAt) {
+      resBizDate = getBusinessDayDateStr(new Date(createdAt));
+    }
+    if (!resBizDate) return false;
+
+    const todayBizDate = getBusinessDayDateStr(new Date());
+
+    // Past business day = expired
+    if (resBizDate < todayBizDate) return true;
+    // Same business day: check if pickup end time has passed (overnight-aware)
+    if (resBizDate === todayBizDate) {
       const end = rr.pickup_end_time ?? rr.basket?.pickup_end_time ?? rr.restaurant?.pickup_end_time ?? rr.basket?.pickupWindow?.end ?? rr.pickupWindow?.end;
       if (end) {
         return isPickupExpiredInTz(String(end).substring(0, 5));
@@ -355,17 +332,22 @@ export default function OrdersScreen() {
     return false;
   }, []);
 
+  // Tick every 60s to re-evaluate pickup expiry in real-time
+  const [timeTick, setTimeTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setTimeTick((t) => t + 1), 60_000);
+    return () => clearInterval(id);
+  }, []);
+
   const upcomingOrders = useMemo(
     () => reservations.filter((r) => {
       const status = (r.status ?? '').toLowerCase();
       if (status !== 'reserved' && status !== 'ready' && status !== 'pending' && status !== 'confirmed') return false;
-      // Move to past if pickup time has expired
       return !isPickupExpiredCheck(r);
     }),
-    [reservations, isPickupExpiredCheck]
+    [reservations, isPickupExpiredCheck, timeTick]
   );
 
-  // "Terminées" — only actually collected/picked_up orders
   const completedOrders = useMemo(
     () => reservations.filter((r) => {
       const status = (r.status ?? '').toLowerCase();
@@ -374,7 +356,6 @@ export default function OrdersScreen() {
     [reservations]
   );
 
-  // "Problèmes" — cancelled, expired, or confirmed-but-pickup-expired
   const issueOrders = useMemo(
     () => reservations.filter((r) => {
       const status = (r.status ?? '').toLowerCase();
@@ -382,65 +363,95 @@ export default function OrdersScreen() {
       if ((status === 'reserved' || status === 'ready' || status === 'pending' || status === 'confirmed') && isPickupExpiredCheck(r)) return true;
       return false;
     }),
-    [reservations, isPickupExpiredCheck]
+    [reservations, isPickupExpiredCheck, timeTick]
   );
 
   // Alias for impact calculations (only picked_up counts)
   const completedReservations = completedOrders;
 
+
+  // Apply date filter to completed and issues tabs
+  const filterByDate = useCallback((orders: typeof completedOrders) => {
+    if (dateFilter === 'all') return orders;
+    const now = new Date();
+    return orders.filter((r: any) => {
+      const d = new Date(r.created_at ?? r.reservation_date);
+      if (dateFilter === 'today') return d.toDateString() === now.toDateString();
+      if (dateFilter === 'month') return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+      return d.getFullYear() === now.getFullYear(); // year
+    });
+  }, [dateFilter]);
+
+  const filteredCompleted = useMemo(() => filterByDate(completedOrders), [completedOrders, filterByDate]);
+  const filteredIssues = useMemo(() => {
+    let filtered = filterByDate(issueOrders);
+    if (issueTypeFilter === 'expired') filtered = filtered.filter((r: any) => (r.status ?? '').toLowerCase() !== 'cancelled');
+    else if (issueTypeFilter === 'cancelled') filtered = filtered.filter((r: any) => (r.status ?? '').toLowerCase() === 'cancelled');
+    return filtered;
+  }, [issueOrders, filterByDate, issueTypeFilter]);
+
+  const displayedOrders = activeTab === 'upcoming' ? upcomingOrders : activeTab === 'completed' ? filteredCompleted : filteredIssues;
+
+  // Hero stats — respond to date filter
+  const statsSource = dateFilter === 'all' ? completedReservations : filteredCompleted;
   const moneySaved = useMemo(() => {
-    const gStats = gamificationQuery.data as any;
-    const gStatsInner = gStats?.stats ?? gStats;
-    if (gStatsInner?.money_saved != null) return Math.max(0, parseFloat(gStatsInner.money_saved) || 0);
-    return calcMoneySaved(completedReservations as any[]);
-  }, [completedReservations, gamificationQuery.data]);
+    if (dateFilter === 'all') {
+      const gStats = gamificationQuery.data as any;
+      const gStatsInner = gStats?.stats ?? gStats;
+      if (gStatsInner?.money_saved != null) return Math.max(0, parseFloat(gStatsInner.money_saved) || 0);
+    }
+    return calcMoneySaved(statsSource as any[]);
+  }, [statsSource, gamificationQuery.data, dateFilter]);
 
   const co2Saved = useMemo(() => {
-    const gStats = gamificationQuery.data as any;
-    const gStatsInner = gStats?.stats ?? gStats;
-    const mealsSaved = gStatsInner?.meals_saved ?? completedReservations.length;
-    return calcCO2Saved(mealsSaved);
-  }, [completedReservations.length, gamificationQuery.data]);
+    if (dateFilter === 'all') {
+      const gStats = gamificationQuery.data as any;
+      const gStatsInner = gStats?.stats ?? gStats;
+      if (gStatsInner?.meals_saved != null) return calcCO2Saved(gStatsInner.meals_saved);
+    }
+    return calcCO2Saved(statsSource.length);
+  }, [statsSource, gamificationQuery.data, dateFilter]);
 
-  // Prefer backend meals_saved (same source as profile.tsx) for consistency
   const totalOrders = useMemo(() => {
-    const gStats = gamificationQuery.data as any;
-    const gStatsInner = gStats?.stats ?? gStats;
-    return gStatsInner?.meals_saved ?? completedReservations.length;
-  }, [completedReservations.length, gamificationQuery.data]);
-
-
-  const displayedOrders = activeTab === 'upcoming' ? upcomingOrders : activeTab === 'completed' ? completedOrders : issueOrders;
+    if (dateFilter === 'all') {
+      const gStats = gamificationQuery.data as any;
+      const gStatsInner = gStats?.stats ?? gStats;
+      if (gStatsInner?.meals_saved != null) return gStatsInner.meals_saved;
+    }
+    return statsSource.length;
+  }, [statsSource, gamificationQuery.data, dateFilter]);
 
   // Expired orders are handled by the isPickupExpiredCheck filter above —
   // they move to the "past" tab automatically. We do NOT auto-cancel from the client
   // because timezone differences between the user's phone and the server (Tunisia)
   // could cause valid reservations to be incorrectly cancelled.
 
-  const handleCancelRequest = useCallback((id: string, quantity: number, locationId?: string, merchantName?: string) => {
+  const handleCancelRequest = useCallback((id: string, quantity: number, locationId?: string, merchantName?: string, paymentMethod?: 'cash' | 'card' | 'credits') => {
     const gStats = queryClient.getQueryData<any>(['gamification-stats']);
     const xp = gStats?.xp ?? (typeof gStats?.level === 'object' ? (gStats.level.xp ?? 0) : 0);
     const xpLoss = quantity * 10;
     const { level: levelBefore } = calcLevelProgress(xp);
     const { level: levelAfter } = calcLevelProgress(Math.max(0, xp - xpLoss));
-    setCancelTarget({ id, quantity, locationId, merchantName, xpLoss, levelBefore, levelAfter });
-    setCancelStep('warning');
-    setCancelReason('');
-    setCancelReasonOther('');
+    setCancelWarning({ id, quantity, locationId, merchantName, xpLoss, levelBefore, levelAfter, paymentMethod });
   }, [queryClient]);
 
-  const handleConfirmCancel = useCallback(() => {
-    if (!cancelTarget || cancelMutation.isPending) return;
-    const finalReason = cancelReason === 'Autre'
-      ? (cancelReasonOther.trim() || 'Other')
-      : cancelReason;
-    cancelMutation.mutate({
-      id: cancelTarget.id,
-      reason: finalReason,
-      quantity: cancelTarget.quantity,
-      locationId: cancelTarget.locationId,
-    });
-  }, [cancelTarget, cancelReason, cancelReasonOther, cancelMutation]);
+  const handleConfirmCancelFromWarning = useCallback(() => {
+    if (!cancelWarning) return;
+    const target = cancelWarning;
+    setCancelWarning(null);
+    router.push({
+      pathname: '/cancel-reservation',
+      params: {
+        reservationId: String(target.id),
+        quantity: String(target.quantity),
+        locationId: target.locationId ?? '',
+        merchantName: target.merchantName ?? '',
+        xpLoss: String(target.xpLoss),
+        levelBefore: String(target.levelBefore),
+        levelAfter: String(target.levelAfter),
+      },
+    } as never);
+  }, [cancelWarning, router]);
 
   const handleHide = useCallback((id: string) => {
     hideMutation.mutate(id);
@@ -519,7 +530,9 @@ export default function OrdersScreen() {
         onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: ordersScrollY } } }], { useNativeDriver: false })}
         scrollEventThrottle={16}
       >
-        <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h1, marginBottom: theme.spacing.sm }]}>{t('orders.title')}</Text>
+        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: theme.spacing.sm }}>
+          <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h1 }]}>{t('orders.title')}</Text>
+        </View>
         {reservationsQuery.isLoading ? (
           <DelayedLoader />
         ) : reservationsQuery.isError ? (
@@ -715,218 +728,101 @@ export default function OrdersScreen() {
         )}
       </ScrollView>
 
-      {/* ── Cancel Order Modal ─────────────────────────── */}
+      {/* Cancel warning popup — shown when user taps "Annuler" on a reservation.
+          Confirming here navigates to /cancel-reservation to pick a reason. */}
       <Modal
-        visible={!!cancelTarget}
+        visible={!!cancelWarning}
         transparent
         animationType="fade"
-        onRequestClose={() => { if (!cancelMutation.isPending && cancelStep !== 'done') setCancelTarget(null); }}
+        onRequestClose={() => setCancelWarning(null)}
       >
         <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 20 }}>
-
           <View style={{ backgroundColor: theme.colors.surface, borderRadius: 20, width: '100%', maxWidth: 380, overflow: 'hidden', padding: 4 }}>
-
-            {/* ── STEP: Warning ─────────────────────────── */}
-            {cancelStep === 'warning' && (
-              <>
-                <View style={{ alignItems: 'center', paddingTop: 24, paddingHorizontal: 20 }}>
-                  <View style={{ backgroundColor: theme.colors.error + '15', width: 56, height: 56, borderRadius: 28, justifyContent: 'center', alignItems: 'center', marginBottom: 16 }}>
-                    <AlertTriangle size={28} color={theme.colors.error} />
-                  </View>
-                  <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3, fontWeight: '700' as const, textAlign: 'center', marginBottom: 4 }}>
-                    {t('orders.cancelConfirmTitle', { defaultValue: 'Annuler cette commande ?' })}
-                  </Text>
-                  {cancelTarget?.merchantName ? (
-                    <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm, textAlign: 'center', marginBottom: 16 }}>
-                      {cancelTarget.merchantName}
-                    </Text>
-                  ) : null}
-                </View>
-
-                <View style={{ paddingHorizontal: 20, paddingBottom: 24 }}>
-                  {/* Consequences list */}
-                  <View style={{ backgroundColor: theme.colors.error + '10', borderRadius: 14, padding: 16, gap: 10, marginBottom: 20 }}>
-                    <Text style={{ color: theme.colors.error, ...theme.typography.bodySm, fontWeight: '700' as const }}>
-                      {t('orders.cancelConsequences', { defaultValue: 'Si vous annulez :' })}
-                    </Text>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-                      <Zap size={14} color={theme.colors.error} />
-                      <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm }}>
-                        {t('orders.cancelXpLoss', { defaultValue: 'Vous perdez' })}{' '}
-                        <Text style={{ fontWeight: '700' as const }}>−{cancelTarget?.xpLoss ?? 0} XP</Text>
-                      </Text>
-                    </View>
-                    {cancelTarget && cancelTarget.levelAfter < cancelTarget.levelBefore && (
-                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-                        <View style={{ width: 16, height: 16, borderRadius: 8, backgroundColor: theme.colors.error, alignItems: 'center', justifyContent: 'center' }}>
-                          <Text style={{ color: '#fff', fontSize: 9, fontWeight: '700' as const, lineHeight: 14 }}>▼</Text>
-                        </View>
-                        <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm }}>
-                          {t('orders.cancelLevelDrop', { defaultValue: 'Niveau' })}{' '}
-                          <Text style={{ fontWeight: '700' as const }}>{cancelTarget.levelBefore} → {cancelTarget.levelAfter}</Text>
-                        </Text>
-                      </View>
-                    )}
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-                      <ShoppingBag size={14} color={theme.colors.error} />
-                      <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm }}>
-                        {t('orders.cancelBasketReturned', { defaultValue: 'Le panier est rendu au commerce' })}
-                      </Text>
-                    </View>
-                  </View>
-
-                  <View style={{ flexDirection: 'row', gap: 10 }}>
-                    <TouchableOpacity
-                      onPress={() => setCancelTarget(null)}
-                      style={{ flex: 1, backgroundColor: theme.colors.primary, borderRadius: 14, paddingVertical: 14, paddingHorizontal: 10, alignItems: 'center', justifyContent: 'center' }}
-                    >
-                      <Text style={{ color: '#fff', fontSize: 13, fontWeight: '700', textAlign: 'center' }} numberOfLines={1} adjustsFontSizeToFit>{t('orders.keepOrder', { defaultValue: 'Garder' })}</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      onPress={() => setCancelStep('reason')}
-                      style={{ flex: 1, backgroundColor: theme.colors.error, borderRadius: 14, paddingVertical: 14, paddingHorizontal: 10, alignItems: 'center', justifyContent: 'center' }}
-                    >
-                      <Text style={{ color: '#fff', fontSize: 13, fontWeight: '700', textAlign: 'center' }} numberOfLines={1} adjustsFontSizeToFit>{t('orders.cancelContinue', { defaultValue: 'Annuler' })}</Text>
-                    </TouchableOpacity>
-                  </View>
-                </View>
-              </>
-            )}
-
-            {/* ── STEP: Reason ──────────────────────────── */}
-            {cancelStep === 'reason' && (
-              <>
-                <View style={{
-                  paddingHorizontal: 20, paddingVertical: 18,
-                  flexDirection: 'row', alignItems: 'center',
-                }}>
-                  <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3, fontWeight: '700' as const, flex: 1 }}>
-                    {t('orders.cancelReasonTitle', { defaultValue: 'Pourquoi annulez-vous ?' })}
-                  </Text>
-                  <TouchableOpacity onPress={() => setCancelTarget(null)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-                    <X size={20} color={theme.colors.muted} />
-                  </TouchableOpacity>
-                </View>
-
-                <View style={{ paddingHorizontal: 20 }}>
-                  {CANCEL_REASONS.map((reason) => (
-                    <TouchableOpacity
-                      key={reason.key}
-                      onPress={() => setCancelReason(reason.label)}
-                      style={{
-                        flexDirection: 'row', alignItems: 'center', gap: 12,
-                        paddingVertical: 13, paddingHorizontal: 16,
-                        borderRadius: 12, marginBottom: 8,
-                        backgroundColor: cancelReason === reason.label
-                          ? theme.colors.primary + '12'
-                          : theme.colors.bg,
-                        borderWidth: 1.5,
-                        borderColor: cancelReason === reason.label
-                          ? theme.colors.primary
-                          : theme.colors.divider,
-                      }}
-                    >
-                      <View style={{
-                        width: 20, height: 20, borderRadius: 10,
-                        borderWidth: 2,
-                        borderColor: cancelReason === reason.label ? theme.colors.primary : theme.colors.divider,
-                        alignItems: 'center', justifyContent: 'center',
-                      }}>
-                        {cancelReason === reason.label && (
-                          <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: theme.colors.primary }} />
-                        )}
-                      </View>
-                      <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, flex: 1 }}>
-                        {reason.label}
-                      </Text>
-                    </TouchableOpacity>
-                  ))}
-
-                  {cancelReason === 'Autre' && (
-                    <TouchableOpacity
-                      onPress={() => { setOtherReasonDraft(cancelReasonOther); setShowOtherReasonModal(true); }}
-                      style={{
-                        borderWidth: 1, borderColor: theme.colors.divider,
-                        borderRadius: 12, padding: 12, marginBottom: 8,
-                        backgroundColor: theme.colors.bg, minHeight: 48,
-                        justifyContent: 'center',
-                      }}
-                    >
-                      <Text style={{ color: cancelReasonOther ? theme.colors.textPrimary : theme.colors.muted, fontSize: 14 }}>
-                        {cancelReasonOther || t('orders.cancelReasonPlaceholder', { defaultValue: 'Appuyez pour écrire votre raison...' })}
-                      </Text>
-                    </TouchableOpacity>
-                  )}
-
-                  <View style={{ flexDirection: 'row', gap: 12, marginTop: 8 }}>
-                    <TouchableOpacity
-                      onPress={() => setCancelStep('warning')}
-                      style={{
-                        flex: 1, borderRadius: 14, paddingVertical: 14, alignItems: 'center',
-                        borderWidth: 1, borderColor: theme.colors.divider,
-                      }}
-                    >
-                      <Text style={{ color: theme.colors.textSecondary, ...theme.typography.button }}>{t('common.back', { defaultValue: 'Retour' })}</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      onPress={handleConfirmCancel}
-                      disabled={!cancelReason || cancelMutation.isPending}
-                      style={{
-                        flex: 2,
-                        backgroundColor: !cancelReason ? theme.colors.muted : theme.colors.error,
-                        borderRadius: 14, paddingVertical: 14, alignItems: 'center',
-                        opacity: !cancelReason ? 0.45 : 1,
-                      }}
-                    >
-                      {cancelMutation.isPending ? (
-                        <ActivityIndicator size="small" color="#fff" />
-                      ) : (
-                        <Text style={{ color: '#fff', ...theme.typography.button }}>{t('orders.confirmCancellation', { defaultValue: 'Confirmer l\'annulation' })}</Text>
-                      )}
-                    </TouchableOpacity>
-                  </View>
-                </View>
-              </>
-            )}
-
-            {/* ── STEP: Done (XP loss animation) ────────── */}
-            {cancelStep === 'done' && cancelTarget && (
-              <Animated.View style={{
-                paddingHorizontal: 20, paddingVertical: 40, alignItems: 'center',
-                transform: [{ scale: xpLossAnim }],
-                opacity: xpLossAnim,
-              }}>
-                <View style={{
-                  width: 72, height: 72, borderRadius: 36,
-                  backgroundColor: theme.colors.error + '15',
-                  alignItems: 'center', justifyContent: 'center',
-                  marginBottom: 20,
-                }}>
-                  <X size={32} color={theme.colors.error} />
-                </View>
-                <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3, fontWeight: '700' as const, textAlign: 'center' }}>
-                  {t('orders.orderCancelled', { defaultValue: 'Commande annulée' })}
+            <View style={{ alignItems: 'center', paddingTop: 24, paddingHorizontal: 20 }}>
+              <View style={{ backgroundColor: theme.colors.error + '15', width: 56, height: 56, borderRadius: 28, justifyContent: 'center', alignItems: 'center', marginBottom: 16 }}>
+                <AlertTriangle size={28} color={theme.colors.error} />
+              </View>
+              <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3, fontWeight: '700' as const, textAlign: 'center', marginBottom: 4 }}>
+                {t('orders.cancelConfirmTitle', { defaultValue: 'Annuler cette commande ?' })}
+              </Text>
+              {cancelWarning?.merchantName ? (
+                <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm, textAlign: 'center', marginBottom: 16 }}>
+                  {cancelWarning.merchantName}
                 </Text>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 10 }}>
-                  <Zap size={16} color={theme.colors.error} />
-                  <Text style={{ color: theme.colors.error, ...theme.typography.body, fontWeight: '700' as const }}>
-                    −{cancelTarget.xpLoss} XP
-                  </Text>
-                  {cancelTarget.levelAfter < cancelTarget.levelBefore && (
-                    <>
-                      <Text style={{ color: theme.colors.textSecondary, ...theme.typography.body }}>·</Text>
-                      <Text style={{ color: theme.colors.error, ...theme.typography.bodySm, fontWeight: '600' as const }}>
-                        Level {cancelTarget.levelBefore} → {cancelTarget.levelAfter}
-                      </Text>
-                    </>
-                  )}
-                </View>
-                <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, marginTop: 8, textAlign: 'center' }}>
-                  {t('orders.cancelBasketReturned', { defaultValue: 'Le panier a été rendu au commerce' })}
-                </Text>
-              </Animated.View>
-            )}
+              ) : null}
+            </View>
 
+            <View style={{ paddingHorizontal: 20, paddingBottom: 24 }}>
+              <View style={{ backgroundColor: theme.colors.error + '10', borderRadius: 14, padding: 16, gap: 10, marginBottom: 20 }}>
+                <Text style={{ color: theme.colors.error, ...theme.typography.bodySm, fontWeight: '700' as const }}>
+                  {t('orders.cancelConsequences', { defaultValue: 'Si vous annulez :' })}
+                </Text>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                  <Zap size={14} color={theme.colors.error} />
+                  <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm }}>
+                    {t('orders.cancelXpLoss', { defaultValue: 'Vous perdez' })}{' '}
+                    <Text style={{ fontWeight: '700' as const }}>−{cancelWarning?.xpLoss ?? 0} XP</Text>
+                  </Text>
+                </View>
+                {cancelWarning && cancelWarning.levelAfter < cancelWarning.levelBefore && (
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                    <View style={{ width: 16, height: 16, borderRadius: 8, backgroundColor: theme.colors.error, alignItems: 'center', justifyContent: 'center' }}>
+                      <Text style={{ color: '#fff', fontSize: 9, fontWeight: '700' as const, lineHeight: 14 }}>▼</Text>
+                    </View>
+                    <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm }}>
+                      {t('orders.cancelLevelDrop', { defaultValue: 'Niveau' })}{' '}
+                      <Text style={{ fontWeight: '700' as const }}>{cancelWarning.levelBefore} → {cancelWarning.levelAfter}</Text>
+                    </Text>
+                  </View>
+                )}
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                  <ShoppingBag size={14} color={theme.colors.error} />
+                  <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm }}>
+                    {t('orders.cancelBasketReturned', { defaultValue: 'Le panier est rendu au commerce' })}
+                  </Text>
+                </View>
+                {/* Payment-method-specific refund line — cash gives no refund,
+                    card/credits are refunded in credits. */}
+                {cancelWarning?.paymentMethod === 'cash' ? (
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                    <AlertTriangle size={14} color="#d97706" />
+                    <Text style={{ color: '#d97706', ...theme.typography.bodySm, fontWeight: '600' }}>
+                      {t('orders.cancelNoRefundCash', { defaultValue: 'Aucun remboursement — paiement en espèces' })}
+                    </Text>
+                  </View>
+                ) : cancelWarning?.paymentMethod ? (
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                    <ShoppingBag size={14} color="#16a34a" />
+                    <Text style={{ color: '#16a34a', ...theme.typography.bodySm, fontWeight: '600' }}>
+                      {t('orders.cancelRefundCredits', { defaultValue: 'Vous serez remboursé en crédits' })}
+                    </Text>
+                  </View>
+                ) : null}
+              </View>
+
+              <Text style={{ color: theme.colors.error, ...theme.typography.bodySm, fontWeight: '700', textAlign: 'center', marginBottom: 16, lineHeight: 20 }}>
+                {t('orders.cancelIrreversible', { defaultValue: 'Cette action est irréversible et ne peut pas être annulée.' })}
+              </Text>
+
+              <View style={{ flexDirection: 'row', gap: 10 }}>
+                <TouchableOpacity
+                  onPress={() => setCancelWarning(null)}
+                  style={{ flex: 1, backgroundColor: theme.colors.primary, borderRadius: 14, paddingVertical: 14, paddingHorizontal: 10, alignItems: 'center', justifyContent: 'center' }}
+                >
+                  <Text style={{ color: '#fff', fontSize: 13, fontWeight: '700', textAlign: 'center' }} numberOfLines={1} adjustsFontSizeToFit>
+                    {t('orders.keepOrder', { defaultValue: 'Garder' })}
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={handleConfirmCancelFromWarning}
+                  style={{ flex: 1, backgroundColor: theme.colors.error, borderRadius: 14, paddingVertical: 14, paddingHorizontal: 10, alignItems: 'center', justifyContent: 'center' }}
+                >
+                  <Text style={{ color: '#fff', fontSize: 13, fontWeight: '700', textAlign: 'center' }} numberOfLines={1} adjustsFontSizeToFit>
+                    {t('orders.cancelContinue', { defaultValue: 'Annuler' })}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </View>
           </View>
         </View>
       </Modal>
@@ -951,43 +847,6 @@ export default function OrdersScreen() {
         </View>
       </Modal>
 
-      {/* "Autre" reason text input modal */}
-      <Modal visible={showOtherReasonModal} transparent animationType="fade" onRequestClose={() => setShowOtherReasonModal(false)}>
-        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
-          <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 24 }}>
-            <View style={{ backgroundColor: theme.colors.surface, borderRadius: 20, padding: 24, width: '100%', maxWidth: 360 }}>
-              <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3, marginBottom: 16 }}>
-                {t('orders.otherReasonTitle', { defaultValue: 'Raison de l\'annulation' })}
-              </Text>
-              <TextInput
-                style={{
-                  borderWidth: 1, borderColor: theme.colors.divider,
-                  borderRadius: 12, padding: 12,
-                  color: theme.colors.textPrimary,
-                  backgroundColor: theme.colors.bg,
-                  fontSize: 14, lineHeight: 20,
-                  minHeight: 100, textAlignVertical: 'top',
-                }}
-                placeholder={t('orders.cancelReasonPlaceholder', { defaultValue: 'Dites-nous en plus...' })}
-                placeholderTextColor={theme.colors.muted}
-                value={otherReasonDraft}
-                onChangeText={setOtherReasonDraft}
-                multiline
-                maxLength={200}
-                autoFocus
-              />
-              <TouchableOpacity
-                onPress={() => { setCancelReasonOther(otherReasonDraft); setShowOtherReasonModal(false); }}
-                style={{ backgroundColor: '#114b3c', borderRadius: 14, paddingVertical: 14, alignItems: 'center', marginTop: 16 }}
-              >
-                <Text style={{ color: '#e3ff5c', fontWeight: '700', fontSize: 15 }}>
-                  {t('common.done', { defaultValue: 'Terminé' })}
-                </Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </KeyboardAvoidingView>
-      </Modal>
     </SafeAreaView>
   );
 }

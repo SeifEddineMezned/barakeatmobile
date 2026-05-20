@@ -2,10 +2,11 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Animated, Image, Modal, ScrollView } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
-import { Heart, Clock, MapPin, Star, ShoppingBag, Tag, Layers, Info, X, TimerOff } from 'lucide-react-native';
+import { Heart, Clock, MapPin, MapPinOff, Star, ShoppingBag, Tag, Layers, Info, X, TimerOff } from 'lucide-react-native';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { Basket } from '@/src/types';
 import { isPickupExpiredInTz } from '@/src/utils/timezone';
+import { useAddressStore } from '@/src/stores/addressStore';
 
 interface BasketCardProps {
   basket: Basket;
@@ -17,19 +18,23 @@ export function BasketCard({ basket, onFavoritePress, isFavorite = false }: Bask
   const { t } = useTranslation();
   const theme = useTheme();
   const router = useRouter();
+  // Distance is only meaningful when the user has a saved address to measure from.
+  // With no address selected, render a dash instead of "0 km" (which reads as "right here").
+  const hasSelectedAddress = useAddressStore((s) => s.selectedId !== null);
   const scaleAnim = React.useRef(new Animated.Value(1)).current;
   const favoriteAnim = React.useRef(new Animated.Value(1)).current;
   const entranceOpacity = React.useRef(new Animated.Value(0)).current;
   const entranceTranslateY = React.useRef(new Animated.Value(20)).current;
   const [infoVisible, setInfoVisible] = useState(false);
 
-  const isSoldOut = basket.quantityLeft <= 0;
-
-  // Check if pickup window has expired (using business timezone)
-  const isPickupExpired = !isSoldOut && isPickupExpiredInTz(basket.pickupWindow?.end);
-
-  // Also treat as expired if the backend flagged isActive = false (e.g. all baskets expired)
-  const isInactive = basket.isActive === false && !isSoldOut;
+  // Determine unavailability reason:
+  // - "Épuisé" = ALL basket types sold out (quantityTotal === 0, no stock at all)
+  // - "Expiré" = had stock but pickup window passed, OR backend flagged inactive
+  const rawTotal = (basket as any).quantityTotal ?? basket.quantityLeft;
+  const isGenuinelySoldOut = rawTotal <= 0; // No stock at all
+  const isSoldOut = basket.quantityLeft <= 0 && isGenuinelySoldOut;
+  const isPickupExpired = basket.quantityLeft <= 0 && !isGenuinelySoldOut; // Had stock but time passed or paused
+  const isInactive = basket.isActive === false && !isSoldOut && !isPickupExpired;
   const isUnavailable = isSoldOut || isPickupExpired || isInactive;
 
   useEffect(() => {
@@ -238,10 +243,21 @@ export function BasketCard({ basket, onFavoritePress, isFavorite = false }: Bask
                   </Text>
                 </View>
                 <View style={[styles.inlineChip, { backgroundColor: theme.colors.bg, borderRadius: theme.radii.pill, paddingHorizontal: 8, paddingVertical: 3 }]}>
-                  <MapPin size={11} color={theme.colors.textSecondary} />
-                  <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, marginLeft: 3 }]}>
-                    {basket.distance}km
-                  </Text>
+                  {hasSelectedAddress ? (
+                    <>
+                      <MapPin size={11} color={theme.colors.textSecondary} />
+                      <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, marginLeft: 3 }]}>
+                        {`${basket.distance}km`}
+                      </Text>
+                    </>
+                  ) : (
+                    <>
+                      <MapPinOff size={11} color={theme.colors.muted} />
+                      <Text style={[{ color: theme.colors.muted, ...theme.typography.caption, marginLeft: 3, fontStyle: 'italic' }]}>
+                        {t('basket.noAddressSet', { defaultValue: 'Aucune adresse' })}
+                      </Text>
+                    </>
+                  )}
                 </View>
               </View>
               <View style={styles.priceBlock}>

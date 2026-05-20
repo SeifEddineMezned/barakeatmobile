@@ -132,13 +132,15 @@ export async function fetchLocations(): Promise<LocationFromAPI[]> {
     });
 
     const withCoords = locations.filter((l) => l.latitude != null && l.longitude != null && isFinite(l.latitude!) && isFinite(l.longitude!));
+    const missingCoords = locations.filter((l) => l.latitude == null || l.longitude == null || !isFinite(l.latitude!) || !isFinite(l.longitude!));
     console.log('[Locations] Fetched', locations.length, 'locations,', withCoords.length, 'have valid GPS coordinates');
-    // Debug: log ALL locations with their coord status
-    locations.forEach((l) => {
-      const name = (l as any).display_name ?? (l as any).location_name ?? (l as any).name ?? `id:${l.id}`;
-      const valid = l.latitude != null && l.longitude != null && isFinite(l.latitude!) && isFinite(l.longitude!);
-      console.log(`[Locations] "${name}" → lat=${l.latitude} (${typeof l.latitude}), lng=${l.longitude} (${typeof l.longitude}), valid=${valid}`);
-    });
+    if (missingCoords.length > 0) {
+      console.warn('[Locations] ⚠️ MISSING COORDINATES — these locations will NOT appear on the map:');
+      missingCoords.forEach((l) => {
+        const name = (l as any).display_name ?? (l as any).location_name ?? (l as any).name ?? `id:${l.id}`;
+        console.warn(`  → "${name}" (id=${l.id}) lat=${l.latitude} lng=${l.longitude}`);
+      });
+    }
     return locations;
   } catch (err: unknown) {
     const errObj = err as any;

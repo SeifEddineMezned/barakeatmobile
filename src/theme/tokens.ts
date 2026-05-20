@@ -12,6 +12,9 @@ export const tokens = {
     bg: '#fcfcfa',
     surface: '#FFFFFF',
     surfaceElevated: '#FFFFFF',
+    // Quiet neutral tint for destructive-row insets and section eyebrows —
+    // replaces the generic `color + '08'` opacity hack used across the app.
+    surfaceMuted: '#f5f5f1',
 
     textPrimary: '#1a1a1a',
     textSecondary: '#6b6b6b',
@@ -21,6 +24,15 @@ export const tokens = {
     success: '#2d8a6e',
     warning: '#e8a838',
     error: '#d94f4f',
+
+    // Status dot colors — single saturated hue each, consumed only by
+    // StatusDot (and its callers). No more `color + '18'` tinted pills for
+    // status labels: instead we render `●  Annulée` with one of these.
+    statusSuccess: '#2d8a6e',
+    statusWarn: '#e8a838',
+    statusDanger: '#d94f4f',
+    statusInfo: '#114b3c',
+    statusNeutral: '#6b6b6b',
 
     overlay: 'rgba(0, 0, 0, 0.5)',
     overlayLight: 'rgba(0, 0, 0, 0.2)',
@@ -44,7 +56,9 @@ export const tokens = {
   radii: {
     r4: 4,
     r8: 8,
+    r10: 10,
     r12: 12,
+    r14: 14,
     r16: 16,
     r20: 20,
     r24: 24,
@@ -117,6 +131,16 @@ export const tokens = {
       fontWeight: '600' as const,
       letterSpacing: 0.3,
       fontFamily: 'Poppins_600SemiBold',
+    },
+    // Uppercase eyebrow — used for section headers, status labels above
+    // chips, form-field labels. Replaces the ad-hoc `fontSize: 11, fontWeight: '600', textTransform: 'uppercase'` styles scattered across screens.
+    label: {
+      fontSize: 11,
+      lineHeight: 14,
+      fontWeight: '600' as const,
+      letterSpacing: 0.6,
+      fontFamily: 'Poppins_600SemiBold',
+      textTransform: 'uppercase' as const,
     },
   },
 

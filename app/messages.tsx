@@ -10,6 +10,7 @@ import { useAuthStore } from '@/src/stores/authStore';
 import { fetchConversations, type Conversation } from '@/src/services/messages';
 import { StatusBar } from 'expo-status-bar';
 import { DelayedLoader } from '@/src/components/DelayedLoader';
+import { orderIdToCode } from '@/src/utils/orderCode';
 
 export default function MessagesScreen() {
   const { t } = useTranslation();
@@ -55,6 +56,11 @@ export default function MessagesScreen() {
             <Text style={{ color: theme.colors.textPrimary, fontSize: 15, fontWeight: hasUnread ? '700' : '500', flex: 1 }} numberOfLines={1}>
               {otherName ?? t('messages.unknownUser', { defaultValue: 'Utilisateur' })}
             </Text>
+            {item.reservation_id && (
+              <View style={{ backgroundColor: theme.colors.primary + '12', borderRadius: 6, paddingHorizontal: 5, paddingVertical: 1, marginLeft: 6 }}>
+                <Text style={{ color: theme.colors.primary, fontSize: 9, fontWeight: '700' }}>{orderIdToCode(item.reservation_id)}</Text>
+              </View>
+            )}
             {isClosed && (
               <View style={{ backgroundColor: theme.colors.muted + '20', borderRadius: 8, paddingHorizontal: 6, paddingVertical: 2, marginLeft: 8 }}>
                 <Text style={{ color: theme.colors.muted, fontSize: 10 }}>

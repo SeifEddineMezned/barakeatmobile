@@ -33,6 +33,7 @@ import {
   BookOpen,
   Moon,
   Medal,
+  X as XIcon,
 } from 'lucide-react-native';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { StatusBar } from 'expo-status-bar';
@@ -700,6 +701,13 @@ export default function ImpactScreen() {
       <Modal visible={badgeModal !== null} transparent animationType="fade" onRequestClose={() => setBadgeModal(null)}>
         <TouchableOpacity style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 24 }} activeOpacity={1} onPress={() => setBadgeModal(null)}>
           <TouchableOpacity activeOpacity={1} onPress={() => {}} style={{ backgroundColor: theme.colors.surface, borderRadius: 24, padding: 24, width: '100%', maxWidth: 340, alignItems: 'center' }}>
+            <TouchableOpacity
+              onPress={() => setBadgeModal(null)}
+              style={{ position: 'absolute', top: 12, right: 12, width: 32, height: 32, borderRadius: 16, backgroundColor: theme.colors.bg, justifyContent: 'center', alignItems: 'center', zIndex: 1 }}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
+              <XIcon size={18} color={theme.colors.textSecondary} />
+            </TouchableOpacity>
             {badgeModal && (() => {
               const bid = badgeModal.badge_id ?? badgeModal.id;
               const BadgeIcon = badgeModal.unlocked ? getBadgeIcon(bid) : Lock;
@@ -734,9 +742,6 @@ export default function ImpactScreen() {
                 </>
               );
             })()}
-            <TouchableOpacity onPress={() => setBadgeModal(null)} style={{ backgroundColor: theme.colors.bg, borderRadius: 12, paddingVertical: 12, alignItems: 'center', width: '100%', borderWidth: 1, borderColor: theme.colors.divider, marginTop: 4 }}>
-              <Text style={{ color: theme.colors.textPrimary, ...theme.typography.button }}>{t('common.close')}</Text>
-            </TouchableOpacity>
           </TouchableOpacity>
         </TouchableOpacity>
       </Modal>

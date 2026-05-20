@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import {
   View,
   Text,
@@ -7,11 +7,13 @@ import {
   KeyboardAvoidingView,
   Platform,
   TouchableOpacity,
+  Dimensions,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import Svg, { Path } from 'react-native-svg';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
-import { useRouter } from 'expo-router';
-import { QrCode, X, CheckCircle, Keyboard, Camera, SwitchCamera } from 'lucide-react-native';
+import { useRouter, useLocalSearchParams } from 'expo-router';
+import { QrCode, X, CheckCircle, Keyboard, Camera, SwitchCamera, Hand } from 'lucide-react-native';
 import { useQueryClient } from '@tanstack/react-query';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 
@@ -25,6 +27,8 @@ import {
 } from '@/src/services/business';
 import { getErrorMessage } from '@/src/lib/api';
 import { useCustomAlert } from '@/src/components/CustomAlert';
+import { useWalkthroughStore } from '@/src/stores/walkthroughStore';
+import { SubScreenWalkthroughOverlay } from '@/src/components/SubScreenWalkthroughOverlay';
 
 export default function ScanQRScreen() {
   const { t } = useTranslation();
@@ -32,20 +36,93 @@ export default function ScanQRScreen() {
   const router = useRouter();
   const alert = useCustomAlert();
   const queryClient = useQueryClient();
+  const insets = useSafeAreaInsets();
+
+  // ── Walkthrough demo mode ──────────────────────────────────────────────
+  // Two demo paths can hit this screen:
+  //   • Legacy `demoScanCode` flow — boots manual mode + a pre-filled DEMO1
+  //     code. Kept for back-compat with the previous walkthrough version.
+  //   • New `demoBack` param — opened from the qrFab step of the orders
+  //     tour. The screen just shows the camera as the user would see it,
+  //     plus a floating instruction popup prompting them to tap back. On
+  //     unmount the walkthrough advances past the scanQrBack step.
+  const params = useLocalSearchParams<{ demoBack?: string }>();
+  const isDemoBack = params.demoBack === '1';
+  const demoScanCode = useWalkthroughStore((s) => s.demoScanCode);
+  const setDemoScanCode = useWalkthroughStore((s) => s.setDemoScanCode);
+  const setMeasuredRect = useWalkthroughStore((s) => s.setMeasuredRect);
+  const walkthroughCurrentStep = useWalkthroughStore((s) => s.currentStep);
+  const skipWalkthrough = useWalkthroughStore((s) => s.skipWalkthrough);
+  const inDemoMode = demoScanCode !== null;
+  useEffect(() => {
+    if (!isDemoBack) return;
+    return () => {
+      // On unmount (user taps close / nav pops the screen), advance the
+      // walkthrough past the scanQrBack step if we're still on it.
+      if (useWalkthroughStore.getState().currentStep?.measureKey === 'scanQrBack') {
+        useWalkthroughStore.getState().nextStep(999);
+      }
+    };
+  }, [isDemoBack]);
+  // We don't measureInWindow the close-X for the demo overlay — measurement
+  // races with the push-screen animation and frequently returned 0/null on
+  // first paint, dropping the halo to the (12, 12) fallback in the top-left
+  // corner. Instead we derive the rect from a known layout: the header has
+  // paddingHorizontal: spacing.xl (20) + paddingTop: spacing.md (12), the X
+  // icon is 24px square, sitting at (insets.left + 20, insets.top + 12).
+  // This is rock-solid and avoids the timing flakiness.
 
   const [code, setCode] = useState('');
   const [loading, setLoading] = useState(false);
   const [verified, setVerified] = useState(false);
   const [matchedOrder, setMatchedOrder] = useState<TodayReservationFromAPI | null>(null);
-  const [mode, setMode] = useState<'camera' | 'manual'>('camera');
+  // In demo mode, boot in manual mode so the keyboard view + manual-toggle
+  // highlight are immediately visible.
+  const [mode, setMode] = useState<'camera' | 'manual'>(inDemoMode ? 'manual' : 'camera');
   const [scanned, setScanned] = useState(false);
+  const processingRef = useRef(false); // ref-based guard — prevents double-scan race condition
   const [permission, requestPermission] = useCameraPermissions();
 
+  // Mock the success state when the user taps Verify in demo mode — skip
+  // the API call and surface a fake confirmed order.
+  const handleVerifyDemo = () => {
+    setMatchedOrder({
+      id: 'demo-order-1',
+      buyer_id: 0,
+      buyer_name: t('walkthrough.biz.demoOrderCustomer', { defaultValue: 'Sami (démo)' }),
+      quantity: 2,
+      pickup_code: 'DEMO1',
+      status: 'picked_up',
+      basket_name: t('walkthrough.biz.demoOrderBasket', { defaultValue: 'Panier Surprise' }),
+    } as unknown as TodayReservationFromAPI);
+    setVerified(true);
+  };
+
+  // Clear the demo flag when leaving this screen so a re-run of the
+  // walkthrough fires fresh state. (Don't clear on success — the user is
+  // still on this screen looking at the success card.)
+  useEffect(() => {
+    return () => {
+      // Only clear if we're not currently mid-demo-success, since the
+      // walkthrough overlay relies on demoScanCode to drive the next steps.
+      // The demo scan code is cleared by the walkthrough's clearDemoState on
+      // step transition / completion anyway, so this is just a safety net.
+    };
+  }, []);
+
   const handleVerifyCode = async (pickupCode: string) => {
+    // Demo mode: skip the backend, surface a mocked success card with the
+    // demo customer name + quantity.
+    if (inDemoMode) {
+      handleVerifyDemo();
+      return;
+    }
     if (pickupCode.trim().length < 4) {
       alert.showAlert(t('common.error'), t('business.scan.codeTooShort'));
       return;
     }
+    if (processingRef.current || verified) return; // Prevent double processing
+    processingRef.current = true;
     setLoading(true);
     try {
       const orders = await fetchTodayOrders();
@@ -63,6 +140,7 @@ export default function ScanQRScreen() {
       setVerified(true);
       setMatchedOrder(match);
       void queryClient.invalidateQueries({ queryKey: ['today-orders'] });
+      void queryClient.invalidateQueries({ queryKey: ['location-orders'] });
     } catch (err) {
       alert.showAlert(t('common.error'), getErrorMessage(err));
       setScanned(false);
@@ -72,25 +150,26 @@ export default function ScanQRScreen() {
   };
 
   const handleBarCodeScanned = ({ data }: { data: string }) => {
-    if (scanned || loading) return;
+    if (scanned || loading || processingRef.current) return;
+    processingRef.current = true;
     setScanned(true);
 
-    // Try using verifyQR for full backend verification (parses JSON QR data internally)
+    // Try using verifyQR for full backend verification, then confirm pickup once
     setLoading(true);
     verifyQR(data)
       .then(async (verifyResult) => {
         if (!verifyResult.valid) {
           alert.showAlert(t('common.error'), t('business.scan.codeNotFound'));
           setScanned(false);
+          processingRef.current = false;
           return;
         }
-        // Confirm pickup with buyer_id so notification reaches buyer
+        // Confirm pickup — single call only
         await confirmPickup(
           String(verifyResult.reservation_id),
           verifyResult.pickup_code ?? '',
           verifyResult.buyer_id
         );
-        // Build a minimal matched order object from verifyResult for display
         setMatchedOrder({
           id: verifyResult.reservation_id ?? '',
           buyer_id: verifyResult.buyer_id,
@@ -101,23 +180,27 @@ export default function ScanQRScreen() {
         } as TodayReservationFromAPI);
         setVerified(true);
         void queryClient.invalidateQueries({ queryKey: ['today-orders'] });
+        void queryClient.invalidateQueries({ queryKey: ['location-orders'] });
       })
       .catch((err) => {
-        // verifyQR failed — fall back to manual pickup code flow if QR is not JSON
-        try {
-          const parsed = JSON.parse(data);
-          if (parsed.pickup_code) {
-            void handleVerifyCode(parsed.pickup_code);
-            return;
+        // verifyQR failed — fall back to manual code entry only if not already processing
+        if (!verified) {
+          try {
+            const parsed = JSON.parse(data);
+            if (parsed.pickup_code) {
+              void handleVerifyCode(parsed.pickup_code);
+              return;
+            }
+          } catch {
+            // not JSON
           }
-        } catch {
-          // not JSON
-        }
-        if (data.trim().length >= 4) {
-          void handleVerifyCode(data.trim());
-        } else {
-          alert.showAlert(t('common.error'), getErrorMessage(err));
-          setScanned(false);
+          if (data.trim().length >= 4) {
+            void handleVerifyCode(data.trim());
+          } else {
+            alert.showAlert(t('common.error'), getErrorMessage(err));
+            setScanned(false);
+            processingRef.current = false;
+          }
         }
       })
       .finally(() => setLoading(false));
@@ -182,6 +265,14 @@ export default function ScanQRScreen() {
             </View>
           ) : null}
 
+          {/* Quantity × basket-name — gives the success screen context
+              instead of a bare customer name. */}
+          {(matchedOrder as any)?.basket_name || matchedOrder?.quantity ? (
+            <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm, marginTop: theme.spacing.xs }}>
+              {matchedOrder?.quantity ?? 1} × {(matchedOrder as any)?.basket_name ?? t('orders.surpriseBag', { defaultValue: 'Panier Surprise' })}
+            </Text>
+          ) : null}
+
           <View style={[styles.doneButtonWrapper, { marginTop: theme.spacing.xxxl }]}>
             <PrimaryCTAButton onPress={handleClose} title={t('business.scan.done')} />
           </View>
@@ -194,6 +285,7 @@ export default function ScanQRScreen() {
   const showCamera = mode === 'camera' && permission?.granted;
 
   return (
+    <View style={{ flex: 1, backgroundColor: theme.colors.bg }}>
     <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]}>
       <KeyboardAvoidingView
         style={styles.flex}
@@ -210,7 +302,10 @@ export default function ScanQRScreen() {
             },
           ]}
         >
-          <TouchableOpacity onPress={handleClose} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
+          <TouchableOpacity
+            onPress={handleClose}
+            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+          >
             <X size={24} color={theme.colors.textPrimary} />
           </TouchableOpacity>
           <Text
@@ -223,7 +318,26 @@ export default function ScanQRScreen() {
           </Text>
           {/* Toggle camera/manual */}
           <TouchableOpacity
+            ref={(r: any) => {
+              if (inDemoMode && r) {
+                requestAnimationFrame(() => {
+                  r.measureInWindow?.((x: number, y: number, w: number, h: number) => {
+                    if (w > 0 && h > 0) setMeasuredRect('scanManualToggle', { x, y, w, h });
+                  });
+                });
+              }
+            }}
             onPress={() => {
+              // During the demoBack flow, the only legal tap on this screen
+              // is the highlighted close X. The four absorber frames around
+              // the X cutout should already block the toggle, but the prior
+              // report ("I tapped this and the profile section never showed")
+              // suggests the responder negotiation was letting taps slip
+              // through on at least one device. Belt-and-suspenders gate.
+              if (isDemoBack) {
+                useWalkthroughStore.getState().notifyTapHint();
+                return;
+              }
               setMode(mode === 'camera' ? 'manual' : 'camera');
               setScanned(false);
             }}
@@ -309,12 +423,24 @@ export default function ScanQRScreen() {
             </Text>
             <View style={{ marginTop: theme.spacing.xl, width: '100%' }}>
               <PrimaryCTAButton
-                onPress={() => requestPermission()}
+                onPress={() => {
+                  if (isDemoBack) {
+                    useWalkthroughStore.getState().notifyTapHint();
+                    return;
+                  }
+                  requestPermission();
+                }}
                 title={t('business.scan.allowCamera', { defaultValue: 'Allow Camera Access' })}
               />
             </View>
             <TouchableOpacity
-              onPress={() => setMode('manual')}
+              onPress={() => {
+                if (isDemoBack) {
+                  useWalkthroughStore.getState().notifyTapHint();
+                  return;
+                }
+                setMode('manual');
+              }}
               style={{ marginTop: theme.spacing.lg }}
             >
               <Text style={{ color: theme.colors.primary, ...theme.typography.bodySm, fontWeight: '600' }}>
@@ -394,7 +520,13 @@ export default function ScanQRScreen() {
 
             <View style={[styles.verifyButtonWrapper, { marginTop: theme.spacing.xl }]}>
               <PrimaryCTAButton
-                onPress={() => handleVerifyCode(code)}
+                onPress={() => {
+                  if (isDemoBack) {
+                    useWalkthroughStore.getState().notifyTapHint();
+                    return;
+                  }
+                  handleVerifyCode(code);
+                }}
                 title={t('business.scan.verify')}
                 loading={loading}
                 disabled={code.trim().length < 4}
@@ -403,7 +535,111 @@ export default function ScanQRScreen() {
           </View>
         )}
       </KeyboardAvoidingView>
+
+      {/* Walkthrough overlay — renders the manual-toggle highlight on this
+          pushed Stack screen. */}
+      <SubScreenWalkthroughOverlay keys={['scanManualToggle']} />
     </SafeAreaView>
+
+      {/* Demo walkthrough overlay for the scanQrBack step.
+          Rendered OUTSIDE the SafeAreaView so its absolute positioning maps
+          straight to window coords (a sibling absolute child of the outer
+          flex:1 View whose frame IS the full window). Earlier this lived
+          inside SafeAreaView, where padding from the safe-area inset pushed
+          the cutout / popup down by ~insets.top px — the halo landed below
+          the actual button and the popup ended up covering both the close X
+          and the camera/keyboard toggle.
+
+          Dims the entire screen with a rounded cutout on the close (X)
+          button and surrounds it with absorber frames so the user can't
+          accidentally tap manual mode / camera flip / verify / etc. — any
+          one of those was leaving the demo stranded. */}
+      {isDemoBack && walkthroughCurrentStep?.measureKey === 'scanQrBack' && (() => {
+        const SW = Dimensions.get('window').width;
+        const SH = Dimensions.get('window').height;
+        // Derive the close-X rect from the known header layout. Header has
+        // paddingHorizontal: spacing.xl (20) + paddingTop: spacing.md (12);
+        // the X icon is 24px square. We pad by 8 so the halo sits clear of
+        // the icon strokes themselves.
+        const pad = 8;
+        const iconSize = 24;
+        const rx = insets.left + theme.spacing.xl - pad;
+        const ry = insets.top + theme.spacing.md - pad;
+        const rw = iconSize + pad * 2;
+        const rh = iconSize + pad * 2;
+        const radius = 12;
+        const r = Math.max(0, Math.min(radius, rw / 2, rh / 2));
+        const x2 = rx + rw;
+        const y2 = ry + rh;
+        const cutoutPath = [
+          `M0 0 H${SW} V${SH} H0 Z`,
+          `M${rx + r} ${ry}`,
+          `H${x2 - r}`,
+          `A${r} ${r} 0 0 1 ${x2} ${ry + r}`,
+          `V${y2 - r}`,
+          `A${r} ${r} 0 0 1 ${x2 - r} ${y2}`,
+          `H${rx + r}`,
+          `A${r} ${r} 0 0 1 ${rx} ${y2 - r}`,
+          `V${ry + r}`,
+          `A${r} ${r} 0 0 1 ${rx + r} ${ry}`,
+          'Z',
+        ].join(' ');
+        const absorb = {
+          onStartShouldSetResponder: () => true,
+          onResponderRelease: () => { /* absorb silently */ },
+        } as const;
+        return (
+          <View pointerEvents="box-none" style={{ position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, zIndex: 9999 }}>
+            <View pointerEvents="none" style={StyleSheet.absoluteFillObject}>
+              <Svg width={SW} height={SH} style={StyleSheet.absoluteFillObject} pointerEvents="none">
+                <Path d={cutoutPath} fill="rgba(0,0,0,0.55)" fillRule="evenodd" />
+              </Svg>
+            </View>
+            {/* Halo border on the close button. */}
+            <View pointerEvents="none" style={{ position: 'absolute', left: rx, top: ry, width: rw, height: rh, borderRadius: radius, borderWidth: 3, borderColor: '#e3ff5c' }} />
+            {/* Four absorber frames around the cutout — block all other
+                taps on the scan-qr screen during the demo. */}
+            <View {...absorb} style={{ position: 'absolute', left: 0, right: 0, top: 0, height: ry }} />
+            <View {...absorb} style={{ position: 'absolute', left: 0, right: 0, top: ry + rh, bottom: 0 }} />
+            <View {...absorb} style={{ position: 'absolute', top: ry, height: rh, left: 0, width: rx }} />
+            <View {...absorb} style={{ position: 'absolute', top: ry, height: rh, left: rx + rw, right: 0 }} />
+            {/* Instruction popup — floats below the header (clears both the
+                close X and the camera/keyboard toggle on the top-right). */}
+            <View style={{
+              position: 'absolute',
+              left: 16,
+              right: 16,
+              top: insets.top + theme.spacing.md + iconSize + theme.spacing.md + 8,
+              backgroundColor: '#fff',
+              borderRadius: 20,
+              padding: 18,
+              shadowColor: '#000',
+              shadowOffset: { width: 0, height: 8 },
+              shadowOpacity: 0.18,
+              shadowRadius: 20,
+              elevation: 12,
+            }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
+                <View style={{ width: 36, height: 36, borderRadius: 18, backgroundColor: '#114b3c12', justifyContent: 'center', alignItems: 'center', marginRight: 10 }}>
+                  <Hand size={18} color="#114b3c" />
+                </View>
+                <Text style={{ color: '#114b3c', fontSize: 15, fontWeight: '700', fontFamily: 'Poppins_700Bold', flex: 1 }}>
+                  {t('walkthrough.biz.scanQrBack.title', { defaultValue: 'Scanner le QR du client' })}
+                </Text>
+              </View>
+              <Text style={{ color: '#666', fontSize: 13, fontFamily: 'Poppins_400Regular', lineHeight: 19, marginBottom: 10 }}>
+                {t('walkthrough.biz.scanQrBack.desc', { defaultValue: "Voici l'écran de scan. En vrai, vous scanneriez le code QR affiché sur le téléphone du client. Appuyez sur le bouton entouré pour revenir et continuer la démo." })}
+              </Text>
+              <TouchableOpacity onPress={() => { handleClose(); skipWalkthrough(); }}>
+                <Text style={{ color: theme.colors.muted, fontSize: 13, fontFamily: 'Poppins_500Medium' }}>
+                  {t('walkthrough.exitDemo', { defaultValue: 'Quitter la démo' })}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        );
+      })()}
+    </View>
   );
 }
 

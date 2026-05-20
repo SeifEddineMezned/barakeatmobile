@@ -1,10 +1,13 @@
 import { apiClient } from '@/src/lib/api';
 
+export type PaymentMethod = 'cash' | 'card' | 'credits';
+
 export interface CreateReservationRequest {
   restaurant_id?: number;
   location_id?: number;
   basket_id?: number;
   quantity: number;
+  payment_method?: PaymentMethod;
 }
 
 export interface ReservationFromAPI {
@@ -77,6 +80,7 @@ export async function createReservation(data: CreateReservationRequest): Promise
     restaurant_id: data.restaurant_id,
     basket_id: data.basket_id,
     quantity: data.quantity,
+    payment_method: data.payment_method,
   });
   const resData = res.data;
   let reservation: ReservationFromAPI;
@@ -124,6 +128,12 @@ export async function cancelReservation(reservationId: string, reason?: string):
   console.log('[Reservations] Cancelling reservation:', reservationId, reason ? `reason: ${reason}` : '');
   await apiClient.delete(`/api/reservations/${reservationId}`, reason ? { data: { reason } } : undefined);
   console.log('[Reservations] Cancelled reservation:', reservationId);
+}
+
+export async function dismissReviewPrompt(reservationId: string): Promise<void> {
+  console.log('[Reservations] Dismissing review prompt for:', reservationId);
+  await apiClient.put(`/api/reservations/${reservationId}/dismiss-review`);
+  console.log('[Reservations] Dismissed review prompt:', reservationId);
 }
 
 export async function hideReservation(reservationId: string): Promise<void> {

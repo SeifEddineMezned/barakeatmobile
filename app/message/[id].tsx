@@ -11,9 +11,11 @@ import { fetchMessages, sendMessage, updateConversationStatus, createConversatio
 import { StatusBar } from 'expo-status-bar';
 import { DelayedLoader } from '@/src/components/DelayedLoader';
 import { useCustomAlert } from '@/src/components/CustomAlert';
+import { useWalkthroughStore } from '@/src/stores/walkthroughStore';
+import { Hand } from 'lucide-react-native';
 
 export default function ChatScreen() {
-  const params = useLocalSearchParams<{ id: string; reservationId?: string; buyerId?: string; locationId?: string }>();
+  const params = useLocalSearchParams<{ id: string; reservationId?: string; buyerId?: string; locationId?: string; demo?: string }>();
   const rawId = params.id ?? '';
   const isReservationBased = rawId.startsWith('res-');
   const reservationId = isReservationBased ? rawId.replace('res-', '') : params.reservationId;
@@ -28,11 +30,32 @@ export default function ChatScreen() {
   const [text, setText] = useState('');
   const [showMenu, setShowMenu] = useState(false);
 
-  // Resolve conversation from reservation ID if needed
+  // Demo: this screen was opened from the orders walkthrough's chat step.
+  // Show an instruction popup pointing at the back button, and advance the
+  // walkthrough when the user navigates away (back) so the demo continues
+  // on the orders screen. Detection uses the `demo=1` param the demo sets
+  // when calling router.push.
+  const isDemo = params.demo === '1';
+  const walkthroughCurrentStep = useWalkthroughStore((s) => s.currentStep);
+  useEffect(() => {
+    if (!isDemo) return;
+    return () => {
+      // On unmount (user taps back / nav pops the screen), advance the
+      // walkthrough past the chatBack step.
+      if (useWalkthroughStore.getState().currentStep?.measureKey === 'chatBack') {
+        useWalkthroughStore.getState().nextStep(999);
+      }
+    };
+  }, [isDemo]);
+
+  // Resolve conversation from reservation ID if needed. Disabled in demo
+  // mode because the demo reservation id ('demo-order-1') has no real
+  // conversation on the backend — firing the lookup would error and
+  // break the chat screen for the walkthrough.
   const convLookupQuery = useQuery({
     queryKey: ['conversation-by-reservation', reservationId],
     queryFn: () => getConversationByReservation(Number(reservationId)),
-    enabled: isReservationBased && !resolvedConvId,
+    enabled: !isDemo && isReservationBased && !resolvedConvId,
     staleTime: 10_000,
   });
 
@@ -47,7 +70,7 @@ export default function ChatScreen() {
   const messagesQuery = useQuery({
     queryKey: ['messages', conversationId],
     queryFn: () => fetchMessages(conversationId!),
-    enabled: !!conversationId,
+    enabled: !isDemo && !!conversationId,
     staleTime: 5_000,
     refetchInterval: 10_000,
   });
@@ -56,10 +79,16 @@ export default function ChatScreen() {
   const messages = messagesQuery.data?.messages ?? [];
   const isBusiness = user?.role === 'business';
   const isMyBusiness = conversation?.business_user_id === Number(user?.id);
-  const canReply = !conversationId || conversation?.status === 'open' || (conversation?.status === 'blocked' && isMyBusiness);
+  // In demo mode the input bar is hidden — the chat screen is a read-only
+  // static placeholder so the user can see the conversation surface, then
+  // tap back to continue the walkthrough. Sending a message would hit the
+  // backend with a fake reservation id and fail.
+  const canReply = !isDemo && (!conversationId || conversation?.status === 'open' || (conversation?.status === 'blocked' && isMyBusiness));
   const isClosed = conversation?.status === 'closed';
   const isBlocked = conversation?.status === 'blocked';
-  const otherName = isBusiness ? conversation?.buyer_name : (conversation?.org_name ?? conversation?.business_name);
+  const otherName = isDemo
+    ? t('walkthrough.biz.demoOrderCustomer', { defaultValue: 'Sami (démo)' })
+    : (isBusiness ? conversation?.buyer_name : (conversation?.org_name ?? conversation?.business_name));
 
   const sendMutation = useMutation({
     mutationFn: async (msg: string) => {
@@ -161,7 +190,13 @@ export default function ChatScreen() {
       <StatusBar style="dark" />
       {/* Header */}
       <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: theme.colors.divider }}>
-        <TouchableOpacity onPress={() => router.back()} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+        <TouchableOpacity
+          onPress={() => router.back()}
+          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          style={(isDemo && walkthroughCurrentStep?.measureKey === 'chatBack')
+            ? { borderRadius: 16, borderWidth: 3, borderColor: '#e3ff5c', padding: 2 }
+            : undefined}
+        >
           <ChevronLeft size={24} color={theme.colors.textPrimary} />
         </TouchableOpacity>
         <View style={{ flex: 1, marginLeft: 10 }}>
@@ -258,6 +293,41 @@ export default function ChatScreen() {
           </View>
         )}
       </KeyboardAvoidingView>
+
+      {/* Demo instruction popup — tells the user to tap the back arrow to
+          continue the walkthrough. Pointer-events box-none so taps fall
+          through to the (haloed) back arrow at the top. */}
+      {isDemo && walkthroughCurrentStep?.measureKey === 'chatBack' && (
+        <View pointerEvents="box-none" style={{ position: 'absolute', left: 16, right: 16, bottom: 24 }}>
+          <View style={{
+            backgroundColor: '#fff',
+            borderRadius: 20,
+            padding: 18,
+            shadowColor: '#000',
+            shadowOffset: { width: 0, height: 8 },
+            shadowOpacity: 0.18,
+            shadowRadius: 20,
+            elevation: 12,
+          }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
+              <View style={{ width: 36, height: 36, borderRadius: 18, backgroundColor: '#114b3c12', justifyContent: 'center', alignItems: 'center', marginRight: 10 }}>
+                <Hand size={18} color="#114b3c" />
+              </View>
+              <Text style={{ color: '#114b3c', fontSize: 15, fontWeight: '700', fontFamily: 'Poppins_700Bold', flex: 1 }}>
+                {t('walkthrough.biz.chatBack.title', { defaultValue: 'Retour à la commande' })}
+              </Text>
+            </View>
+            <Text style={{ color: '#666', fontSize: 13, fontFamily: 'Poppins_400Regular', lineHeight: 19, marginBottom: 10 }}>
+              {t('walkthrough.biz.chatBack.desc', { defaultValue: 'Voici la conversation avec le client. Appuyez sur la flèche de retour en haut à gauche pour revenir aux commandes et continuer la démo.' })}
+            </Text>
+            <TouchableOpacity onPress={() => useWalkthroughStore.getState().skipWalkthrough()}>
+              <Text style={{ color: theme.colors.muted, fontSize: 13, fontFamily: 'Poppins_500Medium' }}>
+                {t('walkthrough.exitDemo', { defaultValue: 'Quitter la démo' })}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
     </SafeAreaView>
   );
 }

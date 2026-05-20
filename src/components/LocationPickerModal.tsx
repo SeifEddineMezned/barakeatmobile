@@ -28,6 +28,7 @@ export function LocationPickerModal({ visible, onClose }: Props) {
   const theme = useTheme();
   const { t } = useTranslation();
   const { addresses, selectedId, addAddress, removeAddress, selectAddress } = useAddressStore();
+  const [searchText, setSearchText] = useState('');
 
   const [step, setStep] = useState<Step>('list');
   const [pendingRegion, setPendingRegion] = useState({ lat: 36.8065, lng: 10.1815 });
@@ -71,6 +72,17 @@ export function LocationPickerModal({ visible, onClose }: Props) {
               </TouchableOpacity>
             </View>
 
+            {/* Search bar */}
+            <View style={{ paddingHorizontal: 20, paddingVertical: 10 }}>
+              <TextInput
+                value={searchText}
+                onChangeText={setSearchText}
+                placeholder={t('address.searchPlaceholder', { defaultValue: 'Rechercher une adresse...' })}
+                placeholderTextColor={theme.colors.muted}
+                style={{ height: 40, backgroundColor: theme.colors.surface, borderRadius: 10, paddingHorizontal: 14, color: theme.colors.textPrimary, ...theme.typography.bodySm, borderWidth: 1, borderColor: theme.colors.divider }}
+              />
+            </View>
+
             <ScrollView contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 48 }}>
               {/* Add new button */}
               <TouchableOpacity
@@ -91,7 +103,7 @@ export function LocationPickerModal({ visible, onClose }: Props) {
                   <Text style={[theme.typography.caption, { color: theme.colors.textSecondary, fontWeight: '600' as const, marginBottom: 8, letterSpacing: 0.5, textTransform: 'uppercase' as const }]}>
                     {t('address.saved', { defaultValue: 'Saved addresses' })}
                   </Text>
-                  {addresses.map((addr) => {
+                  {addresses.filter(a => !searchText.trim() || a.label.toLowerCase().includes(searchText.toLowerCase())).map((addr) => {
                     const isSelected = addr.id === selectedId;
                     const labelLower = addr.label.toLowerCase();
                     const Icon = labelLower === 'home' ? Home : labelLower === 'work' ? Briefcase : MapPin;
@@ -99,7 +111,7 @@ export function LocationPickerModal({ visible, onClose }: Props) {
                       <TouchableOpacity
                         key={addr.id}
                         onPress={() => handleSelectAddress(addr.id)}
-                        style={[styles.addrRow, { borderBottomColor: theme.colors.divider }]}
+                        style={[styles.addrRow, { borderBottomColor: theme.colors.divider, backgroundColor: isSelected ? theme.colors.primary + '20' : 'transparent', borderRadius: 12, paddingHorizontal: 12, borderWidth: isSelected ? 1.5 : 0, borderColor: isSelected ? theme.colors.primary : 'transparent' }]}
                       >
                         <Icon size={20} color={isSelected ? theme.colors.primary : theme.colors.textSecondary} />
                         <Text

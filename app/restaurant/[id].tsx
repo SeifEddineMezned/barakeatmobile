@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -13,11 +13,12 @@ import {
   Dimensions,
   Linking,
   Animated,
+  Keyboard,
 } from 'react-native';
 import type { NativeSyntheticEvent, TextLayoutEventData } from 'react-native';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter, useFocusEffect } from 'expo-router';
 import { useQuery } from '@tanstack/react-query';
-import { ChevronLeft, MapPin, ShoppingBag, Clock, Star, Tag, Flag, X, ChevronRight, MoreVertical, TimerOff, Navigation } from 'lucide-react-native';
+import { ChevronLeft, MapPin, ShoppingBag, Clock, Star, Tag, Flag, X, ChevronRight, TimerOff, Navigation, Heart } from 'lucide-react-native';
 import { isPickupExpiredInTz } from '@/src/utils/timezone';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { useTranslation } from 'react-i18next';
@@ -25,8 +26,12 @@ import { StatusBar } from 'expo-status-bar';
 import { fetchLocationById } from '@/src/services/restaurants';
 import { fetchBasketsByLocation } from '@/src/services/baskets';
 import { fetchReviewsByRestaurant, ReviewFromAPI } from '@/src/services/reviews';
+import { fetchMyReservations } from '@/src/services/reservations';
+import { useFavoritesStore } from '@/src/stores/favoritesStore';
 import { normalizeRawBasketToBasket, mapCategory } from '@/src/utils/normalizeRestaurant';
 import { DelayedLoader } from '@/src/components/DelayedLoader';
+import * as ImagePicker from 'expo-image-picker';
+import { submitReport as submitReportApi } from '@/src/services/reports';
 
 const DESC_COLLAPSED_LINES = 3;
 
@@ -37,7 +42,22 @@ interface ReportState {
   reason: ReportReason | null;
   comment: string;
   submitted: boolean;
+  // Data URL for an optional attached photo (for refund evidence). Stored as
+  // data:image/…;base64,… so it can go straight to the backend and also render
+  // as an <Image source={{ uri }}/> for the in-form preview.
+  imageDataUrl?: string | null;
+  submitting?: boolean;
+  error?: string | null;
 }
+
+// Map the app's reason keys to the backend's expected values.
+const REPORT_REASON_API_MAP: Record<ReportReason, string> = {
+  food_quality: 'quality',
+  wrong_info: 'other',
+  hygiene: 'hygiene',
+  behavior: 'rude',
+  other: 'other',
+};
 
 // ── Category-average helpers ───────────────────────────────────────────────────
 function avg(values: number[]): number | null {
@@ -142,7 +162,6 @@ export default function RestaurantScreen() {
       return false;
     });
   }, [ratingsHeight, screenHeight]);
-  const [menuVisible, setMenuVisible] = useState(false);
 
   // Report modal state — local only, no API
   const [reportVisible, setReportVisible] = useState(false);
@@ -151,6 +170,24 @@ export default function RestaurantScreen() {
     comment: '',
     submitted: false,
   });
+
+  // Keyboard-aware state for the report modal's comment textbox. KeyboardAvoidingView
+  // inside a RN <Modal> is unreliable on Android (the modal runs in its own window),
+  // so we track keyboard height explicitly and push it into ScrollView padding.
+  const reportScrollRef = useRef<ScrollView | null>(null);
+  const [reportKbHeight, setReportKbHeight] = useState(0);
+  useEffect(() => {
+    const showEvt = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvt = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    const showSub = Keyboard.addListener(showEvt, (e) => {
+      setReportKbHeight(e.endCoordinates?.height ?? 0);
+    });
+    const hideSub = Keyboard.addListener(hideEvt, () => setReportKbHeight(0));
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, []);
 
   const REPORT_REASONS: { key: ReportReason; label: string }[] = [
     { key: 'food_quality', label: t('report.reasons.food_quality', { defaultValue: 'Food quality issue' }) },
@@ -172,9 +209,44 @@ export default function RestaurantScreen() {
     queryKey: ['baskets-by-location', id],
     queryFn: () => fetchBasketsByLocation(String(id)),
     enabled: !!id,
-    staleTime: 60_000,
+    staleTime: 0,
+    refetchOnMount: 'always',
     retry: 1,
   });
+
+  // Refetch on focus so quantities stay fresh after navigating back from a basket
+  useFocusEffect(
+    useCallback(() => {
+      if (!id) return;
+      basketsQuery.refetch();
+      locationQuery.refetch();
+    }, [id, basketsQuery, locationQuery])
+  );
+
+  // Gate the "signaler ce commerce" affordance behind having ordered from this location.
+  // Reuses the shared ['reservations'] cache used by the orders tab — no extra request in most cases.
+  const reservationsQuery = useQuery({
+    queryKey: ['reservations'],
+    queryFn: fetchMyReservations,
+    staleTime: 60_000,
+  });
+  const hasOrderedHere = (reservationsQuery.data ?? []).some(
+    (r) => Number(r.restaurant_id) === Number(id) || Number((r as any).restaurant?.id) === Number(id),
+  );
+
+  // Favorite state for the top-right heart. Home/favorites cards use
+  // `favoriteBasketIds` keyed by location id (normalizeLocationToBasket sets
+  // basket.id = location.id), so we read/write the same list here — otherwise
+  // a location favorited from the home screen wouldn't show as highlighted
+  // when the user opens its preview page.
+  // Also fall back to `favoriteMerchantIds` for any legacy entries a user
+  // toggled from this page before the unification.
+  const favoriteBasketIds = useFavoritesStore((s) => s.favoriteBasketIds);
+  const favoriteMerchantIds = useFavoritesStore((s) => s.favoriteMerchantIds);
+  const toggleBasketFavorite = useFavoritesStore((s) => s.toggleBasketFavorite);
+  const isFavorited = id
+    ? favoriteBasketIds.includes(String(id)) || favoriteMerchantIds.includes(String(id))
+    : false;
 
   const restaurant = locationQuery.data;
 
@@ -214,8 +286,7 @@ export default function RestaurantScreen() {
 
   // ── Report handlers ────────────────────────────────────────────────────────────
   const openReport = () => {
-    setMenuVisible(false);
-    setReport({ reason: null, comment: '', submitted: false });
+    setReport({ reason: null, comment: '', submitted: false, imageDataUrl: null, submitting: false, error: null });
     setReportVisible(true);
   };
 
@@ -223,10 +294,43 @@ export default function RestaurantScreen() {
     setReportVisible(false);
   };
 
-  const submitReport = () => {
-    if (!report.reason) return;
-    // Local-only: no API call, no fake server submission
-    setReport((prev) => ({ ...prev, submitted: true }));
+  const assetToDataUrl = (asset: ImagePicker.ImagePickerAsset): string | null => {
+    if (!asset.base64) return null;
+    const mime = asset.mimeType || 'image/jpeg';
+    return `data:${mime};base64,${asset.base64}`;
+  };
+
+  const pickReportPhoto = async () => {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') return;
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: 'images',
+      allowsEditing: true,
+      quality: 0.7,
+      base64: true,
+    });
+    if (!result.canceled && result.assets?.[0]) {
+      const dataUrl = assetToDataUrl(result.assets[0]);
+      if (dataUrl) setReport((prev) => ({ ...prev, imageDataUrl: dataUrl }));
+    }
+  };
+
+  const submitReport = async () => {
+    if (!report.reason || report.submitting) return;
+    if (!id) return;
+    setReport((prev) => ({ ...prev, submitting: true, error: null }));
+    try {
+      await submitReportApi({
+        location_id: Number(id),
+        reason: REPORT_REASON_API_MAP[report.reason],
+        details: report.comment.trim() || undefined,
+        image_data_url: report.imageDataUrl || undefined,
+      });
+      setReport((prev) => ({ ...prev, submitted: true, submitting: false }));
+    } catch (err: any) {
+      const msg = err?.response?.data?.error || err?.message || 'Submission failed';
+      setReport((prev) => ({ ...prev, submitting: false, error: msg }));
+    }
   };
 
   // ── Loading state ──────────────────────────────────────────────────────────────
@@ -251,10 +355,14 @@ export default function RestaurantScreen() {
       <ScrollView showsVerticalScrollIndicator={false}>
         {/* Hero */}
         <View style={styles.hero}>
-          {restaurant?.image_url ? (
-            <Image source={{ uri: restaurant.image_url }} style={styles.heroImage} />
+          {restaurant?.cover_image_url ? (
+            <Image source={{ uri: restaurant.cover_image_url }} style={styles.heroImage} />
           ) : (
-            <View style={[styles.heroImage, { backgroundColor: theme.colors.primary + '20' }]} />
+            <View style={[styles.heroImage, { backgroundColor: theme.colors.primary + '15', justifyContent: 'center', alignItems: 'center' }]}>
+              {restaurant?.image_url ? (
+                <Image source={{ uri: restaurant.image_url }} style={{ width: 80, height: 80, borderRadius: 40, opacity: 0.6 }} />
+              ) : null}
+            </View>
           )}
           <View style={styles.heroOverlay} />
           <TouchableOpacity
@@ -263,12 +371,30 @@ export default function RestaurantScreen() {
           >
             <ChevronLeft size={22} color={theme.colors.textPrimary} />
           </TouchableOpacity>
-          {/* 3-dots menu — top right */}
+          {/* Favorite heart — top right. Filled red when this merchant is favorited,
+              outlined otherwise. Toggling adds/removes the location from the favorites
+              tab (same store as the basket-preview star). */}
           <TouchableOpacity
-            style={[styles.menuBtn, { backgroundColor: 'rgba(255,255,255,0.9)', ...theme.shadows.shadowMd }]}
-            onPress={() => setMenuVisible(true)}
+            style={[
+              styles.menuBtn,
+              {
+                // Keep the button background the same regardless of state so
+                // the heart icon itself carries the active/inactive signal —
+                // mirrors the heart on basket cards on the search page.
+                backgroundColor: 'rgba(255,255,255,0.9)',
+                ...theme.shadows.shadowMd,
+              },
+            ]}
+            onPress={() => { if (id) toggleBasketFavorite(String(id)); }}
+            accessibilityLabel={isFavorited
+              ? t('favorites.removeFromFavorites', { defaultValue: 'Retirer des favoris' })
+              : t('favorites.addToFavorites', { defaultValue: 'Ajouter aux favoris' })}
           >
-            <MoreVertical size={20} color={theme.colors.textPrimary} />
+            <Heart
+              size={20}
+              color={isFavorited ? theme.colors.error : theme.colors.textSecondary}
+              fill={isFavorited ? theme.colors.error : 'transparent'}
+            />
           </TouchableOpacity>
           {/* Rating badge — bottom right of hero image */}
           <TouchableOpacity
@@ -301,10 +427,15 @@ export default function RestaurantScreen() {
             },
           ]}
         >
-          {/* Name + category */}
-          <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h2, fontWeight: '700' as const }]}>
-            {restaurant?.name ?? ''}
-          </Text>
+          {/* Name + logo + category */}
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+            {restaurant?.image_url ? (
+              <Image source={{ uri: restaurant.image_url }} style={{ width: 36, height: 36, borderRadius: 18, borderWidth: 1, borderColor: theme.colors.divider }} />
+            ) : null}
+            <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h2, fontWeight: '700' as const, flex: 1 }]}>
+              {restaurant?.name ?? ''}
+            </Text>
+          </View>
           {restaurant?.category ? (
             <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 4 }}>
               <Tag size={12} color={theme.colors.textSecondary} />
@@ -470,36 +601,26 @@ export default function RestaurantScreen() {
           )}
         </View>
 
+        {/* Signaler ce commerce — only rendered for customers who have already
+            ordered from this location. Keeps the entry point off the top-right
+            (replaced by the favorites heart) while preserving access for users
+            with legitimate grounds to report. Opens the existing report modal. */}
+        {hasOrderedHere && (
+          <TouchableOpacity
+            onPress={openReport}
+            style={{ alignSelf: 'center', flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 16, paddingVertical: 10, marginTop: 8 }}
+            accessibilityLabel={t('report.cta', { defaultValue: 'Report this restaurant' })}
+          >
+            <Flag size={14} color={theme.colors.textSecondary} />
+            <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, textDecorationLine: 'underline' }}>
+              {t('report.cta', { defaultValue: 'Signaler ce commerce' })}
+            </Text>
+          </TouchableOpacity>
+        )}
+
         {/* Bottom spacing */}
         <View style={{ height: 48 }} />
       </ScrollView>
-
-      {/* ── 3-dots menu popup ──────────────────────────────────────── */}
-      <Modal
-        visible={menuVisible}
-        transparent
-        animationType="fade"
-        statusBarTranslucent
-        onRequestClose={() => setMenuVisible(false)}
-      >
-        <TouchableOpacity
-          style={StyleSheet.absoluteFillObject}
-          activeOpacity={1}
-          onPress={() => setMenuVisible(false)}
-        />
-        <View style={[styles.menuPopup, { backgroundColor: theme.colors.surface, ...theme.shadows.shadowLg, borderRadius: theme.radii.r12 }]}>
-          <TouchableOpacity
-            onPress={openReport}
-            style={styles.menuItem}
-            activeOpacity={0.7}
-          >
-            <Flag size={16} color={theme.colors.textSecondary} />
-            <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.body, marginLeft: 12 }]}>
-              {t('report.cta', { defaultValue: 'Report this restaurant' })}
-            </Text>
-          </TouchableOpacity>
-        </View>
-      </Modal>
 
       {/* ── Ratings popup modal ────────────────────────────────────── */}
       <Modal
@@ -682,11 +803,18 @@ export default function RestaurantScreen() {
             onPress={closeReport}
           />
 
-          {/* ── SHEET ── */}
+          {/* ── SHEET ──
+              marginBottom = keyboard height pushes the whole sheet above the keyboard.
+              KeyboardAvoidingView inside a <Modal> is unreliable on Android, so we
+              track the keyboard height explicitly and offset the sheet here. */}
           <View
             style={[
               styles.reportSheet,
-              { backgroundColor: theme.colors.surface, ...theme.shadows.shadowLg },
+              {
+                backgroundColor: theme.colors.surface,
+                ...theme.shadows.shadowLg,
+                marginBottom: reportKbHeight,
+              },
             ]}
           >
             {/* Grab handle */}
@@ -767,26 +895,12 @@ export default function RestaurantScreen() {
                 >
                   {t('report.localConfirmMsg')}
                 </Text>
-                <TouchableOpacity
-                  onPress={closeReport}
-                  style={[
-                    styles.confirmDoneBtn,
-                    {
-                      backgroundColor: theme.colors.primary,
-                      borderRadius: 14,
-                      marginTop: 28,
-                    },
-                  ]}
-                >
-                  <Text style={{ color: '#fff', fontSize: 15, fontWeight: '600', textAlign: 'center' }}>
-                    {t('common.close')}
-                  </Text>
-                </TouchableOpacity>
               </View>
             ) : (
               /* Report form */
               <>
                 <ScrollView
+                  ref={reportScrollRef}
                   keyboardShouldPersistTaps="handled"
                   showsVerticalScrollIndicator={false}
                   contentContainerStyle={styles.sheetScrollContent}
@@ -882,8 +996,61 @@ export default function RestaurantScreen() {
                     numberOfLines={4}
                     value={report.comment}
                     onChangeText={(text) => setReport((prev) => ({ ...prev, comment: text }))}
+                    onFocus={() => {
+                      // Give the keyboard a moment to open, then scroll the input into view.
+                      setTimeout(() => reportScrollRef.current?.scrollToEnd({ animated: true }), 250);
+                    }}
                     textAlignVertical="top"
                   />
+                  {/* ── Optional photo — for refund evidence ── */}
+                  <Text
+                    style={[
+                      styles.sectionLabel,
+                      { color: theme.colors.textSecondary, marginTop: 20 },
+                    ]}
+                  >
+                    {t('report.photoLabel', { defaultValue: 'Photo (optionnel)' }).toUpperCase()}
+                  </Text>
+                  {report.imageDataUrl ? (
+                    <View style={{ position: 'relative', marginTop: 6 }}>
+                      <Image
+                        source={{ uri: report.imageDataUrl }}
+                        style={{ width: '100%', height: 180, borderRadius: 12, resizeMode: 'cover' }}
+                      />
+                      <TouchableOpacity
+                        onPress={() => setReport((prev) => ({ ...prev, imageDataUrl: null }))}
+                        style={{
+                          position: 'absolute', top: 8, right: 8,
+                          backgroundColor: 'rgba(0,0,0,0.65)', borderRadius: 14,
+                          width: 28, height: 28, alignItems: 'center', justifyContent: 'center',
+                        }}
+                      >
+                        <X size={16} color="#fff" />
+                      </TouchableOpacity>
+                    </View>
+                  ) : (
+                    <TouchableOpacity
+                      onPress={pickReportPhoto}
+                      style={{
+                        marginTop: 6, padding: 14, borderRadius: 12,
+                        borderWidth: 1,
+                        borderColor: theme.colors.divider,
+                        backgroundColor: theme.colors.surfaceMuted,
+                        alignItems: 'center', justifyContent: 'center',
+                      }}
+                    >
+                      <Text style={{ color: theme.colors.textSecondary, fontSize: 13, fontWeight: '500' }}>
+                        {t('report.addPhoto', { defaultValue: 'Ajouter une photo (pour remboursement)' })}
+                      </Text>
+                    </TouchableOpacity>
+                  )}
+
+                  {report.error ? (
+                    <Text style={{ color: theme.colors.error, fontSize: 12, marginTop: 8, lineHeight: 16 }}>
+                      {report.error}
+                    </Text>
+                  ) : null}
+
                   {/* Confidentiality note */}
                   <Text
                     style={{
@@ -906,8 +1073,8 @@ export default function RestaurantScreen() {
                 >
                   <TouchableOpacity
                     onPress={submitReport}
-                    disabled={!report.reason}
-                    activeOpacity={report.reason ? 0.82 : 1}
+                    disabled={!report.reason || !!report.submitting}
+                    activeOpacity={report.reason && !report.submitting ? 0.82 : 1}
                     style={[
                       styles.submitBtn,
                       {
@@ -915,21 +1082,25 @@ export default function RestaurantScreen() {
                           ? theme.colors.primary
                           : theme.colors.divider,
                         borderRadius: 14,
-                        opacity: report.reason ? 1 : 0.6,
+                        opacity: report.reason && !report.submitting ? 1 : 0.6,
                       },
                     ]}
                   >
-                    <Text
-                      style={{
-                        color: report.reason ? '#fff' : theme.colors.muted,
-                        fontSize: 15,
-                        fontWeight: '600',
-                        textAlign: 'center',
-                        letterSpacing: 0.1,
-                      }}
-                    >
-                      {t('report.submit')}
-                    </Text>
+                    {report.submitting ? (
+                      <ActivityIndicator color="#fff" />
+                    ) : (
+                      <Text
+                        style={{
+                          color: report.reason ? '#fff' : theme.colors.muted,
+                          fontSize: 15,
+                          fontWeight: '600',
+                          textAlign: 'center',
+                          letterSpacing: 0.1,
+                        }}
+                      >
+                        {t('report.submit')}
+                      </Text>
+                    )}
                   </TouchableOpacity>
                 </View>
               </>
@@ -1080,6 +1251,7 @@ const styles = StyleSheet.create({
   },
   sheetScrollContent: {
     paddingHorizontal: 24,
+    // Base padding — dynamic keyboard-aware padding is added inline in contentContainerStyle.
     paddingBottom: 20,
   },
   sectionLabel: {

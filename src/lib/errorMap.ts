@@ -51,6 +51,9 @@ const ERROR_MAP: Record<string, string> = {
   'Already reserved today': 'errors.alreadyReserved',
   'Pickup time expired': 'errors.pickupExpired',
   'Reservation not found': 'errors.reservationNotFound',
+  'Not authorized to view this reservation': 'errors.forbidden',
+  'Maximum 20 baskets per order': 'errors.maxQuantity',
+  'Invalid or expired code': 'errors.otpExpired',
 
   // ── Generic / network ──────────────────────────────────────────────────────
   'Unauthorized': 'errors.unauthorized',

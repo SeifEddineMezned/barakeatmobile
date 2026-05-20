@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, ScrollView, Modal } from 'react-native';
+import { PasswordInput } from '@/src/components/PasswordInput';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -232,26 +233,26 @@ export default function ForgotPasswordScreen() {
                   <Text style={[styles.label, { color: theme.colors.textPrimary, ...theme.typography.bodySm }]}>
                     {t('auth.newPassword')}
                   </Text>
-                  <TextInput
-                    style={[styles.input, { backgroundColor: theme.colors.surface, borderColor: theme.colors.divider, borderRadius: theme.radii.r12, color: theme.colors.textPrimary, ...theme.typography.body, ...theme.shadows.shadowSm }]}
+                  <PasswordInput
+                    containerStyle={{ backgroundColor: theme.colors.surface }}
+                    style={[styles.input, { color: theme.colors.textPrimary, borderWidth: 0, ...theme.typography.body }]}
                     value={newPassword}
                     onChangeText={setNewPassword}
                     placeholder="••••••••"
                     placeholderTextColor={theme.colors.muted}
-                    secureTextEntry
                   />
                 </View>
                 <View style={[styles.inputContainer, { marginBottom: theme.spacing.xxl }]}>
                   <Text style={[styles.label, { color: theme.colors.textPrimary, ...theme.typography.bodySm }]}>
                     {t('auth.confirmNewPassword')}
                   </Text>
-                  <TextInput
-                    style={[styles.input, { backgroundColor: theme.colors.surface, borderColor: theme.colors.divider, borderRadius: theme.radii.r12, color: theme.colors.textPrimary, ...theme.typography.body, ...theme.shadows.shadowSm }]}
+                  <PasswordInput
+                    containerStyle={{ backgroundColor: theme.colors.surface }}
+                    style={[styles.input, { color: theme.colors.textPrimary, borderWidth: 0, ...theme.typography.body }]}
                     value={confirmPassword}
                     onChangeText={setConfirmPassword}
                     placeholder="••••••••"
                     placeholderTextColor={theme.colors.muted}
-                    secureTextEntry
                   />
                 </View>
                 <PrimaryCTAButton onPress={handleResetPassword} title={t('auth.resetPassword')} loading={loading} />

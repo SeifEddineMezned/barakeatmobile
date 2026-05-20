@@ -145,9 +145,9 @@ const defaultTeam: TeamMember[] = [
 ];
 
 const DEFAULT_PERMISSIONS: Record<string, TeamPermission> = {
-  admin: { dashboard: true, baskets: true, orders: true, profile: true, team: true, financial: true },
-  restricted: { dashboard: true, baskets: false, orders: true, profile: false, team: false, financial: false },
-  custom: { dashboard: true, baskets: true, orders: true, profile: false, team: false, financial: false },
+  admin: { confirm_pickup: true, edit_quantities: true, edit_basket_info: true, create_delete_baskets: true, view_history: true, messaging: true, cancel_order: true },
+  restricted: { confirm_pickup: true, edit_quantities: false, edit_basket_info: false, create_delete_baskets: false, view_history: false, messaging: true, cancel_order: false },
+  custom: { confirm_pickup: true, edit_quantities: false, edit_basket_info: false, create_delete_baskets: false, view_history: false, messaging: false, cancel_order: false },
 };
 
 export { DEFAULT_PERMISSIONS };
@@ -155,29 +155,29 @@ export { DEFAULT_PERMISSIONS };
 export const useBusinessStore = create(
   combine(
     {
-      profile: {
-        id: 'biz1',
-        name: 'Mon Commerce',
-        email: 'commerce@barakeat.tn',
-        phone: '+216 71 123 456',
-        address: 'Avenue Habib Bourguiba, Tunis',
-        category: 'Pâtisseries/Boulangeries',
-        description: 'Boulangerie artisanale depuis 1998',
-        logo: 'https://images.unsplash.com/photo-1509440159596-0249088772ff?w=100&h=100&fit=crop',
-        coverPhoto: 'https://images.unsplash.com/photo-1509440159596-0249088772ff?w=800&h=300&fit=crop',
-        hours: '07:00 - 20:00',
-        latitude: 36.8065,
-        longitude: 10.1815,
-        isSupermarket: false,
-      } as BusinessProfile | null,
+      // Profile starts null — populated only after the partner picks a real
+      // location and we hydrate from /api/teams/.../profile. Hard-coded
+      // fallbacks would flash fake data ("Mon Commerce", "Avenue Habib
+      // Bourguiba") on first login for orgs that haven't added a location yet.
+      profile: null as BusinessProfile | null,
       baskets: defaultBusinessBaskets as Basket[],
       orders: defaultOrders as Order[],
       stats: initialStats as BusinessStats,
       team: defaultTeam as TeamMember[],
       selectedLocationId: null as number | string | null,
+      targetOrderId: null as string | null,
+      targetOrderLocationId: null as number | string | null,
+      targetOrderTs: 0,
+      targetBasketId: null as string | null,
+      targetBasketTs: 0,
     },
     (set) => ({
       setSelectedLocationId: (id: number | string | null) => set({ selectedLocationId: id }),
+      setTargetOrderId: (id: string | null) => set({ targetOrderId: id }),
+      setTargetOrder: (orderId: string | null, locationId?: number | string | null) =>
+        set({ targetOrderId: orderId, targetOrderLocationId: locationId ?? null, targetOrderTs: Date.now() }),
+      setTargetBasket: (basketId: string | null) =>
+        set({ targetBasketId: basketId, targetBasketTs: Date.now() }),
       setProfile: (profile: BusinessProfile) => set({ profile }),
       addBasket: (basket: Basket) =>
         set((state) => ({

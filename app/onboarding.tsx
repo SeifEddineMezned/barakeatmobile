@@ -30,7 +30,10 @@ interface OnboardingSlide {
 
 export default function OnboardingScreen() {
   const { demo, role: roleParam } = useLocalSearchParams<{ demo?: string; role?: string }>();
-  const isDemo = demo === 'true';
+  // Capture demo flag on first render so the auth redirect never fires for demo sessions
+  const isDemoRef = useRef(demo === 'true');
+  if (demo === 'true') isDemoRef.current = true;
+  const isDemo = isDemoRef.current;
   const isBusiness = roleParam === 'business';
   const { t, i18n } = useTranslation();
   const theme = useTheme();
@@ -44,7 +47,7 @@ export default function OnboardingScreen() {
   const user = useAuthStore((state) => state.user);
 
   useEffect(() => {
-    if (isDemo) return; // Demo mode — stay on onboarding regardless of auth state
+    if (isDemo) return; // Demo mode — never redirect
     if (isAuthenticated) {
       if (user?.role === 'business') {
         router.replace('/(business)/dashboard' as never);

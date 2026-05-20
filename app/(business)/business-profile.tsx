@@ -1,5 +1,6 @@
-import React, { useCallback, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Modal, Image, TextInput, Switch, KeyboardAvoidingView, Platform } from 'react-native';
+import React, { useCallback, useState, useRef } from 'react';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Modal, Image, TextInput, Switch, KeyboardAvoidingView, Platform, Animated } from 'react-native';
+import { TimePicker } from '@/src/components/TimePicker';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import { useRouter } from 'expo-router';
@@ -18,6 +19,8 @@ import { DelayedLoader } from '@/src/components/DelayedLoader';
 import { fetchMyContext, fetchOrganizationDetails, addMember as addMemberAPI, updateMember, removeMember as removeMemberAPI } from '@/src/services/teams';
 import * as ImagePicker from 'expo-image-picker';
 import type { TeamMember, TeamRole, TeamPermission } from '@/src/types';
+import { useWalkthroughStore } from '@/src/stores/walkthroughStore';
+import { NoLocationCTA } from '@/src/components/NoLocationCTA';
 
 export default function BusinessProfileScreen() {
   const { t } = useTranslation();
@@ -33,14 +36,16 @@ export default function BusinessProfileScreen() {
   const profileQuery = useQuery({
     queryKey: ['my-profile', selectedLocationId],
     queryFn: () => fetchMyProfile(selectedLocationId),
-    staleTime: 60_000,
+    staleTime: 30_000,
+    refetchOnMount: 'always',
     retry: 1,
   });
 
   const contextQuery = useQuery({
-    queryKey: ['team-context'],
+    queryKey: ['my-context'],
     queryFn: fetchMyContext,
-    staleTime: 60_000,
+    staleTime: 10_000,
+    //refetchInterval: 15_000,
   });
 
   const orgDetailsQuery = useQuery({
@@ -52,15 +57,31 @@ export default function BusinessProfileScreen() {
 
   // Permission enforcement — hide/disable sections based on member permissions
   const myRole = contextQuery.data?.role ?? 'member';
-  const isAdmin = myRole === 'owner' || myRole === 'admin';
-  const myPerms = contextQuery.data?.permissions ?? {};
-  const canEditProfile = isAdmin || myPerms.profile === 'write';
-  const canEditAvailability = isAdmin || myPerms.availability === 'write';
-  const canViewMenu = isAdmin || myPerms.menu === 'write' || myPerms.menu === 'read';
-  const canEditMenu = isAdmin || myPerms.menu === 'write';
+  const myLocationIdForScope = contextQuery.data?.location_id ?? null;
+  // Org admin = admin/owner with NO location constraint.
+  // Location admin = admin scoped to one location — they can manage their
+  // location's team but not the org-wide profile fields.
+  const isOrgAdmin = (myRole === 'owner' || myRole === 'admin') && !myLocationIdForScope;
+  const isLocationAdmin = myRole === 'admin' && !!myLocationIdForScope;
+  const isAdmin = isOrgAdmin || isLocationAdmin;
+  const rawPerms = contextQuery.data?.permissions ?? {};
+  // Normalize: backend may send booleans or strings
+  const hasPerm = (key: string) => {
+    const v = rawPerms[key];
+    return v === true || v === 'true' || v === 'write';
+  };
+  // Profile editing = org-wide changes (name, category, ...). Location admins
+  // can view the profile but can't edit org-level fields.
+  const canEditProfile = isOrgAdmin;
+  const canEditAvailability = isAdmin || hasPerm('edit_quantities');
+  const canEditBasketInfo = isAdmin || hasPerm('edit_basket_info');
+  const canCreateDeleteBaskets = isAdmin || hasPerm('create_delete_baskets');
+  const canManageBaskets = canEditAvailability || canEditBasketInfo || canCreateDeleteBaskets;
+  // Team management is admin-only — location admins keep access but their
+  // team.tsx screen is scoped to their one location.
+  const canManageTeam = isAdmin;
 
-  // Baskets hold the EFFECTIVE pickup times (updatable via PUT /api/baskets/:id)
-  // The locations table pickup_start_time cannot be updated on this backend.
+  // Baskets for this location — used for basket management and menu items
   const basketsQuery = useQuery({
     queryKey: ['my-baskets', selectedLocationId],
     queryFn: () => fetchMyBaskets(selectedLocationId),
@@ -75,25 +96,57 @@ export default function BusinessProfileScreen() {
     status: 'active',
   }));
 
+  // Dedupe by user_id so a member in multiple locations counts once in the
+  // team-management button subtitle (matches gestion d'équipe's own count).
+  const uniqueTeamMemberCount = React.useMemo(() => {
+    const ids = new Set<string>();
+    for (const m of teamMembers as any[]) ids.add(String(m.user_id ?? m.membership_id ?? m.id));
+    return ids.size;
+  }, [teamMembers]);
+
   const addMemberMutation = useMutation({
     mutationFn: async () => {
       const orgId = contextQuery.data?.organization_id;
-      if (!orgId) throw new Error('No organization');
-      // Backend requires name, email, password as mandatory fields
+      if (!orgId) throw new Error(t('business.team.noOrg', { defaultValue: 'Organisation introuvable' }));
       const tempPassword = Math.random().toString(36).slice(-8);
+
+      // Build role and permissions based on selection
+      let role: string;
+      let permsPayload: Record<string, string> | undefined;
+      let locationId: number | undefined;
+
+      if (newMemberIsOrgAdmin) {
+        role = 'admin';
+        permsPayload = { availability: 'write', reservations: 'write', profile: 'write', menu: 'write', team: 'write' };
+      } else {
+        role = newMemberRole === 'admin' ? 'admin' : 'member';
+        if (role === 'admin') {
+          permsPayload = { availability: 'write', reservations: 'write', profile: 'write', menu: 'write', team: 'write' };
+        } else {
+          // Restricted: default minimal permissions
+          permsPayload = { availability: 'none', reservations: 'write', profile: 'none', menu: 'none', team: 'none' };
+        }
+        locationId = newMemberLocations[0];
+      }
+
       return addMemberAPI(orgId, {
         email: newMemberEmail.trim(),
         name: newMemberName.trim(),
         password: tempPassword,
-        role: newMemberRole === 'admin' ? 'admin' : 'member',
+        role,
+        permissions: permsPayload,
+        ...(locationId ? { location_id: locationId } : {}),
       });
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['org-details'] });
+      void queryClient.invalidateQueries({ queryKey: ['my-context'] });
       setShowAddMemberModal(false);
       setNewMemberName('');
       setNewMemberEmail('');
-      alert.showAlert(t('common.success'), t('business.profile.memberAdded'));
+      setNewMemberLocations([]);
+      setNewMemberIsOrgAdmin(false);
+      alert.showAlert(t('common.success'), t('business.profile.memberAdded', { defaultValue: 'Membre ajouté avec succès' }));
     },
     onError: (err: any) => {
       alert.showAlert(t('common.error'), err?.message ?? t('common.errorOccurred'));
@@ -111,25 +164,37 @@ export default function BusinessProfileScreen() {
     },
   });
 
-  // Merge API profile data with store defaults
+  // Format a Tunisian phone number for display. Stored values may or may not
+  // include the +216 prefix (legacy rows didn't); normalize so the profile
+  // always shows the dialable form.
+  const formatTnPhone = (raw?: string | null): string | undefined => {
+    if (!raw) return undefined;
+    const trimmed = String(raw).trim();
+    if (!trimmed) return undefined;
+    if (trimmed.startsWith('+')) return trimmed;
+    const digitsOnly = trimmed.replace(/\D/g, '');
+    if (digitsOnly.startsWith('216')) return `+${digitsOnly}`;
+    return `+216 ${trimmed}`;
+  };
+
+  // Profile = the currently selected location's data. When no location has
+  // been added yet, profile is null and the screen short-circuits to a
+  // NoLocationCTA — we deliberately do NOT fall back to demo data.
   const profile = profileQuery.data
     ? {
         id: String(profileQuery.data.id),
         name: profileQuery.data.name,
         email: user?.email ?? '',
-        phone: profileQuery.data.phone ?? undefined,
+        phone: formatTnPhone(profileQuery.data.phone),
         address: profileQuery.data.address ?? '',
         category: profileQuery.data.category ?? '',
         description: profileQuery.data.description ?? undefined,
         logo: profileQuery.data.image_url ?? undefined,
         coverPhoto: profileQuery.data.cover_image_url ?? undefined,
         hours: (() => {
-          // Prefer basket pickup times — baskets are updatable via PUT /api/baskets/:id.
-          // The locations table times can't be updated (backend bug), so we fall back
-          // to location data only when no basket times exist.
-          const firstBasket = basketsQuery.data?.[0];
-          const start = firstBasket?.pickup_start_time ?? profileQuery.data.pickup_start_time;
-          const end = firstBasket?.pickup_end_time ?? profileQuery.data.pickup_end_time;
+          // Use location profile times as the source of truth (updated via handleSaveHours)
+          const start = profileQuery.data.pickup_start_time;
+          const end = profileQuery.data.pickup_end_time;
           return start && end
             ? `${start.substring(0, 5)} - ${end.substring(0, 5)}`
             : undefined;
@@ -138,7 +203,15 @@ export default function BusinessProfileScreen() {
         longitude: profileQuery.data.longitude ?? 0,
         isSupermarket: (profileQuery.data.category ?? '').toLowerCase() === 'supermarket',
       }
-    : store.profile;
+    : null;
+
+  const orgLocationsForNoLoc = orgDetailsQuery.data?.locations ?? [];
+  const hasNoLocation = isOrgAdmin
+    && !!contextQuery.data?.organization_id
+    && !orgDetailsQuery.isLoading
+    && orgLocationsForNoLoc.length === 0;
+  const orgName = contextQuery.data?.organization_name ?? orgDetailsQuery.data?.organization?.name ?? '';
+  const orgImageUrl = orgDetailsQuery.data?.organization?.image_url ?? null;
   // Pickup instructions editor state
   const [showPickupInstructionsEditor, setShowPickupInstructionsEditor] = useState(false);
   const [pickupInstructionsText, setPickupInstructionsText] = useState(profileQuery.data?.pickup_instructions ?? '');
@@ -165,14 +238,9 @@ export default function BusinessProfileScreen() {
   const [showHoursModal, setShowHoursModal] = useState(false);
   const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
   const DAY_LABELS: Record<string, string> = { Mon: t('business.dashboard.days.Mon'), Tue: t('business.dashboard.days.Tue'), Wed: t('business.dashboard.days.Wed'), Thu: t('business.dashboard.days.Thu'), Fri: t('business.dashboard.days.Fri'), Sat: t('business.dashboard.days.Sat'), Sun: t('business.dashboard.days.Sun') };
-  // Seed modal from basket times (those are what we actually save)
-  const firstBasket = basketsQuery.data?.[0];
-  const defaultStart = firstBasket?.pickup_start_time?.substring(0, 5)
-    ?? profileQuery.data?.pickup_start_time?.substring(0, 5)
-    ?? '09:00';
-  const defaultEnd = firstBasket?.pickup_end_time?.substring(0, 5)
-    ?? profileQuery.data?.pickup_end_time?.substring(0, 5)
-    ?? '18:00';
+  // Seed modal from LOCATION profile times (not basket times — those are basket-specific)
+  const defaultStart = profileQuery.data?.pickup_start_time?.substring(0, 5) ?? '09:00';
+  const defaultEnd = profileQuery.data?.pickup_end_time?.substring(0, 5) ?? '18:00';
   const [hoursStart, setHoursStart] = useState(defaultStart);
   const [hoursEnd, setHoursEnd] = useState(defaultEnd);
   const [sameAllDays, setSameAllDays] = useState(true);
@@ -181,31 +249,125 @@ export default function BusinessProfileScreen() {
   );
   const [hoursSaving, setHoursSaving] = useState(false);
 
-  const handleSaveHours = async () => {
+  // Sync hoursStart/hoursEnd when profile data loads (it may arrive after mount)
+  React.useEffect(() => {
+    const s = profileQuery.data?.pickup_start_time?.substring(0, 5);
+    const e = profileQuery.data?.pickup_end_time?.substring(0, 5);
+    if (s && s !== hoursStart) setHoursStart(s);
+    if (e && e !== hoursEnd) setHoursEnd(e);
+  }, [profileQuery.data?.pickup_start_time, profileQuery.data?.pickup_end_time]);
+
+  // Warning flash for location end time exceeding 03:30
+  const [hoursEndWarning, setHoursEndWarning] = useState(false);
+  const hoursEndWarningAnim = useRef(new Animated.Value(0)).current;
+  const flashHoursEndWarning = useCallback(() => {
+    setHoursEndWarning(true);
+    Animated.sequence([
+      Animated.timing(hoursEndWarningAnim, { toValue: 1, duration: 150, useNativeDriver: false }),
+      Animated.timing(hoursEndWarningAnim, { toValue: 0, duration: 2000, useNativeDriver: false }),
+    ]).start(() => setHoursEndWarning(false));
+  }, [hoursEndWarningAnim]);
+
+  const toTimeField = (hhmm: string) => hhmm.includes(':') && hhmm.split(':').length === 2 ? `${hhmm}:00` : hhmm;
+  const normalizePickupTime = (v: string | null | undefined): string | null => {
+    if (!v) return null;
+    const parts = v.split(':');
+    if (parts.length === 2) return `${v}:00`;
+    if (parts.length === 3) return v;
+    return null;
+  };
+  const clampToWindow = (v: string | null | undefined, lo: string, hi: string): string => {
+    const n = normalizePickupTime(v);
+    if (!n) return lo;
+    if (n < lo) return lo;
+    if (n > hi) return hi;
+    return n;
+  };
+
+  const runSaveHours = async () => {
     setHoursSaving(true);
     try {
-      const { updateLocationById } = await import('@/src/services/business');
+      const { updateLocationById, updateBasket } = await import('@/src/services/business');
       const userId = user?.id ? Number(user.id) : undefined;
       const locationId = profileQuery.data?.id;
       if (!locationId) throw new Error('Profil non chargé');
-      const toTime = (hhmm: string) => hhmm.includes(':') && hhmm.split(':').length === 2 ? `${hhmm}:00` : hhmm;
+      const newStart = toTimeField(sameAllDays ? hoursStart : dayHours['Mon'].start);
+      const newEnd = toTimeField(sameAllDays ? hoursEnd : dayHours['Mon'].end);
       // PUT /api/locations/:id — same pattern as confirmed-working PUT /api/baskets/:id
       await updateLocationById(
         locationId,
-        {
-          pickup_start_time: toTime(sameAllDays ? hoursStart : dayHours['Mon'].start),
-          pickup_end_time: toTime(sameAllDays ? hoursEnd : dayHours['Mon'].end),
-        },
+        { pickup_start_time: newStart, pickup_end_time: newEnd },
         userId,
         profileQuery.data?.organization_id ?? undefined
       );
-      void queryClient.invalidateQueries({ queryKey: ['my-profile'] });
+      // Clamp each basket's pickup window to the new location window.
+      // Non-conflicting baskets get their original times re-sent, in case the
+      // updateLocationById cascade fallback overwrote every basket.
+      const baskets = basketsQuery.data ?? [];
+      await Promise.all(
+        baskets.map((b) =>
+          updateBasket(b.id, {
+            pickup_start_time: clampToWindow(b.pickup_start_time, newStart, newEnd),
+            pickup_end_time: clampToWindow(b.pickup_end_time, newStart, newEnd),
+          }).catch((err: any) => {
+            console.log('[Profile] Failed to clamp basket', b.id, err?.message);
+          })
+        )
+      );
+      await queryClient.invalidateQueries({ queryKey: ['my-profile'] });
+      await queryClient.invalidateQueries({ queryKey: ['my-baskets'] });
+      await queryClient.refetchQueries({ queryKey: ['my-profile', selectedLocationId] });
+      void queryClient.invalidateQueries({ queryKey: ['business-stats'] });
+      void queryClient.invalidateQueries({ queryKey: ['locations'] });
       setShowHoursModal(false);
+      // Update local state so next modal open shows new values
+      setHoursStart(newStart.substring(0, 5));
+      setHoursEnd(newEnd.substring(0, 5));
     } catch (err: any) {
       alert.showAlert(t('common.error'), err?.message ?? t('common.errorOccurred'));
     } finally {
       setHoursSaving(false);
     }
+  };
+
+  const handleSaveHours = async () => {
+    const newStart = toTimeField(sameAllDays ? hoursStart : dayHours['Mon'].start);
+    const newEnd = toTimeField(sameAllDays ? hoursEnd : dayHours['Mon'].end);
+    const baskets = basketsQuery.data ?? [];
+    const conflicting = baskets.filter((b) => {
+      const bs = normalizePickupTime(b.pickup_start_time);
+      const be = normalizePickupTime(b.pickup_end_time);
+      return (bs !== null && bs < newStart) || (be !== null && be > newEnd);
+    });
+    if (conflicting.length > 0) {
+      // Close the hours modal before showing the alert — RN can't reliably
+      // stack a second Modal on top of a visible one (iOS freezes, Android
+      // hides the new one behind the old one).
+      setShowHoursModal(false);
+      const resetToSaved = () => {
+        const s = profileQuery.data?.pickup_start_time?.substring(0, 5) ?? '09:00';
+        const e = profileQuery.data?.pickup_end_time?.substring(0, 5) ?? '18:00';
+        setHoursStart(s);
+        setHoursEnd(e);
+        setDayHours(Object.fromEntries(DAYS.map(d => [d, { start: s, end: e }])));
+      };
+      setTimeout(() => {
+        alert.showAlert(
+          t('business.availability.conflictTitle'),
+          t('business.availability.conflictMessage', {
+            count: conflicting.length,
+            start: newStart.substring(0, 5),
+            end: newEnd.substring(0, 5),
+          }),
+          [
+            { text: t('common.cancel'), style: 'cancel', onPress: resetToSaved },
+            { text: t('business.availability.adjustAndSave'), onPress: () => { void runSaveHours(); } },
+          ]
+        );
+      }, 300);
+      return;
+    }
+    await runSaveHours();
   };
 
   const [showAddMemberModal, setShowAddMemberModal] = useState(false);
@@ -214,6 +376,9 @@ export default function BusinessProfileScreen() {
   const [newMemberName, setNewMemberName] = useState('');
   const [newMemberEmail, setNewMemberEmail] = useState('');
   const [newMemberRole, setNewMemberRole] = useState<TeamRole>('restricted');
+  const [newMemberIsOrgAdmin, setNewMemberIsOrgAdmin] = useState(false);
+  const [newMemberLocations, setNewMemberLocations] = useState<number[]>([]);
+  const orgLocations = (orgDetailsQuery.data as any)?.locations ?? [];
 
   const handleAddMember = useCallback(() => {
     if (!newMemberName.trim() || !newMemberEmail.trim()) return;
@@ -231,18 +396,59 @@ export default function BusinessProfileScreen() {
     );
   }, [removeMemberMutation, t]);
 
-  const handleChangeRole = useCallback((memberId: string, role: TeamRole) => {
+  const permBoolToString = (val: boolean): string => val ? 'write' : 'none';
+
+  const handleChangeRole = useCallback(async (memberId: string, role: TeamRole) => {
     const perms: TeamPermission = DEFAULT_PERMISSIONS[role];
+    // Update local state immediately for UI responsiveness
     updateTeamMemberRole(memberId, role, perms);
     setShowRoleModal(null);
-  }, [updateTeamMemberRole]);
+    // Persist to backend
+    try {
+      const orgId = contextQuery.data?.organization_id;
+      if (orgId) {
+        const permsPayload: Record<string, string> = {};
+        Object.entries(perms).forEach(([k, v]) => { permsPayload[k] = permBoolToString(v); });
+        await updateMember(orgId, memberId, { role, permissions: permsPayload });
+        void queryClient.invalidateQueries({ queryKey: ['org-details'] });
+        void queryClient.invalidateQueries({ queryKey: ['my-context'] });
+      }
+    } catch (err: any) {
+      alert.showAlert(t('common.error'), t('business.team.updateFailed', { defaultValue: 'Échec de la mise à jour des permissions' }));
+    }
+  }, [updateTeamMemberRole, contextQuery.data, queryClient, t, alert]);
 
-  const handleTogglePermission = useCallback((memberId: string, permKey: keyof TeamPermission) => {
-    const member = team.find((m) => m.id === memberId);
-    if (!member) return;
-    const newPerms: TeamPermission = { ...member.permissions, [permKey]: !member.permissions[permKey] };
-    updateTeamMemberRole(memberId, 'custom', newPerms);
-  }, [team, updateTeamMemberRole]);
+  const handleTogglePermission = useCallback(async (memberId: string, permKey: keyof TeamPermission) => {
+    // Find the member from API data (not Zustand)
+    const members = orgDetailsQuery.data?.members ?? [];
+    const m = members.find((mem: any) => String(mem.membership_id) === String(memberId) || String(mem.user_id) === String(memberId));
+    if (!m) return;
+    const rawP = typeof m.permissions === 'string' ? JSON.parse(m.permissions) : (m.permissions ?? {});
+    // Build current perms as booleans
+    const currentPerms: Record<string, boolean> = {
+      confirm_pickup: rawP.confirm_pickup === 'write' || rawP.confirm_pickup === true,
+      edit_quantities: rawP.edit_quantities === 'write' || rawP.edit_quantities === true,
+      edit_basket_info: rawP.edit_basket_info === 'write' || rawP.edit_basket_info === true,
+      create_delete_baskets: rawP.create_delete_baskets === 'write' || rawP.create_delete_baskets === true,
+      view_history: rawP.view_history === 'write' || rawP.view_history === true,
+      messaging: rawP.messaging === 'write' || rawP.messaging === true,
+    };
+    // Toggle the key
+    currentPerms[permKey] = !currentPerms[permKey];
+    const permsPayload: Record<string, string> = {};
+    Object.entries(currentPerms).forEach(([k, v]) => { permsPayload[k] = permBoolToString(v as boolean); });
+    try {
+      const orgId = contextQuery.data?.organization_id;
+      if (orgId) {
+        await updateMember(orgId, memberId, { permissions: permsPayload });
+        await queryClient.invalidateQueries({ queryKey: ['org-details'] });
+        void queryClient.invalidateQueries({ queryKey: ['my-context'] });
+        void queryClient.invalidateQueries({ queryKey: ['my-context'] });
+      }
+    } catch (err: any) {
+      alert.showAlert(t('common.error'), t('business.team.updateFailed', { defaultValue: 'Échec de la mise à jour des permissions' }));
+    }
+  }, [orgDetailsQuery.data, contextQuery.data, queryClient, t, alert]);
 
   const handleChangeCover = async () => {
     try {
@@ -318,16 +524,38 @@ export default function BusinessProfileScreen() {
     }
   };
 
-  const permissionLabels: { key: keyof TeamPermission; label: string }[] = [
-    { key: 'dashboard', label: t('business.profile.permCanViewDashboard') },
-    { key: 'baskets', label: t('business.profile.permCanManageBaskets') },
-    { key: 'orders', label: t('business.profile.permCanViewOrders') },
-    { key: 'profile', label: t('business.profile.permCanEditProfile') },
-    { key: 'team', label: t('business.profile.permCanManageTeam') },
-    { key: 'financial', label: t('business.profile.permCanViewFinancial') },
+  const permissionLabels: { key: keyof TeamPermission; label: string; desc: string }[] = [
+    { key: 'confirm_pickup', label: t('business.profile.permConfirmPickup', { defaultValue: 'Confirmer les retraits' }), desc: t('business.profile.permConfirmPickupDesc', { defaultValue: "Scanner le QR / saisir le code pour confirmer le retrait d'un client" }) },
+    { key: 'edit_quantities', label: t('business.profile.permEditQuantities', { defaultValue: 'Modifier les quantités' }), desc: t('business.profile.permEditQuantitiesDesc', { defaultValue: 'Changer la quantité disponible des paniers, mettre en pause les ventes' }) },
+    { key: 'edit_basket_info', label: t('business.profile.permEditBasketInfo', { defaultValue: 'Modifier les paniers' }), desc: t('business.profile.permEditBasketInfoDesc', { defaultValue: 'Modifier le prix, description, horaires de retrait et instructions' }) },
+    { key: 'create_delete_baskets', label: t('business.profile.permCreateDeleteBaskets', { defaultValue: 'Créer et supprimer des paniers' }), desc: t('business.profile.permCreateDeleteBasketsDesc', { defaultValue: 'Ajouter de nouveaux paniers ou supprimer des paniers existants' }) },
+    { key: 'view_history', label: t('business.profile.permViewHistory', { defaultValue: 'Historique et statistiques' }), desc: t('business.profile.permViewHistoryDesc', { defaultValue: 'Voir les stats de vente, l\'historique des commandes et les graphiques de performance' }) },
+    { key: 'messaging', label: t('business.profile.permMessaging', { defaultValue: 'Messagerie clients' }), desc: t('business.profile.permMessagingDesc', { defaultValue: 'Envoyer et recevoir des messages avec les clients' }) },
+    { key: 'cancel_order', label: t('business.profile.permCancelOrder', { defaultValue: 'Annuler des commandes' }), desc: t('business.profile.permCancelOrderDesc', { defaultValue: 'Annuler les commandes entrantes et rembourser les clients en crédits' }) },
   ];
 
-  const selectedMemberForPerms = showPermissionsModal ? team.find((m) => m.id === showPermissionsModal) : null;
+  // Use API member data (orgDetailsQuery) for permission toggles, not Zustand store
+  const apiMembers = orgDetailsQuery.data?.members ?? [];
+  const selectedMemberForPerms = showPermissionsModal
+    ? (() => {
+        const m = apiMembers.find((mem: any) => String(mem.membership_id) === String(showPermissionsModal) || String(mem.user_id) === String(showPermissionsModal));
+        if (!m) return null;
+        const rawP = typeof m.permissions === 'string' ? JSON.parse(m.permissions) : (m.permissions ?? {});
+        return {
+          id: String(m.membership_id),
+          name: m.name ?? m.email ?? '',
+          role: m.role ?? 'member',
+          permissions: {
+            confirm_pickup: rawP.confirm_pickup === 'write' || rawP.confirm_pickup === true,
+            edit_quantities: rawP.edit_quantities === 'write' || rawP.edit_quantities === true,
+            edit_basket_info: rawP.edit_basket_info === 'write' || rawP.edit_basket_info === true,
+            create_delete_baskets: rawP.create_delete_baskets === 'write' || rawP.create_delete_baskets === true,
+            view_history: rawP.view_history === 'write' || rawP.view_history === true,
+            messaging: rawP.messaging === 'write' || rawP.messaging === true,
+          } as TeamPermission,
+        };
+      })()
+    : null;
 
   if (profileQuery.isLoading && !profileQuery.data) {
     return (
@@ -364,26 +592,34 @@ export default function BusinessProfileScreen() {
         <View style={[styles.profileCard, { backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, padding: theme.spacing.xl, marginTop: -30, marginHorizontal: theme.spacing.sm, ...theme.shadows.shadowMd }]}>
           <View style={styles.profileTop}>
             <View style={styles.logoWrap}>
-              {profile?.logo ? (
-                <Image source={{ uri: profile.logo }} style={[styles.profileLogo, { borderRadius: theme.radii.r16 }]} />
+              {(orgImageUrl ?? profile?.logo) ? (
+                <Image source={{ uri: (orgImageUrl ?? profile?.logo) as string }} style={[styles.profileLogo, { borderRadius: theme.radii.r16 }]} />
               ) : (
                 <View style={[styles.profileLogo, { borderRadius: theme.radii.r16, backgroundColor: theme.colors.primary + '15' }]}>
                   <Store size={32} color={theme.colors.primary} />
                 </View>
               )}
-              {canEditProfile && (
+              {canEditProfile && !hasNoLocation && (
                 <TouchableOpacity onPress={handleChangeLogo} style={[styles.logoEditBtn, { backgroundColor: theme.colors.primary, borderRadius: 12, width: 24, height: 24 }]}>
                   <Camera size={12} color="#fff" />
                 </TouchableOpacity>
               )}
             </View>
             <View style={styles.profileInfo}>
-              <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h2 }]}>
-                {!selectedLocationId && contextQuery.data?.organization_name
-                  ? contextQuery.data.organization_name
-                  : profile?.name ?? user?.name}
+              {/* Top-of-profile name: show the selected LOCATION name when
+                  one is chosen, falling back to the org name. The previous
+                  "org - location" combo was redundant with the location
+                  switcher pill in the header. */}
+              <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h2 }]} numberOfLines={1} ellipsizeMode="tail">
+                {selectedLocationId
+                  ? (profileQuery.data?.location_name || profileQuery.data?.name || orgName || '')
+                  : (orgName || profileQuery.data?.name || '')}
               </Text>
-              {!selectedLocationId ? (
+              {hasNoLocation ? (
+                <Text style={[{ color: '#e67e22', ...theme.typography.bodySm, marginTop: 2 }]}>
+                  {t('business.locationSwitcher.noLocationYet')}
+                </Text>
+              ) : !selectedLocationId ? (
                 <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.bodySm, marginTop: 2 }]}>
                   {t('business.profile.allLocationsLabel', { defaultValue: 'Organisation' })}
                 </Text>
@@ -401,6 +637,21 @@ export default function BusinessProfileScreen() {
         {/* Team Management Card (only visible to admin/owner) */}
         {(contextQuery.data?.role === 'admin' || contextQuery.data?.role === 'owner') && (
         <TouchableOpacity
+          ref={(r: any) => {
+            if (r) {
+              requestAnimationFrame(() => {
+                r.measureInWindow?.((x: number, y: number, w: number, h: number) => {
+                  if (w > 0 && h > 0) useWalkthroughStore.getState().setMeasuredRect('profileTeamCard', { x, y, w, h });
+                });
+              });
+            }
+          }}
+          onLayout={(e) => {
+            // measureInWindow on layout for accurate window-coords
+            (e.target as any)?.measureInWindow?.((x: number, y: number, w: number, h: number) => {
+              if (w > 0 && h > 0) useWalkthroughStore.getState().setMeasuredRect('profileTeamCard', { x, y, w, h });
+            });
+          }}
           onPress={() => router.push('/business/team' as never)}
           style={[styles.infoCard, {
             backgroundColor: theme.colors.surface,
@@ -428,7 +679,7 @@ export default function BusinessProfileScreen() {
               {t('business.profile.teamManagement')}
             </Text>
             <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, marginTop: 2 }]}>
-              {teamMembers.length} {t('business.team.members')}
+              {uniqueTeamMemberCount} {t('business.team.members')}
             </Text>
           </View>
           <ChevronRight size={20} color={theme.colors.muted} />
@@ -468,13 +719,37 @@ export default function BusinessProfileScreen() {
         </TouchableOpacity>}
 
         {/* Business Info Card */}
-        <View style={[styles.infoCard, { backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, marginTop: theme.spacing.lg, ...theme.shadows.shadowSm }]}>
+        <View
+          onLayout={(e) => {
+            (e.target as any)?.measureInWindow?.((x: number, y: number, w: number, h: number) => {
+              if (w > 0 && h > 0) useWalkthroughStore.getState().setMeasuredRect('profileBusinessInfo', { x, y, w, h });
+            });
+          }}
+          style={[styles.infoCard, { backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, marginTop: theme.spacing.lg, ...theme.shadows.shadowSm }]}
+        >
           <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, padding: theme.spacing.lg, paddingBottom: theme.spacing.sm }]}>
             {t('business.profile.businessInfo')}
           </Text>
 
-          {[
-            { icon: Store, label: t('business.profile.name'), value: (!selectedLocationId && contextQuery.data?.organization_name) ? contextQuery.data.organization_name : (profile?.name ?? '-') },
+          {hasNoLocation ? (
+            <View style={{ paddingHorizontal: theme.spacing.lg, paddingBottom: theme.spacing.lg }}>
+              <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.bodySm, marginBottom: theme.spacing.md, textAlign: 'center' as const, fontStyle: 'italic' as const }]}>
+                {t('business.noLocation.profileHint')}
+              </Text>
+              <NoLocationCTA compact />
+            </View>
+          ) : [
+            // "Nom du commerce" shows the location name when one is selected;
+            // for the "all locations" / org-admin view we fall back to the
+            // organization name. The previous combo string ("Org - Location")
+            // wrapped to two lines and pushed the row out of alignment.
+            {
+              icon: Store,
+              label: t('business.profile.name'),
+              value: selectedLocationId
+                ? (profileQuery.data?.location_name || contextQuery.data?.organization_name || '-')
+                : (contextQuery.data?.organization_name || profileQuery.data?.location_name || '-'),
+            },
             { icon: MapPin, label: t('business.profile.address'), value: profile?.address ?? '-' },
             { icon: Phone, label: t('business.profile.phone'), value: profile?.phone ?? '-' },
             { icon: Clock, label: t('business.profile.hours'), value: profile?.hours ?? '-', onPress: () => setShowHoursModal(true) },
@@ -499,7 +774,15 @@ export default function BusinessProfileScreen() {
                     {item.label}
                   </Text>
                 </View>
-                <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '500' as const, flex: 1, textAlign: 'right' as const }]} numberOfLines={2}>
+                {/* Single-line value with ellipsis. Long values used to wrap
+                    to a second line which mis-aligned the row (the icon+label
+                    on the left were vertically centred against the 2-line
+                    block, so the label looked like it sat above the value). */}
+                <Text
+                  style={[{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '500' as const, flex: 1, textAlign: 'right' as const, marginLeft: 12 }]}
+                  numberOfLines={1}
+                  ellipsizeMode="tail"
+                >
                   {item.value}
                 </Text>
                 {item.onPress && <ChevronRight size={16} color={theme.colors.muted} style={{ marginLeft: 4 }} />}
@@ -520,8 +803,10 @@ export default function BusinessProfileScreen() {
 
         </View>
 
-        {/* Pickup Instructions Card */}
-        <View style={[styles.infoCard, { backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, marginTop: theme.spacing.lg, ...theme.shadows.shadowSm }]}>
+        {/* Pickup Instructions Card — hidden when no location exists yet
+            (instructions are per-location and would render fake "no instructions"
+            text that's not actionable). */}
+        {!hasNoLocation && <View style={[styles.infoCard, { backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, marginTop: theme.spacing.lg, ...theme.shadows.shadowSm }]}>
           <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: theme.spacing.lg, paddingBottom: theme.spacing.sm }}>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
               <Package size={18} color={theme.colors.primary} />
@@ -563,9 +848,9 @@ export default function BusinessProfileScreen() {
               </Text>
             )}
           </View>
-        </View>
+        </View>}
 
-        {FeatureFlags.ENABLE_FINANCIAL_INFO && <View style={[styles.infoCard, { backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, marginTop: theme.spacing.lg, ...theme.shadows.shadowSm }]}>
+        {FeatureFlags.ENABLE_FINANCIAL_INFO && !hasNoLocation && <View style={[styles.infoCard, { backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, marginTop: theme.spacing.lg, ...theme.shadows.shadowSm }]}>
           <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, padding: theme.spacing.lg, paddingBottom: theme.spacing.sm }]}>
             {t('business.profile.financialInfo')}
           </Text>
@@ -577,7 +862,7 @@ export default function BusinessProfileScreen() {
               </Text>
             </View>
             <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '500' as const }]}>
-              {profile?.iban ?? '••••••••••••'}
+              {(profile as any)?.iban ?? '••••••••••••'}
             </Text>
           </View>
           <TouchableOpacity style={[styles.infoRow, { paddingHorizontal: theme.spacing.lg, paddingVertical: theme.spacing.md, borderTopWidth: 1, borderTopColor: theme.colors.divider }]}>
@@ -630,31 +915,75 @@ export default function BusinessProfileScreen() {
             <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.bodySm, marginTop: theme.spacing.lg, marginBottom: theme.spacing.sm }]}>
               {t('business.profile.memberRole')}
             </Text>
-            {(['admin', 'restricted'] as TeamRole[]).map((role) => (
-              <TouchableOpacity
-                key={role}
-                onPress={() => setNewMemberRole(role)}
-                style={[{
-                  flexDirection: 'row',
-                  alignItems: 'center',
-                  padding: theme.spacing.md,
-                  borderRadius: theme.radii.r12,
-                  marginBottom: theme.spacing.xs,
-                  backgroundColor: newMemberRole === role ? roleColor(role) + '15' : theme.colors.bg,
-                  borderWidth: newMemberRole === role ? 1.5 : 0,
-                  borderColor: roleColor(role),
-                }]}
-              >
-                <Shield size={16} color={roleColor(role)} />
-                <Text style={[{ color: newMemberRole === role ? roleColor(role) : theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: newMemberRole === role ? ('600' as const) : ('400' as const), marginLeft: 10 }]}>
-                  {roleLabel(role)}
+            {/* Role options — clearer labels with subtitles */}
+            {[
+              { id: 'orgAdmin', label: t('business.profile.orgAdmin', { defaultValue: "Admin de l'organisation" }), desc: t('business.profile.orgAdminDesc', { defaultValue: 'Accès total à tous les emplacements et toutes les fonctionnalités' }), color: '#114b3c' },
+              { id: 'locAdmin', label: t('business.profile.locAdmin', { defaultValue: "Admin d'emplacement" }), desc: t('business.profile.locAdminDesc', { defaultValue: 'Accès complet aux emplacements assignés' }), color: theme.colors.primary },
+              { id: 'member', label: t('business.profile.memberRole', { defaultValue: 'Membre' }), desc: t('business.profile.memberRoleDesc', { defaultValue: 'Accès limité selon les permissions ci-dessous' }), color: theme.colors.muted },
+            ].map((opt) => {
+              const selected = opt.id === 'orgAdmin' ? newMemberIsOrgAdmin
+                : opt.id === 'locAdmin' ? (!newMemberIsOrgAdmin && newMemberRole === ('admin' as TeamRole))
+                : (!newMemberIsOrgAdmin && newMemberRole === ('restricted' as TeamRole));
+              return (
+                <TouchableOpacity
+                  key={opt.id}
+                  onPress={() => {
+                    if (opt.id === 'orgAdmin') { setNewMemberIsOrgAdmin(true); setNewMemberRole('admin' as TeamRole); setNewMemberLocations([]); }
+                    else if (opt.id === 'locAdmin') { setNewMemberIsOrgAdmin(false); setNewMemberRole('admin' as TeamRole); }
+                    else { setNewMemberIsOrgAdmin(false); setNewMemberRole('restricted' as TeamRole); }
+                  }}
+                  style={{
+                    flexDirection: 'row', alignItems: 'center', padding: theme.spacing.md, borderRadius: theme.radii.r12, marginBottom: theme.spacing.xs,
+                    backgroundColor: selected ? opt.color + '12' : theme.colors.bg,
+                    borderWidth: selected ? 1.5 : 0, borderColor: opt.color,
+                  }}
+                >
+                  <Shield size={16} color={opt.color} />
+                  <View style={{ flex: 1, marginLeft: 10 }}>
+                    <Text style={{ color: selected ? opt.color : theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: selected ? '600' : '400' }}>
+                      {opt.label}
+                    </Text>
+                    <Text style={{ color: theme.colors.muted, fontSize: 10, marginTop: 1 }}>{opt.desc}</Text>
+                  </View>
+                </TouchableOpacity>
+              );
+            })}
+
+            {/* Location assignment — required unless org admin */}
+            {!newMemberIsOrgAdmin && orgLocations.length > 0 && (
+              <>
+                <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.bodySm, marginTop: theme.spacing.lg, marginBottom: theme.spacing.sm }]}>
+                  {t('business.profile.assignLocations', { defaultValue: 'Assigner aux emplacements *' })}
                 </Text>
-              </TouchableOpacity>
-            ))}
+                {orgLocations.map((loc: any) => {
+                  const selected = newMemberLocations.includes(loc.id);
+                  return (
+                    <TouchableOpacity
+                      key={loc.id}
+                      onPress={() => setNewMemberLocations(prev => selected ? prev.filter(id => id !== loc.id) : [...prev, loc.id])}
+                      style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 10, paddingHorizontal: 12, borderRadius: 10, marginBottom: 4, backgroundColor: selected ? theme.colors.primary + '10' : theme.colors.bg }}
+                    >
+                      <View style={{ width: 20, height: 20, borderRadius: 4, borderWidth: 2, borderColor: selected ? theme.colors.primary : theme.colors.muted, backgroundColor: selected ? theme.colors.primary : 'transparent', justifyContent: 'center', alignItems: 'center' }}>
+                        {selected && <Text style={{ color: '#fff', fontSize: 12, fontWeight: '700' }}>✓</Text>}
+                      </View>
+                      <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, marginLeft: 10 }}>
+                        {loc.name ?? loc.display_name ?? `Location ${loc.id}`}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+                {newMemberLocations.length === 0 && (
+                  <Text style={{ color: theme.colors.error, fontSize: 11, marginTop: 4 }}>
+                    {t('business.profile.locationRequired', { defaultValue: 'Veuillez sélectionner au moins un emplacement' })}
+                  </Text>
+                )}
+              </>
+            )}
 
             <TouchableOpacity
               onPress={handleAddMember}
-              style={[{ backgroundColor: theme.colors.primary, borderRadius: theme.radii.r12, padding: theme.spacing.lg, marginTop: theme.spacing.lg }]}
+              disabled={!newMemberIsOrgAdmin && newMemberLocations.length === 0 && orgLocations.length > 0}
+              style={[{ backgroundColor: theme.colors.primary, borderRadius: theme.radii.r12, padding: theme.spacing.lg, marginTop: theme.spacing.lg, opacity: (!newMemberIsOrgAdmin && newMemberLocations.length === 0 && orgLocations.length > 0) ? 0.5 : 1 }]}
             >
               <Text style={[{ color: '#fff', ...theme.typography.button, textAlign: 'center' as const }]}>
                 {t('common.add')}
@@ -730,27 +1059,109 @@ export default function BusinessProfileScreen() {
                   </Text>
                 </View>
 
-                {permissionLabels.map(({ key, label }) => (
+                {/* Location assignment */}
+                {isAdmin && orgLocations.length > 0 && (
+                  <View style={{ marginBottom: theme.spacing.lg }}>
+                    <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '600', marginBottom: theme.spacing.sm }}>
+                      {t('business.profile.assignedLocation', { defaultValue: 'Emplacement assigné' })}
+                    </Text>
+                    {orgLocations.map((loc: any) => {
+                      const memberLocId = (selectedMemberForPerms as any)?.location_id;
+                      const isLocSelected = loc.id === Number(memberLocId);
+                      return (
+                        <TouchableOpacity
+                          key={loc.id}
+                          onPress={async () => {
+                            try {
+                              const orgId = contextQuery.data?.organization_id;
+                              if (orgId) {
+                                await updateMember(orgId, selectedMemberForPerms!.id, { location_id: loc.id });
+                                void queryClient.invalidateQueries({ queryKey: ['org-details'] });
+                                void queryClient.invalidateQueries({ queryKey: ['my-context'] });
+                                alert.showAlert(t('common.success'), t('business.team.locationUpdated', { defaultValue: 'Emplacement mis à jour' }));
+                              }
+                            } catch (err: any) {
+                              alert.showAlert(t('common.error'), err?.message ?? t('common.errorOccurred'));
+                            }
+                          }}
+                          style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 8, paddingHorizontal: 10, borderRadius: 10, marginBottom: 4, backgroundColor: isLocSelected ? theme.colors.primary + '12' : theme.colors.bg, borderWidth: isLocSelected ? 1.5 : 0, borderColor: theme.colors.primary }}
+                        >
+                          <View style={{ width: 18, height: 18, borderRadius: 9, borderWidth: 2, borderColor: isLocSelected ? theme.colors.primary : theme.colors.muted, backgroundColor: isLocSelected ? theme.colors.primary : 'transparent', justifyContent: 'center', alignItems: 'center' }}>
+                            {isLocSelected && <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: '#fff' }} />}
+                          </View>
+                          <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, marginLeft: 10 }}>{loc.name ?? `Location ${loc.id}`}</Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                )}
+
+                {/* Grant admin toggle */}
+                <TouchableOpacity
+                  onPress={async () => {
+                    const isCurrentlyAdmin = selectedMemberForPerms.role === 'admin';
+                    const newRole = isCurrentlyAdmin ? 'member' : 'admin';
+                    try {
+                      const orgId = contextQuery.data?.organization_id;
+                      if (orgId) {
+                        await updateMember(orgId, selectedMemberForPerms.id, { role: newRole });
+                        void queryClient.invalidateQueries({ queryKey: ['org-details'] });
+                        void queryClient.invalidateQueries({ queryKey: ['my-context'] });
+                        void queryClient.invalidateQueries({ queryKey: ['my-context'] });
+                      }
+                    } catch {}
+                  }}
+                  style={{
+                    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+                    backgroundColor: selectedMemberForPerms.role === 'admin' ? theme.colors.primary + '12' : theme.colors.bg,
+                    borderRadius: theme.radii.r12, padding: theme.spacing.md, marginBottom: theme.spacing.md,
+                    borderWidth: selectedMemberForPerms.role === 'admin' ? 1.5 : 1,
+                    borderColor: selectedMemberForPerms.role === 'admin' ? theme.colors.primary : theme.colors.divider,
+                  }}
+                >
+                  <View style={{ flex: 1, marginRight: 12 }}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                      <Shield size={16} color={selectedMemberForPerms.role === 'admin' ? theme.colors.primary : theme.colors.muted} />
+                      <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '700' }}>
+                        {t('business.profile.grantAdminAccess', { defaultValue: "Accorder l'accès admin" })}
+                      </Text>
+                    </View>
+                    <Text style={{ color: theme.colors.muted, fontSize: 11, marginTop: 4, lineHeight: 15 }}>
+                      {t('business.profile.grantAdminAccessDesc', { defaultValue: "Donne accès à tout: gestion d'équipe, profil du commerce, et toutes les permissions" })}
+                    </Text>
+                  </View>
+                  <Switch
+                    value={selectedMemberForPerms.role === 'admin'}
+                    onValueChange={() => {}}
+                    trackColor={{ false: theme.colors.divider, true: theme.colors.primary + '50' }}
+                    thumbColor={selectedMemberForPerms.role === 'admin' ? theme.colors.primary : theme.colors.muted}
+                  />
+                </TouchableOpacity>
+
+                {/* Granular permission toggles — hidden when admin */}
+                {selectedMemberForPerms.role !== 'admin' && permissionLabels.map(({ key, label, desc }) => (
                   <View
                     key={key}
-                    style={[{
-                      flexDirection: 'row',
-                      justifyContent: 'space-between',
-                      alignItems: 'center',
+                    style={{
                       paddingVertical: theme.spacing.md,
                       borderBottomWidth: 1,
                       borderBottomColor: theme.colors.divider,
-                    }]}
+                    }}
                   >
-                    <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.bodySm, flex: 1 }]}>
-                      {label}
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '600', flex: 1, marginRight: 12 }}>
+                        {label}
+                      </Text>
+                      <Switch
+                        value={selectedMemberForPerms.permissions[key]}
+                        onValueChange={() => handleTogglePermission(selectedMemberForPerms.id, key)}
+                        trackColor={{ false: theme.colors.divider, true: theme.colors.primary + '50' }}
+                        thumbColor={selectedMemberForPerms.permissions[key] ? theme.colors.primary : theme.colors.muted}
+                      />
+                    </View>
+                    <Text style={{ color: selectedMemberForPerms.permissions[key] ? theme.colors.textSecondary : theme.colors.muted, fontSize: 11, lineHeight: 15, marginTop: 3 }}>
+                      {desc}
                     </Text>
-                    <Switch
-                      value={selectedMemberForPerms.permissions[key]}
-                      onValueChange={() => handleTogglePermission(selectedMemberForPerms.id, key)}
-                      trackColor={{ false: theme.colors.divider, true: theme.colors.primary + '50' }}
-                      thumbColor={selectedMemberForPerms.permissions[key] ? theme.colors.primary : theme.colors.muted}
-                    />
                   </View>
                 ))}
               </View>
@@ -770,6 +1181,7 @@ export default function BusinessProfileScreen() {
 
       {/* Location Hours Editor Modal */}
       <Modal visible={showHoursModal} transparent animationType="fade" onRequestClose={() => setShowHoursModal(false)}>
+        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
         <TouchableOpacity style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' }} activeOpacity={1} onPress={() => setShowHoursModal(false)}>
           <View style={{ backgroundColor: theme.colors.surface, borderTopLeftRadius: 24, borderTopRightRadius: 24, paddingTop: 12, paddingBottom: 40, paddingHorizontal: 20, maxHeight: '80%' }} onStartShouldSetResponder={() => true}>
             <View style={{ alignSelf: 'center', width: 40, height: 4, borderRadius: 2, backgroundColor: theme.colors.divider, marginBottom: 16 }} />
@@ -800,14 +1212,30 @@ export default function BusinessProfileScreen() {
 
             <ScrollView showsVerticalScrollIndicator={false}>
               {sameAllDays ? (
-                <View style={{ backgroundColor: theme.colors.bg, borderRadius: 12, padding: 16, gap: 12 }}>
-                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm }}>{t('business.availability.startTime')}</Text>
-                    <TextInput value={hoursStart} onChangeText={setHoursStart} placeholder="HH:MM" style={{ color: theme.colors.textPrimary, ...theme.typography.h3, backgroundColor: theme.colors.surface, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 6, textAlign: 'center', minWidth: 80 }} />
+                <View style={{ backgroundColor: theme.colors.bg, borderRadius: 12, padding: 16, gap: 16 }}>
+                  <View>
+                    <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm, marginBottom: 8 }}>{t('business.availability.startTime')}</Text>
+                    <TimePicker value={hoursStart} onChange={setHoursStart} label={t('business.availability.startTime')} primaryColor={theme.colors.primary} textColor={theme.colors.textPrimary} bgColor={theme.colors.surface} mutedColor={theme.colors.muted} />
                   </View>
-                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm }}>{t('business.availability.endTime')}</Text>
-                    <TextInput value={hoursEnd} onChangeText={setHoursEnd} placeholder="HH:MM" style={{ color: theme.colors.textPrimary, ...theme.typography.h3, backgroundColor: theme.colors.surface, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 6, textAlign: 'center', minWidth: 80 }} />
+                  <View>
+                    <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm, marginBottom: 8 }}>{t('business.availability.endTime')}</Text>
+                    <TimePicker value={hoursEnd} onChange={(val) => {
+                      const [h, m] = val.split(':').map(Number);
+                      const mins = (h || 0) * 60 + (m || 0);
+                      const startMins = (() => { const [sh, sm] = hoursStart.split(':').map(Number); return (sh || 0) * 60 + (sm || 0); })();
+                      const MAX_END = 3 * 60 + 30; // 03:30
+                      if (mins > MAX_END && mins < startMins) {
+                        flashHoursEndWarning();
+                        setHoursEnd('03:30');
+                      } else {
+                        setHoursEnd(val);
+                      }
+                    }} label={t('business.availability.endTime')} primaryColor={theme.colors.primary} textColor={theme.colors.textPrimary} bgColor={theme.colors.surface} mutedColor={theme.colors.muted} />
+                    {hoursEndWarning && (
+                      <Animated.Text style={{ color: theme.colors.error, ...theme.typography.caption, marginTop: 6, opacity: hoursEndWarningAnim }}>
+                        {t('business.availability.maxEndTime', { defaultValue: "L'heure de fin ne peut pas dépasser 03:30 (réinitialisation quotidienne)" })}
+                      </Animated.Text>
+                    )}
                   </View>
                 </View>
               ) : (
@@ -815,9 +1243,13 @@ export default function BusinessProfileScreen() {
                   <View key={day} style={{ backgroundColor: theme.colors.bg, borderRadius: 12, padding: 12, marginBottom: 8 }}>
                     <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '600', marginBottom: 8 }}>{DAY_LABELS[day]}</Text>
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                      <TextInput value={dayHours[day]?.start ?? '09:00'} onChangeText={(v) => setDayHours(prev => ({ ...prev, [day]: { ...prev[day], start: v } }))} placeholder="HH:MM" style={{ flex: 1, color: theme.colors.textPrimary, ...theme.typography.bodySm, backgroundColor: theme.colors.surface, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6, textAlign: 'center' }} />
+                      <View style={{ flex: 1 }}>
+                        <TimePicker value={dayHours[day]?.start ?? '09:00'} onChange={(v) => setDayHours(prev => ({ ...prev, [day]: { ...prev[day], start: v } }))} primaryColor={theme.colors.primary} textColor={theme.colors.textPrimary} bgColor={theme.colors.surface} mutedColor={theme.colors.muted} />
+                      </View>
                       <Text style={{ color: theme.colors.muted }}>-</Text>
-                      <TextInput value={dayHours[day]?.end ?? '18:00'} onChangeText={(v) => setDayHours(prev => ({ ...prev, [day]: { ...prev[day], end: v } }))} placeholder="HH:MM" style={{ flex: 1, color: theme.colors.textPrimary, ...theme.typography.bodySm, backgroundColor: theme.colors.surface, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6, textAlign: 'center' }} />
+                      <View style={{ flex: 1 }}>
+                        <TimePicker value={dayHours[day]?.end ?? '18:00'} onChange={(v) => setDayHours(prev => ({ ...prev, [day]: { ...prev[day], end: v } }))} primaryColor={theme.colors.primary} textColor={theme.colors.textPrimary} bgColor={theme.colors.surface} mutedColor={theme.colors.muted} />
+                      </View>
                     </View>
                   </View>
                 ))
@@ -835,6 +1267,7 @@ export default function BusinessProfileScreen() {
             </TouchableOpacity>
           </View>
         </TouchableOpacity>
+        </KeyboardAvoidingView>
       </Modal>
     </SafeAreaView>
   );

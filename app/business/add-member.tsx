@@ -14,9 +14,10 @@ import {
   type OrgDetailsFromAPI,
 } from '@/src/services/teams';
 import { useCustomAlert } from '@/src/components/CustomAlert';
+import { getErrorMessage } from '@/src/lib/api';
 
-type PermissionKey = 'availability' | 'reservations' | 'profile' | 'menu' | 'team';
-type RolePreset = 'full_access' | 'orders_only' | 'view_only';
+type PermissionKey = 'confirm_pickup' | 'edit_quantities' | 'edit_basket_info' | 'create_delete_baskets' | 'view_history' | 'messaging' | 'cancel_order';
+type RolePreset = 'org_admin' | 'full_access' | 'orders_only' | 'view_only';
 
 function permBoolToString(val: boolean): string {
   return val ? 'write' : 'none';
@@ -32,25 +33,32 @@ interface PresetConfig {
 
 const ROLE_PRESETS: PresetConfig[] = [
   {
+    id: 'org_admin',
+    labelKey: 'business.team.roleOrgAdmin',
+    descKey: 'business.team.roleOrgAdminDesc',
+    role: 'admin',
+    permissions: { confirm_pickup: true, edit_quantities: true, edit_basket_info: true, create_delete_baskets: true, view_history: true, messaging: true, cancel_order: true },
+  },
+  {
     id: 'full_access',
     labelKey: 'business.team.roleFullAccess',
     descKey: 'business.team.roleFullAccessDesc',
-    role: 'admin',
-    permissions: { availability: true, reservations: true, profile: true, menu: true, team: true },
+    role: 'member',
+    permissions: { confirm_pickup: true, edit_quantities: true, edit_basket_info: true, create_delete_baskets: true, view_history: true, messaging: true, cancel_order: true },
   },
   {
     id: 'orders_only',
     labelKey: 'business.team.roleOrdersOnly',
     descKey: 'business.team.roleOrdersOnlyDesc',
     role: 'member',
-    permissions: { availability: false, reservations: true, profile: false, menu: false, team: false },
+    permissions: { confirm_pickup: true, edit_quantities: false, edit_basket_info: false, create_delete_baskets: false, view_history: false, messaging: true, cancel_order: false },
   },
   {
     id: 'view_only',
     labelKey: 'business.team.roleViewOnly',
     descKey: 'business.team.roleViewOnlyDesc',
     role: 'member',
-    permissions: { availability: true, reservations: true, profile: true, menu: true, team: true },
+    permissions: { confirm_pickup: false, edit_quantities: false, edit_basket_info: false, create_delete_baskets: false, view_history: true, messaging: false, cancel_order: false },
   },
 ];
 
@@ -67,15 +75,22 @@ export default function AddMemberScreen() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState(() => Math.random().toString(36).slice(-8));
   const [role, setRole] = useState<'admin' | 'member'>('member');
-  const [locationId, setLocationId] = useState<number | null>(preSelectedLocation);
+  // Multi-location: a member can be assigned to multiple locations by creating
+  // one membership row per location. preSelectedLocation (when arriving from a
+  // location card) seeds the initial selection but the admin can still add more.
+  const [locationIds, setLocationIds] = useState<Set<number>>(() => {
+    const set = new Set<number>();
+    if (preSelectedLocation) set.add(preSelectedLocation);
+    return set;
+  });
   const [selectedPreset, setSelectedPreset] = useState<RolePreset | null>('orders_only');
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [sendCredentials, setSendCredentials] = useState(true);
   const [permissions, setPermissions] = useState<Record<PermissionKey, boolean>>({
-    availability: false, reservations: true, profile: false, menu: false, team: false,
+    confirm_pickup: true, edit_quantities: false, edit_basket_info: false, create_delete_baskets: false, view_history: false, messaging: true, cancel_order: false,
   });
 
-  const contextQuery = useQuery({ queryKey: ['team-context'], queryFn: fetchMyContext, staleTime: 60_000 });
+  const contextQuery = useQuery({ queryKey: ['my-context'], queryFn: fetchMyContext, staleTime: 60_000 });
   const orgId = contextQuery.data?.organization_id;
 
   const orgDetailsQuery = useQuery({
@@ -92,47 +107,83 @@ export default function AddMemberScreen() {
     setPermissions(preset.permissions);
   };
 
-  const permissionLabels: { key: PermissionKey; label: string }[] = [
-    { key: 'availability', label: t('business.team.permAvailability', { defaultValue: 'Disponibilit\u00e9' }) },
-    { key: 'reservations', label: t('business.team.permReservations', { defaultValue: 'Commandes' }) },
-    { key: 'profile', label: t('business.team.permProfile', { defaultValue: 'Profil' }) },
-    { key: 'menu', label: t('business.team.permMenu', { defaultValue: 'Menu' }) },
-    { key: 'team', label: t('business.team.permTeam', { defaultValue: '\u00c9quipe' }) },
+  const permissionLabels: { key: PermissionKey; label: string; desc: string }[] = [
+    { key: 'confirm_pickup', label: t('business.profile.permConfirmPickup', { defaultValue: 'Confirmer les retraits' }), desc: t('business.profile.permConfirmPickupDesc', { defaultValue: "Scanner le QR / saisir le code pour confirmer le retrait d'un client" }) },
+    { key: 'edit_quantities', label: t('business.profile.permEditQuantities', { defaultValue: 'Modifier les quantités' }), desc: t('business.profile.permEditQuantitiesDesc', { defaultValue: 'Changer la quantité disponible des paniers, mettre en pause les ventes' }) },
+    { key: 'edit_basket_info', label: t('business.profile.permEditBasketInfo', { defaultValue: 'Modifier les paniers' }), desc: t('business.profile.permEditBasketInfoDesc', { defaultValue: 'Modifier le prix, description, horaires de retrait et instructions' }) },
+    { key: 'create_delete_baskets', label: t('business.profile.permCreateDeleteBaskets', { defaultValue: 'Créer et supprimer des paniers' }), desc: t('business.profile.permCreateDeleteBasketsDesc', { defaultValue: 'Ajouter de nouveaux paniers ou supprimer des paniers existants' }) },
+    { key: 'view_history', label: t('business.profile.permViewHistory', { defaultValue: 'Historique et statistiques' }), desc: t('business.profile.permViewHistoryDesc', { defaultValue: "Voir les stats de vente, l'historique des commandes et les graphiques de performance" }) },
+    { key: 'messaging', label: t('business.profile.permMessaging', { defaultValue: 'Messagerie clients' }), desc: t('business.profile.permMessagingDesc', { defaultValue: 'Envoyer et recevoir des messages avec les clients' }) },
+    { key: 'cancel_order', label: t('business.profile.permCancelOrder', { defaultValue: 'Annuler des commandes' }), desc: t('business.profile.permCancelOrderDesc', { defaultValue: 'Annuler les commandes entrantes et rembourser les clients en crédits' }) },
   ];
 
-  const canSubmit = name.trim() && email.trim() && password;
+  const isOrgAdminSelected = selectedPreset === 'org_admin';
+  const canSubmit = name.trim() && email.trim() && password && (isOrgAdminSelected || locationIds.size > 0 || locations.length === 0);
 
   const mutation = useMutation({
     mutationFn: async () => {
-      if (!orgId) throw new Error('No organization');
-      const finalLocationId = locationId ?? preSelectedLocation ?? undefined;
+      if (!orgId) throw new Error(t('business.team.noOrg', { defaultValue: 'Organisation introuvable' }));
       const permsPayload: Record<string, string> = {
-        availability: permBoolToString(permissions.availability),
-        reservations: permBoolToString(permissions.reservations),
-        profile: permBoolToString(permissions.profile),
-        menu: permBoolToString(permissions.menu),
-        team: permBoolToString(permissions.team),
+        confirm_pickup: permBoolToString(permissions.confirm_pickup),
+        edit_quantities: permBoolToString(permissions.edit_quantities),
+        edit_basket_info: permBoolToString(permissions.edit_basket_info),
+        create_delete_baskets: permBoolToString(permissions.create_delete_baskets),
+        view_history: permBoolToString(permissions.view_history),
+        messaging: permBoolToString(permissions.messaging),
+        cancel_order: permBoolToString(permissions.cancel_order),
       };
-      return addMember(orgId, {
+      const basePayload = {
         email: email.trim(),
         name: name.trim(),
         password,
         role,
         permissions: permsPayload,
-        ...(finalLocationId ? { location_id: finalLocationId } : {}),
-      });
-    },
-    onSuccess: async (data) => {
-      void queryClient.invalidateQueries({ queryKey: ['org-details'] });
-      void queryClient.invalidateQueries({ queryKey: ['team-context'] });
-      const tempPw = data?.temporary_password || password;
-      // Send credentials email if toggle is on
-      if (sendCredentials && orgId && data?.membership_id) {
-        try { await sendMemberCredentials(orgId, data.membership_id, tempPw); } catch {}
+      };
+      // Org admins have no location constraint — one membership without location_id.
+      if (isOrgAdminSelected) {
+        const result = await addMember(orgId, basePayload);
+        return { firstResult: result, assignedLocationIds: [] as number[] };
       }
+      // Non-admins: create one membership per selected location. The first call
+      // creates the user account; subsequent calls reuse the same email (backend
+      // handles the second-membership-for-existing-user case).
+      const ids = Array.from(locationIds);
+      if (ids.length === 0) {
+        const result = await addMember(orgId, basePayload);
+        return { firstResult: result, assignedLocationIds: [] as number[] };
+      }
+      let firstResult: any = null;
+      for (const locId of ids) {
+        const res = await addMember(orgId, { ...basePayload, location_id: locId });
+        if (!firstResult) firstResult = res;
+      }
+      return { firstResult, assignedLocationIds: ids };
+    },
+    onSuccess: async ({ firstResult, assignedLocationIds }) => {
+      void queryClient.invalidateQueries({ queryKey: ['org-details'] });
+      void queryClient.invalidateQueries({ queryKey: ['my-context'] });
+      const tempPw = firstResult?.temporary_password || password;
+      // Send credentials email once (the user receives a single welcome email
+      // regardless of how many location memberships were created).
+      let emailStatusLine = '';
+      const membershipId = firstResult?.member?.id ?? firstResult?.membership_id;
+      if (sendCredentials && orgId && membershipId) {
+        try {
+          await sendMemberCredentials(orgId, membershipId, tempPw);
+          emailStatusLine = '\n\n' + t('business.team.credentialsSent', { defaultValue: 'Identifiants envoyés par email.' });
+        } catch (err: any) {
+          emailStatusLine = '\n\n' + t('business.team.emailSendFailed', { defaultValue: "L'envoi de l'email a échoué" }) + `: ${getErrorMessage(err)}`;
+        }
+      }
+      const locationNames = assignedLocationIds
+        .map((id) => (locations as any[]).find((l: any) => l.id === id)?.name)
+        .filter(Boolean);
+      const locationLine = locationNames.length > 0
+        ? `\n${t('business.team.assignedTo', { defaultValue: 'Assigné à' })}: ${locationNames.join(', ')}`
+        : '';
       alert.showAlert(
         t('common.success'),
-        `${t('business.profile.memberAdded')}\n\n${t('business.team.fieldEmail', { defaultValue: 'Email' })}: ${email.trim()}\n${t('business.team.fieldPassword', { defaultValue: 'Mot de passe' })}: ${tempPw}${sendCredentials ? '\n\n' + t('business.team.credentialsSent', { defaultValue: 'Identifiants envoyés par email.' }) : ''}`,
+        `${t('business.profile.memberAdded')}\n\n${t('business.team.fieldEmail', { defaultValue: 'Email' })}: ${email.trim()}\n${t('business.team.fieldPassword', { defaultValue: 'Mot de passe' })}: ${tempPw}${locationLine}${emailStatusLine}`,
         [{ text: 'OK', onPress: () => router.back() }],
       );
     },
@@ -253,47 +304,80 @@ export default function AddMemberScreen() {
 
         {showAdvanced && (
           <View style={{ backgroundColor: theme.colors.surface, borderRadius: 12, padding: 14, marginTop: 4, borderWidth: 1, borderColor: theme.colors.divider }}>
-            {permissionLabels.map(({ key, label }) => (
-              <View key={key} style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: theme.colors.divider }}>
-                <Text style={{ color: theme.colors.textPrimary, fontSize: 14, flex: 1 }}>{label}</Text>
-                <Switch
-                  value={permissions[key]}
-                  onValueChange={(val) => {
-                    setPermissions((prev) => ({ ...prev, [key]: val }));
-                    setSelectedPreset(null);
-                  }}
-                  trackColor={{ false: theme.colors.divider, true: '#114b3c50' }}
-                  thumbColor={permissions[key] ? '#114b3c' : theme.colors.muted}
-                />
+            {permissionLabels.map(({ key, label, desc }) => (
+              <View key={key} style={{ paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: theme.colors.divider }}>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <Text style={{ color: theme.colors.textPrimary, fontSize: 14, fontWeight: '600', flex: 1, marginRight: 12 }}>{label}</Text>
+                  <Switch
+                    value={permissions[key]}
+                    onValueChange={(val) => {
+                      setPermissions((prev) => ({ ...prev, [key]: val }));
+                      setSelectedPreset(null);
+                    }}
+                    trackColor={{ false: theme.colors.divider, true: '#114b3c50' }}
+                    thumbColor={permissions[key] ? '#114b3c' : theme.colors.muted}
+                  />
+                </View>
+                <Text style={{ color: permissions[key] ? theme.colors.textSecondary : theme.colors.muted, fontSize: 11, lineHeight: 15, marginTop: 4 }}>
+                  {desc}
+                </Text>
               </View>
             ))}
           </View>
         )}
 
-        {/* ── Location Assignment ── */}
-        {locations.length > 0 && !preSelectedLocation && (
+        {/* ── Location Assignment — required for non-org-admin. Multi-select:
+             the admin can tick several locations and we create one membership
+             per tick. ── */}
+        {locations.length > 0 && !isOrgAdminSelected && (
           <>
             <Text style={[styles.sectionLabel, { marginTop: 20 }]}>
-              {t('business.team.assignLocation', { defaultValue: 'Assigner \u00e0 un emplacement' })}
+              {t('business.team.assignLocations', { defaultValue: 'Assigner aux emplacements *' })}
             </Text>
-            {locations.map((loc: any) => (
-              <TouchableOpacity
-                key={loc.id}
-                onPress={() => setLocationId(locationId === loc.id ? null : loc.id)}
-                style={{
-                  flexDirection: 'row', alignItems: 'center',
-                  padding: 14, borderRadius: 12, marginBottom: 6,
-                  backgroundColor: locationId === loc.id ? '#114b3c15' : theme.colors.surface,
-                  borderWidth: locationId === loc.id ? 1.5 : 1,
-                  borderColor: locationId === loc.id ? '#114b3c' : theme.colors.divider,
-                }}
-              >
-                <MapPin size={14} color="#114b3c" />
-                <Text style={{ color: theme.colors.textPrimary, fontSize: 14, marginLeft: 8 }}>
-                  {loc.name ?? loc.address ?? 'Location'}
-                </Text>
-              </TouchableOpacity>
-            ))}
+            <Text style={{ color: theme.colors.textSecondary, fontSize: 11, marginBottom: 8 }}>
+              {t('business.team.assignLocationsHint', { defaultValue: 'Sélectionnez un ou plusieurs emplacements' })}
+            </Text>
+            {locations.map((loc: any) => {
+              const isChecked = locationIds.has(loc.id);
+              return (
+                <TouchableOpacity
+                  key={loc.id}
+                  onPress={() => {
+                    setLocationIds((prev) => {
+                      const next = new Set(prev);
+                      if (next.has(loc.id)) next.delete(loc.id);
+                      else next.add(loc.id);
+                      return next;
+                    });
+                  }}
+                  style={{
+                    flexDirection: 'row', alignItems: 'center',
+                    padding: 14, borderRadius: 12, marginBottom: 6,
+                    backgroundColor: isChecked ? '#114b3c15' : theme.colors.surface,
+                    borderWidth: isChecked ? 1.5 : 1,
+                    borderColor: isChecked ? '#114b3c' : theme.colors.divider,
+                  }}
+                >
+                  <View style={{
+                    width: 20, height: 20, borderRadius: 6, borderWidth: 2,
+                    borderColor: isChecked ? '#114b3c' : theme.colors.muted,
+                    backgroundColor: isChecked ? '#114b3c' : 'transparent',
+                    marginRight: 10, justifyContent: 'center', alignItems: 'center',
+                  }}>
+                    {isChecked && <Text style={{ color: '#fff', fontSize: 13, lineHeight: 15, fontWeight: '700' }}>✓</Text>}
+                  </View>
+                  <MapPin size={14} color="#114b3c" />
+                  <Text style={{ color: theme.colors.textPrimary, fontSize: 14, marginLeft: 8, flex: 1 }}>
+                    {loc.name ?? loc.address ?? 'Location'}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+            {locationIds.size === 0 && (
+              <Text style={{ color: '#ef4444', fontSize: 11, marginTop: 4 }}>
+                {t('business.profile.locationRequired', { defaultValue: 'Veuillez sélectionner au moins un emplacement' })}
+              </Text>
+            )}
           </>
         )}
 

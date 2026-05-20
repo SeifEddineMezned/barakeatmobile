@@ -9,7 +9,9 @@ export interface SubmitReviewRequest {
   rating_quality: number;
   rating_variety: number;
   comment?: string;
-  image_url?: string;
+  /** Data URL (data:image/…;base64,…). The backend uploads to Cloudinary and
+   *  stores the resulting URL on reviews.image_url. Do NOT send a local file URI. */
+  image_data_url?: string;
 }
 
 export interface ReviewFromAPI {

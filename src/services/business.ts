@@ -290,6 +290,10 @@ export interface TodayReservationFromAPI {
   buyer_email?: string;
   price_tier?: string;
   original_price?: string;
+  /** Free-text reason supplied when the reservation was cancelled. */
+  cancellation_reason?: string | null;
+  /** Who initiated the cancellation: 'buyer' | 'business'. */
+  cancelled_by?: 'buyer' | 'business' | null;
   [key: string]: unknown;
 }
 
@@ -302,6 +306,15 @@ export async function fetchTodayOrders(locationId?: number | string | null): Pro
   if (data && typeof data === 'object' && 'reservations' in data) return (data as any).reservations;
   if (data && typeof data === 'object' && 'data' in data) return (data as any).data;
   return [];
+}
+
+export async function fetchLocationOrders(locationId?: number | string | null, filter: 'today' | 'month' | 'year' | 'all' = 'month'): Promise<TodayReservationFromAPI[]> {
+  const params = new URLSearchParams({ filter });
+  if (locationId) params.set('location_id', String(locationId));
+  console.log('[Business] Fetching location orders', params.toString());
+  const res = await apiClient.get<TodayReservationFromAPI[]>(`/api/reservations/location/orders?${params.toString()}`);
+  const data = res.data;
+  return Array.isArray(data) ? data : [];
 }
 
 export async function confirmPickup(reservationId: number | string, pickupCode: string, buyerId?: number | string): Promise<void> {

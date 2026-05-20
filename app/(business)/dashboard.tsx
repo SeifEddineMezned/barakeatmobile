@@ -2,7 +2,8 @@ import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Modal, Dimensions, Image, Animated as RNAnimated, PanResponder } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
-import { TrendingUp, ShoppingBag, Banknote, Clock, Leaf, Star, X, Package, Store, Settings, Bell, ChevronDown, Check, Building2 } from 'lucide-react-native';
+import { TrendingUp, ShoppingBag, Banknote, Clock, Leaf, Star, X, Package, Store, Settings, Bell, ChevronDown, Check, Building2, MapPin } from 'lucide-react-native';
+import { NoLocationCTA } from '@/src/components/NoLocationCTA';
 import { useQuery } from '@tanstack/react-query';
 import { useRouter } from 'expo-router';
 import { useTheme } from '@/src/theme/ThemeProvider';
@@ -10,9 +11,10 @@ import { StatusBar } from 'expo-status-bar';
 import { useAuthStore } from '@/src/stores/authStore';
 import { useBusinessStore } from '@/src/stores/businessStore';
 import { useNotificationStore } from '@/src/stores/notificationStore';
-import { fetchStats, fetchTodayOrders, fetchAnalytics, fetchMyProfile } from '@/src/services/business';
+import { fetchStats, fetchTodayOrders, fetchAnalytics, fetchMyProfile, fetchMyBaskets, type BusinessBasketFromAPI } from '@/src/services/business';
 import { fetchMyContext, fetchOrganizationDetails } from '@/src/services/teams';
 import { apiClient } from '@/src/lib/api';
+import { orderIdToCode } from '@/src/utils/orderCode';
 import { LineChart } from '@/src/components/LineChart';
 import { DelayedLoader } from '@/src/components/DelayedLoader';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -104,17 +106,26 @@ const chartStyles = StyleSheet.create({
   },
 });
 
-function ReviewBar({ label, value, color }: { label: string; value: number; color: string }) {
+function ReviewStarRow({ label, value }: { label: string; value: number }) {
   const theme = useTheme();
-  const pct = (value / 5) * 100;
+  // Read-only star display — mirrors customer-side StarRatingRow (app/review.tsx).
+  // Rounded to nearest whole star; we also surface the numeric average at the right.
+  const rounded = Math.round(value);
   return (
-    <View style={{ marginBottom: 14 }}>
-      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 7 }}>
-        <Text style={{ color: theme.colors.textSecondary, fontSize: 12, fontFamily: 'Poppins_400Regular', letterSpacing: 0.1 }}>{label}</Text>
-        <Text style={{ color: theme.colors.textPrimary, fontSize: 13, fontFamily: 'Poppins_600SemiBold' }}>{value.toFixed(1)}</Text>
-      </View>
-      <View style={{ height: 5, backgroundColor: theme.colors.divider, borderRadius: 3 }}>
-        <View style={{ height: 5, width: `${pct}%`, backgroundColor: color, borderRadius: 3 }} />
+    <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 14 }}>
+      <Text style={{ color: theme.colors.textPrimary, ...theme.typography.body, flex: 1 }}>
+        {label}
+      </Text>
+      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+        {[1, 2, 3, 4, 5].map((star) => (
+          <View key={star} style={{ paddingHorizontal: 2 }}>
+            <Star
+              size={22}
+              color={theme.colors.accentWarm}
+              fill={star <= rounded ? theme.colors.accentWarm : 'transparent'}
+            />
+          </View>
+        ))}
       </View>
     </View>
   );
@@ -238,7 +249,7 @@ export default function BusinessDashboard() {
       const avgQuantity = reviews.reduce((s: number, r: any) => s + (r.rating_quantity ?? 0), 0) / reviews.length;
       const avgQuality = reviews.reduce((s: number, r: any) => s + (r.rating_quality ?? 0), 0) / reviews.length;
       const avgVariety = reviews.reduce((s: number, r: any) => s + (r.rating_variety ?? 0), 0) / reviews.length;
-      return { service: avgService, quantite: avgQuantity, qualite: avgQuality, variete: avgVariety };
+      return { service: avgService, quantite: avgQuantity, qualite: avgQuality, variete: avgVariety, reviews };
     },
     enabled: !!profileQuery.data?.id,
     staleTime: 60_000,
@@ -279,7 +290,7 @@ export default function BusinessDashboard() {
     pendingOrders: todayOrders.filter((o: any) => ['confirmed', 'reserved', 'pending'].includes(o.status ?? '')).length,
     mealsRescued: summaryData?.pickups_today ?? 0,
     // ─ Overview ──────────────────────────────────────────
-    activeBaskets: profileQuery.data?.available_quantity ?? 0,
+    activeBaskets: Number(statsData?.active_baskets || 0) || Number(profileQuery.data?.available_quantity || 0),
     averageRating: (statsData?.average_rating && statsData.average_rating > 0)
       ? statsData.average_rating
       : ((profileQuery.data?.average_rating && profileQuery.data.average_rating > 0)
@@ -320,6 +331,7 @@ export default function BusinessDashboard() {
   const weeklyRevenueTotal = stats.dailyRevenue.reduce((a: number, b: number) => a + b, 0);
 
   const [showRatingModal, setShowRatingModal] = useState(false);
+  const [showAllComments, setShowAllComments] = useState(false);
   const ratingSlideY = useRef(new RNAnimated.Value(400)).current;
   const ratingPanResponder = useRef(
     PanResponder.create({
@@ -341,10 +353,11 @@ export default function BusinessDashboard() {
   }, [showRatingModal]);
 
   const teamContextQuery = useQuery({
-    queryKey: ['team-context'],
+    queryKey: ['my-context'],
     queryFn: fetchMyContext,
-    staleTime: 300_000,
+    staleTime: 10_000,
     retry: 1,
+    //refetchInterval: 15_000,
   });
 
   const orgId = teamContextQuery.data?.organization_id;
@@ -358,10 +371,59 @@ export default function BusinessDashboard() {
   });
 
   const orgLocations = orgDetailsQuery.data?.locations ?? [];
-  const isAdmin = (teamContextQuery.data?.role ?? '') === 'admin' || (teamContextQuery.data?.role ?? '') === 'owner';
-  const selectedLocationName = selectedLocationId
-    ? (orgLocations.find((l) => l.id === selectedLocationId)?.name ?? `${t('business.location')} ${selectedLocationId}`)
-    : (isAdmin ? (teamContextQuery.data?.organization_name ?? t('business.allLocations')) : (teamContextQuery.data?.location_name ?? t('business.team.locationLabel')));
+
+  // Baskets for the horizontal scroll — visible to all members
+  const basketsQuery = useQuery({
+    queryKey: ['my-baskets', selectedLocationId],
+    queryFn: () => fetchMyBaskets(selectedLocationId),
+    staleTime: 30_000,
+  });
+  const dashBaskets = (basketsQuery.data ?? []).filter((b: BusinessBasketFromAPI) => b.status !== 'deleted');
+
+  const myDashRole = teamContextQuery.data?.role ?? '';
+  const myDashLocationId = teamContextQuery.data?.location_id;
+  // Every location this user belongs to. Prefer my-context (polled ~60s) so
+  // remote membership changes propagate at the same cadence as permissions;
+  // fall back to org-details and the primary membership for safety.
+  const myDashLocationIds = React.useMemo<number[]>(() => {
+    const ids = (teamContextQuery.data as any)?.location_ids;
+    if (Array.isArray(ids) && ids.length > 0) return ids.map(Number);
+    const uid = String(user?.id ?? '');
+    const rows = (orgDetailsQuery.data?.members ?? []) as any[];
+    const fromOrgDetails = new Set<number>();
+    for (const m of rows) {
+      if (String(m.user_id) === uid && m.location_id != null) fromOrgDetails.add(Number(m.location_id));
+    }
+    if (fromOrgDetails.size > 0) return Array.from(fromOrgDetails);
+    return myDashLocationId != null ? [Number(myDashLocationId)] : [];
+  }, [user?.id, orgDetailsQuery.data?.members, (teamContextQuery.data as any)?.location_ids, myDashLocationId]);
+  const isAdmin = (myDashRole === 'admin' || myDashRole === 'owner') && myDashLocationIds.length === 0;
+  // True for an org owner/admin who hasn't created a location yet — every
+  // partner-screen short-circuits to a single "add your first location" CTA in
+  // this state. Wait for orgDetails to finish loading so we don't briefly flash
+  // the empty state on hydration.
+  const hasNoLocation = isAdmin
+    && !!orgId
+    && !orgDetailsQuery.isLoading
+    && orgLocations.length === 0;
+  // The switcher is tappable for org admins (who can jump to any location +
+  // "Tous les emplacements") and for anyone with 2+ memberships. Single-
+  // location members still see their location name as static text.
+  const canSwitchDashLocation = isAdmin || myDashLocationIds.length > 1;
+  const dashPerms = teamContextQuery.data?.permissions ?? {};
+  const hasDashPerm = (key: string) => { const v = (dashPerms as any)[key]; return v === true || v === 'true' || v === 'write'; };
+  const canViewHistory = isAdmin || hasDashPerm('view_history');
+  // Org name is the source of truth for the hero greeting + switcher fallback.
+  const orgName = teamContextQuery.data?.organization_name ?? orgDetailsQuery.data?.organization?.name ?? '';
+  const selectedLocationName = hasNoLocation
+    ? t('business.locationSwitcher.noLocationYet')
+    : selectedLocationId
+      ? (orgLocations.find((l) => l.id === selectedLocationId)?.name ?? `${t('business.location')} ${selectedLocationId}`)
+      : (isAdmin
+          ? (orgLocations.length > 0
+              ? (orgName || t('business.allLocations'))
+              : t('business.locationSwitcher.noLocationYet'))
+          : (teamContextQuery.data?.location_name ?? t('business.team.locationLabel')));
 
   const reviews = reviewsQuery.data ?? { service: 0, quantite: 0, qualite: 0, variete: 0 };
 
@@ -370,7 +432,7 @@ export default function BusinessDashboard() {
     setShowRatingModal(true);
   }, []);
 
-  const chartWidth = Math.min(SCREEN_WIDTH - 80, 320);
+  const chartWidth = SCREEN_WIDTH > 768 ? Math.min((SCREEN_WIDTH - 120) / 2, 400) : Math.min(SCREEN_WIDTH - 80, 320);
 
   // No fade animation — render at full opacity immediately to avoid "faded" state
 
@@ -398,32 +460,45 @@ export default function BusinessDashboard() {
           justifyContent: 'space-between',
           alignItems: 'center',
         }}>
-          {/* Team / location switcher */}
-          <TouchableOpacity
-            onPress={() => setShowLocationModal(true)}
-            style={{
-              backgroundColor: theme.colors.surface,
-              borderRadius: 20,
-              paddingHorizontal: 12,
-              paddingVertical: 8,
-              flexDirection: 'row',
-              alignItems: 'center',
-              gap: 6,
-              ...theme.shadows.shadowMd,
-              maxWidth: 200,
-            }}
-          >
-            <Building2 size={14} color={theme.colors.primary} />
-            <Text
-              style={{ color: theme.colors.textPrimary, fontSize: 13, fontWeight: '600', fontFamily: 'Poppins_600SemiBold', flexShrink: 1 }}
-              numberOfLines={1}
+          {/* Team / location switcher — org admins can switch to any
+              location; regular members get the dropdown once they're
+              assigned to 2+ locations. */}
+          {canSwitchDashLocation ? (
+            <TouchableOpacity
+              onPress={() => setShowLocationModal(true)}
+              style={{
+                backgroundColor: theme.colors.surface,
+                borderRadius: 20,
+                paddingHorizontal: 12,
+                paddingVertical: 8,
+                flexDirection: 'row',
+                alignItems: 'center',
+                gap: 6,
+                ...theme.shadows.shadowMd,
+                maxWidth: 220,
+                borderWidth: hasNoLocation ? 1 : 0,
+                borderColor: hasNoLocation ? '#e67e22' : 'transparent',
+              }}
             >
-              {selectedLocationName}
-            </Text>
-            {orgLocations.length > 0 && (
-              <ChevronDown size={13} color={theme.colors.textSecondary} />
-            )}
-          </TouchableOpacity>
+              {hasNoLocation
+                ? <MapPin size={14} color="#e67e22" />
+                : <Building2 size={14} color={theme.colors.primary} />}
+              <Text
+                style={{ color: hasNoLocation ? '#e67e22' : theme.colors.textPrimary, fontSize: 13, fontWeight: '600', fontFamily: 'Poppins_600SemiBold', flexShrink: 1 }}
+                numberOfLines={1}
+              >
+                {selectedLocationName}
+              </Text>
+              <ChevronDown size={13} color={hasNoLocation ? '#e67e22' : theme.colors.textSecondary} />
+            </TouchableOpacity>
+          ) : (
+            <View style={{ backgroundColor: theme.colors.surface, borderRadius: 20, paddingHorizontal: 12, paddingVertical: 8, flexDirection: 'row', alignItems: 'center', gap: 6, ...theme.shadows.shadowMd, maxWidth: 200 }}>
+              <Building2 size={14} color={theme.colors.primary} />
+              <Text style={{ color: theme.colors.textPrimary, fontSize: 13, fontWeight: '600', fontFamily: 'Poppins_600SemiBold', flexShrink: 1 }} numberOfLines={1}>
+                {selectedLocationName}
+              </Text>
+            </View>
+          )}
 
           {/* Settings + Notifications pills */}
           <View style={{
@@ -497,8 +572,11 @@ export default function BusinessDashboard() {
             overflow: 'hidden',
             backgroundColor: theme.colors.surface,
           }}>
-            {profileQuery.data?.image_url ? (
-              <Image source={{ uri: profileQuery.data.image_url }} style={{ width: '100%', height: '100%' }} />
+            {(orgDetailsQuery.data?.organization?.image_url ?? profileQuery.data?.image_url) ? (
+              <Image
+                source={{ uri: (orgDetailsQuery.data?.organization?.image_url ?? profileQuery.data?.image_url) as string }}
+                style={{ width: '100%', height: '100%' }}
+              />
             ) : (
               <View style={{ width: '100%', height: '100%', backgroundColor: theme.colors.primary + '15', justifyContent: 'center', alignItems: 'center' }}>
                 <Store size={22} color={theme.colors.primary} />
@@ -506,10 +584,14 @@ export default function BusinessDashboard() {
             )}
           </View>
           <View style={{ marginLeft: 14, flex: 1 }}>
-            <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3 }]}>
-              {profileQuery.data?.name ?? user?.name ?? ''}
+            <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3 }]} numberOfLines={1}>
+              {orgName || profileQuery.data?.name || ''}
             </Text>
-            {profileQuery.data?.category ? (
+            {hasNoLocation ? (
+              <Text style={{ color: '#e67e22', fontSize: 12, fontFamily: 'Poppins_500Medium', marginTop: 4 }}>
+                {t('business.locationSwitcher.noLocationYet')}
+              </Text>
+            ) : profileQuery.data?.category ? (
               <View style={{ alignSelf: 'flex-start', marginTop: 4, backgroundColor: '#114b3c15', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 3 }}>
                 <Text style={{ color: '#114b3c', fontSize: 11, fontWeight: '600' }}>
                   {t(`categories.${profileQuery.data.category.toLowerCase()}`, { defaultValue: profileQuery.data.category })}
@@ -518,6 +600,15 @@ export default function BusinessDashboard() {
             ) : null}
           </View>
         </View>
+
+        {hasNoLocation && (
+          <View style={{ marginTop: theme.spacing.lg, marginHorizontal: theme.spacing.lg }}>
+            {/* Only the dashboard's CTA publishes its bounds for the
+                walkthrough — other instances (e.g. inside the location
+                dropdown) would otherwise overwrite this rect when opened. */}
+            <NoLocationCTA publishMeasure />
+          </View>
+        )}
 
         <Text style={{ color: theme.colors.textPrimary, fontSize: 26, fontFamily: 'Poppins_700Bold', letterSpacing: -0.4, paddingHorizontal: theme.spacing.xl, marginTop: 14 }}>
           {t('business.dashboard.title')}
@@ -648,6 +739,8 @@ export default function BusinessDashboard() {
           </TouchableOpacity>
         </View>
 
+        {/* Analytics sections — gated by view_history permission */}
+        {canViewHistory && (<>
         <View style={{ paddingHorizontal: theme.spacing.xl, marginTop: theme.spacing.xl }}>
           {/* Section header */}
           <View>
@@ -667,10 +760,10 @@ export default function BusinessDashboard() {
 
         {/* Order Status Breakdown moved to incoming-orders screen */}
 
-        {/* ── Sales This Week + Monthly Performance — animated as group 5 ── */}
-        <View>
+        {/* ── Sales This Week + Monthly Performance — side-by-side on tablets ── */}
+        <View style={SCREEN_WIDTH > 768 ? { flexDirection: 'row', gap: 16 } : undefined}>
         {/* ── Sales This Week (Line Chart) ── */}
-        <View style={{ paddingHorizontal: theme.spacing.xl, marginTop: theme.spacing.xxl }}>
+        <View style={{ paddingHorizontal: theme.spacing.xl, marginTop: theme.spacing.xxl, ...(SCREEN_WIDTH > 768 ? { flex: 1 } : {}) }}>
           {/* Section header */}
           <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
             <View style={{ flexDirection: 'row', alignItems: 'center' }}>
@@ -733,7 +826,7 @@ export default function BusinessDashboard() {
         </View>
 
         {/* ── Monthly Performance (Bar Chart) ── */}
-        <View style={{ paddingHorizontal: theme.spacing.xl, marginTop: theme.spacing.xl }}>
+        <View style={{ paddingHorizontal: theme.spacing.xl, marginTop: SCREEN_WIDTH > 768 ? theme.spacing.xxl : theme.spacing.xl, ...(SCREEN_WIDTH > 768 ? { flex: 1 } : {}) }}>
           {/* Section header */}
           <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
             <View style={{ flexDirection: 'row', alignItems: 'center' }}>
@@ -802,6 +895,71 @@ export default function BusinessDashboard() {
           </View>
         </View>
         </View>
+        </>)}
+
+        {/* ── Basket overview — visible to ALL members, at bottom ── */}
+        {dashBaskets.length > 0 && (
+          <View style={{ marginTop: theme.spacing.xl }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: theme.spacing.xl, marginBottom: 12 }}>
+              <View style={{ width: 3, height: 16, backgroundColor: theme.colors.primary, borderRadius: 2, marginRight: 8 }} />
+              <Text style={{ color: theme.colors.textPrimary, fontSize: 13, fontFamily: 'Poppins_600SemiBold', letterSpacing: 0.3, textTransform: 'uppercase' as const }}>
+                {t('business.dashboard.baskets', { defaultValue: 'Paniers' })}
+              </Text>
+              <Text style={{ color: theme.colors.muted, fontSize: 12, fontFamily: 'Poppins_400Regular', marginLeft: 8 }}>
+                {dashBaskets.length}
+              </Text>
+            </View>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: theme.spacing.xl, gap: 12 }}>
+              {dashBaskets.map((basket: BusinessBasketFromAPI) => {
+                const locName = orgLocations.find((l: any) => l.id === basket.location_id)?.name;
+                const pickupStart = basket.pickup_start_time?.substring(0, 5) ?? '';
+                const pickupEnd = basket.pickup_end_time?.substring(0, 5) ?? '';
+                return (
+                  <TouchableOpacity
+                    key={basket.id}
+                    activeOpacity={0.85}
+                    onPress={() => {
+                      useBusinessStore.getState().setTargetBasket(String(basket.id));
+                      router.push('/(business)/my-baskets' as never);
+                    }}
+                    style={{ width: 160, backgroundColor: theme.colors.surface, borderRadius: 14, overflow: 'hidden', ...theme.shadows.shadowSm }}
+                  >
+                    <View style={{ width: 160, height: 100, backgroundColor: theme.colors.bg }}>
+                      {basket.image_url ? (
+                        <Image source={{ uri: basket.image_url }} style={{ width: 160, height: 100 }} resizeMode="cover" />
+                      ) : (
+                        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+                          <Package size={28} color={theme.colors.muted} />
+                        </View>
+                      )}
+                      <View style={{ position: 'absolute', top: 6, right: 6, backgroundColor: Number(basket.quantity) > 0 ? theme.colors.primary : theme.colors.error, borderRadius: 8, paddingHorizontal: 6, paddingVertical: 2, minWidth: 22, alignItems: 'center' }}>
+                        <Text style={{ color: '#fff', fontSize: 11, fontWeight: '700' }}>{basket.quantity}</Text>
+                      </View>
+                    </View>
+                    <View style={{ padding: 10 }}>
+                      <Text style={{ color: theme.colors.textPrimary, fontSize: 13, fontFamily: 'Poppins_600SemiBold' }} numberOfLines={1}>
+                        {basket.name}
+                      </Text>
+                      {locName && (
+                        <Text style={{ color: theme.colors.muted, fontSize: 11, fontFamily: 'Poppins_400Regular', marginTop: 2 }} numberOfLines={1}>
+                          {locName}
+                        </Text>
+                      )}
+                      {(pickupStart || pickupEnd) && (
+                        <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 4, gap: 4 }}>
+                          <Clock size={10} color={theme.colors.muted} />
+                          <Text style={{ color: theme.colors.textSecondary, fontSize: 10, fontFamily: 'Poppins_400Regular' }}>
+                            {pickupStart} - {pickupEnd}
+                          </Text>
+                        </View>
+                      )}
+                    </View>
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+          </View>
+        )}
 
         <View style={{ height: 40 }} />
       </ScrollView>
@@ -816,106 +974,198 @@ export default function BusinessDashboard() {
             style={[styles.modalContent, { backgroundColor: theme.colors.surface, borderTopLeftRadius: 28, borderTopRightRadius: 28, padding: theme.spacing.xl, ...theme.shadows.shadowLg, transform: [{ translateY: ratingSlideY }] }]}
           >
             <View style={[styles.modalHandle, { backgroundColor: theme.colors.divider, alignSelf: 'center', marginBottom: theme.spacing.lg }]} />
-            <View style={styles.modalHeader}>
-              <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h2 }]}>
-                {t('business.dashboard.ratingDetails')}
-              </Text>
-              <TouchableOpacity onPress={() => setShowRatingModal(false)} style={[styles.modalCloseBtn, { backgroundColor: theme.colors.bg }]}>
-                <X size={18} color={theme.colors.textSecondary} />
-              </TouchableOpacity>
-            </View>
+            <ScrollView showsVerticalScrollIndicator={false} bounces={false} contentContainerStyle={{ paddingBottom: 20 }}>
+              <View style={styles.modalHeader}>
+                <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h2 }]}>
+                  {t('business.dashboard.ratingDetails')}
+                </Text>
+                <TouchableOpacity onPress={() => setShowRatingModal(false)} style={[styles.modalCloseBtn, { backgroundColor: theme.colors.bg }]}>
+                  <X size={18} color={theme.colors.textSecondary} />
+                </TouchableOpacity>
+              </View>
 
-            <View style={[styles.overallRatingBlock, { backgroundColor: theme.colors.primary, borderRadius: theme.radii.r16, padding: theme.spacing.xl, marginTop: theme.spacing.lg }]}>
-              <Star size={28} color={theme.colors.secondary} fill={theme.colors.secondary} />
-              <Text style={[{ color: '#fff', ...theme.typography.display, marginLeft: 12 }]}>
-                {stats.averageRating > 0 ? stats.averageRating.toFixed(1) : '--'}
-              </Text>
-              <Text style={[{ color: 'rgba(255,255,255,0.6)', fontSize: 18, marginLeft: 4, fontFamily: 'Poppins_400Regular' }]}>/5</Text>
-            </View>
+              <View style={[styles.overallRatingBlock, { backgroundColor: 'transparent', paddingVertical: theme.spacing.lg, marginTop: theme.spacing.sm }]}>
+                <Star size={22} color={theme.colors.accentWarm} fill={theme.colors.accentWarm} />
+                <Text style={[{ color: theme.colors.textPrimary, fontSize: 28, fontFamily: 'Poppins_700Bold', marginLeft: 8 }]}>
+                  {stats.averageRating > 0 ? stats.averageRating.toFixed(1) : '--'}
+                </Text>
+                <Text style={[{ color: theme.colors.muted, fontSize: 16, marginLeft: 4, fontFamily: 'Poppins_400Regular' }]}>/5</Text>
+              </View>
 
-            <View style={{ marginTop: theme.spacing.xl }}>
-              <ReviewBar label={t('basket.reviewService')} value={reviews.service} color={theme.colors.primary} />
-              <ReviewBar label={t('basket.reviewQuantite')} value={reviews.quantite} color={theme.colors.accentFresh} />
-              <ReviewBar label={t('basket.reviewQualite')} value={reviews.qualite} color={theme.colors.accentWarm} />
-              <ReviewBar label={t('basket.reviewVariete')} value={reviews.variete} color={theme.colors.secondary} />
-            </View>
+              <View style={[{ backgroundColor: theme.colors.bg, borderRadius: theme.radii.r16, padding: theme.spacing.xl, marginTop: theme.spacing.md }]}>
+                <ReviewStarRow label={t('basket.reviewService')} value={reviews.service} />
+                <ReviewStarRow label={t('basket.reviewQuantite')} value={reviews.quantite} />
+                <ReviewStarRow label={t('basket.reviewQualite')} value={reviews.qualite} />
+                <ReviewStarRow label={t('basket.reviewVariete')} value={reviews.variete} />
+              </View>
 
-            <TouchableOpacity
-              onPress={() => setShowRatingModal(false)}
-              style={[{ backgroundColor: theme.colors.primary, borderRadius: theme.radii.r12, padding: theme.spacing.lg, marginTop: theme.spacing.xl }]}
-            >
-              <Text style={[{ color: '#fff', ...theme.typography.button, textAlign: 'center' as const }]}>
-                {t('common.close')}
-              </Text>
-            </TouchableOpacity>
+              {/* Comments section */}
+              {(reviews as any).reviews && (reviews as any).reviews.length > 0 && (
+                <View style={{ marginTop: theme.spacing.xl }}>
+                  <View style={{ height: 1, backgroundColor: theme.colors.divider, marginBottom: theme.spacing.lg }} />
+                  <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3, marginBottom: theme.spacing.md }}>
+                    {t('business.dashboard.recentComments', { defaultValue: 'Commentaires récents' })}
+                  </Text>
+                  {(showAllComments ? (reviews as any).reviews : (reviews as any).reviews.slice(0, 3)).filter((r: any) => r.comment).map((r: any, i: number) => (
+                    <View key={r.id ?? i} style={{ backgroundColor: theme.colors.bg, borderRadius: 14, padding: 14, marginBottom: 10 }}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3 }}>
+                          {[1,2,3,4,5].map(s => (
+                            <Star key={s} size={12} color="#f59e0b" fill={s <= Math.round(Number(r.rating ?? r.rating_service ?? 0)) ? '#f59e0b' : 'transparent'} />
+                          ))}
+                        </View>
+                        <Text style={{ color: theme.colors.muted, ...theme.typography.caption, marginLeft: 8 }}>
+                          {r.buyer_name ?? r.customer_name ?? t('business.orders.customer')}
+                        </Text>
+                        {r.reservation_id && (
+                          <TouchableOpacity
+                            onPress={() => {
+                              setShowRatingModal(false);
+                              setShowAllComments(false);
+                              useBusinessStore.getState().setTargetOrder(String(r.reservation_id), selectedLocationId);
+                              router.push('/(business)/incoming-orders' as never);
+                            }}
+                            style={{ marginLeft: 6, backgroundColor: theme.colors.primary + '12', borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2 }}
+                          >
+                            <Text style={{ color: theme.colors.primary, fontSize: 10, fontWeight: '700' }}>
+                              {orderIdToCode(r.reservation_id)}
+                            </Text>
+                          </TouchableOpacity>
+                        )}
+                        {r.created_at && (
+                          <Text style={{ color: theme.colors.muted, ...theme.typography.caption, marginLeft: 'auto' }}>
+                            {new Date(r.created_at).toLocaleDateString('fr-FR')}
+                          </Text>
+                        )}
+                      </View>
+                      <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontStyle: 'italic', lineHeight: 19 }}>
+                        « {r.comment} »
+                      </Text>
+                    </View>
+                  ))}
+                  {(reviews as any).reviews.filter((r: any) => r.comment).length > 3 && (
+                    <TouchableOpacity onPress={() => setShowAllComments(v => !v)} style={{ alignItems: 'center', marginTop: 8 }}>
+                      <Text style={{ color: theme.colors.primary, ...theme.typography.bodySm, fontWeight: '600' }}>
+                        {showAllComments ? t('common.seeLess', { defaultValue: 'Voir moins' }) : t('common.seeMore', { defaultValue: 'Voir plus' })}
+                      </Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+              )}
+
+            </ScrollView>
           </RNAnimated.View>
         </View>
       </Modal>
 
-      {/* Location / team switcher modal */}
+      {/* Location / team switcher — inline dropdown anchored just below the
+          trigger, matching the other business tabs' location selector. */}
       <Modal visible={showLocationModal} transparent animationType="fade" onRequestClose={() => setShowLocationModal(false)}>
-        <View style={styles.modalOverlay}>
-          <TouchableOpacity style={StyleSheet.absoluteFillObject} activeOpacity={1} onPress={() => setShowLocationModal(false)} />
-          <View style={[styles.modalContent, { backgroundColor: theme.colors.surface, borderTopLeftRadius: 28, borderTopRightRadius: 28, padding: theme.spacing.xl, ...theme.shadows.shadowLg }]}>
-            <TouchableOpacity activeOpacity={0.6} onPress={() => setShowLocationModal(false)}>
-              <View style={[styles.modalHandle, { backgroundColor: theme.colors.divider, alignSelf: 'center', marginBottom: theme.spacing.lg }]} />
-            </TouchableOpacity>
-            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: theme.spacing.lg }}>
-              <Building2 size={18} color={theme.colors.primary} />
-              <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h2, marginLeft: 10, flex: 1 }]}>
-                {teamContextQuery.data?.organization_name ?? t('business.profile.allLocationsLabel')}
-              </Text>
-              <TouchableOpacity onPress={() => setShowLocationModal(false)}>
-                <X size={22} color={theme.colors.textPrimary} />
-              </TouchableOpacity>
-            </View>
-
-            {/* "All locations" option — admin only */}
-            {isAdmin && (
-              <TouchableOpacity
-                onPress={() => handleLocationSwitch(null)}
-                style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: theme.colors.divider }}
-              >
-                <Store size={18} color={selectedLocationId === null ? theme.colors.primary : theme.colors.textSecondary} />
-                <Text style={[{ ...theme.typography.body, color: selectedLocationId === null ? theme.colors.primary : theme.colors.textPrimary, flex: 1, marginLeft: 12, fontWeight: selectedLocationId === null ? ('600' as const) : ('400' as const) }]}>
-                  {t('business.allLocations', { defaultValue: 'Tous les emplacements' })}
-                </Text>
-                {selectedLocationId === null && <Check size={18} color={theme.colors.primary} />}
-              </TouchableOpacity>
-            )}
-
-            {/* Individual locations */}
-            {orgLocations.map((loc) => {
-              const isSelected = selectedLocationId === loc.id;
-              return (
+        <TouchableOpacity
+          style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.25)' }}
+          activeOpacity={1}
+          onPress={() => setShowLocationModal(false)}
+        >
+          <View
+            style={{
+              position: 'absolute',
+              top: insets.top + 52,
+              left: 12,
+              right: 12,
+              maxHeight: '70%',
+              backgroundColor: theme.colors.surface,
+              borderRadius: 16,
+              paddingVertical: 8,
+              paddingHorizontal: 8,
+              ...theme.shadows.shadowLg,
+              borderWidth: 1,
+              borderColor: theme.colors.divider,
+            }}
+            onStartShouldSetResponder={() => true}
+          >
+            <ScrollView showsVerticalScrollIndicator={false} style={{ maxHeight: 420 }}>
+              {/* "All locations" option — admin only */}
+              {isAdmin && (
                 <TouchableOpacity
-                  key={loc.id}
-                  onPress={() => handleLocationSwitch(loc.id)}
-                  style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: theme.colors.divider }}
+                  onPress={() => handleLocationSwitch(null)}
+                  style={{
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    paddingVertical: 12,
+                    paddingHorizontal: 12,
+                    borderRadius: 10,
+                    backgroundColor: selectedLocationId === null ? theme.colors.primary + '12' : 'transparent',
+                  }}
+                  activeOpacity={0.7}
                 >
-                  <Building2 size={18} color={isSelected ? theme.colors.primary : theme.colors.textSecondary} />
-                  <View style={{ flex: 1, marginLeft: 12 }}>
-                    <Text style={[{ ...theme.typography.body, color: theme.colors.textPrimary, fontWeight: isSelected ? ('600' as const) : ('400' as const) }]}>
-                      {loc.name ?? `Location ${loc.id}`}
-                    </Text>
-                    {loc.address ? (
-                      <Text style={[{ ...theme.typography.caption, color: theme.colors.textSecondary }]} numberOfLines={1}>
-                        {loc.address}
-                      </Text>
-                    ) : null}
-                  </View>
-                  {isSelected && <Check size={18} color={theme.colors.primary} />}
+                  <Store size={18} color={selectedLocationId === null ? theme.colors.primary : theme.colors.textSecondary} />
+                  <Text style={{
+                    flex: 1,
+                    marginLeft: 10,
+                    color: selectedLocationId === null ? theme.colors.primary : theme.colors.textPrimary,
+                    fontSize: 14,
+                    fontWeight: selectedLocationId === null ? '700' : '500',
+                    fontFamily: selectedLocationId === null ? 'Poppins_700Bold' : 'Poppins_500Medium',
+                  }}>
+                    {t('business.allLocations', { defaultValue: 'Tous les emplacements' })}
+                  </Text>
+                  {selectedLocationId === null && <Check size={18} color={theme.colors.primary} />}
                 </TouchableOpacity>
-              );
-            })}
+              )}
 
-            {orgLocations.length === 0 && !orgDetailsQuery.isLoading && (
-              <Text style={[{ ...theme.typography.bodySm, color: theme.colors.muted, textAlign: 'center', marginTop: 16 }]}>
-                No additional locations found
-              </Text>
-            )}
+              {/* Individual locations — org admins see every location;
+                  everyone else only sees the ones they actually belong to. */}
+              {orgLocations.filter((loc) => isAdmin || myDashLocationIds.includes(Number(loc.id))).map((loc) => {
+                const isSelected = selectedLocationId === loc.id;
+                return (
+                  <TouchableOpacity
+                    key={loc.id}
+                    onPress={() => handleLocationSwitch(loc.id)}
+                    style={{
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      paddingVertical: 12,
+                      paddingHorizontal: 12,
+                      borderRadius: 10,
+                      backgroundColor: isSelected ? theme.colors.primary + '12' : 'transparent',
+                    }}
+                    activeOpacity={0.7}
+                  >
+                    <Building2 size={18} color={isSelected ? theme.colors.primary : theme.colors.textSecondary} />
+                    <View style={{ flex: 1, marginLeft: 10 }}>
+                      <Text style={{
+                        color: isSelected ? theme.colors.primary : theme.colors.textPrimary,
+                        fontSize: 14,
+                        fontWeight: isSelected ? '700' : '500',
+                        fontFamily: isSelected ? 'Poppins_700Bold' : 'Poppins_500Medium',
+                      }}>
+                        {loc.name ?? `Location ${loc.id}`}
+                      </Text>
+                      {loc.address ? (
+                        <Text style={{ color: theme.colors.textSecondary, fontSize: 11, fontFamily: 'Poppins_400Regular', marginTop: 2 }} numberOfLines={1}>
+                          {loc.address}
+                        </Text>
+                      ) : null}
+                    </View>
+                    {isSelected && <Check size={18} color={theme.colors.primary} />}
+                  </TouchableOpacity>
+                );
+              })}
+
+              {orgLocations.length === 0 && !orgDetailsQuery.isLoading && (
+                <View style={{ paddingVertical: 8 }}>
+                  <NoLocationCTA
+                    compact
+                    onPressOverride={() => {
+                      setShowLocationModal(false);
+                      router.push('/business/add-location' as never);
+                    }}
+                  />
+                </View>
+              )}
+            </ScrollView>
           </View>
-        </View>
+        </TouchableOpacity>
       </Modal>
 
       {/* Location switching animation overlay */}

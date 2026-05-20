@@ -19,6 +19,8 @@ export function DelayedLoader({ delay = 400, size = 36 }: DelayedLoaderProps) {
   const bounceAnim = useRef(new Animated.Value(0)).current;
   const fadeAnim = useRef(new Animated.Value(0)).current;
 
+  const loopRef = useRef<Animated.CompositeAnimation | null>(null);
+
   useEffect(() => {
     const timer = setTimeout(() => {
       setVisible(true);
@@ -27,7 +29,7 @@ export function DelayedLoader({ delay = 400, size = 36 }: DelayedLoaderProps) {
         duration: 200,
         useNativeDriver: true,
       }).start();
-      Animated.loop(
+      const loop = Animated.loop(
         Animated.sequence([
           Animated.timing(bounceAnim, {
             toValue: -12,
@@ -43,9 +45,14 @@ export function DelayedLoader({ delay = 400, size = 36 }: DelayedLoaderProps) {
           }),
           Animated.delay(200),
         ])
-      ).start();
+      );
+      loopRef.current = loop;
+      loop.start();
     }, delay);
-    return () => clearTimeout(timer);
+    return () => {
+      clearTimeout(timer);
+      loopRef.current?.stop();
+    };
   }, [delay]);
 
   if (!visible) return null;

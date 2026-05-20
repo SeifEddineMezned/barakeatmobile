@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { View, Text, StyleSheet, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, ScrollView, Animated, Modal } from 'react-native';
+import { PasswordInput } from '@/src/components/PasswordInput';
 import { useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -8,6 +9,7 @@ import { useTheme } from '@/src/theme/ThemeProvider';
 import { useAuthStore } from '@/src/stores/authStore';
 import { register, restaurantAccessRequest } from '@/src/services/auth';
 import { getErrorMessage } from '@/src/lib/api';
+import { FeatureFlags } from '@/src/lib/featureFlags';
 import type { UserRole, User as UserType } from '@/src/types';
 import { StatusBar } from 'expo-status-bar';
 
@@ -38,6 +40,10 @@ export default function SignUpScreen() {
   const [bizAddress, setBizAddress] = useState('');
 
   const handleCustomerSignUp = async () => {
+    if (FeatureFlags.IS_PROTOTYPE) {
+      setErrorMsg(t('auth.prototypeMode', { defaultValue: 'L\'application est en mode prototype. L\'inscription n\'est pas disponible.' }));
+      return;
+    }
     if (!tosAccepted) {
       setErrorMsg(t('auth.tosRequired'));
       return;
@@ -80,6 +86,10 @@ export default function SignUpScreen() {
   };
 
   const handleBusinessRequest = async () => {
+    if (FeatureFlags.IS_PROTOTYPE) {
+      setErrorMsg(t('auth.prototypeMode', { defaultValue: 'L\'application est en mode prototype. L\'inscription n\'est pas disponible.' }));
+      return;
+    }
     if (!contactName.trim() || !restaurantName.trim() || !bizEmail.trim()) {
       setErrorMsg(t('auth.fillAllFields'));
       return;
@@ -260,11 +270,11 @@ export default function SignUpScreen() {
                 {/* Password */}
                 <View style={[styles.inputContainer, { marginBottom: theme.spacing.lg }]}>
                   <Text style={[styles.label, { color: '#114b3c', ...theme.typography.bodySm }]}>{t('auth.password')}</Text>
-                  <TextInput
-                    style={[styles.input, { backgroundColor: '#fff', borderColor: '#114b3c30', borderWidth: 1.5, borderRadius: 14, color: '#114b3c', ...theme.typography.body }]}
+                  <PasswordInput
+                    containerStyle={{ backgroundColor: '#fff', borderColor: '#114b3c' }}
+                    style={[styles.input, { color: '#114b3c', borderWidth: 0, ...theme.typography.body }]}
                     value={password} onChangeText={setPassword}
                     placeholder="••••••••" placeholderTextColor="#114b3c40"
-                    secureTextEntry
                     accessibilityLabel={t('auth.password')}
                   />
                 </View>

@@ -1,5 +1,6 @@
-import { Tabs } from "expo-router";
-import { Search, ShoppingBag, Heart, User, Star, Flag, Map, Bell, Settings, Flame, Trophy, Zap, Clock, MapPin, QrCode, CheckCircle, X as XIcon, Navigation } from "lucide-react-native";
+import { Tabs, useSegments } from "expo-router";
+import { Search, ShoppingBag, Heart, User, Star, Flag, Map, Bell, Settings, Flame, Trophy, Zap, Clock, MapPin, QrCode, CheckCircle, X as XIcon, Navigation, Wallet, Plus, Hand } from "lucide-react-native";
+import Svg, { Path } from 'react-native-svg';
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import React, { useState, useEffect, useMemo } from "react";
 import { useTranslation } from "react-i18next";
@@ -14,7 +15,7 @@ import { useHeroStore } from "@/src/stores/heroStore";
 import { useSplashStore } from "@/src/stores/splashStore";
 import { useCelebrationStore } from "@/src/stores/celebrationStore";
 import { useWalkthroughStore } from "@/src/stores/walkthroughStore";
-import { fetchMyReservations } from "@/src/services/reservations";
+import { fetchMyReservations, dismissReviewPrompt } from "@/src/services/reservations";
 import { fetchGamificationStats } from "@/src/services/gamification";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
@@ -134,7 +135,7 @@ export default function TabLayout() {
   // ── Review popup on app open (persisted so it only shows once per reservation) ──
   const [reviewPrompt, setReviewPrompt] = useState<{ reservationId: string; locationName: string; locationId: string; locationLogo?: string; basketImage?: string; basketName?: string; quantity?: number; total?: number } | null>(null);
   const [reviewDismissed, setReviewDismissed] = useState<Set<string>>(new Set());
-  const reviewDismissedLoaded = React.useRef(false);
+  const [reviewDismissedReady, setReviewDismissedReady] = useState(false);
 
   // Load persisted dismissed set on mount
   useEffect(() => {
@@ -142,19 +143,23 @@ export default function TabLayout() {
       try {
         const stored = await AsyncStorage.getItem(REVIEW_DISMISSED_KEY);
         if (stored) setReviewDismissed(new Set(JSON.parse(stored)));
-      } catch {}
-      reviewDismissedLoaded.current = true;
+      } catch (e) {
+        console.warn('[ReviewDismiss] AsyncStorage read failed:', e);
+      }
+      setReviewDismissedReady(true);
     })();
   }, []);
 
-  // Helper to dismiss + persist
+  // Helper to dismiss + persist (both client-side and server-side)
   const dismissReview = React.useCallback((reservationId: string) => {
     setReviewDismissed(prev => {
       const next = new Set(prev);
       next.add(reservationId);
-      AsyncStorage.setItem(REVIEW_DISMISSED_KEY, JSON.stringify([...next])).catch(() => {});
+      AsyncStorage.setItem(REVIEW_DISMISSED_KEY, JSON.stringify([...next])).catch(e => console.warn('[ReviewDismiss] AsyncStorage write failed:', e));
       return next;
     });
+    // Persist server-side so popup never reappears even after storage clears
+    dismissReviewPrompt(reservationId).catch(e => console.warn('[ReviewDismiss] Server dismiss failed:', e));
     setReviewPrompt(null);
   }, []);
 
@@ -173,12 +178,13 @@ export default function TabLayout() {
   useEffect(() => {
     if (!splashDone) return;
     if (hasPendingCelebration) return; // wait for celebration to finish
-    if (!reviewDismissedLoaded.current || !reservations.length || reviewShownRef.current) return;
+    if (!reviewDismissedReady || !reservations.length || reviewShownRef.current) return;
     const needsReview = reservations.find((r) => {
       const status = ((r as any).status ?? '').toLowerCase();
       const hasReview = (r as any).has_review === true;
+      const promptDismissed = (r as any).review_prompt_dismissed === true;
       const id = String(r.id ?? '');
-      return (status === 'picked_up' || status === 'collected') && !hasReview && !reviewDismissed.has(id);
+      return (status === 'picked_up' || status === 'collected') && !hasReview && !promptDismissed && !reviewDismissed.has(id);
     });
     if (needsReview && !reviewPrompt) {
       const rid = String(needsReview.id);
@@ -188,9 +194,11 @@ export default function TabLayout() {
       setReviewDismissed(prev => {
         const next = new Set(prev);
         next.add(rid);
-        AsyncStorage.setItem(REVIEW_DISMISSED_KEY, JSON.stringify([...next])).catch(() => {});
+        AsyncStorage.setItem(REVIEW_DISMISSED_KEY, JSON.stringify([...next])).catch(e => console.warn('[ReviewDismiss] AsyncStorage write failed:', e));
         return next;
       });
+      // Also persist server-side so popup never reappears even after storage clears
+      dismissReviewPrompt(rid).catch(e => console.warn('[ReviewDismiss] Server dismiss failed:', e));
       setReviewPrompt({
         reservationId: rid,
         locationName: rr.restaurant_name ?? rr.basket?.merchantName ?? rr.basket?.merchant_name ?? 'this location',
@@ -202,7 +210,7 @@ export default function TabLayout() {
         total: rr.total_price ?? rr.total ?? rr.basket?.price ?? 0,
       });
     }
-  }, [reservations, reviewDismissed, reviewPrompt, splashDone, hasPendingCelebration]);
+  }, [reservations, reviewDismissed, reviewDismissedReady, reviewPrompt, splashDone, hasPendingCelebration]);
 
   // ── Post-reservation celebration popup ──
   const celebrationPending = useCelebrationStore((s) => s.pending);
@@ -302,15 +310,18 @@ export default function TabLayout() {
 
 
 
-  // Guard: business accounts must not see the customer flow
+  // Block only users we can clearly identify as business (restaurant / business
+  // type or role). Cross-role redirect is handled by the root layout.
+  const normalizedRole = String(user?.role ?? '').toLowerCase();
+  const normalizedType = String((user as any)?.type ?? '').toLowerCase();
+  const isBusinessUser =
+    normalizedRole === 'business' || normalizedRole === 'restaurant' ||
+    normalizedType === 'business' || normalizedType === 'restaurant';
   React.useEffect(() => {
-    if (isAuthenticated && user?.role === 'business') {
-      console.log('[TabLayout] Business user detected, redirecting to (business)/dashboard');
-      router.replace('/(business)/dashboard' as never);
-    } else if (!isAuthenticated) {
+    if (!isAuthenticated) {
       router.replace('/auth/sign-in' as never);
     }
-  }, [isAuthenticated, user?.role]);
+  }, [isAuthenticated]);
 
   const unreadQuery = useQuery({
     queryKey: ['unread-count'],
@@ -357,13 +368,22 @@ export default function TabLayout() {
   }, [isSearchTab]);
 
   // Calculate the X offset so the map icon center aligns with the spacer center in the search tab.
-  // Search tab right group: [spacer(34)] [gap:10] [settings(20)] [gap:10] [bell(20)] | 16px right pad
-  // Spacer center from right edge = 16 + 20 + 10 + 20 + 10 + 17 = 93
-  // Spacer center from left = screenW - 93
+  // Search tab right group: [spacer(34)] [gap:10] [settings(34)] [gap:10] [bell(34)] | 16px right pad
+  // Settings/bell are wrapped in 34x34 touch boxes (matches the spacer) so the
+  // icons sit on the same centerline on Android; the old 20-wide touchables
+  // drifted. Spacer center from right edge = 16 + 34 + 10 + 34 + 10 + 17 = 121
+  // Spacer center from left = screenW - 121
   // Overlay icon (20px) at left:16 + translateX → center at 16 + translateX + 10
-  // 16 + translateX + 10 = screenW - 93 → translateX = screenW - 119
+  // 16 + translateX + 10 = screenW - 121 → translateX = screenW - 147
   const screenW = Dimensions.get('window').width;
-  const mapBtnStartX = screenW - 119;
+  const mapBtnStartX = screenW - 147;
+
+  // Hard render-gate: block the customer UI for unauthenticated users and for
+  // business accounts. Prevents the layout from rendering for a single frame
+  // while the wrong-account alert/redirect effect above is still pending.
+  if (!isAuthenticated || isBusinessUser) {
+    return null;
+  }
 
   return (
     <>
@@ -559,6 +579,11 @@ export default function TabLayout() {
         }}
       >
         <TouchableOpacity
+          onLayout={(e) => {
+            (e.target as any)?.measureInWindow?.((x: number, y: number, w: number, h: number) => {
+              if (w > 0 && h > 0) useWalkthroughStore.getState().setMeasuredRect('mapButton', { x, y, w, h });
+            });
+          }}
           onPress={() => router.push('/map-view' as never)}
           activeOpacity={0.7}
         >
@@ -652,7 +677,17 @@ export default function TabLayout() {
         <TouchableOpacity onPress={() => router.push('/settings' as never)}>
           <Settings size={20} color={theme.colors.textPrimary} />
         </TouchableOpacity>
-        <TouchableOpacity onPress={() => router.push('/notifications' as never)}>
+        <TouchableOpacity
+          onLayout={(e) => {
+            (e.target as any)?.measureInWindow?.((x: number, y: number, w: number, h: number) => {
+              if (w > 0 && h > 0) useWalkthroughStore.getState().setMeasuredRect('notifBell', { x, y, w, h });
+            });
+          }}
+          onPress={() => router.push('/notifications' as never)}
+          // Fixed-size wrapper so the measured rect is stable regardless of
+          // whether the unread badge is rendered (it's absolute-positioned).
+          style={{ width: 32, height: 32, alignItems: 'center', justifyContent: 'center' }}
+        >
           <Bell size={20} color={theme.colors.textPrimary} />
           {unreadCount > 0 && (
             <View style={{
@@ -885,18 +920,25 @@ export default function TabLayout() {
                   {t('notifications.notif_message_order_confirmed', { defaultValue: 'Votre commande est confirm\u00e9e !', location: orderConfirmPopup?.locationName ?? '' })}
                 </Text>
 
-                {/* Basket image */}
-                {orderConfirmPopup?.basketImage ? (
-                  <View style={{ alignItems: 'center', marginBottom: 16 }}>
-                    <Image source={{ uri: orderConfirmPopup.basketImage }} style={{ width: 70, height: 70, borderRadius: 14, borderWidth: 1, borderColor: theme.colors.divider }} resizeMode="cover" />
+                {/* Basket image + name — side by side */}
+                {(orderConfirmPopup?.basketImage || orderConfirmPopup?.basketName || orderConfirmPopup?.locationName) ? (
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+                    {orderConfirmPopup?.basketImage ? (
+                      <Image source={{ uri: orderConfirmPopup.basketImage }} style={{ width: 56, height: 56, borderRadius: 12, borderWidth: 1, borderColor: theme.colors.divider }} resizeMode="cover" />
+                    ) : null}
+                    <View style={{ flex: 1 }}>
+                      {orderConfirmPopup?.basketName ? (
+                        <Text style={{ color: theme.colors.textPrimary, ...theme.typography.body, fontWeight: '700' }} numberOfLines={2}>
+                          {orderConfirmPopup.basketName}
+                        </Text>
+                      ) : null}
+                      {orderConfirmPopup?.locationName ? (
+                        <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm, marginTop: 2 }} numberOfLines={1}>
+                          {orderConfirmPopup.locationName}
+                        </Text>
+                      ) : null}
+                    </View>
                   </View>
-                ) : null}
-
-                {/* Basket name + location */}
-                {(orderConfirmPopup?.basketName || orderConfirmPopup?.locationName) ? (
-                  <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3, fontWeight: '700', marginBottom: 12 }}>
-                    {orderConfirmPopup?.basketName}{orderConfirmPopup?.locationName ? ` \u2014 ${orderConfirmPopup.locationName}` : ''}
-                  </Text>
                 ) : null}
 
                 {/* Info rows — matching notification order card style */}
@@ -998,30 +1040,209 @@ export default function TabLayout() {
 }
 
 // ── Walkthrough spotlight component ─────────────────────────────────────────
-const WALKTHROUGH_STEPS = [
-  { tabIndex: 0, routeName: 'index', icon: Search, titleKey: 'walkthrough.discover.title', descKey: 'walkthrough.discover.desc' },
-  { tabIndex: 1, routeName: 'orders', icon: ShoppingBag, titleKey: 'walkthrough.orders.title', descKey: 'walkthrough.orders.desc' },
-  { tabIndex: 2, routeName: 'favorites', icon: Heart, titleKey: 'walkthrough.favorites.title', descKey: 'walkthrough.favorites.desc' },
-  { tabIndex: 3, routeName: 'profile', icon: User, titleKey: 'walkthrough.profile.title', descKey: 'walkthrough.profile.desc' },
+import type { MeasuredKey } from '@/src/stores/walkthroughStore';
+
+type CustomerStep = {
+  routeName: string; // tab name (or current tab if pushRoute is set)
+  pushRoute?: string; // optional pushed sub-screen
+  // True if this step lives on a pushed sub-screen the user navigated to
+  // themselves (e.g. /map-view after tapping the map button). The engine
+  // skips its auto-pop logic for these so the user stays on screen.
+  keepStack?: boolean;
+  icon: any;
+  titleKey: string;
+  descKey: string;
+  highlight: 'tab' | 'element';
+  tabIndex?: number; // required when highlight === 'tab'
+  measureKey?: MeasuredKey;
+  // Fallback rect when measurement isn't ready yet.
+  target?: { top?: number; bottom?: number; left?: number; right?: number; width?: number; height?: number; radius?: number };
+  tooltipPosition?: 'top' | 'bottom';
+  // When set, the tooltip hides its "Next" button and the walkthrough waits
+  // for the user to tap the highlighted element. advanceOnPath fires the
+  // advance when the pathname matches.
+  requireTap?: boolean;
+  advanceOnPath?: string;
+};
+
+const SCREEN_W_CUST = Dimensions.get('window').width;
+const SCREEN_H_CUST = Dimensions.get('window').height;
+
+// SVG path: full screen rectangle plus an inner rounded-rectangle hole drawn
+// with the opposite winding so even-odd fill renders the dim area minus a
+// perfect rounded cutout. Cap radius to half the smaller dimension so we
+// never produce an invalid path on small targets.
+function buildCutoutPath(sw: number, sh: number, x: number, y: number, w: number, h: number, r: number): string {
+  const radius = Math.max(0, Math.min(r, w / 2, h / 2));
+  if (w <= 0 || h <= 0) return `M0 0 H${sw} V${sh} H0 Z`;
+  const x2 = x + w;
+  const y2 = y + h;
+  return [
+    `M0 0 H${sw} V${sh} H0 Z`,
+    `M${x + radius} ${y}`,
+    `H${x2 - radius}`,
+    `A${radius} ${radius} 0 0 1 ${x2} ${y + radius}`,
+    `V${y2 - radius}`,
+    `A${radius} ${radius} 0 0 1 ${x2 - radius} ${y2}`,
+    `H${x + radius}`,
+    `A${radius} ${radius} 0 0 1 ${x} ${y2 - radius}`,
+    `V${y + radius}`,
+    `A${radius} ${radius} 0 0 1 ${x + radius} ${y}`,
+    'Z',
+  ].join(' ');
+}
+
+const WALKTHROUGH_STEPS: CustomerStep[] = [
+  { tabIndex: 0, routeName: 'index', icon: Search, titleKey: 'walkthrough.discover.title', descKey: 'walkthrough.discover.desc', highlight: 'tab' },
+  // First card on Discover
+  {
+    routeName: 'index', icon: ShoppingBag,
+    titleKey: 'walkthrough.customer.firstCard.title', descKey: 'walkthrough.customer.firstCard.desc',
+    highlight: 'element', measureKey: 'firstBasketCard',
+    target: { top: 240, left: 16, width: SCREEN_W_CUST - 32, height: 220, radius: 16 },
+    tooltipPosition: 'bottom',
+  },
+  // Heart on first card
+  {
+    routeName: 'index', icon: Heart,
+    titleKey: 'walkthrough.customer.heart.title', descKey: 'walkthrough.customer.heart.desc',
+    highlight: 'element', measureKey: 'favoriteHeart',
+    target: { top: 252, right: 28, width: 32, height: 32, radius: 16 },
+    tooltipPosition: 'bottom',
+  },
+  // Notifications bell in header
+  {
+    routeName: 'index', icon: Bell,
+    titleKey: 'walkthrough.customer.notif.title', descKey: 'walkthrough.customer.notif.desc',
+    highlight: 'element', measureKey: 'notifBell',
+    target: { top: 60, right: 16, width: 32, height: 32, radius: 16 },
+    tooltipPosition: 'bottom',
+  },
+  // Tap the map button (pill in the header) to open the discover map.
+  // requireTap waits for the user to actually open /map-view rather than
+  // auto-pushing — the original UX let people land on the radius highlight
+  // before they understood they were on a map screen.
+  {
+    routeName: 'index', icon: Map,
+    titleKey: 'walkthrough.customer.openMap.title', descKey: 'walkthrough.customer.openMap.desc',
+    highlight: 'element', measureKey: 'mapButton',
+    target: { top: 50, left: 16, width: 60, height: 34, radius: 17 },
+    tooltipPosition: 'bottom',
+    requireTap: true,
+    advanceOnPath: '/map-view',
+  },
+  // Map view radius pill — user already navigated to /map-view themselves.
+  {
+    routeName: 'index', keepStack: true, icon: MapPin,
+    titleKey: 'walkthrough.customer.radius.title', descKey: 'walkthrough.customer.radius.desc',
+    highlight: 'element', measureKey: 'mapRadiusPill',
+    target: { top: 130, left: 16, width: 100, height: 36, radius: 18 },
+    tooltipPosition: 'bottom',
+  },
+  // Map category row
+  {
+    routeName: 'index', keepStack: true, icon: ShoppingBag,
+    titleKey: 'walkthrough.customer.category.title', descKey: 'walkthrough.customer.category.desc',
+    highlight: 'element', measureKey: 'mapCategoryRow',
+    target: { top: 170, left: 16, width: SCREEN_W_CUST - 32, height: 44, radius: 12 },
+    tooltipPosition: 'bottom',
+  },
+  // Tabs walk-through
+  { tabIndex: 1, routeName: 'orders', icon: ShoppingBag, titleKey: 'walkthrough.orders.title', descKey: 'walkthrough.orders.desc', highlight: 'tab' },
+  { tabIndex: 2, routeName: 'favorites', icon: Heart, titleKey: 'walkthrough.favorites.title', descKey: 'walkthrough.favorites.desc', highlight: 'tab' },
+  { tabIndex: 3, routeName: 'profile', icon: User, titleKey: 'walkthrough.profile.title', descKey: 'walkthrough.profile.desc', highlight: 'tab' },
+  // Wallet balance pill
+  {
+    routeName: 'profile', icon: Wallet,
+    titleKey: 'walkthrough.customer.wallet.title', descKey: 'walkthrough.customer.wallet.desc',
+    highlight: 'element', measureKey: 'walletBalance',
+    target: { top: 200, left: 16, width: SCREEN_W_CUST - 32, height: 60, radius: 14 },
+    tooltipPosition: 'bottom',
+  },
+  // Recharge button (push /wallet)
+  {
+    routeName: 'profile', pushRoute: '/wallet', icon: Plus,
+    titleKey: 'walkthrough.customer.recharge.title', descKey: 'walkthrough.customer.recharge.desc',
+    highlight: 'element', measureKey: 'walletRecharge',
+    target: { bottom: 80, left: 16, width: SCREEN_W_CUST - 32, height: 52, radius: 14 },
+    tooltipPosition: 'top',
+  },
 ];
 
 function WalkthroughOverlay({ navRef, tabWidth, theme, t, insets }: { navRef: any; tabWidth: number; theme: any; t: any; insets: any }) {
+  const router = useRouter();
+  const segments = useSegments();
+  const pathname = '/' + (segments as string[]).join('/');
   const step = useWalkthroughStore((s) => s.step);
   const nextStep = useWalkthroughStore((s) => s.nextStep);
   const skipWalkthrough = useWalkthroughStore((s) => s.skipWalkthrough);
+  const measuredRects = useWalkthroughStore((s) => s.measuredRects);
+  const setCurrentStep = useWalkthroughStore((s) => s.setCurrentStep);
   const fadeAnim = React.useRef(new Animated.Value(0)).current;
 
   React.useEffect(() => {
     if (step !== null) {
       fadeAnim.setValue(0);
       Animated.timing(fadeAnim, { toValue: 1, duration: 300, useNativeDriver: true }).start();
-      // Navigate to the tab for this step
-      const route = WALKTHROUGH_STEPS[step]?.routeName;
-      if (route && navRef.current) {
-        try { navRef.current.navigate(route); } catch {}
+      const s = WALKTHROUGH_STEPS[step];
+      if (!s) return;
+
+      // Publish step metadata so SubScreenWalkthroughOverlay (mounted on
+      // pushed Stack screens like /map-view) can render the same highlight
+      // when the user is above the tabs in the navigator hierarchy.
+      if (s.measureKey) {
+        setCurrentStep({
+          measureKey: s.measureKey,
+          titleKey: s.titleKey,
+          descKey: s.descKey,
+          tooltipPosition: s.tooltipPosition,
+          isLast: step === WALKTHROUGH_STEPS.length - 1,
+          stepIndex: step,
+          totalSteps: WALKTHROUGH_STEPS.length,
+          requireTap: !!s.requireTap,
+        });
+      } else {
+        setCurrentStep(null);
+      }
+
+      const onSubScreen = pathname.startsWith('/map-view') || pathname.startsWith('/wallet') || pathname.startsWith('/notifications') || pathname.startsWith('/settings');
+      if (s.highlight === 'tab') {
+        // Tab step: pop pushed sub-screens via REPLACE then switch tabs.
+        if (onSubScreen && !s.pushRoute && !s.keepStack) {
+          try {
+            const tabPath = s.routeName === 'index' ? '/(tabs)/' : `/(tabs)/${s.routeName}`;
+            router.replace(tabPath as never);
+          } catch {}
+        } else if (s.routeName && navRef.current && !s.keepStack) {
+          try { navRef.current.navigate(s.routeName); } catch {}
+        }
+      }
+      // Element steps: never call navRef.navigate. The user is either on the
+      // tab where the element lives (previous step put them there) OR on a
+      // pushed sub-screen they just opened (e.g. /map-view after tapping the
+      // map button). Navigating here would pop that fresh push.
+
+      // Push sub-screen for steps that explicitly request it.
+      if (s.pushRoute) {
+        setTimeout(() => {
+          if (!pathname.startsWith(s.pushRoute!)) {
+            try { router.push(s.pushRoute! as never); } catch {}
+          }
+        }, 100);
       }
     }
   }, [step]);
+
+  // Auto-advance when the user navigates to the path the current step is
+  // waiting for (requireTap + advanceOnPath). Mirrors the business overlay's
+  // mechanic.
+  React.useEffect(() => {
+    if (step === null) return;
+    const s = WALKTHROUGH_STEPS[step];
+    if (s?.advanceOnPath && pathname.startsWith(s.advanceOnPath)) {
+      nextStep(WALKTHROUGH_STEPS.length);
+    }
+  }, [pathname, step, nextStep]);
 
   if (step === null) return null;
   const current = WALKTHROUGH_STEPS[step];
@@ -1029,87 +1250,181 @@ function WalkthroughOverlay({ navRef, tabWidth, theme, t, insets }: { navRef: an
 
   const StepIcon = current.icon;
   const isLast = step === WALKTHROUGH_STEPS.length - 1;
-  const screenW = Dimensions.get('window').width;
-
-  // Compute pill position: tab bar is 40px from sides, tab at tabIndex
   const tabBarLeft = 20;
-  const pillCenterX = tabBarLeft + (current.tabIndex * tabWidth) + (tabWidth / 2);
-  const tooltipLeft = Math.max(16, Math.min(pillCenterX - 140, screenW - 296));
+
+  // ── Compute cutout + tooltip geometry ─────────────────────────────────
+  let rectX = 0, rectY = 0, rectW = 0, rectH = 0, rectRadius = 16;
+  let tooltipStyle: any;
+  let arrowStyle: any;
+
+  if (current.highlight === 'element') {
+    const measured = current.measureKey ? (measuredRects[current.measureKey] ?? null) : null;
+    const t2 = current.target ?? {};
+    // If a step declares a measureKey, the measured rect is the ONLY source
+    // of truth — don't fall back to a hardcoded target. A stale fallback put
+    // misplaced cutouts on the navbar / off-screen on the business side; the
+    // same pattern lived here. Render the dim mask while we wait.
+    if (current.measureKey && !measured) {
+      return (
+        <Animated.View pointerEvents="box-none" style={{ ...StyleSheet.absoluteFillObject, zIndex: 9999, opacity: fadeAnim }}>
+          <View pointerEvents="none" style={[StyleSheet.absoluteFillObject, { backgroundColor: 'rgba(0,0,0,0.55)' }]} />
+        </Animated.View>
+      );
+    }
+    const w = measured ? measured.w : (t2.width ?? 44);
+    const h = measured ? measured.h : (t2.height ?? 44);
+    const cx = measured ? measured.x + w / 2
+      : (t2.right != null ? SCREEN_W_CUST - t2.right - w / 2 : (t2.left ?? 0) + w / 2);
+    const cy = measured ? measured.y + h / 2
+      : (t2.bottom != null ? SCREEN_H_CUST - t2.bottom - h / 2 : (t2.top ?? 0) + h / 2);
+    rectX = cx - w / 2 - 6;
+    rectY = cy - h / 2 - 6;
+    rectW = w + 12;
+    rectH = h + 12;
+    rectRadius = (t2.radius ?? 12) + 6;
+
+    // Pick a placement, then verify it fits — flip if not. Same fix as the
+    // business overlay (see formConfirm bug).
+    const TAB_BAR_HEIGHT = 88;
+    const ESTIMATED_TOOLTIP_HEIGHT = 220;
+    const safeTop = (insets?.top ?? 0) + 12;
+    const safeBottom = TAB_BAR_HEIGHT + 12;
+    const elementTop = rectY;
+    const elementBottom = rectY + rectH;
+    const fitsBelow = elementBottom + 20 + ESTIMATED_TOOLTIP_HEIGHT <= SCREEN_H_CUST - safeBottom;
+    const fitsAbove = elementTop - 20 - ESTIMATED_TOOLTIP_HEIGHT >= safeTop;
+    let tooltipBelow = current.tooltipPosition
+      ? current.tooltipPosition === 'bottom'
+      : cy < SCREEN_H_CUST / 2;
+    if (tooltipBelow && !fitsBelow && fitsAbove) tooltipBelow = false;
+    else if (!tooltipBelow && !fitsAbove && fitsBelow) tooltipBelow = true;
+    const ttLeft = Math.max(16, Math.min(cx - 140, SCREEN_W_CUST - 296));
+    if (tooltipBelow) {
+      tooltipStyle = {
+        position: 'absolute' as const,
+        top: elementBottom + 20,
+        left: ttLeft,
+        width: 280,
+      };
+      arrowStyle = {
+        position: 'absolute' as const, top: -8,
+        left: Math.max(20, Math.min(cx - ttLeft - 8, 252)),
+        width: 16, height: 16, backgroundColor: '#fff',
+        transform: [{ rotate: '45deg' }],
+      };
+    } else {
+      tooltipStyle = {
+        position: 'absolute' as const,
+        bottom: SCREEN_H_CUST - elementTop + 20,
+        left: ttLeft,
+        width: 280,
+      };
+      arrowStyle = {
+        position: 'absolute' as const, bottom: -8,
+        left: Math.max(20, Math.min(cx - ttLeft - 8, 252)),
+        width: 16, height: 16, backgroundColor: '#fff',
+        transform: [{ rotate: '45deg' }],
+      };
+    }
+  } else {
+    // Tab pill — same math as before
+    const idx = current.tabIndex ?? 0;
+    const pillCenterX = tabBarLeft + (idx * tabWidth) + (tabWidth / 2);
+    rectX = tabBarLeft + (idx * tabWidth) + 6;
+    rectY = SCREEN_H_CUST - (20 + 8 + 44) - 2;
+    rectW = tabWidth - 12;
+    rectH = 44 + 4;
+    rectRadius = 14;
+    const ttLeft = Math.max(16, Math.min(pillCenterX - 140, SCREEN_W_CUST - 296));
+    tooltipStyle = { position: 'absolute' as const, bottom: 100, left: ttLeft, width: 280 };
+    arrowStyle = {
+      position: 'absolute' as const, bottom: -8,
+      left: Math.max(20, Math.min(pillCenterX - ttLeft - 8, 252)),
+      width: 16, height: 16, backgroundColor: '#fff',
+      transform: [{ rotate: '45deg' }],
+    };
+  }
+
+  // Cutout mask: dim everything except the highlighted rounded rectangle
+  // using a single SVG path with even-odd fill (outer rect minus rounded
+  // inner rect = perfect rounded cutout, no rectangle-with-rounded-border
+  // mismatch at the corners).
+  const handleMaskTap = current.highlight === 'tab'
+    ? () => nextStep(WALKTHROUGH_STEPS.length)
+    : undefined;
+  const showNextButton = !current.requireTap;
+  const showTapHint = !!current.requireTap;
+  const cutoutPath = buildCutoutPath(SCREEN_W_CUST, SCREEN_H_CUST, rectX, rectY, rectW, rectH, rectRadius);
 
   return (
-    <Animated.View style={{ ...StyleSheet.absoluteFillObject, zIndex: 9999, opacity: fadeAnim }}>
-      {/* Dark overlay — tap to advance */}
-      <TouchableOpacity
-        activeOpacity={1}
-        onPress={() => nextStep(WALKTHROUGH_STEPS.length)}
-        style={{ ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.55)' }}
-      />
-
-      {/* Highlight ring around active tab */}
-      <View style={{
-        position: 'absolute',
-        bottom: 20 + 8,
-        left: tabBarLeft + (current.tabIndex * tabWidth) + (tabWidth / 2) - 28,
-        width: 56, height: 56, borderRadius: 28,
-        borderWidth: 3, borderColor: '#e3ff5c',
-        backgroundColor: 'transparent',
-      }} />
-
-      {/* Tooltip card */}
-      <View style={{
-        position: 'absolute',
-        bottom: 100,
-        left: tooltipLeft,
-        width: 280,
-        backgroundColor: '#fff',
-        borderRadius: 20,
-        padding: 20,
-        shadowColor: '#000', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.15, shadowRadius: 20, elevation: 10,
-      }}>
-        {/* Step counter */}
-        <Text style={{ color: theme.colors.muted, fontSize: 12, fontFamily: 'Poppins_500Medium', marginBottom: 10 }}>
-          {step + 1}/{WALKTHROUGH_STEPS.length}
-        </Text>
-
-        <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 10 }}>
-          <View style={{ width: 44, height: 44, borderRadius: 22, backgroundColor: '#114b3c12', justifyContent: 'center', alignItems: 'center', marginRight: 12 }}>
-            <StepIcon size={22} color="#114b3c" />
-          </View>
-          <Text style={{ color: '#114b3c', fontSize: 17, fontWeight: '700', fontFamily: 'Poppins_700Bold', flex: 1 }}>
-            {t(current.titleKey)}
-          </Text>
+    <Animated.View pointerEvents="box-none" style={{ ...StyleSheet.absoluteFillObject, zIndex: 9999, opacity: fadeAnim }}>
+        {/* SVG mask — the dim region exactly follows the rounded cutout shape. */}
+        <View pointerEvents={handleMaskTap ? 'auto' : 'none'} style={StyleSheet.absoluteFillObject}>
+          {handleMaskTap ? (
+            <TouchableOpacity activeOpacity={1} onPress={handleMaskTap} style={StyleSheet.absoluteFillObject}>
+              <Svg width={SCREEN_W_CUST} height={SCREEN_H_CUST} style={StyleSheet.absoluteFillObject} pointerEvents="none">
+                <Path d={cutoutPath} fill="rgba(0,0,0,0.55)" fillRule="evenodd" />
+              </Svg>
+            </TouchableOpacity>
+          ) : (
+            <Svg width={SCREEN_W_CUST} height={SCREEN_H_CUST} style={StyleSheet.absoluteFillObject} pointerEvents="none">
+              <Path d={cutoutPath} fill="rgba(0,0,0,0.55)" fillRule="evenodd" />
+            </Svg>
+          )}
         </View>
 
-        <Text style={{ color: '#666', fontSize: 13, fontFamily: 'Poppins_400Regular', lineHeight: 19, marginBottom: 16 }}>
-          {t(current.descKey)}
-        </Text>
+        <View
+          pointerEvents="none"
+          style={{ position: 'absolute', left: rectX, top: rectY, width: rectW, height: rectH, borderRadius: rectRadius, borderWidth: 3, borderColor: '#e3ff5c' }}
+        />
 
-        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-          <TouchableOpacity onPress={skipWalkthrough}>
-            <Text style={{ color: theme.colors.muted, fontSize: 13, fontFamily: 'Poppins_500Medium' }}>
-              {t('common.skip', { defaultValue: 'Passer' })}
-            </Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            onPress={() => nextStep(WALKTHROUGH_STEPS.length)}
-            style={{ backgroundColor: '#114b3c', borderRadius: 12, paddingHorizontal: 20, paddingVertical: 10 }}
-          >
-            <Text style={{ color: '#e3ff5c', fontSize: 14, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
-              {isLast ? t('walkthrough.done', { defaultValue: 'C\'est parti !' }) : t('walkthrough.next', { defaultValue: 'Suivant' })}
-            </Text>
-          </TouchableOpacity>
-        </View>
-
-        {/* Arrow pointing down to tab */}
         <View style={{
-          position: 'absolute', bottom: -8,
-          left: Math.max(20, Math.min(pillCenterX - tooltipLeft - 8, 252)),
-          width: 16, height: 16,
-          backgroundColor: '#fff',
-          transform: [{ rotate: '45deg' }],
-        }} />
-      </View>
-    </Animated.View>
+          ...tooltipStyle,
+          backgroundColor: '#fff', borderRadius: 20, padding: 20,
+          shadowColor: '#000', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.15, shadowRadius: 20, elevation: 10,
+        }}>
+          <Text style={{ color: theme.colors.muted, fontSize: 12, fontFamily: 'Poppins_500Medium', marginBottom: 10 }}>
+            {step + 1}/{WALKTHROUGH_STEPS.length}
+          </Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 10 }}>
+            <View style={{ width: 44, height: 44, borderRadius: 22, backgroundColor: '#114b3c12', justifyContent: 'center', alignItems: 'center', marginRight: 12 }}>
+              <StepIcon size={22} color="#114b3c" />
+            </View>
+            <Text style={{ color: '#114b3c', fontSize: 17, fontWeight: '700', fontFamily: 'Poppins_700Bold', flex: 1 }}>
+              {t(current.titleKey)}
+            </Text>
+          </View>
+          <Text style={{ color: '#666', fontSize: 13, fontFamily: 'Poppins_400Regular', lineHeight: 19, marginBottom: showTapHint ? 10 : 16 }}>
+            {t(current.descKey)}
+          </Text>
+          {showTapHint && (
+            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 14, backgroundColor: '#114b3c0f', paddingHorizontal: 10, paddingVertical: 8, borderRadius: 10 }}>
+              <Hand size={14} color="#114b3c" />
+              <Text style={{ color: '#114b3c', fontSize: 12, fontFamily: 'Poppins_600SemiBold', marginLeft: 6, flex: 1 }}>
+                {t('walkthrough.tapToContinue', { defaultValue: 'Appuyez sur le bouton entouré pour continuer.' })}
+              </Text>
+            </View>
+          )}
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+            <TouchableOpacity onPress={skipWalkthrough}>
+              <Text style={{ color: theme.colors.muted, fontSize: 13, fontFamily: 'Poppins_500Medium' }}>
+                {t('walkthrough.exitDemo', { defaultValue: 'Quitter la démo' })}
+              </Text>
+            </TouchableOpacity>
+            {showNextButton && (
+              <TouchableOpacity
+                onPress={() => nextStep(WALKTHROUGH_STEPS.length)}
+                style={{ backgroundColor: '#114b3c', borderRadius: 12, paddingHorizontal: 20, paddingVertical: 10 }}
+              >
+                <Text style={{ color: '#e3ff5c', fontSize: 14, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
+                  {isLast ? t('walkthrough.done', { defaultValue: 'C\'est parti !' }) : t('walkthrough.next', { defaultValue: 'Suivant' })}
+                </Text>
+              </TouchableOpacity>
+            )}
+          </View>
+          <View style={arrowStyle} />
+        </View>
+      </Animated.View>
   );
 }
 

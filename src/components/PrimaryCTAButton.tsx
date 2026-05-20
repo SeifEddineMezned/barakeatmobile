@@ -1,5 +1,5 @@
 import React, { useCallback } from 'react';
-import { TouchableOpacity, Text, StyleSheet, ActivityIndicator, Animated } from 'react-native';
+import { TouchableOpacity, Text, StyleSheet, ActivityIndicator, Animated, View } from 'react-native';
 import { useTheme } from '@/src/theme/ThemeProvider';
 
 interface PrimaryCTAButtonProps {
@@ -7,9 +7,40 @@ interface PrimaryCTAButtonProps {
   title: string;
   disabled?: boolean;
   loading?: boolean;
-  variant?: 'primary' | 'secondary';
+  /**
+   * - `primary`: solid primary fill (green)
+   * - `secondary`: outlined primary
+   * - `destructive`: ghost text-only in error red (no bg, no border, no
+   *   shadow). Use as the TRIGGER button for destructive actions — the
+   *   loud red fill lives in the confirmation step, not the trigger.
+   */
+  variant?: 'primary' | 'secondary' | 'destructive';
   compact?: boolean;
   borderRadius?: number;
+  /**
+   * Optional ref forwarded to the inner TouchableOpacity. The walkthrough
+   * uses this to measure the actual button bounds (`measureInWindow`)
+   * instead of an outer wrapper that may stretch to fill its parent.
+   */
+  innerRef?: React.Ref<View>;
+  /**
+   * onLayout forwarded to the inner TouchableOpacity. Pair with `innerRef`
+   * so the walkthrough can publish accurate measurements when the button
+   * mounts or its layout changes.
+   */
+  onInnerLayout?: (e: any) => void;
+  /**
+   * When true, the button stretches to fill its parent's cross-axis (full
+   * width inside a column-flex parent). Use for primary-action footers
+   * where the button should span edge-to-edge of the padded area.
+   */
+  fullWidth?: boolean;
+  /**
+   * Suppresses the default shadow / elevation. Use when the button sits in
+   * a place where the shadow would visually leak past a surrounding
+   * highlight (e.g. the create-basket walkthrough halo).
+   */
+  flat?: boolean;
 }
 
 export function PrimaryCTAButton({
@@ -20,6 +51,10 @@ export function PrimaryCTAButton({
   variant = 'primary',
   compact = false,
   borderRadius,
+  innerRef,
+  onInnerLayout,
+  fullWidth = false,
+  flat = false,
 }: PrimaryCTAButtonProps) {
   const theme = useTheme();
   const scaleAnim = React.useRef(new Animated.Value(1)).current;
@@ -41,35 +76,51 @@ export function PrimaryCTAButton({
   }, [scaleAnim]);
 
   const isPrimary = variant === 'primary';
+  const isDestructive = variant === 'destructive';
+
+  const bg = isPrimary
+    ? theme.colors.primary
+    : isDestructive
+      ? 'transparent'
+      : theme.colors.surface;
+  const fg = isPrimary
+    ? theme.colors.surface
+    : isDestructive
+      ? theme.colors.error
+      : theme.colors.primary;
+  const borderW = isPrimary || isDestructive ? 0 : 2;
 
   return (
-    <Animated.View style={{ transform: [{ scale: scaleAnim }] }}>
+    <Animated.View style={[{ transform: [{ scale: scaleAnim }] }, fullWidth ? { width: '100%' } : null]}>
       <TouchableOpacity
+        ref={innerRef as any}
+        onLayout={onInnerLayout}
         onPress={onPress}
         onPressIn={handlePressIn}
         onPressOut={handlePressOut}
         disabled={disabled || loading}
         style={[
           compact ? styles.buttonCompact : styles.button,
+          fullWidth ? { width: '100%' } : null,
           {
-            backgroundColor: isPrimary ? theme.colors.primary : theme.colors.surface,
+            backgroundColor: bg,
             borderRadius: borderRadius ?? theme.radii.pill,
-            borderWidth: isPrimary ? 0 : 2,
+            borderWidth: borderW,
             borderColor: theme.colors.primary,
             opacity: disabled ? 0.5 : 1,
-            ...theme.shadows.shadowMd,
+            ...((isDestructive || flat) ? {} : theme.shadows.shadowMd),
           },
         ]}
         activeOpacity={0.8}
       >
         {loading ? (
-          <ActivityIndicator color={isPrimary ? theme.colors.surface : theme.colors.primary} />
+          <ActivityIndicator color={fg} />
         ) : (
           <Text
             style={[
               styles.buttonText,
               {
-                color: isPrimary ? theme.colors.surface : theme.colors.primary,
+                color: fg,
                 ...theme.typography.button,
               },
             ]}

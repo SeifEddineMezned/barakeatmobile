@@ -1,5 +1,6 @@
 import type { Basket } from '@/src/types';
 import type { RestaurantFromAPI, LocationFromAPI } from '@/src/services/restaurants';
+import { isPickupExpiredInTz } from '@/src/utils/timezone';
 
 // ── Tunisia coordinate lookup table ──────────────────────────────────────────
 // Used as a fallback when the API does not return GPS coordinates.
@@ -226,16 +227,26 @@ export function normalizeLocationToBasket(loc: LocationFromAPI): Basket {
     ? Math.round(((originalPrice - discountedPrice) / originalPrice) * 100)
     : 0;
 
-  // Quantity = total basket quantity from baskets table (not adjusted for reservations/expiry)
   const totalBasketQty = Number(loc.total_basket_quantity ?? loc.available_quantity ?? 0);
-  // For the card display, always use the raw basket quantity — don't zero out for pickup expiry
-  const availableLeft = totalBasketQty;
 
-  // Don't use loc.pickup_expired here — individual baskets may have different
-  // pickup windows than the location. BasketCard handles per-card expiry checks.
+  // Pickup expiry: use the same end-time the basket detail page would show.
+  // MAX(basket.pickup_end_time) = latest basket closing time.
+  // If no basket has an explicit end time, fall back to location default, then '19:00'.
+  const maxBasketEnd = (loc as any).max_basket_pickup_end
+    ? formatTime((loc as any).max_basket_pickup_end)
+    : null;
+  const locEnd = formatTime(loc.pickup_end_time);
+  const effectiveEnd = maxBasketEnd || locEnd || '19:00';
+  const pickupExpired = isPickupExpiredInTz(effectiveEnd);
+
   const isActive = !loc.is_paused
     && loc.availability_status !== 'paused'
-    && totalBasketQty > 0;
+    && totalBasketQty > 0
+    && !pickupExpired;
+
+  // baskets.quantity is already decremented on reserve (and restored on cancel), so
+  // totalBasketQty IS the remaining count — subtracting reserved_today would double-count.
+  const availableLeft = isActive ? totalBasketQty : 0;
 
   const bagDesc = loc.bag_description?.trim();
   const description = loc.description?.trim();

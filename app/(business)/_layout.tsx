@@ -1,10 +1,11 @@
 import { Tabs } from "expo-router";
-import { LayoutDashboard, ShoppingBag, ClipboardList, User, Bell, Settings, ChevronDown, MapPin, Check } from "lucide-react-native";
+import { LayoutDashboard, ShoppingBag, ClipboardList, User, Bell, Settings, ChevronDown, MapPin, Check, Building2, Plus, QrCode, Hand, Clock, CheckCircle, MessageCircle, Store } from "lucide-react-native";
 import React from "react";
 import { useTranslation } from "react-i18next";
-import { View, Text, TouchableOpacity, Animated, Dimensions, PanResponder, Modal, StyleSheet } from "react-native";
-import { useRouter } from "expo-router";
-import { useQuery } from "@tanstack/react-query";
+import { View, Text, TouchableOpacity, Animated, Dimensions, PanResponder, Modal, StyleSheet, ScrollView } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useRouter, useSegments } from "expo-router";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTheme } from "@/src/theme/ThemeProvider";
 import { getUnreadCount } from "@/src/services/notifications";
 import { fetchTodayOrders } from "@/src/services/business";
@@ -13,11 +14,16 @@ import { useNotificationStore } from "@/src/stores/notificationStore";
 import { useAuthStore } from "@/src/stores/authStore";
 import { useBusinessStore } from "@/src/stores/businessStore";
 import { useWalkthroughStore } from "@/src/stores/walkthroughStore";
+import { NoLocationCTA } from "@/src/components/NoLocationCTA";
+import { DelayedLoader } from "@/src/components/DelayedLoader";
+import { DemoTapHintToast } from "@/src/components/DemoTapHintToast";
+import Svg, { Path } from 'react-native-svg';
 
 
 export default function BusinessTabLayout() {
   const { t } = useTranslation();
   const theme = useTheme();
+  const insets = useSafeAreaInsets();
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
   const user = useAuthStore((s) => s.user);
   const router = useRouter();
@@ -25,9 +31,9 @@ export default function BusinessTabLayout() {
   const unreadCount = useNotificationStore((s) => s.unreadCount);
   const brandAnim = React.useRef(new Animated.Value(0)).current;
 
-  const tabCount = 4;
+  // Compute visible tabs based on permissions (computed below, default all 4)
+  const allTabNames = ['dashboard', 'my-baskets', 'incoming-orders', 'business-profile'];
   const navWidth = Dimensions.get('window').width - 64;
-  const tabWidth = navWidth / tabCount;
   const glassAnim = React.useRef(new Animated.Value(0)).current;
   const [activeIndex, setActiveIndex] = React.useState(0);
 
@@ -70,23 +76,28 @@ export default function BusinessTabLayout() {
         tension: 100,
       }).start();
       setActiveIndex(targetIdx);
-      const routes = navStateRef.current?.routes ?? [];
-      if (routes[targetIdx]) navRef.current?.navigate(routes[targetIdx].name);
+      // Navigate to the visible tab's route name
+      const targetRoute = visibleTabs[targetIdx];
+      if (targetRoute) navRef.current?.navigate(targetRoute);
     },
     onPanResponderTerminate: () => {
       glassAnim.flattenOffset();
     },
-  }), [glassAnim, tabWidth, tabCount]);
+  }), [glassAnim, tabWidth, tabCount, visibleTabs, activeIndex]);
 
-  // Guard: customer accounts must not see the business flow
+  // Block only users we can clearly identify as customers. Admin / owner /
+  // member team accounts are all valid business users. Cross-role redirect is
+  // handled by the root layout in app/_layout.tsx.
+  const normalizedRole = String(user?.role ?? '').toLowerCase();
+  const normalizedType = String((user as any)?.type ?? '').toLowerCase();
+  const isCustomerUser =
+    normalizedRole === 'customer' || normalizedRole === 'buyer' ||
+    normalizedType === 'customer' || normalizedType === 'buyer';
   React.useEffect(() => {
-    if (isAuthenticated && user?.role !== 'business') {
-      console.log('[BusinessLayout] Non-business user detected, redirecting to (tabs)');
-      router.replace('/(tabs)' as never);
-    } else if (!isAuthenticated) {
+    if (!isAuthenticated) {
       router.replace('/auth/sign-in' as never);
     }
-  }, [isAuthenticated, user?.role]);
+  }, [isAuthenticated]);
 
   const unreadQuery = useQuery({
     queryKey: ['unread-count'],
@@ -96,11 +107,31 @@ export default function BusinessTabLayout() {
     staleTime: 10_000,
   });
 
+  const queryClient = useQueryClient();
+  const prevUnreadRef = React.useRef<number | undefined>(undefined);
   React.useEffect(() => {
     if (unreadQuery.data !== undefined) {
+      // When unread count INCREASES, a new notification arrived — likely a new order
+      // or a cancellation. Refresh not only the orders list but also the basket
+      // quantity views (my-baskets dashboard + location cards): those UIs would
+      // otherwise show stale counts until next focus/mount, which is what the
+      // "basket quantity not responsive" complaint describes.
+      if (prevUnreadRef.current !== undefined && unreadQuery.data > prevUnreadRef.current) {
+        void queryClient.invalidateQueries({ queryKey: ['today-orders'] });
+        void queryClient.invalidateQueries({ queryKey: ['location-orders'] });
+        void queryClient.invalidateQueries({ queryKey: ['my-baskets'] });
+        void queryClient.invalidateQueries({ queryKey: ['locations'] });
+        // Prefix-match: invalidates any ['location', id] and ['basket', id] caches.
+        void queryClient.invalidateQueries({ queryKey: ['location'] });
+        void queryClient.invalidateQueries({ queryKey: ['basket'] });
+        void queryClient.invalidateQueries({ queryKey: ['baskets-by-location'] });
+        // Restaurant stats card refreshes too, so revenue/basket counts track reality.
+        void queryClient.invalidateQueries({ queryKey: ['restaurant-stats'] });
+      }
+      prevUnreadRef.current = unreadQuery.data;
       setUnreadCount(unreadQuery.data);
     }
-  }, [unreadQuery.data, setUnreadCount]);
+  }, [unreadQuery.data, setUnreadCount, queryClient]);
 
   const selectedLocationId = useBusinessStore((s) => s.selectedLocationId);
   const setSelectedLocationId = useBusinessStore((s) => s.setSelectedLocationId);
@@ -112,7 +143,11 @@ export default function BusinessTabLayout() {
     queryKey: ['my-context'],
     queryFn: fetchMyContext,
     enabled: isAuthenticated && user?.role === 'business',
-    staleTime: 5 * 60_000,
+    staleTime: 10_000,
+    refetchOnMount: 'always',
+    refetchOnWindowFocus: true,
+    refetchOnReconnect: true,
+    refetchInterval: 60_000, // Safety net: 1 req/min even if member stays on same page
   });
 
   const orgId = myContextQuery.data?.organization_id;
@@ -126,24 +161,86 @@ export default function BusinessTabLayout() {
   });
 
   const orgLocations = orgDetailsQuery.data?.locations ?? [];
-  const isAdminOrOwner = myRole === 'admin' || myRole === 'owner';
   const myLocationId = myContextQuery.data?.location_id;
-
-  // Lock location for non-admin members assigned to a specific location
-  React.useEffect(() => {
-    if (!isAdminOrOwner && myLocationId && selectedLocationId !== myLocationId) {
-      setSelectedLocationId(myLocationId);
+  // Full set of locations this user belongs to. Source-of-truth preference:
+  //   1. location_ids from my-context — polled every ~60s (same cadence as
+  //      permissions), so remote membership changes show up quickly.
+  //   2. membership rows in orgDetails matching my user_id — fallback for
+  //      any device where my-context hasn't been updated yet.
+  //   3. The single location_id from the primary membership (back-compat).
+  // Previously we preferred org-details, but its 5-minute staleTime made
+  // location-reassignments lag on the target member's device while their
+  // permissions appeared to update instantly — felt like a bug.
+  const myLocationIds = React.useMemo<number[]>(() => {
+    const ids = myContextQuery.data?.location_ids;
+    if (Array.isArray(ids) && ids.length > 0) return ids.map(Number);
+    const uid = String(user?.id ?? '');
+    const rows = (orgDetailsQuery.data?.members ?? []) as any[];
+    const fromOrgDetails = new Set<number>();
+    for (const m of rows) {
+      if (String(m.user_id) === uid && m.location_id != null) fromOrgDetails.add(Number(m.location_id));
     }
-  }, [isAdminOrOwner, myLocationId, selectedLocationId, setSelectedLocationId]);
+    if (fromOrgDetails.size > 0) return Array.from(fromOrgDetails);
+    return myLocationId != null ? [Number(myLocationId)] : [];
+  }, [user?.id, orgDetailsQuery.data?.members, myContextQuery.data?.location_ids, myLocationId]);
+  // Org admin = admin/owner with NO location constraint (access to all).
+  // Location admin = admin WITH at least one location. They get profile
+  // access too, but gestion d'équipe is scoped to their location(s).
+  const isOrgAdmin = (myRole === 'admin' || myRole === 'owner') && myLocationIds.length === 0;
+  const isLocationAdmin = myRole === 'admin' && myLocationIds.length > 0;
+  const isAdminOrOwner = isOrgAdmin; // Only org-level admins get full org-wide access
+  // Org owner/admin with zero locations — switcher shows an orange "no
+  // location yet" affordance, mirroring the dashboard pill.
+  const hasNoLocation = isOrgAdmin
+    && !!orgId
+    && !orgDetailsQuery.isLoading
+    && orgLocations.length === 0;
+  // Any user with 2+ location memberships can switch via the dropdown — even
+  // regular members. Single-location users see the name as static text.
+  const canSwitchLocation = isOrgAdmin || myLocationIds.length > 1;
+  const rawPerms = myContextQuery.data?.permissions ?? {};
+  const hasPerm = (key: string) => { const v = (rawPerms as any)[key]; return v === true || v === 'true' || v === 'write'; };
+  // New granular permission keys
+  const canViewDashboard = true; // Dashboard always visible
+  const canViewOrders = true; // Incoming orders always visible for all members
+  const canManageBaskets = isAdminOrOwner || hasPerm('edit_quantities') || hasPerm('edit_basket_info') || hasPerm('create_delete_baskets');
+  // Profile tab — org admins see the full org profile; location admins see a
+  // version scoped to their location only (the team screen enforces the scope).
+  const canEditProfile = isOrgAdmin || isLocationAdmin;
+
+  // Compute visible tabs
+  const visibleTabs = React.useMemo(() => {
+    const tabs: string[] = [];
+    if (canViewDashboard) tabs.push('dashboard');
+    if (canManageBaskets) tabs.push('my-baskets');
+    if (canViewOrders) tabs.push('incoming-orders');
+    if (canEditProfile) tabs.push('business-profile');
+    return tabs.length > 0 ? tabs : ['dashboard']; // At minimum show dashboard
+  }, [canViewDashboard, canManageBaskets, canViewOrders, canEditProfile]);
+  const tabCount = visibleTabs.length;
+  const tabWidth = navWidth / tabCount;
+
+  // Lock handled in the unified effect below
 
   // When navigating away from dashboard (tab 0) with "all locations" selected,
-  // auto-pick the first location since other pages need a specific one
+  // auto-pick the first location since other pages need a specific one.
+  // Non-org-admin users are confined to the locations in `myLocationIds`: if
+  // their current selection isn't one of theirs (e.g. stale from a prior
+  // session), snap it to their first one. Dashboard "all locations" is only
+  // valid for org admins — everyone else gets auto-picked.
   const isDashboard = activeIndex === 0;
   React.useEffect(() => {
-    if (!isDashboard && !selectedLocationId && orgLocations.length > 0) {
+    if (!isAdminOrOwner) {
+      // Non-admin: must be on one of their locations at all times.
+      if (myLocationIds.length === 0) return;
+      const selNum = selectedLocationId != null ? Number(selectedLocationId) : null;
+      if (selNum == null || !myLocationIds.includes(selNum)) {
+        setSelectedLocationId(myLocationIds[0]);
+      }
+    } else if (!isDashboard && !selectedLocationId && orgLocations.length > 0) {
       setSelectedLocationId(orgLocations[0].id);
     }
-  }, [isDashboard, selectedLocationId, orgLocations, setSelectedLocationId]);
+  }, [isDashboard, selectedLocationId, orgLocations, setSelectedLocationId, isAdminOrOwner, myLocationIds]);
 
   // Derive the current location name for display
   const selectedLocationName = React.useMemo(() => {
@@ -199,26 +296,52 @@ export default function BusinessTabLayout() {
         { scale: brandAnim.interpolate({ inputRange: [0, 0.5, 1], outputRange: [0.8, 1.05, 1] }) },
       ],
     }}>
-      <TouchableOpacity
-        onPress={() => { if (isAdminOrOwner || !myLocationId) setLocationModalVisible(true); }}
-        style={{ flexDirection: 'row', alignItems: 'center' }}
-        activeOpacity={isAdminOrOwner || !myLocationId ? 0.7 : 1}
-      >
-        <MapPin size={18} color={theme.colors.primary} style={{ marginRight: 6 }} />
-        <Text
-          numberOfLines={1}
+      {canSwitchLocation ? (
+        // Pill trigger — matches the dashboard's location switcher so the
+        // business interface has one consistent control across all tabs.
+        <TouchableOpacity
+          onPress={() => setLocationModalVisible(true)}
           style={{
-            color: theme.colors.textPrimary,
-            fontSize: 16,
-            fontWeight: '600',
-            fontFamily: 'Poppins_700Bold',
-            maxWidth: 180,
+            backgroundColor: theme.colors.surface,
+            borderRadius: 20,
+            paddingHorizontal: 12,
+            paddingVertical: 8,
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: 6,
+            ...theme.shadows.shadowMd,
+            maxWidth: 220,
+            borderWidth: hasNoLocation ? 1 : 0,
+            borderColor: hasNoLocation ? '#e67e22' : 'transparent',
           }}
+          activeOpacity={0.7}
         >
-          {selectedLocationName}
-        </Text>
-        <ChevronDown size={18} color={theme.colors.textSecondary} style={{ marginLeft: 4 }} />
-      </TouchableOpacity>
+          {hasNoLocation
+            ? <MapPin size={14} color="#e67e22" />
+            : <Building2 size={14} color={theme.colors.primary} />}
+          <Text
+            numberOfLines={1}
+            ellipsizeMode="tail"
+            style={{ color: hasNoLocation ? '#e67e22' : theme.colors.textPrimary, fontSize: 13, fontWeight: '600', fontFamily: 'Poppins_600SemiBold', flexShrink: 1 }}
+          >
+            {hasNoLocation
+              ? t('business.locationSwitcher.noLocationYet', { defaultValue: 'Aucun emplacement' })
+              : selectedLocationName}
+          </Text>
+          <ChevronDown size={13} color={hasNoLocation ? '#e67e22' : theme.colors.textSecondary} />
+        </TouchableOpacity>
+      ) : (
+        <View style={{ backgroundColor: theme.colors.surface, borderRadius: 20, paddingHorizontal: 12, paddingVertical: 8, flexDirection: 'row', alignItems: 'center', gap: 6, ...theme.shadows.shadowMd, maxWidth: 220 }}>
+          <Building2 size={14} color={theme.colors.primary} />
+          <Text
+            numberOfLines={1}
+            ellipsizeMode="tail"
+            style={{ color: theme.colors.textPrimary, fontSize: 13, fontWeight: '600', fontFamily: 'Poppins_600SemiBold', flexShrink: 1 }}
+          >
+            {selectedLocationName}
+          </Text>
+        </View>
+      )}
     </Animated.View>
   );
 
@@ -259,10 +382,41 @@ export default function BusinessTabLayout() {
     </View>
   );
 
+  // Hard render-gate: block the business UI only for unauthenticated users
+  // and users we can clearly identify as customers. Team admins / owners /
+  // members are still allowed through so their queries keep running.
+  if (!isAuthenticated || isCustomerUser) {
+    return null;
+  }
+
+  // Wait for the perms query to settle before mounting the tab navigator.
+  // Without this gate the tabs render at 2 first (permissions empty → only
+  // dashboard + incoming-orders) and pop to 4 a moment later when
+  // myContextQuery resolves — the visible "2→4 tab flip" jitter the user
+  // reported. We render while either:
+  //   • data has landed (success path), OR
+  //   • the query errored (typically offline) — render the degraded 2-tab
+  //     fallback rather than trapping the user on a loader forever.
+  // TanStack returns cached data synchronously, so a warm reload doesn't
+  // even briefly paint the loader.
+  const permsReady = myContextQuery.data !== undefined || myContextQuery.isError;
+  if (!permsReady) {
+    return (
+      <View style={{ flex: 1, backgroundColor: '#f9f9f6' }}>
+        <DelayedLoader />
+      </View>
+    );
+  }
+
   return (
     <>
     <Tabs
       screenOptions={{
+        // Bottom-tabs v7 ships with a "shift" slide animation as its default.
+        // For mobile bottom-tab UX a hard switch is what users expect, and
+        // it also keeps the demo's step-1 → step-2 transition (dashboard →
+        // baskets) crisp — no horizontal page slide between tabs.
+        animation: 'none',
         tabBarActiveTintColor: theme.colors.primary,
         tabBarInactiveTintColor: theme.colors.textSecondary,
         headerShown: true,
@@ -277,9 +431,20 @@ export default function BusinessTabLayout() {
         navStateRef.current = state;
         navRef.current = navigation;
 
-        // Defer state update to avoid "cannot update during render" warning
-        const targetX = state.index * tabWidth;
-        if (activeIndex !== state.index) {
+        // Map real route index to visible tab index
+        const currentRouteName = state.routes[state.index]?.name;
+        const visibleIdx = visibleTabs.indexOf(currentRouteName);
+
+        // If current route is not visible, force navigate to first visible tab
+        if (visibleIdx < 0 && visibleTabs.length > 0) {
+          requestAnimationFrame(() => {
+            navigation.navigate(visibleTabs[0]);
+          });
+        }
+
+        const safeVisIdx = visibleIdx >= 0 ? visibleIdx : 0;
+        const targetX = safeVisIdx * tabWidth;
+        if (activeIndex !== safeVisIdx) {
           requestAnimationFrame(() => {
             Animated.spring(glassAnim, {
               toValue: targetX,
@@ -287,7 +452,7 @@ export default function BusinessTabLayout() {
               friction: 10,
               tension: 100,
             }).start();
-            setActiveIndex(state.index);
+            setActiveIndex(safeVisIdx);
           });
         }
 
@@ -328,9 +493,9 @@ export default function BusinessTabLayout() {
               }}
             />
 
-            {state.routes.map((route, index) => {
+            {state.routes.filter((route) => visibleTabs.includes(route.name)).map((route, index) => {
               const { options } = descriptors[route.key];
-              const isFocused = state.index === index;
+              const isFocused = index === safeVisIdx;
               const color = isFocused ? '#FFFFFF' : theme.colors.textSecondary;
               const iconColor = isFocused ? '#FFFFFF' : theme.colors.textSecondary;
 
@@ -340,8 +505,18 @@ export default function BusinessTabLayout() {
                   target: route.key,
                   canPreventDefault: true,
                 });
+                // Refetch permissions on every tab press (cheap — only fires if stale)
+                if (myContextQuery.isStale) void myContextQuery.refetch();
                 if (!isFocused && !event.defaultPrevented) {
                   navigation.navigate(route.name);
+                  setActiveIndex(index);
+                  // Animate glass pill to this tab
+                  Animated.spring(glassAnim, {
+                    toValue: index * tabWidth,
+                    useNativeDriver: true,
+                    friction: 10,
+                    tension: 100,
+                  }).start();
                 }
               };
 
@@ -448,7 +623,10 @@ export default function BusinessTabLayout() {
       />
     </Tabs>
 
-    {/* Location selector modal */}
+    {/* Location selector — inline dropdown that expands below the header
+        brand. Uses a transparent Modal so it layers above tabs; the panel
+        itself is anchored top-left (just under the header) rather than
+        sliding up from the bottom like a sheet. */}
     <Modal
       visible={locationModalVisible}
       transparent
@@ -456,113 +634,155 @@ export default function BusinessTabLayout() {
       onRequestClose={() => setLocationModalVisible(false)}
     >
       <TouchableOpacity
-        style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' }}
+        style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.25)' }}
         activeOpacity={1}
         onPress={() => setLocationModalVisible(false)}
       >
         <View
-          {...modalPanResponder.panHandlers}
           style={{
+            position: 'absolute',
+            top: (insets.top ?? 0) + 52,
+            left: 12,
+            right: 12,
+            maxHeight: '70%',
             backgroundColor: theme.colors.surface,
-            borderTopLeftRadius: 24,
-            borderTopRightRadius: 24,
-            paddingTop: 12,
-            paddingBottom: 40,
-            paddingHorizontal: 20,
-            maxHeight: '60%',
+            borderRadius: 16,
+            paddingVertical: 8,
+            paddingHorizontal: 8,
+            ...theme.shadows.shadowLg,
+            borderWidth: 1,
+            borderColor: theme.colors.divider,
           }}
           onStartShouldSetResponder={() => true}
         >
-          {/* Drag handle */}
-          <View style={{ alignSelf: 'center', width: 40, height: 4, borderRadius: 2, backgroundColor: theme.colors.divider, marginBottom: 16 }} />
-
-          <Text style={{ color: theme.colors.textPrimary, fontSize: 18, fontWeight: '700', fontFamily: 'Poppins_700Bold', marginBottom: 16 }}>
-            {t('business.selectLocation', { defaultValue: 'Select location' })}
-          </Text>
-
-          {/* "All locations" option for admin/owner — only on dashboard tab */}
-          {isDashboard && isAdminOrOwner && (
-            <TouchableOpacity
-              onPress={() => { setSelectedLocationId(null); setLocationModalVisible(false); }}
-              style={{
-                flexDirection: 'row',
-                alignItems: 'center',
-                paddingVertical: 14,
-                paddingHorizontal: 12,
-                borderRadius: 12,
-                backgroundColor: !selectedLocationId ? theme.colors.primary + '12' : 'transparent',
-                marginBottom: 4,
-              }}
-              activeOpacity={0.7}
-            >
-              <MapPin size={20} color={!selectedLocationId ? theme.colors.primary : theme.colors.textSecondary} />
-              <Text style={{
-                flex: 1,
-                marginLeft: 12,
-                color: !selectedLocationId ? theme.colors.primary : theme.colors.textPrimary,
-                fontSize: 15,
-                fontWeight: !selectedLocationId ? '700' : '500',
-                fontFamily: !selectedLocationId ? 'Poppins_700Bold' : 'Poppins_500Medium',
-              }}>
-                {t('business.allLocations', { defaultValue: 'All locations' })}
-              </Text>
-              {!selectedLocationId && <Check size={20} color={theme.colors.primary} />}
-            </TouchableOpacity>
-          )}
-
-          {/* Individual locations */}
-          {orgLocations.map((loc) => {
-            const isSelected = Number(selectedLocationId) === loc.id;
-            return (
+          <ScrollView showsVerticalScrollIndicator={false} style={{ maxHeight: 420 }}>
+            {/* "All locations" option for admin/owner — only on dashboard tab.
+                Uses the Store icon to match the dashboard's switcher. */}
+            {isDashboard && isAdminOrOwner && (
               <TouchableOpacity
-                key={loc.id}
-                onPress={() => { setSelectedLocationId(loc.id); setLocationModalVisible(false); }}
+                onPress={() => { setSelectedLocationId(null); setLocationModalVisible(false); }}
                 style={{
                   flexDirection: 'row',
                   alignItems: 'center',
-                  paddingVertical: 14,
+                  paddingVertical: 12,
                   paddingHorizontal: 12,
-                  borderRadius: 12,
-                  backgroundColor: isSelected ? theme.colors.primary + '12' : 'transparent',
-                  marginBottom: 4,
+                  borderRadius: 10,
+                  backgroundColor: !selectedLocationId ? theme.colors.primary + '12' : 'transparent',
                 }}
                 activeOpacity={0.7}
               >
-                <MapPin size={20} color={isSelected ? theme.colors.primary : theme.colors.textSecondary} />
-                <View style={{ flex: 1, marginLeft: 12 }}>
-                  <Text style={{
-                    color: isSelected ? theme.colors.primary : theme.colors.textPrimary,
-                    fontSize: 15,
-                    fontWeight: isSelected ? '700' : '500',
-                    fontFamily: isSelected ? 'Poppins_700Bold' : 'Poppins_500Medium',
-                  }}>
-                    {loc.name ?? t('business.unnamedLocation', { defaultValue: 'Unnamed location' })}
-                  </Text>
-                  {loc.address ? (
-                    <Text style={{ color: theme.colors.textSecondary, fontSize: 12, fontFamily: 'Poppins_400Regular', marginTop: 2 }} numberOfLines={1}>
-                      {loc.address}
-                    </Text>
-                  ) : null}
-                </View>
-                {isSelected && <Check size={20} color={theme.colors.primary} />}
+                <Store size={18} color={!selectedLocationId ? theme.colors.primary : theme.colors.textSecondary} />
+                <Text style={{
+                  flex: 1,
+                  marginLeft: 10,
+                  color: !selectedLocationId ? theme.colors.primary : theme.colors.textPrimary,
+                  fontSize: 14,
+                  fontWeight: !selectedLocationId ? '700' : '500',
+                  fontFamily: !selectedLocationId ? 'Poppins_700Bold' : 'Poppins_500Medium',
+                }}
+                  numberOfLines={1}
+                  ellipsizeMode="tail"
+                >
+                  {t('business.allLocations', { defaultValue: 'Tous les emplacements' })}
+                </Text>
+                {!selectedLocationId && <Check size={18} color={theme.colors.primary} />}
               </TouchableOpacity>
-            );
-          })}
+            )}
+
+            {/* Individual locations — org admins see every location; everyone
+                else only sees the ones they actually belong to (myLocationIds).
+                Uses Building2 to match the dashboard's switcher. */}
+            {orgLocations.filter((loc) => isOrgAdmin || myLocationIds.includes(Number(loc.id))).map((loc) => {
+              const isSelected = Number(selectedLocationId) === loc.id;
+              return (
+                <TouchableOpacity
+                  key={loc.id}
+                  onPress={() => { setSelectedLocationId(loc.id); setLocationModalVisible(false); }}
+                  style={{
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    paddingVertical: 12,
+                    paddingHorizontal: 12,
+                    borderRadius: 10,
+                    backgroundColor: isSelected ? theme.colors.primary + '12' : 'transparent',
+                  }}
+                  activeOpacity={0.7}
+                >
+                  <Building2 size={18} color={isSelected ? theme.colors.primary : theme.colors.textSecondary} />
+                  <View style={{ flex: 1, marginLeft: 10 }}>
+                    <Text
+                      numberOfLines={1}
+                      ellipsizeMode="tail"
+                      style={{
+                        color: isSelected ? theme.colors.primary : theme.colors.textPrimary,
+                        fontSize: 14,
+                        fontWeight: isSelected ? '700' : '500',
+                        fontFamily: isSelected ? 'Poppins_700Bold' : 'Poppins_500Medium',
+                      }}
+                    >
+                      {loc.name ?? t('business.unnamedLocation', { defaultValue: 'Unnamed location' })}
+                    </Text>
+                    {loc.address ? (
+                      <Text style={{ color: theme.colors.textSecondary, fontSize: 11, fontFamily: 'Poppins_400Regular', marginTop: 2 }} numberOfLines={1} ellipsizeMode="tail">
+                        {loc.address}
+                      </Text>
+                    ) : null}
+                  </View>
+                  {isSelected && <Check size={18} color={theme.colors.primary} />}
+                </TouchableOpacity>
+              );
+            })}
+
+            {/* Empty state — admin with zero locations gets the same CTA the
+                dashboard switcher shows, so the affordance to add a first
+                point-de-vente is reachable from every tab. */}
+            {orgLocations.length === 0 && !orgDetailsQuery.isLoading && isOrgAdmin && (
+              <View style={{ paddingVertical: 8 }}>
+                <NoLocationCTA
+                  compact
+                  onPressOverride={() => {
+                    setLocationModalVisible(false);
+                    router.push('/business/add-location' as never);
+                  }}
+                />
+              </View>
+            )}
+          </ScrollView>
         </View>
       </TouchableOpacity>
     </Modal>
 
     {/* ── Interactive business tab walkthrough overlay ── */}
-    <BusinessWalkthroughOverlay navRef={navRef} tabWidth={tabWidth} theme={theme} t={t} />
+    <BusinessWalkthroughOverlay
+      navRef={navRef}
+      tabWidth={tabWidth}
+      theme={theme}
+      t={t}
+      visibleTabs={visibleTabs}
+      canManageBaskets={canManageBaskets}
+      canEditProfile={canEditProfile}
+      canConfirmPickup={isAdminOrOwner || hasPerm('confirm_pickup')}
+      canMessage={isAdminOrOwner || hasPerm('messaging')}
+      isOrgAdmin={isOrgAdmin}
+      hasNoLocation={hasNoLocation}
+      insetsTop={insets.top}
+      router={router}
+    />
     </>
   );
 }
 
 // ── Business walkthrough spotlight ─────────────────────────────────────────
-// highlight: 'tab' = circle the tab icon, 'element' = circle an on-screen element
-// For 'element' steps, `target` gives the position. `requireTap` = user must tap highlighted area.
-// 'skip' on element steps jumps to next tab-level step.
-type HighlightType = 'tab' | 'element';
+// highlight: 'tab' = cutout around tab pill; 'element' = cutout around an
+// on-screen element positioned from one of the screen edges.
+// `target` accepts width/height (preferred — matches rectangular buttons) OR
+// a legacy square `size`. `requireTap` means the tooltip has no Next button —
+// the walkthrough advances only when the user actually interacts with the
+// feature (e.g., navigates to `advanceOnPath`). `isSettings` is the final
+// stage and is rendered by settings.tsx instead of this overlay.
+type HighlightType = 'tab' | 'element' | 'inline-modal';
+type StepKey = 'basketCreate' | 'pickup' | 'settings';
+import type { MeasuredKey } from '@/src/stores/walkthroughStore';
 interface BizStep {
   tabIndex: number;
   routeName: string;
@@ -570,129 +790,811 @@ interface BizStep {
   titleKey: string;
   descKey: string;
   highlight: HighlightType;
-  target?: { top?: number; bottom?: number; left?: number; right?: number; size: number };
-  tooltipPosition?: 'bottom' | 'top'; // where tooltip appears relative to highlight
+  target?: { top?: number; bottom?: number; left?: number; right?: number; size?: number; width?: number; height?: number; radius?: number };
+  tooltipPosition?: 'bottom' | 'top';
+  requireTap?: boolean;
+  advanceOnPath?: string;
+  // Watch a flag in the walkthrough store; advance when it flips true.
+  // 'modal' watches verifyModalOpen (Verify Pickup modal opened); 'expand'
+  // watches expandedDemoCard (user expanded the demo order card).
+  advanceOnFlag?: 'modal' | 'expand';
+  isSettings?: boolean;
+  // Pull the measured rect from the walkthrough store by key — pixel-perfect.
+  measureKey?: MeasuredKey;
+  // Effects that fire when the user enters this step. Set demo flags so
+  // screens know to inject fake data / mock backend calls.
+  enter?: { demoBasket?: boolean; demoOrder?: boolean; demoScanCode?: string | null };
 }
 
 const SCREEN_W_BIZ = Dimensions.get('window').width;
 const SCREEN_H_BIZ = Dimensions.get('window').height;
 
-const BIZ_WALKTHROUGH_STEPS: BizStep[] = [
-  // Tab: Dashboard
-  { tabIndex: 0, routeName: 'dashboard', icon: LayoutDashboard, titleKey: 'walkthrough.biz.dashboard.title', descKey: 'walkthrough.biz.dashboard.desc', highlight: 'tab' },
-  // Tab: Baskets
-  { tabIndex: 1, routeName: 'my-baskets', icon: ShoppingBag, titleKey: 'walkthrough.biz.baskets.title', descKey: 'walkthrough.biz.baskets.desc', highlight: 'tab' },
-  // Element: Create basket button (top-right, below nav header + safe area)
-  { tabIndex: 1, routeName: 'my-baskets', icon: ShoppingBag, titleKey: 'walkthrough.biz.basketCreate.title', descKey: 'walkthrough.biz.basketCreate.desc', highlight: 'element', target: { top: 110, right: 22, size: 40 }, tooltipPosition: 'top' },
-  // Tab: Orders
-  { tabIndex: 2, routeName: 'incoming-orders', icon: ClipboardList, titleKey: 'walkthrough.biz.orders.title', descKey: 'walkthrough.biz.orders.desc', highlight: 'tab' },
-  // Element: QR scan FAB (bottom-right)
-  { tabIndex: 2, routeName: 'incoming-orders', icon: ClipboardList, titleKey: 'walkthrough.biz.pickup.title', descKey: 'walkthrough.biz.pickup.desc', highlight: 'element', target: { bottom: 100, right: 24, size: 56 }, tooltipPosition: 'bottom' },
-  // Tab: Profile
-  { tabIndex: 3, routeName: 'business-profile', icon: User, titleKey: 'walkthrough.biz.profile.title', descKey: 'walkthrough.biz.profile.desc', highlight: 'tab' },
-  // Element: Team (settings area — center of screen)
-  { tabIndex: 3, routeName: 'business-profile', icon: User, titleKey: 'walkthrough.biz.team.title', descKey: 'walkthrough.biz.team.desc', highlight: 'tab' },
-];
+function buildWalkthroughSteps(visibleTabs: string[], canManageBaskets: boolean, canEditProfile: boolean, canConfirmPickup: boolean, canMessage: boolean, isOrgAdmin: boolean, hasNoLocation: boolean, insetsTop: number): BizStep[] {
+  // ── Special case: no location yet ──────────────────────────────────────
+  // Org admin with zero locations — every other step would point at a
+  // screen that just shows NoLocationCTA, so we short-circuit to a single
+  // step that highlights the "add your first location" button. The user
+  // taps it, navigates to /business/add-location, and the walkthrough
+  // ends. Once they have a location they can replay the full tour from
+  // Settings → Mode démo.
+  if (hasNoLocation) {
+    return [{
+      tabIndex: 0,
+      routeName: 'dashboard',
+      icon: MapPin,
+      titleKey: 'walkthrough.biz.addLocation.title',
+      descKey: 'walkthrough.biz.addLocation.desc',
+      highlight: 'element',
+      tooltipPosition: 'top',
+      requireTap: true,
+      advanceOnPath: '/business/add-location',
+      measureKey: 'addLocationCta',
+    }];
+  }
+  const steps: BizStep[] = [];
+  // ── Dashboard ─────────────────────────────────────────────────────────
+  const dashIdx = visibleTabs.indexOf('dashboard');
+  if (dashIdx >= 0) {
+    steps.push({ tabIndex: dashIdx, routeName: 'dashboard', icon: LayoutDashboard, titleKey: 'walkthrough.biz.dashboard.title', descKey: 'walkthrough.biz.dashboard.desc', highlight: 'tab' });
+  }
+  // ── Baskets — interactive sub-tour through create-basket form ─────────
+  const basketIdx = visibleTabs.indexOf('my-baskets');
+  if (basketIdx >= 0 && canManageBaskets) {
+    steps.push({ tabIndex: basketIdx, routeName: 'my-baskets', icon: ShoppingBag, titleKey: 'walkthrough.biz.baskets.title', descKey: 'walkthrough.biz.baskets.desc', highlight: 'tab' });
+    // 1. Tap the real Add Basket button → form opens
+    steps.push({
+      tabIndex: basketIdx,
+      routeName: 'my-baskets',
+      icon: Plus,
+      titleKey: 'walkthrough.biz.basketCreate.title',
+      descKey: 'walkthrough.biz.basketCreate.desc',
+      highlight: 'element',
+      target: { top: insetsTop + 54, right: 20, width: 140, height: 40, radius: 12 },
+      tooltipPosition: 'bottom',
+      requireTap: true,
+      advanceOnPath: '/business/create-basket',
+      measureKey: 'addBasket',
+      // Activate demo basket NOW so create-basket pre-fills on mount.
+      enter: { demoBasket: true },
+    });
+    // 2. Daily reset card — Suivant (must come BEFORE the pickup-time step:
+    // daily quantity is the field higher up the form, and the pickup-time
+    // description references the profile defaults the user will see later)
+    steps.push({
+      tabIndex: basketIdx,
+      routeName: 'my-baskets',
+      icon: ClipboardList,
+      titleKey: 'walkthrough.biz.formReinit.title',
+      descKey: 'walkthrough.biz.formReinit.desc',
+      highlight: 'element',
+      target: { top: 200, left: 16, width: SCREEN_W_BIZ - 32, height: 80, radius: 16 },
+      tooltipPosition: 'bottom',
+      measureKey: 'formDailyReset',
+    });
+    // 3. Pickup time card — Suivant
+    steps.push({
+      tabIndex: basketIdx,
+      routeName: 'my-baskets',
+      icon: Clock,
+      titleKey: 'walkthrough.biz.formPickup.title',
+      descKey: 'walkthrough.biz.formPickup.desc',
+      highlight: 'element',
+      target: { top: 320, left: 16, width: SCREEN_W_BIZ - 32, height: 80, radius: 16 },
+      tooltipPosition: 'bottom',
+      measureKey: 'formPickupTime',
+    });
+    // 4. Confirm button — user taps for real, intercepted to skip backend.
+    // `radius: 28` gives the cutout a pill shape that hugs the actual
+    // (PrimaryCTAButton) button corners; the smaller value 14 left visible
+    // corner-gap between the halo and the rounded button.
+    steps.push({
+      tabIndex: basketIdx,
+      routeName: 'my-baskets',
+      icon: Check,
+      titleKey: 'walkthrough.biz.formConfirm.title',
+      descKey: 'walkthrough.biz.formConfirm.desc',
+      highlight: 'element',
+      target: { bottom: 24, left: 16, width: SCREEN_W_BIZ - 32, height: 52, radius: 28 },
+      tooltipPosition: 'top',
+      requireTap: true,
+      advanceOnPath: '/(business)/my-baskets',
+      measureKey: 'formConfirmBtn',
+    });
+    // 5. Demo basket card on list — Suivant
+    steps.push({
+      tabIndex: basketIdx,
+      routeName: 'my-baskets',
+      icon: ShoppingBag,
+      titleKey: 'walkthrough.biz.demoBasket.title',
+      descKey: 'walkthrough.biz.demoBasket.desc',
+      highlight: 'element',
+      target: { top: insetsTop + 110, left: 16, width: SCREEN_W_BIZ - 32, height: 100, radius: 16 },
+      tooltipPosition: 'bottom',
+      measureKey: 'demoBasketCard',
+    });
+    // 6. Quantity edit — prompt the user to TAP the demo card to open the
+    // availability sheet (which has the +/- controls). Highlight the whole
+    // card; advance when the detail modal opens (expandedDemoCard flag).
+    steps.push({
+      tabIndex: basketIdx,
+      routeName: 'my-baskets',
+      icon: Plus,
+      titleKey: 'walkthrough.biz.basketQty.title',
+      descKey: 'walkthrough.biz.basketQty.desc',
+      highlight: 'element',
+      target: { top: insetsTop + 110, left: 16, width: SCREEN_W_BIZ - 32, height: 100, radius: 16 },
+      tooltipPosition: 'bottom',
+      requireTap: true,
+      advanceOnFlag: 'expand',
+      measureKey: 'demoBasketCard',
+    });
+    // 6a-c. Sequential sub-steps INSIDE the availability modal. Native RN
+    // Modal sits above the layout overlay, so the modal renders its own
+    // halo border + inline tooltip for these steps. `highlight: 'inline-modal'`
+    // tells the layout overlay to render nothing for them. Advance is driven
+    // by the modal's onPress handlers (each calls `nextStep(999)` directly).
+    steps.push({
+      tabIndex: basketIdx,
+      routeName: 'my-baskets',
+      icon: Plus,
+      titleKey: 'walkthrough.biz.modalMinus.title',
+      descKey: 'walkthrough.biz.modalMinus.desc',
+      highlight: 'inline-modal',
+      requireTap: true,
+      measureKey: 'modalQtyMinus',
+    });
+    steps.push({
+      tabIndex: basketIdx,
+      routeName: 'my-baskets',
+      icon: Plus,
+      titleKey: 'walkthrough.biz.modalPlus.title',
+      descKey: 'walkthrough.biz.modalPlus.desc',
+      highlight: 'inline-modal',
+      requireTap: true,
+      measureKey: 'modalQtyPlus',
+    });
+    steps.push({
+      tabIndex: basketIdx,
+      routeName: 'my-baskets',
+      icon: Check,
+      titleKey: 'walkthrough.biz.modalSave.title',
+      descKey: 'walkthrough.biz.modalSave.desc',
+      highlight: 'inline-modal',
+      requireTap: true,
+      measureKey: 'modalSave',
+    });
+    // 6d. After save — highlight the updated qty pill on the basket card.
+    // Standard 'element' step with Next button (no requireTap, no advanceOn*).
+    steps.push({
+      tabIndex: basketIdx,
+      routeName: 'my-baskets',
+      icon: ShoppingBag,
+      titleKey: 'walkthrough.biz.basketCardQty.title',
+      descKey: 'walkthrough.biz.basketCardQty.desc',
+      highlight: 'element',
+      target: { top: insetsTop + 110, left: 28, width: 60, height: 28, radius: 14 },
+      tooltipPosition: 'bottom',
+      measureKey: 'demoBasketCardQty',
+    });
+  }
+  // ── Orders — interactive sub-tour ────────────────────────────────────
+  const ordersIdx = visibleTabs.indexOf('incoming-orders');
+  if (ordersIdx >= 0) {
+    // Orders tab intro — show the (empty) orders page first. No demo order
+    // is injected yet so the user sees the page as it normally would after
+    // a fresh login. They press Suivant to continue.
+    steps.push({
+      tabIndex: ordersIdx,
+      routeName: 'incoming-orders',
+      icon: ClipboardList,
+      titleKey: 'walkthrough.biz.orders.title',
+      descKey: 'walkthrough.biz.orders.desc',
+      highlight: 'tab',
+    });
+    // Order arrives — flip demoOrderActive on so the injected demo order +
+    // the in-app notification popup appear. The popup is the surface that
+    // advances the demo (tap "Voir la commande"), so this step uses
+    // `inline-modal` to let the popup own the screen.
+    steps.push({
+      tabIndex: ordersIdx,
+      routeName: 'incoming-orders',
+      icon: ClipboardList,
+      titleKey: 'walkthrough.biz.orderArrives.title',
+      descKey: 'walkthrough.biz.orderArrives.desc',
+      highlight: 'inline-modal',
+      measureKey: 'orderArrives',
+      enter: { demoOrder: true },
+    });
+    // Demo order card — user taps to expand
+    steps.push({
+      tabIndex: ordersIdx,
+      routeName: 'incoming-orders',
+      icon: ClipboardList,
+      titleKey: 'walkthrough.biz.orderCard.title',
+      descKey: 'walkthrough.biz.orderCard.desc',
+      highlight: 'element',
+      target: { top: insetsTop + 110, left: 16, width: SCREEN_W_BIZ - 32, height: 100, radius: 16 },
+      tooltipPosition: 'bottom',
+      requireTap: true,
+      advanceOnFlag: 'expand',
+      measureKey: 'demoOrderCard',
+    });
+    // Chat button — only if user can message. Tapping it navigates to the
+    // message screen; the demo's chat-screen step then prompts the user to
+    // tap back to return.
+    if (canMessage) {
+      steps.push({
+        tabIndex: ordersIdx,
+        routeName: 'incoming-orders',
+        icon: MessageCircle,
+        titleKey: 'walkthrough.biz.orderChat.title',
+        descKey: 'walkthrough.biz.orderChat.desc',
+        highlight: 'element',
+        target: { top: insetsTop + 130, left: SCREEN_W_BIZ - 80, width: 32, height: 32, radius: 16 },
+        tooltipPosition: 'bottom',
+        requireTap: true,
+        advanceOnPath: '/message/',
+        measureKey: 'orderCardChat',
+      });
+      // Chat screen — prompts user to tap the back arrow to return.
+      // `inline-modal` so the layout overlay renders nothing here; the
+      // chat screen renders its own walkthrough tooltip.
+      steps.push({
+        tabIndex: ordersIdx,
+        routeName: 'incoming-orders',
+        icon: MessageCircle,
+        titleKey: 'walkthrough.biz.chatBack.title',
+        descKey: 'walkthrough.biz.chatBack.desc',
+        highlight: 'inline-modal',
+        measureKey: 'chatBack',
+      });
+    }
+    // Per-card "Confirmer" button — opens Verify Pickup modal
+    if (canConfirmPickup) {
+      steps.push({
+        tabIndex: ordersIdx,
+        routeName: 'incoming-orders',
+        icon: CheckCircle,
+        titleKey: 'walkthrough.biz.orderConfirm.title',
+        descKey: 'walkthrough.biz.orderConfirm.desc',
+        highlight: 'element',
+        target: { top: insetsTop + 280, left: 24, width: SCREEN_W_BIZ / 2 - 32, height: 40, radius: 12 },
+        tooltipPosition: 'top',
+        requireTap: true,
+        advanceOnFlag: 'modal',
+        measureKey: 'orderCardConfirmBtn',
+      });
+      // Verify Pickup modal — explain the code input. The user can either
+      // type the example code (DEMO1) and confirm to trigger the demo
+      // success flow, or just press Suivant on the walkthrough tooltip to
+      // skip ahead. `inline-modal` highlight tells the layout overlay to
+      // render null for this step; the verify modal renders its own tooltip
+      // card so it sits above the modal sheet.
+      steps.push({
+        tabIndex: ordersIdx,
+        routeName: 'incoming-orders',
+        icon: CheckCircle,
+        titleKey: 'walkthrough.biz.verifyInput.title',
+        descKey: 'walkthrough.biz.verifyInput.desc',
+        highlight: 'inline-modal',
+        measureKey: 'verifyModalInput',
+      });
+      // QR scanner FAB shortcut — bottom-right of the orders screen. Tap
+      // the FAB to navigate to /business/scan-qr; the next step renders an
+      // instruction popup there and advances when the user comes back.
+      // Auto-closes the verify modal on step entry so the FAB underneath
+      // is reachable. `demoOrder: false` clears the injected demo order
+      // from the list — by this point the user has "confirmed pickup", so
+      // the order has logically moved out of the incoming tab.
+      steps.push({
+        tabIndex: ordersIdx,
+        routeName: 'incoming-orders',
+        icon: QrCode,
+        titleKey: 'walkthrough.biz.qrFab.title',
+        descKey: 'walkthrough.biz.qrFab.desc',
+        highlight: 'element',
+        target: { bottom: 100, right: 24, width: 56, height: 56, radius: 28 },
+        tooltipPosition: 'top',
+        requireTap: true,
+        advanceOnPath: '/business/scan-qr',
+        measureKey: 'qrFab',
+        enter: { demoOrder: false },
+      });
+      // On the scan-qr screen — prompt the user to tap back to return.
+      // `inline-modal` so the layout overlay renders nothing here; the
+      // scan-qr screen renders its own walkthrough instruction popup.
+      steps.push({
+        tabIndex: ordersIdx,
+        routeName: 'incoming-orders',
+        icon: QrCode,
+        titleKey: 'walkthrough.biz.scanQrBack.title',
+        descKey: 'walkthrough.biz.scanQrBack.desc',
+        highlight: 'inline-modal',
+        measureKey: 'scanQrBack',
+      });
+    }
+  }
+  // ── Profile — gestion d'équipe + infos commerce ───────────────────────
+  const profileIdx = visibleTabs.indexOf('business-profile');
+  if (profileIdx >= 0 && canEditProfile) {
+    steps.push({ tabIndex: profileIdx, routeName: 'business-profile', icon: User, titleKey: 'walkthrough.biz.profile.title', descKey: 'walkthrough.biz.profile.desc', highlight: 'tab' });
+    // Infos commerce comes BEFORE the team tour. That way the team tour
+    // can navigate into /business/team and continue to the settings hand-
+    // off without needing to pop back to /business/profile mid-demo.
+    steps.push({
+      tabIndex: profileIdx,
+      routeName: 'business-profile',
+      icon: Building2,
+      titleKey: 'walkthrough.biz.profileInfo.title',
+      descKey: 'walkthrough.biz.profileInfo.desc',
+      highlight: 'element',
+      target: { top: insetsTop + 320, left: 16, width: SCREEN_W_BIZ - 32, height: 100, radius: 16 },
+      tooltipPosition: 'bottom',
+      measureKey: 'profileBusinessInfo',
+    });
+    // Gestion d'équipe — admins only. Tap the team card on the profile
+    // page to navigate to /business/team. The sub-screen overlay there
+    // renders the next two steps on top of that pushed screen.
+    if (isOrgAdmin) {
+      steps.push({
+        tabIndex: profileIdx,
+        routeName: 'business-profile',
+        icon: User,
+        titleKey: 'walkthrough.biz.profileTeam.title',
+        descKey: 'walkthrough.biz.profileTeam.desc',
+        highlight: 'element',
+        target: { top: insetsTop + 200, left: 16, width: SCREEN_W_BIZ - 32, height: 80, radius: 16 },
+        tooltipPosition: 'bottom',
+        requireTap: true,
+        advanceOnPath: '/business/team',
+        measureKey: 'profileTeamCard',
+      });
+      // Org info / stats card at the top of the team page. `target.radius`
+      // matches the green banner's borderRadius (theme.radii.r16 = 16) so
+      // the halo's rounded corners follow the card's actual shape.
+      steps.push({
+        tabIndex: profileIdx,
+        routeName: 'business-profile',
+        icon: Building2,
+        titleKey: 'walkthrough.biz.teamOrg.title',
+        descKey: 'walkthrough.biz.teamOrg.desc',
+        highlight: 'element',
+        target: { radius: 16 },
+        tooltipPosition: 'bottom',
+        measureKey: 'teamOrgCard',
+      });
+      // Locations list — preview step. Highlights the whole locations
+      // section first so the user understands what the section contains
+      // (their points of vente / dépôts), then the next step focuses on
+      // the "+" button. Mirrors the members-list / + member pattern so
+      // both sections get the same two-beat introduction.
+      steps.push({
+        tabIndex: profileIdx,
+        routeName: 'business-profile',
+        icon: MapPin,
+        titleKey: 'walkthrough.biz.teamLocations.title',
+        descKey: 'walkthrough.biz.teamLocations.desc',
+        highlight: 'element',
+        target: { radius: 16 },
+        tooltipPosition: 'bottom',
+        measureKey: 'teamLocationsSection',
+      });
+      // Locations section — highlight the "+ add location" button. The
+      // team page scrolls the locations section into view on step entry
+      // (see team.tsx). 18-radius matches the small round + button.
+      steps.push({
+        tabIndex: profileIdx,
+        routeName: 'business-profile',
+        icon: MapPin,
+        titleKey: 'walkthrough.biz.teamAddLocation.title',
+        descKey: 'walkthrough.biz.teamAddLocation.desc',
+        highlight: 'element',
+        target: { radius: 16 },
+        tooltipPosition: 'bottom',
+        measureKey: 'teamAddLocationBtn',
+      });
+      // Members list — preview step. Highlights the whole members section
+      // first so the user sees the full list (and can read who's on the
+      // team), then the next step focuses on the "+" button. Splitting the
+      // tour this way avoids the previous jump where the halo went straight
+      // from a small + on locations to a small + on members with no context
+      // about what the section even contained.
+      steps.push({
+        tabIndex: profileIdx,
+        routeName: 'business-profile',
+        icon: User,
+        titleKey: 'walkthrough.biz.teamMembers.title',
+        descKey: 'walkthrough.biz.teamMembers.desc',
+        highlight: 'element',
+        target: { radius: 16 },
+        tooltipPosition: 'top',
+        measureKey: 'teamMembersSection',
+      });
+      // Members section — highlight the "+ add member" button. Scrolls
+      // the members section into view first so the button is visible.
+      steps.push({
+        tabIndex: profileIdx,
+        routeName: 'business-profile',
+        icon: User,
+        titleKey: 'walkthrough.biz.teamAddMember.title',
+        descKey: 'walkthrough.biz.teamAddMember.desc',
+        highlight: 'element',
+        target: { radius: 16 },
+        tooltipPosition: 'top',
+        measureKey: 'teamAddMemberBtn',
+      });
+    }
+  }
+  // Settings hand-off (final)
+  steps.push({
+    tabIndex: 0,
+    routeName: 'dashboard',
+    icon: Settings,
+    titleKey: 'walkthrough.biz.settingsDemo.title',
+    descKey: 'walkthrough.biz.settingsDemo.desc',
+    highlight: 'element',
+    isSettings: true,
+  });
+  return steps;
+}
 
-function BusinessWalkthroughOverlay({ navRef, tabWidth, theme, t }: { navRef: any; tabWidth: number; theme: any; t: any }) {
+// SVG path: full screen rectangle plus an inner rounded-rectangle hole drawn
+// with the opposite winding so even-odd fill renders the dim area minus a
+// perfect rounded cutout (no rectangle-with-rounded-border mismatch).
+function buildCutoutPath(sw: number, sh: number, x: number, y: number, w: number, h: number, r: number): string {
+  const radius = Math.max(0, Math.min(r, w / 2, h / 2));
+  if (w <= 0 || h <= 0) return `M0 0 H${sw} V${sh} H0 Z`;
+  const x2 = x + w;
+  const y2 = y + h;
+  return [
+    `M0 0 H${sw} V${sh} H0 Z`,
+    `M${x + radius} ${y}`,
+    `H${x2 - radius}`,
+    `A${radius} ${radius} 0 0 1 ${x2} ${y + radius}`,
+    `V${y2 - radius}`,
+    `A${radius} ${radius} 0 0 1 ${x2 - radius} ${y2}`,
+    `H${x + radius}`,
+    `A${radius} ${radius} 0 0 1 ${x} ${y2 - radius}`,
+    `V${y + radius}`,
+    `A${radius} ${radius} 0 0 1 ${x + radius} ${y}`,
+    'Z',
+  ].join(' ');
+}
+
+// Cutout mask backed by SVG so the dim region follows the rounded highlight
+// shape exactly. The SVG itself is non-interactive; four absorber frames
+// arranged around the cutout rect (top / bottom / left / right) catch any
+// tap outside the cutout so the user can't accidentally hit unrelated
+// surfaces (tab bar pills, FAB, header back, etc.) and auto-quit the demo.
+// The cutout area has no absorber, so taps fall through to the highlighted
+// element. If `onOutsidePress` is provided (tab steps), the frame taps call
+// it — preserves the "tap anywhere to advance the demo" UX. Otherwise the
+// frame taps are absorbed silently (no-op).
+function CutoutMask({ x, y, w, h, radius = 0, onOutsidePress }: { x: number; y: number; w: number; h: number; radius?: number; onOutsidePress?: () => void }) {
+  const d = buildCutoutPath(SCREEN_W_BIZ, SCREEN_H_BIZ, x, y, w, h, radius);
+  // Clamp the cutout rect so the four frames don't get negative widths /
+  // heights when the highlight is near a screen edge.
+  const cx = Math.max(0, x);
+  const cy = Math.max(0, y);
+  const cw = Math.max(0, Math.min(w, SCREEN_W_BIZ - cx));
+  const ch = Math.max(0, Math.min(h, SCREEN_H_BIZ - cy));
+  const Frame = ({ style }: { style: any }) => (
+    onOutsidePress
+      ? <TouchableOpacity activeOpacity={1} onPress={onOutsidePress} style={style} />
+      : <View
+          style={style}
+          onStartShouldSetResponder={() => true}
+          onResponderRelease={() => { /* absorb silently — the hint toast
+              only fires for taps on actual blocked buttons (per-button
+              gates), not for taps on empty dim space. */ }}
+        />
+  );
+  return (
+    <View style={StyleSheet.absoluteFillObject}>
+      {/* Visual dim — non-interactive. */}
+      <View pointerEvents="none" style={StyleSheet.absoluteFillObject}>
+        <Svg width={SCREEN_W_BIZ} height={SCREEN_H_BIZ} style={StyleSheet.absoluteFillObject} pointerEvents="none">
+          <Path d={d} fill="rgba(0,0,0,0.55)" fillRule="evenodd" />
+        </Svg>
+      </View>
+      {/* Tap absorbers around the cutout. */}
+      <Frame style={{ position: 'absolute', left: 0, right: 0, top: 0, height: cy }} />
+      <Frame style={{ position: 'absolute', left: 0, right: 0, top: cy + ch, bottom: 0 }} />
+      <Frame style={{ position: 'absolute', top: cy, height: ch, left: 0, width: cx }} />
+      <Frame style={{ position: 'absolute', top: cy, height: ch, left: cx + cw, right: 0 }} />
+    </View>
+  );
+}
+
+function BusinessWalkthroughOverlay({ navRef, tabWidth, theme, t, visibleTabs, canManageBaskets, canEditProfile, canConfirmPickup, canMessage, isOrgAdmin, hasNoLocation, insetsTop, router }: { navRef: any; tabWidth: number; theme: any; t: any; visibleTabs: string[]; canManageBaskets: boolean; canEditProfile: boolean; canConfirmPickup: boolean; canMessage: boolean; isOrgAdmin: boolean; hasNoLocation: boolean; insetsTop: number; router: any }) {
+  const BIZ_WALKTHROUGH_STEPS = React.useMemo(() => buildWalkthroughSteps(visibleTabs, canManageBaskets, canEditProfile, canConfirmPickup, canMessage, isOrgAdmin, hasNoLocation, insetsTop), [visibleTabs, canManageBaskets, canEditProfile, canConfirmPickup, canMessage, isOrgAdmin, hasNoLocation, insetsTop]);
   const step = useWalkthroughStore((s) => s.step);
   const nextStep = useWalkthroughStore((s) => s.nextStep);
   const skipWalkthrough = useWalkthroughStore((s) => s.skipWalkthrough);
+  const setShowSettingsOverlay = useWalkthroughStore((s) => s.setShowSettingsOverlay);
+  const measuredRects = useWalkthroughStore((s) => s.measuredRects);
+  const setDemoBasketActive = useWalkthroughStore((s) => s.setDemoBasketActive);
+  const setDemoOrderActive = useWalkthroughStore((s) => s.setDemoOrderActive);
+  const setDemoScanCode = useWalkthroughStore((s) => s.setDemoScanCode);
+  const verifyModalOpen = useWalkthroughStore((s) => s.verifyModalOpen);
+  const expandedDemoCard = useWalkthroughStore((s) => s.expandedDemoCard);
+  const setExpandedDemoCardFlag = useWalkthroughStore((s) => s.setExpandedDemoCard);
+  const setVerifyModalOpenFlag = useWalkthroughStore((s) => s.setVerifyModalOpen);
+  const setCurrentStep = useWalkthroughStore((s) => s.setCurrentStep);
   const fadeAnim = React.useRef(new Animated.Value(0)).current;
+  const segments = useSegments();
+  const pathname = '/' + (segments as string[]).join('/');
 
+  // Track whether the overlay is already faded in. We only run the
+  // 0→1 fade on the FIRST step (or when the walkthrough is re-entered
+  // from null), not between adjacent step transitions. Resetting to 0
+  // on every step change made the entire overlay snap to invisible
+  // each tap, then fade back in over 300 ms — combined with the
+  // tab-navigation slide it read as "not smooth at all". Now the dim
+  // mask stays at opacity 1 and only the cutout/tooltip positions
+  // change between steps.
+  const fadeInDoneRef = React.useRef(false);
+  // Halo settling: hide the halo + tooltip for a short window after a step
+  // change so any pending scrollTo / measureInWindow updates land BEFORE we
+  // paint. Without this, the overlay reads the previous step's cached rect
+  // (or an initial onLayout rect that gets overwritten once data finishes
+  // loading), draws the halo there, then snaps to the corrected position —
+  // visible to the user as jitter. The dim mask still appears immediately
+  // so the demo never feels frozen during the wait.
+  const [haloReady, setHaloReady] = React.useState(false);
+  React.useEffect(() => {
+    if (step === null) { setHaloReady(false); return; }
+    const mk = BIZ_WALKTHROUGH_STEPS[step]?.measureKey;
+    // Team sub-screen steps run a scrollTo (60 ms) + deferred remeasure
+    // (350–450 ms). The halo must wait for the remeasure to commit or it
+    // lands at the pre-scroll rect. Other element steps just need a beat
+    // for the first onLayout to settle (e.g. profile cards that re-layout
+    // after their underlying data query resolves).
+    const isTeamScroll = mk === 'teamOrgCard' || mk === 'teamLocationsSection' || mk === 'teamAddLocationBtn' || mk === 'teamAddMemberBtn' || mk === 'teamMembersSection';
+    const delay = isTeamScroll ? 520 : 260;
+    setHaloReady(false);
+    const t = setTimeout(() => setHaloReady(true), delay);
+    return () => clearTimeout(t);
+  }, [step, BIZ_WALKTHROUGH_STEPS]);
   React.useEffect(() => {
     if (step !== null) {
-      fadeAnim.setValue(0);
-      Animated.timing(fadeAnim, { toValue: 1, duration: 300, useNativeDriver: true }).start();
-      const s = BIZ_WALKTHROUGH_STEPS[step];
-      if (s?.routeName && navRef.current) {
-        try { navRef.current.navigate(s.routeName); } catch {}
+      if (!fadeInDoneRef.current) {
+        fadeAnim.setValue(0);
+        Animated.timing(fadeAnim, { toValue: 1, duration: 180, useNativeDriver: true }).start();
+        fadeInDoneRef.current = true;
       }
+      const s = BIZ_WALKTHROUGH_STEPS[step];
+      // Reset advance flags between steps — a flag flipped during the
+      // previous step would otherwise auto-advance the next step that uses
+      // the same `advanceOnFlag`. Reset only happens on step ENTRY so the
+      // step's own user-triggered flag flip still works.
+      setExpandedDemoCardFlag(false);
+      setVerifyModalOpenFlag(false);
+      // Apply this step's enter effects (demo flag setters). These persist
+      // until cleared explicitly — typical pattern is: step N sets demoBasket,
+      // step N+K (after the basket flow ends) sets demoBasket back to false.
+      if (s?.enter) {
+        if (s.enter.demoBasket !== undefined) setDemoBasketActive(s.enter.demoBasket);
+        if (s.enter.demoOrder !== undefined) setDemoOrderActive(s.enter.demoOrder);
+        if (s.enter.demoScanCode !== undefined) setDemoScanCode(s.enter.demoScanCode);
+      }
+      // NOTE: do NOT blanket-invalidate measuredRects[s.measureKey] here.
+      // Many element steps target already-rendered surfaces (Add Basket
+      // button on my-baskets, demo basket card, profile cards, …). Those
+      // elements only fire onLayout once at mount — wiping their rect now
+      // would strand the overlay in dim-only mode forever because nothing
+      // ever re-publishes. Cross-run pollution is already handled by
+      // `startWalkthrough` clearing measuredRects; the create-basket form
+      // fields that need re-measurement after auto-scroll self-invalidate
+      // inside their effect (see create-basket.tsx:252).
+      // Publish step metadata so SubScreenWalkthroughOverlay (mounted on
+      // pushed Stack screens like /business/create-basket) can render this
+      // step's highlight when the user is above the tabs.
+      if (s?.measureKey) {
+        setCurrentStep({
+          measureKey: s.measureKey,
+          titleKey: s.titleKey,
+          descKey: s.descKey,
+          tooltipPosition: s.tooltipPosition,
+          isLast: step === BIZ_WALKTHROUGH_STEPS.length - 1,
+          stepIndex: step,
+          totalSteps: BIZ_WALKTHROUGH_STEPS.length,
+          requireTap: !!s.requireTap,
+          // Pass the step's target radius through so SubScreenWalkthroughOverlay
+          // can match it (it previously hardcoded 18, which mismatched
+          // pill-shaped buttons like the create-basket confirm CTA).
+          radius: s.target?.radius,
+        });
+      } else {
+        setCurrentStep(null);
+      }
+      // Settings hand-off: push /settings once, mark the overlay flag, and
+      // return. The settings screen renders its own cutout overlay.
+      if (s?.isSettings) {
+        setShowSettingsOverlay(true);
+        try { router.push('/settings'); } catch {}
+        return;
+      }
+      if (s?.routeName && navRef.current) {
+        const onSubScreen = pathname.startsWith('/business/') || pathname.startsWith('/settings');
+        if (s.highlight === 'tab') {
+          // Tab step: pop any pushed sub-screen via router.replace (the
+          // REPLACE action is always handled by the Stack — avoids the
+          // GO_BACK / POP_TO_TOP dev warnings) and switch tabs.
+          if (onSubScreen && !s.isSettings) {
+            try { router.replace(`/(business)/${s.routeName}` as never); } catch {}
+          }
+          // Always also tell the Tabs navigator to switch tabs. The Tabs
+          // sit underneath any pushed Stack screen, so this is harmless —
+          // and it covers the case where router.replace silently failed
+          // (which left the demo stuck on the orders/scan-qr tab after the
+          // scanQrBack step advanced, with no profile-tour steps showing).
+          try { navRef.current.navigate(s.routeName); } catch {}
+        }
+        // Element steps: do NOT navigate. The user has either just landed on
+        // a pushed sub-screen (e.g. /business/create-basket after tapping
+        // Add Basket) or is still on the previous tab. Calling navRef.navigate
+        // here would pop the freshly-pushed screen, which is exactly the bug
+        // that was preventing the create-basket form from staying open.
+      }
+    } else {
+      // Walkthrough ended — make sure settings overlay is cleared too.
+      setShowSettingsOverlay(false);
+      // Allow the fade-in to play again next time the walkthrough starts.
+      fadeInDoneRef.current = false;
     }
   }, [step]);
 
-  // Skip to next tab-level step (for "Passer" on element steps)
-  const skipToNextTab = React.useCallback(() => {
+  // Auto-advance when the user navigates to the path specified on the
+  // current step — i.e., they actually tapped the real button through the
+  // cutout. This is what makes `requireTap` steps "advance on interaction".
+  React.useEffect(() => {
     if (step === null) return;
-    for (let i = step + 1; i < BIZ_WALKTHROUGH_STEPS.length; i++) {
-      if (BIZ_WALKTHROUGH_STEPS[i].highlight === 'tab' && BIZ_WALKTHROUGH_STEPS[i].tabIndex !== BIZ_WALKTHROUGH_STEPS[step].tabIndex) {
-        useWalkthroughStore.setState({ step: i });
-        return;
-      }
+    const s = BIZ_WALKTHROUGH_STEPS[step];
+    if (s?.advanceOnPath && pathname.startsWith(s.advanceOnPath)) {
+      nextStep(BIZ_WALKTHROUGH_STEPS.length);
     }
-    // No more tab steps — end walkthrough
-    skipWalkthrough();
-  }, [step, skipWalkthrough]);
+  }, [pathname, step, BIZ_WALKTHROUGH_STEPS, nextStep]);
+
+  // Safety net for sub-screen "tap back" steps: if the user has left the
+  // expected sub-screen but the walkthrough is still on the corresponding
+  // inline-modal step, advance. The sub-screen's own unmount-cleanup
+  // already calls nextStep in the happy path; this is the belt-and-
+  // suspenders so the demo can never strand the user on the orders tab
+  // with no overlay UI to recover from.
+  React.useEffect(() => {
+    if (step === null) return;
+    const s = BIZ_WALKTHROUGH_STEPS[step];
+    const mk = s?.measureKey;
+    if (mk === 'scanQrBack' && !pathname.startsWith('/business/scan-qr')) {
+      nextStep(BIZ_WALKTHROUGH_STEPS.length);
+    } else if (mk === 'chatBack' && !pathname.startsWith('/message')) {
+      nextStep(BIZ_WALKTHROUGH_STEPS.length);
+    }
+  }, [pathname, step, BIZ_WALKTHROUGH_STEPS, nextStep]);
+
+  // Auto-advance when a watched store flag flips true. Used for steps that
+  // wait on the user to expand the demo card or open the verify modal.
+  React.useEffect(() => {
+    if (step === null) return;
+    const s = BIZ_WALKTHROUGH_STEPS[step];
+    if (s?.advanceOnFlag === 'expand' && expandedDemoCard) {
+      nextStep(BIZ_WALKTHROUGH_STEPS.length);
+    } else if (s?.advanceOnFlag === 'modal' && verifyModalOpen) {
+      nextStep(BIZ_WALKTHROUGH_STEPS.length);
+    }
+  }, [step, expandedDemoCard, verifyModalOpen, BIZ_WALKTHROUGH_STEPS, nextStep]);
 
   if (step === null) return null;
   const current = BIZ_WALKTHROUGH_STEPS[step];
   if (!current) return null;
+  // Settings step — the settings screen renders its own overlay.
+  if (current.isSettings) return null;
+  // Inline-modal steps — the React Native Modal sits above the walkthrough
+  // overlay's zIndex, so the modal renders its own halo + inline tooltip
+  // for these steps. Return null so the layout overlay doesn't fight the
+  // modal with its own dim mask.
+  if (current.highlight === 'inline-modal') return null;
 
   const StepIcon = current.icon;
   const isLast = step === BIZ_WALKTHROUGH_STEPS.length - 1;
   const tabBarLeft = 32;
 
-  // Calculate highlight position
-  let highlightStyle: any;
+  // Compute the cutout rectangle (x, y, w, h) in screen coordinates, plus
+  // the tooltip/arrow position.
+  let rectX = 0, rectY = 0, rectW = 0, rectH = 0, rectRadius = 16;
   let tooltipStyle: any;
   let arrowStyle: any;
 
-  if (current.highlight === 'element' && current.target) {
+  if (current.highlight === 'element' && (current.target || current.measureKey)) {
     const t2 = current.target;
-    const cx = t2.right != null ? SCREEN_W_BIZ - t2.right - t2.size / 2 : (t2.left ?? 0) + t2.size / 2;
-    const cy = t2.bottom != null ? SCREEN_H_BIZ - t2.bottom - t2.size / 2 : (t2.top ?? 0) + t2.size / 2;
+    // Prefer the measured rect — it's accurate across devices / header
+    // heights. If a step declares a measureKey, the measured rect is the
+    // ONLY source of truth: don't fall back to a hardcoded target, because
+    // a stale fallback put the cutout on the bottom navbar (the demoBasket
+    // race). Render nothing until the host screen publishes the rect.
+    const measured = current.measureKey ? (measuredRects[current.measureKey] ?? null) : null;
+    if (current.measureKey && (!measured || !haloReady)) {
+      // Wait for the measurement (and the post-step-change settling window)
+      // — render only the dim mask in the meantime so we don't paint a
+      // misplaced halo / off-screen tooltip that then snaps into place.
+      return (
+        <Animated.View pointerEvents="box-none" style={{ ...StyleSheet.absoluteFillObject, zIndex: 9999, opacity: fadeAnim }}>
+          <View pointerEvents="none" style={[StyleSheet.absoluteFillObject, { backgroundColor: 'rgba(0,0,0,0.55)' }]} />
+        </Animated.View>
+      );
+    }
+    const w = measured ? measured.w : (t2?.width ?? t2?.size ?? 44);
+    const h = measured ? measured.h : (t2?.height ?? t2?.size ?? 44);
+    const cx = measured ? measured.x + w / 2 :
+      (t2?.right != null ? SCREEN_W_BIZ - t2.right - w / 2 : (t2?.left ?? 0) + w / 2);
+    const cy = measured ? measured.y + h / 2 :
+      (t2?.bottom != null ? SCREEN_H_BIZ - t2.bottom - h / 2 : (t2?.top ?? 0) + h / 2);
+    // Expand by 6px for a visible breathing room around the element.
+    rectX = cx - w / 2 - 6;
+    rectY = cy - h / 2 - 6;
+    rectW = w + 12;
+    rectH = h + 12;
+    rectRadius = (t2?.radius ?? 12) + 6;
 
-    highlightStyle = {
-      position: 'absolute' as const,
-      left: cx - t2.size / 2 - 6,
-      top: cy - t2.size / 2 - 6,
-      width: t2.size + 12,
-      height: t2.size + 12,
-      borderRadius: (t2.size + 12) / 2,
-      borderWidth: 3,
-      borderColor: '#e3ff5c',
-      backgroundColor: 'transparent',
-    };
-
-    // Tooltip: position near the element
-    const tooltipBelow = (current.tooltipPosition === 'top') || (cy < SCREEN_H_BIZ / 2);
+    // `tooltipPosition` in the step def describes where the TOOLTIP should
+    // render relative to the highlighted element:
+    //   'top'    → tooltip ABOVE the element (element is near the bottom)
+    //   'bottom' → tooltip BELOW the element (element is near the top)
+    // If unset, auto-pick based on where the element sits on screen.
+    // Then verify the chosen side actually fits in the visible viewport,
+    // accounting for the bottom tab bar — flip if not. The previous code
+    // honoured the preference blindly and pushed the formConfirm tooltip
+    // off the bottom of the screen.
+    const TAB_BAR_HEIGHT = 88; // 68px pill + 20px gap from screen bottom
+    const ESTIMATED_TOOLTIP_HEIGHT = 220;
+    const safeTop = insetsTop + 12;
+    const safeBottom = TAB_BAR_HEIGHT + 12;
+    const elementTop = rectY;
+    const elementBottom = rectY + rectH;
+    const fitsBelow = elementBottom + 20 + ESTIMATED_TOOLTIP_HEIGHT <= SCREEN_H_BIZ - safeBottom;
+    const fitsAbove = elementTop - 20 - ESTIMATED_TOOLTIP_HEIGHT >= safeTop;
+    let tooltipBelow = current.tooltipPosition
+      ? current.tooltipPosition === 'bottom'
+      : cy < SCREEN_H_BIZ / 2;
+    if (tooltipBelow && !fitsBelow && fitsAbove) tooltipBelow = false;
+    else if (!tooltipBelow && !fitsAbove && fitsBelow) tooltipBelow = true;
+    const ttLeft = Math.max(16, Math.min(cx - 140, SCREEN_W_BIZ - 296));
     if (tooltipBelow) {
       tooltipStyle = {
         position: 'absolute' as const,
-        top: cy + t2.size / 2 + 20,
-        left: Math.max(16, Math.min(cx - 140, SCREEN_W_BIZ - 296)),
+        top: elementBottom + 20,
+        left: ttLeft,
         width: 280,
       };
       arrowStyle = {
         position: 'absolute' as const, top: -8,
-        left: Math.max(20, Math.min(cx - (tooltipStyle.left ?? 0) - 8, 252)),
+        left: Math.max(20, Math.min(cx - ttLeft - 8, 252)),
         width: 16, height: 16, backgroundColor: '#fff',
         transform: [{ rotate: '45deg' }],
       };
     } else {
       tooltipStyle = {
         position: 'absolute' as const,
-        bottom: SCREEN_H_BIZ - cy + t2.size / 2 + 20,
-        left: Math.max(16, Math.min(cx - 140, SCREEN_W_BIZ - 296)),
+        bottom: SCREEN_H_BIZ - elementTop + 20,
+        left: ttLeft,
         width: 280,
       };
       arrowStyle = {
         position: 'absolute' as const, bottom: -8,
-        left: Math.max(20, Math.min(cx - (tooltipStyle.left ?? 0) - 8, 252)),
+        left: Math.max(20, Math.min(cx - ttLeft - 8, 252)),
         width: 16, height: 16, backgroundColor: '#fff',
         transform: [{ rotate: '45deg' }],
       };
     }
   } else {
-    // Tab highlight
+    // Tab highlight — position matches the bottom tab pill.
     const pillCenterX = tabBarLeft + (current.tabIndex * tabWidth) + (tabWidth / 2);
-    highlightStyle = {
-      position: 'absolute' as const,
-      bottom: 20 + 8,
-      left: pillCenterX - 28,
-      width: 56, height: 56, borderRadius: 28,
-      borderWidth: 3, borderColor: '#e3ff5c', backgroundColor: 'transparent',
-    };
+    rectX = tabBarLeft + (current.tabIndex * tabWidth) + 6 - 2;
+    rectY = SCREEN_H_BIZ - (20 + 8 + 52) - 2;
+    rectW = (tabWidth - 12) + 4;
+    rectH = 52 + 4;
+    rectRadius = 22;
     const ttLeft = Math.max(16, Math.min(pillCenterX - 140, SCREEN_W_BIZ - 296));
     tooltipStyle = { position: 'absolute' as const, bottom: 100, left: ttLeft, width: 280 };
     arrowStyle = {
@@ -704,62 +1606,81 @@ function BusinessWalkthroughOverlay({ navRef, tabWidth, theme, t }: { navRef: an
   }
 
   const handleAdvance = () => nextStep(BIZ_WALKTHROUGH_STEPS.length);
-  const handleSkip = current.highlight === 'element' ? skipToNextTab : skipWalkthrough;
+  // "Quitter la démo" — always exits the entire walkthrough, regardless of
+  // step type. The previous behaviour (skipToNextTab on element steps) was
+  // confusing because the same label "Skip" did different things.
+  const handleSkip = skipWalkthrough;
+  // Tab steps advance on tapping the mask; element steps never do (we want
+  // the user to tap the actual feature through the unmasked hole).
+  const maskPress = current.highlight === 'tab' ? handleAdvance : undefined;
+  const showNextButton = !current.requireTap;
+  const showTapHint = !!current.requireTap;
 
   return (
-    <Animated.View style={{ ...StyleSheet.absoluteFillObject, zIndex: 9999, opacity: fadeAnim }}>
-      {/* Dark overlay — tapping advances for tab steps */}
-      <TouchableOpacity
-        activeOpacity={1}
-        onPress={current.highlight === 'tab' ? handleAdvance : undefined}
-        style={{ ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.55)' }}
-      />
-      {/* Highlight ring — tapping it advances for element steps */}
-      <TouchableOpacity
-        activeOpacity={0.8}
-        onPress={handleAdvance}
-        style={highlightStyle}
-      />
-      {/* Tooltip */}
-      <View style={{
-        ...tooltipStyle,
-        backgroundColor: '#fff', borderRadius: 20, padding: 20,
-        shadowColor: '#000', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.15, shadowRadius: 20, elevation: 10,
-      }}>
-        <Text style={{ color: theme.colors.muted, fontSize: 12, fontFamily: 'Poppins_500Medium', marginBottom: 10 }}>
-          {step + 1}/{BIZ_WALKTHROUGH_STEPS.length}
-        </Text>
-        <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 10 }}>
-          <View style={{ width: 44, height: 44, borderRadius: 22, backgroundColor: '#114b3c12', justifyContent: 'center', alignItems: 'center', marginRight: 12 }}>
-            <StepIcon size={22} color="#114b3c" />
-          </View>
-          <Text style={{ color: '#114b3c', fontSize: 17, fontWeight: '700', fontFamily: 'Poppins_700Bold', flex: 1 }}>
-            {t(current.titleKey)}
+    <Animated.View pointerEvents="box-none" style={{ ...StyleSheet.absoluteFillObject, zIndex: 9999, opacity: fadeAnim }}>
+        {/* Cutout mask — SVG path, the dim region exactly follows the rounded
+            highlight shape (no rectangle-with-rounded-border mismatch). */}
+        <CutoutMask x={rectX} y={rectY} w={rectW} h={rectH} radius={rectRadius} onOutsidePress={maskPress} />
+        {/* Highlight ring — non-interactive (pointerEvents none) so taps on
+            the element beneath the hole go through untouched. */}
+        <View
+          pointerEvents="none"
+          style={{
+            position: 'absolute', left: rectX, top: rectY, width: rectW, height: rectH,
+            borderRadius: rectRadius, borderWidth: 3, borderColor: '#e3ff5c', backgroundColor: 'transparent',
+          }}
+        />
+        {/* Tooltip */}
+        <View style={{
+          ...tooltipStyle,
+          backgroundColor: '#fff', borderRadius: 20, padding: 20,
+          shadowColor: '#000', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.15, shadowRadius: 20, elevation: 10,
+        }}>
+          <Text style={{ color: theme.colors.muted, fontSize: 12, fontFamily: 'Poppins_500Medium', marginBottom: 10 }}>
+            {step + 1}/{BIZ_WALKTHROUGH_STEPS.length}
           </Text>
-        </View>
-        <Text style={{ color: '#666', fontSize: 13, fontFamily: 'Poppins_400Regular', lineHeight: 19, marginBottom: 16 }}>
-          {t(current.descKey)}
-        </Text>
-        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-          <TouchableOpacity onPress={handleSkip}>
-            <Text style={{ color: theme.colors.muted, fontSize: 13, fontFamily: 'Poppins_500Medium' }}>
-              {t('common.skip', { defaultValue: 'Passer' })}
+          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 10 }}>
+            <View style={{ width: 44, height: 44, borderRadius: 22, backgroundColor: '#114b3c12', justifyContent: 'center', alignItems: 'center', marginRight: 12 }}>
+              <StepIcon size={22} color="#114b3c" />
+            </View>
+            <Text style={{ color: '#114b3c', fontSize: 17, fontWeight: '700', fontFamily: 'Poppins_700Bold', flex: 1 }}>
+              {t(current.titleKey)}
             </Text>
-          </TouchableOpacity>
-          {current.highlight === 'tab' && (
-            <TouchableOpacity
-              onPress={handleAdvance}
-              style={{ backgroundColor: '#114b3c', borderRadius: 12, paddingHorizontal: 20, paddingVertical: 10 }}
-            >
-              <Text style={{ color: '#e3ff5c', fontSize: 14, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
-                {isLast ? t('walkthrough.done', { defaultValue: 'C\'est parti !' }) : t('walkthrough.next', { defaultValue: 'Suivant' })}
+          </View>
+          <Text style={{ color: '#666', fontSize: 13, fontFamily: 'Poppins_400Regular', lineHeight: 19, marginBottom: showTapHint ? 10 : 16 }}>
+            {t(current.descKey)}
+          </Text>
+          {showTapHint && (
+            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 14, backgroundColor: '#114b3c0f', paddingHorizontal: 10, paddingVertical: 8, borderRadius: 10 }}>
+              <Hand size={14} color="#114b3c" />
+              <Text style={{ color: '#114b3c', fontSize: 12, fontFamily: 'Poppins_600SemiBold', marginLeft: 6, flex: 1 }}>
+                {t('walkthrough.tapToContinue', { defaultValue: 'Appuyez sur le bouton entouré pour continuer.' })}
+              </Text>
+            </View>
+          )}
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+            <TouchableOpacity onPress={handleSkip}>
+              <Text style={{ color: theme.colors.muted, fontSize: 13, fontFamily: 'Poppins_500Medium' }}>
+                {t('walkthrough.exitDemo', { defaultValue: 'Quitter la démo' })}
               </Text>
             </TouchableOpacity>
-          )}
+            {showNextButton && (
+              <TouchableOpacity
+                onPress={handleAdvance}
+                style={{ backgroundColor: '#114b3c', borderRadius: 12, paddingHorizontal: 20, paddingVertical: 10 }}
+              >
+                <Text style={{ color: '#e3ff5c', fontSize: 14, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
+                  {isLast ? t('walkthrough.done', { defaultValue: 'C\'est parti !' }) : t('walkthrough.next', { defaultValue: 'Suivant' })}
+                </Text>
+              </TouchableOpacity>
+            )}
+          </View>
+          {/* Arrow */}
+          <View style={arrowStyle} />
         </View>
-        {/* Arrow */}
-        <View style={arrowStyle} />
-      </View>
-    </Animated.View>
+        {/* "Follow instructions" toast — flashes when a blocked tap is
+            absorbed by one of the four frame absorbers. */}
+        <DemoTapHintToast />
+      </Animated.View>
   );
 }
