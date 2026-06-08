@@ -1,7 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Animated, Image, ActivityIndicator, Linking } from 'react-native';
 import { useTranslation } from 'react-i18next';
-import { MapPin, Clock, Navigation, X as XIcon, QrCode, Star, ChevronDown, ChevronUp, ShoppingBag, MessageCircle, Flag } from 'lucide-react-native';
+import { MapPin, Clock, Navigation, X as XIcon, QrCode, Star, ChevronDown, ChevronUp, ShoppingBag, MessageCircle, Leaf, PiggyBank } from 'lucide-react-native';
+import { FlagIcon8 } from '@/src/components/ui/Icon8';
+import { calcCO2Saved, calcMoneySaved } from '@/src/lib/impactCalculations';
 import { useRouter } from 'expo-router';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { getNowInBusinessTz, toBizDayMinutes } from '@/src/utils/timezone';
@@ -10,6 +12,8 @@ import type { ReservationFromAPI } from '@/src/services/reservations';
 import { fetchReservationQRCode } from '@/src/services/reservations';
 import { useOrdersStore } from '@/src/stores/ordersStore';
 import { StatusDot } from '@/src/components/StatusDot';
+import { useWalkthroughStore } from '@/src/stores/walkthroughStore';
+import { DEMO_ORDER_ID } from '@/src/lib/demoData';
 
 interface ReservationCardProps {
   reservation: ReservationFromAPI;
@@ -17,6 +21,22 @@ interface ReservationCardProps {
   onHide?: (id: string) => void;
   overrideExpired?: boolean;
   messageUnreadCount?: number;
+}
+
+// Mirrors the timeAgo in notification cards so order cards read with the same
+// "il y a 3min" cadence the user already knows from the inbox.
+function timeAgo(dateStr: string | null | undefined, t: (key: string, opts?: Record<string, unknown>) => string): string {
+  if (!dateStr) return '';
+  const then = new Date(dateStr).getTime();
+  if (!Number.isFinite(then)) return '';
+  const diff = Math.floor((Date.now() - then) / 1000);
+  if (diff < 60) return t('timeAgo.seconds', { count: Math.max(diff, 0) });
+  if (diff < 3600) return t('timeAgo.minutes', { count: Math.floor(diff / 60) });
+  if (diff < 86400) return t('timeAgo.hours', { count: Math.floor(diff / 3600) });
+  const days = Math.floor(diff / 86400);
+  if (days < 7) return t('timeAgo.days', { count: days });
+  if (days < 30) return t('timeAgo.weeks', { count: Math.floor(days / 7) });
+  return t('timeAgo.months', { count: Math.floor(days / 30) });
 }
 
 // ---------------------------------------------------------------------------
@@ -254,8 +274,56 @@ export function ReservationCard({ reservation, onCancel, onHide: _onHide, overri
     }
   })();
 
+  // Walkthrough handshake — only for the demo order card. Measures the card
+  // and the pickup-code block so the customer-side orders walkthrough steps
+  // (`customerOrderCard`, `customerPickupCode`) can spotlight them.
+  const isDemoCard = String(reservation.id) === DEMO_ORDER_ID;
+
+  // When the demo order card expands (user taps it during the
+  // `customerOrderCard` step), advance the walkthrough so the next step
+  // (`customerPickupCode`) can spotlight the now-visible pickup code block.
+  // Without this advance, the user is stuck on step 8 forever — the card
+  // expanding doesn't trigger a navigation, and the step has no
+  // `advanceOnPath` to listen for.
+  React.useEffect(() => {
+    if (!isDemoCard || !isExpanded) return;
+    const { currentStep, nextStep } = useWalkthroughStore.getState();
+    if (currentStep?.measureKey === 'customerOrderCard') {
+      nextStep(Number.MAX_SAFE_INTEGER);
+    }
+  }, [isDemoCard, isExpanded]);
+
+  // Re-measure the pickup code block after the orders tab's auto-scroll has
+  // settled. The block's onLayout publishes its rect on initial layout, but
+  // scrolling the page doesn't trigger onLayout — so the rect would still
+  // point at the pre-scroll window y and the halo would land off-target.
+  // We subscribe to the walkthrough's current step key and, when it
+  // becomes `customerPickupCode`, fire a delayed measureInWindow that
+  // overwrites the rect with the post-scroll position.
+  const pickupCodeRef = React.useRef<View>(null);
+  const walkthroughKey = useWalkthroughStore((s) => s.currentStep?.measureKey);
+  React.useEffect(() => {
+    if (!isDemoCard || !isExpanded) return;
+    if (walkthroughKey !== 'customerPickupCode') return;
+    // Orders tab scroll is animated=true with ~300 ms duration; 500 ms
+    // gives a comfortable buffer for layout to settle before we read the
+    // ref's new window position.
+    const t = setTimeout(() => {
+      pickupCodeRef.current?.measureInWindow((x, y, w, h) => {
+        if (w > 0 && h > 0) useWalkthroughStore.getState().setMeasuredRect('customerPickupCode', { x, y, w, h });
+      });
+    }, 500);
+    return () => clearTimeout(t);
+  }, [isDemoCard, isExpanded, walkthroughKey]);
+
   return (
     <Animated.View
+      onLayout={(e) => {
+        if (!isDemoCard) return;
+        (e.target as any)?.measureInWindow?.((x: number, y: number, w: number, h: number) => {
+          if (w > 0 && h > 0) useWalkthroughStore.getState().setMeasuredRect('customerOrderCard', { x, y, w, h });
+        });
+      }}
       style={[
         styles.card,
         {
@@ -351,6 +419,14 @@ export function ReservationCard({ reservation, onCancel, onHide: _onHide, overri
                 <StatusDot tone={getStatusTone()} label={getStatusLabel()} />
               </View>
             )}
+            {/* Time since the order was placed — mirrors the timeAgo line on
+                notification cards so the inbox + orders view share the same
+                relative-time cadence. */}
+            {r.created_at ? (
+              <Text style={{ color: theme.colors.muted, ...theme.typography.caption, marginTop: 4 }}>
+                {timeAgo(r.created_at, t)}
+              </Text>
+            ) : null}
           </View>
         </View>
         {/* Bottom row: order ID (collapsed only) + chevron */}
@@ -430,9 +506,87 @@ export function ReservationCard({ reservation, onCancel, onHide: _onHide, overri
               )}
             </View>
 
+            {/* Impact summary — only for past (collected) orders, since
+                "saved" stats are meaningless on a not-yet-completed order.
+                Two small chips: CO2 avoided + TND saved, mirroring the
+                methodology used in the profile impact totals. */}
+            {isPast && (() => {
+              const co2 = calcCO2Saved(quantity);
+              const money = calcMoneySaved([reservation as any]);
+              if (co2 <= 0 && money <= 0) return null;
+              return (
+                <View style={{ flexDirection: 'row', gap: 8, marginTop: theme.spacing.md }}>
+                  {co2 > 0 && (
+                    <View style={{
+                      flex: 1,
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      gap: 8,
+                      backgroundColor: '#114b3c0F',
+                      borderRadius: 12,
+                      paddingHorizontal: 10,
+                      paddingVertical: 8,
+                    }}>
+                      <Leaf size={14} color="#114b3c" />
+                      <View style={{ flex: 1 }}>
+                        <Text style={{ color: theme.colors.muted, fontSize: 9, fontFamily: 'Poppins_500Medium', letterSpacing: 0.4, textTransform: 'none' as const }}>
+                          {t('orders.impactCo2Label', { defaultValue: 'CO₂ évité' })}
+                        </Text>
+                        <Text style={{ color: '#114b3c', fontSize: 13, fontFamily: 'Poppins_700Bold' }}>
+                          {co2.toFixed(1)} kg
+                        </Text>
+                      </View>
+                    </View>
+                  )}
+                  {money > 0 && (
+                    <View style={{
+                      flex: 1,
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      gap: 8,
+                      backgroundColor: '#114b3c0F',
+                      borderRadius: 12,
+                      paddingHorizontal: 10,
+                      paddingVertical: 8,
+                    }}>
+                      <PiggyBank size={14} color="#114b3c" />
+                      <View style={{ flex: 1 }}>
+                        <Text style={{ color: theme.colors.muted, fontSize: 9, fontFamily: 'Poppins_500Medium', letterSpacing: 0.4, textTransform: 'none' as const }}>
+                          {t('orders.impactMoneyLabel', { defaultValue: 'Économisé' })}
+                        </Text>
+                        <Text style={{ color: '#114b3c', fontSize: 13, fontFamily: 'Poppins_700Bold' }}>
+                          {money.toFixed(0)} TND
+                        </Text>
+                      </View>
+                    </View>
+                  )}
+                </View>
+              );
+            })()}
+
             {/* Pickup code — dark div, only for upcoming */}
             {isUpcoming && pickupCode ? (
-              <View style={{ backgroundColor: '#114b3c', borderRadius: 14, padding: 14, marginTop: 10, alignItems: 'center' }}>
+              <View
+                ref={pickupCodeRef}
+                onLayout={(e) => {
+                  if (!isDemoCard) return;
+                  // Mirror the payment-section fix: when the walkthrough is at
+                  // (or about to advance to) customerPickupCode, this onLayout
+                  // would publish the PRE-SCROLL rect — the user briefly sees
+                  // the halo at the wrong y before the post-scroll 500 ms
+                  // re-measure lands and snaps it into place. Skip publication
+                  // here so the only publisher in the demo path is the
+                  // post-scroll re-measure below. The layout overlay paints
+                  // dim-only in the meantime, then the halo appears directly
+                  // at the correct position.
+                  const currentMeasureKey = useWalkthroughStore.getState().currentStep?.measureKey;
+                  if (currentMeasureKey === 'customerPickupCode' || currentMeasureKey === 'customerOrderCard') return;
+                  (e.target as any)?.measureInWindow?.((x: number, y: number, w: number, h: number) => {
+                    if (w > 0 && h > 0) useWalkthroughStore.getState().setMeasuredRect('customerPickupCode', { x, y, w, h });
+                  });
+                }}
+                style={{ backgroundColor: '#114b3c', borderRadius: 14, padding: 14, marginTop: 10, alignItems: 'center' }}
+              >
                 <Text style={{ color: 'rgba(255,255,255,0.6)', fontSize: 11, marginBottom: 4 }}>
                   {t('orders.pickupCode')}
                 </Text>
@@ -458,10 +612,10 @@ export function ReservationCard({ reservation, onCancel, onHide: _onHide, overri
               <View style={{ flexDirection: 'row', gap: 8, flex: 1, justifyContent: 'flex-end' }}>
                 {isPast && !hasReport && (
                   <TouchableOpacity
-                    onPress={() => router.push({ pathname: '/claim', params: { reservationId: String(reservation.id), locationName: merchantName } } as never)}
+                    onPress={() => router.push({ pathname: '/claim', params: { reservationId: String(reservation.id), locationName: merchantName, basketName: basketTypeName } } as never)}
                     style={{ borderRadius: 10, paddingHorizontal: 12, paddingVertical: 8, flexDirection: 'row', alignItems: 'center', gap: 4, borderWidth: 1, borderColor: theme.colors.muted + '40' }}
                   >
-                    <Flag size={12} color={theme.colors.muted} />
+                    <FlagIcon8 size={12} tintColor={theme.colors.muted} />
                     <Text style={{ color: theme.colors.muted, fontSize: 12, fontWeight: '600' }}>{t('orders.reportIssue', { defaultValue: 'Signaler' })}</Text>
                   </TouchableOpacity>
                 )}

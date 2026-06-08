@@ -38,19 +38,25 @@
     "signOutAndSignIn": "تسجيل الخروج",
     "takePhoto": "التقاط صورة",
     "chooseFromGallery": "اختيار من المعرض",
+    "choose": "اختيار",
+    "crop": "اقتصاص",
     "cameraPermRequired": "يلزم الوصول إلى الكاميرا.",
-    "photoPermRequired": "يلزم الوصول إلى معرض الصور."
+    "photoPermRequired": "يلزم الوصول إلى معرض الصور.",
+    "warning": "تحذير",
+    "youSuffix": "(أنت)"
   },
   "claims": {
     "title": "الإبلاغ عن مشكلة",
     "regarding": "بشأن:",
+    "basket": "السلة:",
     "selectReason": "سبب الشكوى",
     "foodQuality": "جودة الطعام",
     "wrongInfo": "معلومات غير صحيحة",
     "hygiene": "النظافة",
     "notReceived": "الطلب لم يصل",
     "other": "أخرى",
-    "description": "الوصف (اختياري)",
+    "description": "الوصف",
+    "descriptionRequired": "يرجى وصف المشكلة.",
     "descPlaceholder": "صِف المشكلة...",
     "addPhotoOptional": "إضافة صورة (اختياري)",
     "insertOrTakePhoto": "إدراج أو التقاط صورة",
@@ -117,6 +123,10 @@
     "chooseAccountType": "كيف ستستخدم بركات؟",
     "customerRole": "أنا عميل",
     "customerRoleDesc": "اعثر على سلال مفاجئة بالقرب منك واحجزها",
+    "genderTitle": "أنت؟",
+    "genderSubtitle": "يساعدنا هذا على تخصيص تجربتك. يمكنك تخطّي هذه الخطوة.",
+    "genderMale": "رجل",
+    "genderFemale": "امرأة",
     "businessRoleDesc": "بِع فائض الطعام وقلل الهدر الغذائي",
     "passwordRequirements": "8 أحرف على الأقل مع حرف كبير وصغير ورقم ورمز خاص (!@#$%...)",
     "tosRequired": "يرجى قبول شروط الخدمة للمتابعة.",
@@ -127,7 +137,9 @@
     "termsOfService": "شروط الخدمة",
     "privacyPolicy": "سياسة الخصوصية",
     "continueWithApple": "متابعة مع Apple",
-    "appleAuthError": "فشل تسجيل الدخول عبر Apple. يرجى المحاولة مرة أخرى."
+    "appleAuthError": "فشل تسجيل الدخول عبر Apple. يرجى المحاولة مرة أخرى.",
+    "appleUnavailable": "تسجيل الدخول عبر Apple غير متاح حالياً. يرجى استخدام البريد الإلكتروني أو Google لتسجيل الدخول.",
+    "businessMustUseEmail": "يسجل التجار الدخول عن طريق البريد الإلكتروني فقط."
   },
   "address": {
     "addresses": "العناوين",
@@ -227,7 +239,18 @@
     "tapToView": "اضغط لعرض التفاصيل",
     "addFavorite": "إضافة إلى المفضلة",
     "removeFavorite": "إزالة من المفضلة",
-    "reserve": "احجز"
+    "reserve": "احجز",
+    "pickupInstructionsCollapse": "طي",
+    "pickupInstructionsExpand": "… اقرأ المزيد",
+    "dietary": {
+      "vegan": "نباتي صرف",
+      "vegetarian": "نباتي",
+      "halal": "حلال",
+      "gluten_free": "خالٍ من الغلوتين",
+      "dairy_free": "خالٍ من الألبان",
+      "organic": "عضوي"
+    },
+    "pickupInstructionsTapToExpand": "اضغط للقراءة"
   },
   "reserve": {
     "title": "حجز سلة",
@@ -268,7 +291,9 @@
     "totalInCredits": "{{credits}} د.ت",
     "cashWarning": "مستعد لاستلام هذا السلة؟\n\nإذا تغيرت خططك، يرجى الإلغاء مبكرًا — لتحرير المكان لشخص آخر.\n\nتنبيه: الغياب المتكرر بدون إلغاء قد يؤدي إلى إيقاف مؤقت لحجوزاتك.",
     "shareCode": "مشاركة معلومات الاستلام",
-    "goToOrders": "طلباتي"
+    "goToOrders": "طلباتي",
+    "basketsCount": "× {{count}} كيس",
+    "subtotal": "المجموع الفرعي"
   },
   "orders": {
     "title": "الطلبات",
@@ -298,6 +323,15 @@
     "emptyDesc": "احجز أول سلة مفاجأة لك لتبدأ في توفير المال وإنقاذ الطعام.",
     "findBasket": "اعثر على سلة",
     "emptyPastDesc": "ستظهر طلباتك المكتملة والملغاة هنا.",
+    "cancelReasonPlaceholder": "أخبرنا المزيد...",
+    "cancelReasonOtherRequired": "يرجى توضيح السبب.",
+    "cancelReasons": {
+      "changed_mind": "غيّرت رأيي",
+      "cant_make_it": "لا أستطيع الحضور",
+      "ordered_mistake": "طلبت عن طريق الخطأ",
+      "emergency": "حالة طارئة",
+      "other": "أخرى"
+    },
     "yourImpact": "تأثيرك",
     "todayPickups": "استلامات اليوم",
     "startsIn": "تبدأ في",
@@ -320,7 +354,9 @@
     "cancelBasketReturned": "تعود السلة إلى المتجر",
     "cancelIrreversible": "هذا الإجراء نهائي ولا يمكن التراجع عنه.",
     "keepOrder": "احتفظ",
-    "cancelContinue": "إلغاء"
+    "cancelContinue": "إلغاء",
+    "impactCo2Label": "CO₂ المتجنب",
+    "impactMoneyLabel": "وفّرت"
   },
   "review": {
     "title": "اترك تقييمًا",
@@ -391,6 +427,15 @@
     "switchRole": "تغيير الدور التجريبي",
     "changePassword": "تغيير كلمة المرور",
     "passwordChanged": "تم تغيير كلمة المرور بنجاح.",
+    "wrongCurrentPassword": "كلمة المرور الحالية غير صحيحة.",
+    "changeEmail": "تغيير البريد الإلكتروني",
+    "currentEmail": "البريد الإلكتروني الحالي",
+    "newEmail": "البريد الإلكتروني الجديد",
+    "emailChanged": "تم تغيير البريد الإلكتروني بنجاح.",
+    "sendCode": "إرسال الرمز",
+    "emailCodeSent": "أرسلنا رمزاً من 6 أرقام إلى {{email}}. أدخله أدناه للتأكيد.",
+    "confirmationCode": "رمز التأكيد",
+    "verifyAndSave": "تأكيد وحفظ",
     "foodPreferences": "التفضيلات الغذائية",
     "preferencesUpdated": "تم تحديث التفضيلات.",
     "currentPassword": "كلمة المرور الحالية",
@@ -437,8 +482,9 @@
     "title": "إبلاغ",
     "reasonLabel": "السبب",
     "reasonPlaceholder": "اختر سببًا...",
-    "detailsLabel": "التفاصيل (اختياري)",
+    "detailsLabel": "التفاصيل",
     "detailsPlaceholder": "قدم المزيد من التفاصيل...",
+    "detailsRequired": "يرجى وصف المشكلة.",
     "submit": "إرسال البلاغ",
     "success": "تم إرسال البلاغ. شكرًا.",
     "error": "تعذر إرسال البلاغ.",
@@ -466,7 +512,9 @@
     "coordinates": "الإحداثيات",
     "dragToMove": "اسحب الخريطة لتغيير موقع الدبوس",
     "deleteConfirmTitle": "حذف هذا العنوان؟",
-    "deleteIrreversible": "هذا الإجراء نهائي."
+    "deleteIrreversible": "هذا الإجراء نهائي.",
+    "detectedLabel": "العنوان المكتشف",
+    "useDetected": "استخدام"
   },
   "map": {
     "title": "القريبة",
@@ -475,22 +523,21 @@
     "availableLocations": "الأماكن المتاحة"
   },
   "categories": {
-    "bakery": "مخبز",
-    "boulangerie": "مخبز",
+    "bakery": "مخبزة / حلويات",
+    "boulangerie": "مخبزة / حلويات",
     "patisserie": "حلويات",
     "restaurant": "مطعم",
     "restaurants": "مطاعم",
-    "meals": "وجبات",
     "supermarket": "سوبرماركت",
-    "grocery": "بقالة",
     "cafe": "مقهى",
     "café": "مقهى",
     "coffee": "مقهى قهوة",
     "fast_food": "وجبات سريعة",
     "fast food": "وجبات سريعة",
     "snack": "وجبات خفيفة",
-    "fresh": "منتجات طازجة",
-    "traiteur": "مطعم توصيل"
+    "pizzeria": "بيتزيريا",
+    "traiteur": "خدمات تموين",
+    "healthy": "مأكولات صحية"
   },
   "notifications": {
     "title": "الإشعارات",
@@ -501,20 +548,34 @@
     "notif_title_reservation_cancelled": "حجز ملغي",
     "notif_title_pickup_confirmed": "تم تأكيد الاستلام",
     "notif_title_basket_picked_up": "تم استلام السلة",
-    "notif_message_basket_picked_up": "{{customerName}} استلم {{quantity}} سلة/سلال من {{location}}.",
+    "notif_message_basket_picked_up_one": "{{customerName}} استلم {{count}} سلة من {{location}}.",
+    "notif_message_basket_picked_up_other": "{{customerName}} استلم {{count}} سلال من {{location}}.",
     "notif_title_review_received": "تقييم جديد",
     "notif_title_new_review": "تقييم جديد",
-    "notif_message_new_reservation": "{{customerName}} حجز {{count}} سلة في {{location}}",
-    "notif_message_reservation_cancelled": "{{customerName}} ألغى {{count}} حجز في {{location}}",
-    "notif_message_business_cancelled_internal": "تم إلغاء طلب {{customerName}} ({{count}} سلة) في {{location}} من قبل التجارة",
-    "notif_message_buyer_cancellation": "تم إلغاء حجزك في {{location}} ({{count}} سلة).",
+    "notif_message_new_reservation_one": "{{customerName}} حجز {{count}} سلة في {{location}}",
+    "notif_message_new_reservation_other": "{{customerName}} حجز {{count}} سلال في {{location}}",
+    "notif_message_reservation_cancelled_one": "{{customerName}} ألغى {{count}} حجز في {{location}}",
+    "notif_message_reservation_cancelled_other": "{{customerName}} ألغى {{count}} حجوزات في {{location}}",
+    "notif_message_business_cancelled_internal_one": "تم إلغاء طلب {{customerName}} ({{count}} سلة) في {{location}} من قبل التجارة",
+    "notif_message_business_cancelled_internal_other": "تم إلغاء طلب {{customerName}} ({{count}} سلال) في {{location}} من قبل التجارة",
+    "notif_message_buyer_cancellation_one": "لقد ألغيت حجزك في {{location}}.",
+    "notif_message_buyer_cancellation_other": "لقد ألغيت حجزك في {{location}}.",
     "notif_title_business_cancelled": "تم إلغاء الطلب من قبل التجارة",
-    "notif_message_business_cancelled_buyer": "تم إلغاء حجزك في {{location}} ({{count}} سلة) من قبل التجارة.",
+    "notif_message_business_cancelled_buyer_one": "تم إلغاء حجزك في {{location}} من قبل التجارة.",
+    "notif_message_business_cancelled_buyer_other": "تم إلغاء حجزك في {{location}} من قبل التجارة.",
+    "cancellationReasonLabel": "السبب",
+    "bravoTitle": "أحسنت!",
+    "bravoCustomerDesc": "تم استلامك من {{location}}. هل تود مشاركة تجربتك؟",
+    "bravoBusinessDesc": "لقد حوّلت سلعة غير مباعة إلى دخل مع المساهمة في حماية البيئة. واصل تقليل هدر الطعام مع بركات!",
+    "cancellation_payment_cash": "بما أنك اخترت الدفع نقدًا، لم يتم خصم أي مبلغ.",
+    "cancellation_payment_refunded": "بما أنك دفعت بـ {{payment_method_label}}، سيتم إرجاع {{refund_amount}} دت إلى رصيدك على بركات.",
+    "cancellation_payment_not_charged": "لم تتم معالجة الدفع بعد، لذلك لن يتم خصم أي مبلغ.",
     "notif_title_order_confirmed": "تم تأكيد الطلب",
     "notif_message_order_confirmed": "تم تأكيد طلبك في {{location}}! الاستلام: {{time}}. الرمز: {{code}}",
     "notif_message_pickup_confirmed": "تم تأكيد استلامك من {{restaurant}}! قيّم تجربتك؟",
     "notif_message_review_received": "ترك لك أحد العملاء تقييمًا",
-    "notif_new_review": "تلقيت تقييمًا بتقدير {{rating}} نجوم",
+    "notif_new_review_one": "تلقيت تقييمًا بتقدير {{count}} نجمة",
+    "notif_new_review_other": "تلقيت تقييمًا بتقدير {{count}} نجوم",
     "pickupStartsTitle": "وقت الاستلام!",
     "pickupStartsBody": "طلبك جاهز للاستلام.",
     "pickupEndingSoonTitle": "الاستلام ينتهي قريبًا!",
@@ -526,9 +587,11 @@
     "markRead": "وضع علامة مقروء",
     "seeAll": "عرض جميع الإشعارات",
     "notif_title_streak_expired": "انتهت السلسلة",
-    "notif_message_streak_expired": "انتهت سلسلتك المكونة من {{streak}} يوم بعد 7 أيام من عدم النشاط. اطلب الآن لبدء سلسلة جديدة!",
+    "notif_message_streak_expired_one": "انتهت سلسلتك المكونة من {{count}} يوم بعد 7 أيام من عدم النشاط. اطلب الآن لبدء سلسلة جديدة!",
+    "notif_message_streak_expired_other": "انتهت سلسلتك المكونة من {{count}} أيام بعد 7 أيام من عدم النشاط. اطلب الآن لبدء سلسلة جديدة!",
     "notif_title_streak_expiring": "السلسلة على وشك الانتهاء!",
-    "notif_message_streak_expiring": "لديك {{daysLeft}} يوم لمواصلة سلسلتك المكونة من {{streak}} يوم. اطلب الآن!",
+    "notif_message_streak_expiring_one": "لديك {{daysLeft}} يوم لمواصلة سلسلتك المكونة من {{count}} يوم. اطلب الآن!",
+    "notif_message_streak_expiring_other": "لديك {{daysLeft}} يوم لمواصلة سلسلتك المكونة من {{count}} أيام. اطلب الآن!",
     "notif_title_new_message": "رسالة جديدة",
     "notif_message_new_message": "{{senderName}} أرسل لك رسالة.",
     "notif_title_new_reply": "رسالة جديدة",
@@ -643,6 +706,7 @@
       "onlyOneActive": "يمكن تفعيل سلة واحدة فقط في نفس الوقت",
       "quantityAvailable": "الكمية المتاحة",
       "saveChanges": "حفظ التعديلات",
+      "updateFailed": "تعذر تحديث السلة. حاول مرة أخرى.",
       "willDeactivate": "سيتم إلغاء تفعيله.",
       "todayQty": "اليوم",
       "defaultQty": "إعادة التعيين اليومية",
@@ -650,7 +714,12 @@
       "maxPerCustomer": "الحد الأقصى لكل عميل",
       "sameAllDays": "نفس الشيء لجميع الأيام",
       "timeOutOfRange": "وقت الاستلام يجب أن يكون ضمن ساعات العمل ({{start}} - {{end}})",
-      "endBeforeStart": "وقت الانتهاء يجب أن يكون بعد وقت البداية"
+      "endBeforeStart": "وقت الانتهاء يجب أن يكون بعد وقت البداية",
+      "locationHoursLabel": "ساعات عمل المتجر",
+      "usingLocationHours": "ساعات عمل المتجر",
+      "pausedBadge": "متوقف",
+      "pauseBasket": "إيقاف مؤقت",
+      "resumeBasket": "استئناف"
     },
     "orders": {
       "title": "الطلبات",
@@ -670,7 +739,17 @@
       "cancelledByBuyer": "العميل",
       "cancelledByBusiness": "التاجر",
       "cancelledByMember": "{{name}} (التاجر)",
+      "cancelledByMemberSub": "— {{name}}",
       "cancelReason": "السبب",
+      "cancelReasons": {
+        "expired_no_pickup": "انتهت الصلاحية، لم يُستلم",
+        "out_of_stock": "نفد المخزون",
+        "customer_no_show": "العميل لم يحضر",
+        "customer_cancelled": "ألغاه العميل",
+        "business_cancelled": "ألغاه التاجر",
+        "payment_failed": "فشل الدفع",
+        "other": "أخرى"
+      },
       "filterToday": "اليوم",
       "filterMonth": "هذا الشهر",
       "filterYear": "هذا العام",
@@ -700,9 +779,9 @@
       "paymentMethod": "الدفع",
       "paymentCash": "نقدًا",
       "paymentCredits": "مدفوع بالأرصدة",
-      "cancelOrderConfirm": "سيتم رد المبلغ للعميل إذا دفع بالبطاقة أو بالأرصدة. لا يمكن التراجع عن هذا الإجراء.",
+      "cancelOrderConfirm": "أنت على وشك إلغاء طلب. سيتم إشعار العميل فورًا. هذا الإجراء غير قابل للاسترجاع.",
       "cancelHelpTitle": "حول الإلغاء",
-      "cancelHelpDesc": "قم بالإلغاء فقط في الحالات الطارئة: نقص المخزون، إغلاق غير مخطط، إلخ. سيتم إعلام العميل وسترد له الأموال إذا كان قد دفع مسبقاً. الإلغاءات المتكررة قد تؤثر على ظهورك.",
+      "cancelHelpDesc": "قم بالإلغاء فقط في الحالات الطارئة: نقص المخزون، إغلاق غير مخطط، إلخ. سيتم إعلام العميل وسترد له الأموال إذا كان قد دفع مسبقاً.",
       "confirmCancel": "إلغاء الطلب",
       "reservedAt": "حُجز في"
     },
@@ -745,7 +824,9 @@
       "tempPassword": "كلمة مرور مؤقتة",
       "imageUpdated": "تم تحديث الصورة بنجاح.",
       "memberAdded": "تمت إضافة العضو بنجاح.",
-      "allLocationsLabel": "المنظمة"
+      "allLocationsLabel": "المنظمة",
+      "closedDay": "مغلق",
+      "closedAllDay": "مغلق طوال اليوم"
     },
     "team": {
       "members": "أعضاء",
@@ -786,9 +867,16 @@
       "noOrgDesc": "أنشئ منظمة لإدارة فريقك ومواقعك.",
       "deleteLocation": "حذف الموقع",
       "deleteLocationConfirm": "هل أنت متأكد من حذف هذا الموقع؟",
+      "deleteLocationNote": "سيتم إخفاء الموقع وسلاله. تظل الطلبات السابقة والمحادثات مع الزبائن متاحة للسجل.",
+      "deleteLocationFailed": "تعذر إخفاء الموقع. حاول مرة أخرى.",
       "memberDetail": "العضو",
       "recentActivity": "النشاط الأخير",
       "noActivity": "لا يوجد نشاط حديث",
+      "addMemberError": {
+        "title": "البريد الإلكتروني مستخدم بالفعل",
+        "emailInOtherOrg": "هذا البريد الإلكتروني مرتبط بالفعل بـ {{org}}. استخدم عنوانًا مختلفًا، أو احذف هذا العضو أولاً من المؤسسة الأخرى.",
+        "otherCommerce": "مؤسسة أخرى"
+      },
       "emailSent": "تم إرسال البريد الإلكتروني بنجاح.",
       "emailSendFailed": "فشل إرسال البريد الإلكتروني",
       "changeRole": "تغيير الدور",
@@ -819,7 +907,8 @@
         "grocery": "بقالة",
         "cafe": "مقهى",
         "supermarket": "سوبر ماركت"
-      }
+      },
+      "changeRoleRetry": "تعذر تحديث هذا الدور الآن. يرجى المحاولة مرة أخرى."
     },
     "createBasket": {
       "title": "سلة جديدة",
@@ -842,7 +931,23 @@
       "goToMenuItems": "الذهاب لعناصر القائمة",
       "menuItems": "عناصر القائمة",
       "menuItemsDesc": "اختر عناصر القائمة في هذه السلة (اختياري)",
-      "noMenuItems": "لا توجد عناصر بعد — أضف بعضها في عناصر القائمة"
+      "noMenuItems": "لا توجد عناصر بعد — أضف بعضها في عناصر القائمة",
+      "useBusinessHours": "استخدام ساعات عمل المتجر",
+      "usingLocationDefault": "نافذة الاستلام الافتراضية للمتجر",
+      "pickExistingTitle": "إضافة كيس",
+      "createManually": "إنشاء كيس جديد",
+      "createManuallyHint": "املأ النموذج من البداية",
+      "orPickExisting": "أو اختر كيسًا موجودًا",
+      "noOrgBaskets": "لا توجد أكياس في مؤسستك حتى الآن.",
+      "useThis": "استخدام",
+      "useForAllLocations": "متاح في جميع المواقع",
+      "useForAllLocationsHint": "ينشئ نسخة من هذا الكيس في كل من المواقع {{count}} في المؤسسة.",
+      "replicateFailed": "تم إنشاء الكيس ولكن فشل نسخه إلى المواقع الأخرى.",
+      "dailyResetNotice": "تتم إعادة ضبط الأكياس إلى كميتها اليومية كل يوم في الساعة {{time}} (بتوقيت تونس).",
+      "alreadyHere": "موجود هنا",
+      "oneLocationChip": "موقع واحد",
+      "manyLocationsChip": "{{count}} مواقع",
+      "noLocationChip": "بدون موقع"
     },
     "auth": {
       "businessSignIn": "دخول التجارة",
@@ -893,8 +998,26 @@
       "save": "حفظ التغييرات",
       "saved": "تم تحديث التوفر.",
       "conflictTitle": "سلال خارج أوقات العمل",
-      "conflictMessage": "{{count}} سلة/سلال لها أوقات خارج النافذة الجديدة ({{start}}-{{end}}). سيتم تعديل أوقاتها لتناسب هذه النافذة. هل تريد المتابعة؟",
-      "adjustAndSave": "تعديل وحفظ"
+      "conflictMessage_one": "سلة واحدة لها أوقات خارج النافذة الجديدة ({{start}}-{{end}}). سيتم تعديل أوقاتها لتناسب هذه النافذة. هل تريد المتابعة؟",
+      "conflictMessage_two": "سلتان لهما أوقات خارج النافذة الجديدة ({{start}}-{{end}}). سيتم تعديل أوقاتهما لتناسب هذه النافذة. هل تريد المتابعة؟",
+      "conflictMessage_few": "{{count}} سلال لها أوقات خارج النافذة الجديدة ({{start}}-{{end}}). سيتم تعديل أوقاتها لتناسب هذه النافذة. هل تريد المتابعة؟",
+      "conflictMessage_many": "{{count}} سلة لها أوقات خارج النافذة الجديدة ({{start}}-{{end}}). سيتم تعديل أوقاتها لتناسب هذه النافذة. هل تريد المتابعة؟",
+      "conflictMessage_other": "{{count}} سلة لها أوقات خارج النافذة الجديدة ({{start}}-{{end}}). سيتم تعديل أوقاتها لتناسب هذه النافذة. هل تريد المتابعة؟",
+      "adjustAndSave": "تعديل وحفظ",
+      "adjustedRecapTitle": "تم تعديل السلال",
+      "adjustedRecap_one": "تم تعديل سلة واحدة لتناسب النافذة الجديدة ({{start}}-{{end}}). يُرجى مراجعتها.",
+      "adjustedRecap_two": "تم تعديل سلتين لتناسب النافذة الجديدة ({{start}}-{{end}}). يُرجى مراجعتهما.",
+      "adjustedRecap_few": "تم تعديل {{count}} سلال لتناسب النافذة الجديدة ({{start}}-{{end}}). يُرجى مراجعتها.",
+      "adjustedRecap_many": "تم تعديل {{count}} سلة لتناسب النافذة الجديدة ({{start}}-{{end}}). يُرجى مراجعتها.",
+      "adjustedRecap_other": "تم تعديل {{count}} سلة لتناسب النافذة الجديدة ({{start}}-{{end}}). يُرجى مراجعتها.",
+      "invalidWindow": "يجب أن يكون وقت الانتهاء مختلفًا عن وقت البدء.",
+      "invalidTimeFormat": "تنسيق وقت غير صالح.",
+      "allDaysClosed": "يجب أن يبقى يوم واحد على الأقل مفتوحًا.",
+      "pauseTitle": "إيقاف الحجوزات مؤقتًا",
+      "pauseDesc": "يمنع العملاء مؤقتًا من الحجز. تبقى كميات الأكياس محفوظة.",
+      "openAllDay": "مفتوح طوال اليوم",
+      "crossReset": "لا يمكن أن يتقاطع وقت الاستلام مع إعادة الضبط اليومية (03:30). ابدأ في 03:30 أو بعدها، أو انتهِ بحلول 03:29.",
+      "crossResetHint": "يجب ألا يتقاطع وقت الاستلام مع 03:30 (إعادة الضبط اليومية). ابدأ من 03:30 أو انتهِ بحلول 03:29."
     },
     "menuItems": {
       "title": "عناصر القائمة",
@@ -914,61 +1037,90 @@
       "addSelectedItems": "إضافة العناصر المختارة",
       "cameraPermRequired": "مطلوب إذن الكاميرا لالتقاط الصور.",
       "takePhoto": "صورة"
+    },
+    "settings": {
+      "roleDisplay": {
+        "orgAdmin": "مسؤول {{org}}",
+        "locationAdmin": "مسؤول {{org}} - {{location}}",
+        "locationAdminNoLocation": "مسؤول {{org}}",
+        "member": "عضو {{org}} - {{location}}",
+        "memberNoLocation": "عضو {{org}}"
+      }
     }
   },
   "errors": {
-    "invalidEmail": "\u062a\u0646\u0633\u064a\u0642 \u0627\u0644\u0628\u0631\u064a\u062f \u0627\u0644\u0625\u0644\u0643\u062a\u0631\u0648\u0646\u064a \u063a\u064a\u0631 \u0635\u0627\u0644\u062d.",
-    "invalidCredentials": "\u0627\u0644\u0628\u0631\u064a\u062f \u0627\u0644\u0625\u0644\u0643\u062a\u0631\u0648\u0646\u064a \u0623\u0648 \u0643\u0644\u0645\u0629 \u0627\u0644\u0645\u0631\u0648\u0631 \u063a\u064a\u0631 \u0635\u062d\u064a\u062d\u0629.",
-    "emailExists": "\u0647\u0630\u0627 \u0627\u0644\u0628\u0631\u064a\u062f \u0627\u0644\u0625\u0644\u0643\u062a\u0631\u0648\u0646\u064a \u0645\u0633\u062c\u0644 \u0628\u0627\u0644\u0641\u0639\u0644.",
-    "phoneExists": "\u0631\u0642\u0645 \u0627\u0644\u0647\u0627\u062a\u0641 \u0647\u0630\u0627 \u0645\u0633\u062c\u0644 \u0628\u0627\u0644\u0641\u0639\u0644.",
-    "userNotFound": "\u0627\u0644\u0645\u0633\u062a\u062e\u062f\u0645 \u063a\u064a\u0631 \u0645\u0648\u062c\u0648\u062f.",
-    "invalidPassword": "\u0643\u0644\u0645\u0629 \u0627\u0644\u0645\u0631\u0648\u0631 \u063a\u064a\u0631 \u0635\u062d\u064a\u062d\u0629.",
-    "invalidToken": "\u0627\u0646\u062a\u0647\u062a \u0627\u0644\u062c\u0644\u0633\u0629. \u064a\u0631\u062c\u0649 \u062a\u0633\u062c\u064a\u0644 \u0627\u0644\u062f\u062e\u0648\u0644 \u0645\u0631\u0629 \u0623\u062e\u0631\u0649.",
-    "invalidOtp": "\u0631\u0645\u0632 \u0627\u0644\u062a\u062d\u0642\u0642 \u063a\u064a\u0631 \u0635\u0627\u0644\u062d.",
-    "otpExpired": "\u0627\u0646\u062a\u0647\u062a \u0635\u0644\u0627\u062d\u064a\u0629 \u0631\u0645\u0632 \u0627\u0644\u062a\u062d\u0642\u0642. \u064a\u0631\u062c\u0649 \u0637\u0644\u0628 \u0631\u0645\u0632 \u062c\u062f\u064a\u062f.",
-    "passwordTooShort": "\u064a\u062c\u0628 \u0623\u0646 \u062a\u062a\u0643\u0648\u0646 \u0643\u0644\u0645\u0629 \u0627\u0644\u0645\u0631\u0648\u0631 \u0645\u0646 6 \u0623\u062d\u0631\u0641 \u0639\u0644\u0649 \u0627\u0644\u0623\u0642\u0644.",
-    "emailNotVerified": "\u064a\u0631\u062c\u0649 \u0627\u0644\u062a\u062d\u0642\u0642 \u0645\u0646 \u0628\u0631\u064a\u062f\u0643 \u0627\u0644\u0625\u0644\u0643\u062a\u0631\u0648\u0646\u064a \u0623\u0648\u0644\u0627\u064b.",
-    "restaurantPaused": "\u0647\u0630\u0627 \u0627\u0644\u0645\u0637\u0639\u0645 \u063a\u064a\u0631 \u0645\u062a\u0627\u062d \u062d\u0627\u0644\u064a\u064b\u0627.",
-    "noBaskets": "\u0644\u0627 \u062a\u0648\u062c\u062f \u0633\u0644\u0627\u0644 \u0645\u062a\u0627\u062d\u0629 \u0627\u0644\u0622\u0646.",
-    "alreadyReserved": "\u0644\u062f\u064a\u0643 \u062d\u062c\u0632 \u0628\u0627\u0644\u0641\u0639\u0644 \u0644\u0647\u0630\u0627 \u0627\u0644\u064a\u0648\u0645.",
-    "maxQuantity": "\u0627\u0644\u062d\u062f \u0627\u0644\u0623\u0642\u0635\u0649 20 \u0633\u0644\u0629 \u0644\u0643\u0644 \u0637\u0644\u0628.",
-    "pickupExpired": "\u0627\u0646\u062a\u0647\u0649 \u0648\u0642\u062a \u0627\u0644\u0627\u0633\u062a\u0644\u0627\u0645.",
-    "reservationNotFound": "\u0627\u0644\u062d\u062c\u0632 \u063a\u064a\u0631 \u0645\u0648\u062c\u0648\u062f.",
-    "unauthorized": "\u064a\u0631\u062c\u0649 \u062a\u0633\u062c\u064a\u0644 \u0627\u0644\u062f\u062e\u0648\u0644 \u0644\u0644\u0645\u062a\u0627\u0628\u0639\u0629.",
-    "forbidden": "\u0644\u064a\u0633 \u0644\u062f\u064a\u0643 \u0635\u0644\u0627\u062d\u064a\u0629 \u0644\u0647\u0630\u0627 \u0627\u0644\u0625\u062c\u0631\u0627\u0621.",
-    "notFound": "\u0627\u0644\u0645\u0648\u0631\u062f \u0627\u0644\u0645\u0637\u0644\u0648\u0628 \u063a\u064a\u0631 \u0645\u0648\u062c\u0648\u062f.",
-    "serverError": "\u062d\u062f\u062b \u062e\u0637\u0623 \u0645\u0627. \u064a\u0631\u062c\u0649 \u0627\u0644\u0645\u062d\u0627\u0648\u0644\u0629 \u0644\u0627\u062d\u0642\u064b\u0627.",
-    "networkError": "\u0644\u0627 \u064a\u0648\u062c\u062f \u0627\u062a\u0635\u0627\u0644 \u0628\u0627\u0644\u0625\u0646\u062a\u0631\u0646\u062a. \u064a\u0631\u062c\u0649 \u0627\u0644\u062a\u062d\u0642\u0642 \u0645\u0646 \u0634\u0628\u0643\u062a\u0643.",
-    "timeout": "\u0627\u0646\u062a\u0647\u062a \u0645\u0647\u0644\u0629 \u0627\u0644\u0637\u0644\u0628. \u064a\u0631\u062c\u0649 \u0627\u0644\u0645\u062d\u0627\u0648\u0644\u0629 \u0645\u0631\u0629 \u0623\u062e\u0631\u0649."
+    "invalidEmail": "تنسيق البريد الإلكتروني غير صالح.",
+    "sameEmail": "يجب أن يكون البريد الإلكتروني الجديد مختلفاً.",
+    "invalidCredentials": "البريد الإلكتروني أو كلمة المرور غير صحيحة.",
+    "emailExists": "هذا البريد الإلكتروني مسجل بالفعل.",
+    "emailAlreadyPartnerElsewhere": "هذا البريد الإلكتروني مرتبط بالفعل بمؤسسة أخرى.",
+    "phoneExists": "رقم الهاتف هذا مسجل بالفعل.",
+    "userNotFound": "المستخدم غير موجود.",
+    "invalidPassword": "كلمة المرور غير صحيحة.",
+    "invalidToken": "انتهت الجلسة. يرجى تسجيل الدخول مرة أخرى.",
+    "invalidOtp": "رمز التحقق غير صالح.",
+    "otpExpired": "انتهت صلاحية رمز التحقق. يرجى طلب رمز جديد.",
+    "passwordTooShort": "يجب أن تتكون كلمة المرور من 6 أحرف على الأقل.",
+    "emailNotVerified": "يرجى التحقق من بريدك الإلكتروني أولاً.",
+    "restaurantPaused": "هذا المطعم غير متاح حاليًا.",
+    "noBaskets": "لا توجد سلال متاحة الآن.",
+    "alreadyReserved": "لديك حجز بالفعل لهذا اليوم.",
+    "maxQuantity": "الحد الأقصى 20 سلة لكل طلب.",
+    "pickupExpired": "انتهى وقت الاستلام.",
+    "reservationNotFound": "الحجز غير موجود.",
+    "unauthorized": "يرجى تسجيل الدخول للمتابعة.",
+    "forbidden": "ليس لديك صلاحية لهذا الإجراء.",
+    "notFound": "المورد المطلوب غير موجود.",
+    "serverError": "حدث خطأ ما. يرجى المحاولة لاحقًا.",
+    "networkError": "لا يوجد اتصال بالإنترنت. يرجى التحقق من شبكتك.",
+    "sessionExpired": "انتهت جلستك. يرجى تسجيل الدخول مرة أخرى.",
+    "unavailable": "هذه الخدمة غير متاحة مؤقتًا. يرجى المحاولة لاحقًا.",
+    "tooManyAttempts": "محاولات كثيرة جدًا. يرجى المحاولة لاحقًا.",
+    "missingFields": "يرجى ملء جميع الحقول المطلوبة.",
+    "phoneRequired": "رقم الهاتف مطلوب.",
+    "invalidPhone": "يرجى إدخال رقم هاتف تونسي صالح.",
+    "invalidUserType": "نوع الحساب غير صالح.",
+    "registrationFailed": "فشل التسجيل. يرجى المحاولة مرة أخرى.",
+    "loginFailed": "فشل تسجيل الدخول. يرجى المحاولة مرة أخرى.",
+    "accountIsBusiness": "هذا الحساب مسجّل كنشاط تجاري. يرجى التبديل إلى وضع التاجر.",
+    "accountIsCustomer": "هذا الحساب مسجّل كعميل. يرجى التبديل إلى وضع العميل.",
+    "googleAuthFailed": "تسجيل الدخول عبر Google غير متاح حاليًا. يرجى استخدام البريد الإلكتروني.",
+    "priceDiscount": "يجب أن يكون السعر المخفّض أقل بنسبة 50٪ على الأقل من السعر الأصلي.",
+    "timeout": "انتهت مهلة الطلب. يرجى المحاولة مرة أخرى.",
+    "rateLimited": "عدد كبير جدًا من الطلبات. يرجى الانتظار قليلاً.",
+    "profileUpdateFailed": "تعذّر حفظ التغييرات في الملف الشخصي. يرجى المحاولة مرة أخرى.",
+    "locationUpdateFailed": "تعذّر حفظ تعديلات الموقع. يرجى المحاولة مرة أخرى.",
+    "locationAddFailed": "تعذّر إضافة الموقع. يرجى المحاولة مرة أخرى.",
+    "locationDeleteFailed": "تعذّر حذف الموقع. يرجى المحاولة مرة أخرى."
   },
   "settings": {
-    "title": "\u0627\u0644\u0625\u0639\u062f\u0627\u062f\u0627\u062a",
-    "notifications": "\u0627\u0644\u0625\u0634\u0639\u0627\u0631\u0627\u062a",
-    "pushNotifications": "\u0627\u0644\u0625\u0634\u0639\u0627\u0631\u0627\u062a \u0627\u0644\u0641\u0648\u0631\u064a\u0629",
-    "support": "\u0627\u0644\u062f\u0639\u0645",
-    "notificationPreferences": "\u062a\u0641\u0636\u064a\u0644\u0627\u062a \u0627\u0644\u0625\u0634\u0639\u0627\u0631\u0627\u062a",
-    "orderConfirmed": "\u062a\u0623\u0643\u064a\u062f \u0627\u0644\u0637\u0644\u0628",
-    "orderConfirmedDesc": "\u0625\u0634\u0639\u0627\u0631 \u0639\u0646\u062f \u062a\u0623\u0643\u064a\u062f \u0627\u0644\u062d\u062c\u0632",
-    "pickupReminder": "\u062a\u0630\u0643\u064a\u0631 \u0648\u0642\u062a \u0627\u0644\u0627\u0633\u062a\u0644\u0627\u0645",
-    "pickupReminderDesc": "\u0625\u0634\u0639\u0627\u0631 \u0639\u0646\u062f \u0641\u062a\u062d/\u0625\u063a\u0644\u0627\u0642 \u0646\u0627\u0641\u0630\u0629 \u0627\u0644\u0627\u0633\u062a\u0644\u0627\u0645",
-    "favoritesUpdates": "\u062a\u062d\u062f\u064a\u062b\u0627\u062a \u0627\u0644\u0645\u0641\u0636\u0644\u0629",
-    "favoritesUpdatesDesc": "\u0625\u0634\u0639\u0627\u0631 \u0639\u0646\u062f\u0645\u0627 \u062a\u062a\u0648\u0641\u0631 \u0633\u0644\u0627\u0644 \u0641\u064a \u0627\u0644\u0623\u0645\u0627\u0643\u0646 \u0627\u0644\u0645\u0641\u0636\u0644\u0629",
-    "suggestions": "\u0627\u0642\u062a\u0631\u0627\u062d\u0627\u062a",
-    "suggestionsDesc": "\u0625\u0634\u0639\u0627\u0631 \u062d\u0648\u0644 \u0623\u0645\u0627\u0643\u0646 \u062c\u062f\u064a\u062f\u0629 \u0623\u0648 \u062a\u0648\u0635\u064a\u0627\u062a",
-    "promotions": "\u0639\u0631\u0648\u0636",
-    "promotionsDesc": "\u0625\u0634\u0639\u0627\u0631 \u062d\u0648\u0644 \u0627\u0644\u0639\u0631\u0648\u0636 \u0627\u0644\u062e\u0627\u0635\u0629",
-    "newOrders": "\u0637\u0644\u0628\u0627\u062a \u062c\u062f\u064a\u062f\u0629",
-    "newOrdersDesc": "\u0625\u0634\u0639\u0627\u0631 \u0639\u0646\u062f \u062d\u062c\u0632 \u0633\u0644\u0629",
-    "basketPickedUp": "\u0633\u0644\u0627\u0644 \u0645\u0633\u062a\u0644\u0645\u0629",
-    "basketPickedUpDesc": "\u0625\u0634\u0639\u0627\u0631 \u0639\u0646\u062f \u0627\u0633\u062a\u0644\u0627\u0645 \u0633\u0644\u0629",
-    "cancellations": "\u0625\u0644\u063a\u0627\u0621\u0627\u062a",
-    "cancellationsDesc": "\u0625\u0634\u0639\u0627\u0631 \u0639\u0646\u062f \u0625\u0644\u063a\u0627\u0621 \u0637\u0644\u0628",
-    "permissions": "\u0627\u0644\u0623\u0630\u0648\u0646\u0627\u062a",
-    "camera": "\u0627\u0644\u0643\u0627\u0645\u064a\u0631\u0627",
-    "location": "\u0627\u0644\u0645\u0648\u0642\u0639",
-    "photoLibrary": "\u0645\u0643\u062a\u0628\u0629 \u0627\u0644\u0635\u0648\u0631",
-    "granted": "\u0645\u0645\u0646\u0648\u062d",
-    "notSet": "\u063a\u064a\u0631 \u0645\u062d\u062f\u062f"
+    "title": "الإعدادات",
+    "notifications": "الإشعارات",
+    "pushNotifications": "الإشعارات الفورية",
+    "support": "الدعم",
+    "notificationPreferences": "تفضيلات الإشعارات",
+    "orderConfirmed": "تأكيد الطلب",
+    "orderConfirmedDesc": "إشعار عند تأكيد الحجز",
+    "pickupReminder": "تذكير وقت الاستلام",
+    "pickupReminderDesc": "إشعار عند فتح/إغلاق نافذة الاستلام",
+    "favoritesUpdates": "تحديثات المفضلة",
+    "favoritesUpdatesDesc": "إشعار عندما تتوفر سلال في الأماكن المفضلة",
+    "suggestions": "اقتراحات",
+    "suggestionsDesc": "إشعار حول أماكن جديدة أو توصيات",
+    "promotions": "عروض",
+    "promotionsDesc": "إشعار حول العروض الخاصة",
+    "newOrders": "طلبات جديدة",
+    "newOrdersDesc": "إشعار عند حجز سلة",
+    "basketPickedUp": "سلال مستلمة",
+    "basketPickedUpDesc": "إشعار عند استلام سلة",
+    "cancellations": "إلغاءات",
+    "cancellationsDesc": "إشعار عند إلغاء طلب",
+    "permissions": "الأذونات",
+    "camera": "الكاميرا",
+    "location": "الموقع",
+    "photoLibrary": "مكتبة الصور",
+    "granted": "ممنوح",
+    "notSet": "غير محدد"
   },
   "impact": {
     "title": "تأثيري",
@@ -992,12 +1144,32 @@
     "showAll": "عرض الترتيب الكامل",
     "showLess": "عرض أقل",
     "levelUp": "ترقية المستوى!",
-    "levelUpDesc": "وصلت إلى المستوى {{level}}!"
+    "levelUpDesc": "وصلت إلى المستوى {{level}}!",
+    "copy": {
+      "co2": {
+        "low": "لقد وفّرت {{value}} كغ من ثاني أكسيد الكربون. واصل!",
+        "mid": "{{value}} كغ من ثاني أكسيد الكربون وُفّرت. أحسنت، تابع!",
+        "high": "{{value}} كغ من ثاني أكسيد الكربون وُفّرت. أنت بطل المناخ!"
+      },
+      "money": {
+        "low": "لقد وفّرت {{value}} دينار. واصل!",
+        "mid": "{{value}} دينار وُفّرت. أحسنت، تابع!",
+        "high": "{{value}} دينار وُفّرت. يا له من بطل!"
+      },
+      "baskets": {
+        "low": "لقد أنقذت {{value}} سلة. القليل بعد!",
+        "mid": "{{value}} سلة أُنقذت. تكسب الزخم!",
+        "high": "{{value}} سلة أُنقذت. أنت قوة الطبيعة!"
+      }
+    },
+    "perOrderCo2": "−{{value}} كغ CO₂",
+    "perOrderMoney": "+{{value}} دينار وُفّرت"
   },
   "streak": {
     "warningTitle": "سلسلتك على وشك الانتهاء!",
     "warningDesc": "اطلب قريبًا للحفاظ على سلسلتك. تنتهي بعد 7 أيام من عدم النشاط.",
-    "days": "يوم متتالي",
+    "days_one": "يوم متتالي",
+    "days_other": "أيام متتالية",
     "orderNow": "اطلب الآن",
     "later": "لاحقًا",
     "current": "السلسلة الحالية",
@@ -1005,13 +1177,14 @@
     "lastOrder": "آخر طلب",
     "expiresLabel": "تنتهي في",
     "expiresIn": "تنتهي في {{days}} يوم",
-    "expires": "تنتهي",
+    "expires": "ينتهي في",
     "expiresOn": "{{date}}",
     "expiresInDays_one": "خلال {{count}} يوم",
     "expiresInDays_other": "خلال {{count}} أيام",
     "expiresSoon": "تنتهي قريبًا!",
     "description": "تعدّ سلسلتك الأسابيع المتتالية التي تضم طلبًا واحدًا على الأقل. تُعاد بعد 7 أيام من عدم النشاط.",
-    "daysUnit": "أيام"
+    "daysUnit_one": "يوم",
+    "daysUnit_other": "أيام"
   },
   "badges": {
     "newBadge": "شارة جديدة مفتوحة!",
@@ -1045,7 +1218,6 @@
     "lockedDesc": "واصل إنقاذ الطعام لفتح هذه الشارة!"
   },
   "tutorial": {
-
     "getStarted": "هيا نبدأ!",
     "customer": {
       "discoverTitle": "اكتشف السلال",
@@ -1127,20 +1299,116 @@
     "next": "التالي",
     "done": "هيا بنا!",
     "tapToContinue": "اضغط على الزر المحدد للمتابعة.",
-    "discover": { "title": "استكشاف", "desc": "تصفح السلال المفاجئة المتاحة بالقرب منك. فلتر حسب الفئة أو المسافة أو السعر." },
-    "orders": { "title": "طلباتي", "desc": "تتبع حجوزاتك الحالية، عرض الطلبات السابقة، والتواصل مع المتاجر." },
-    "favorites": { "title": "المفضلات", "desc": "اعثر على أماكنك المفضلة بضغطة واحدة واحصل على إشعار عند توفر سلال." },
-    "profile": { "title": "ملفي الشخصي", "desc": "مستواك وشاراتك وإحصائيات تأثيرك وإعداداتك. تابع تقدمك!" },
+    "tapCardToContinue": "اضغط على البطاقة المحددة للمتابعة.",
+    "demoWelcome": {
+      "title": "مرحباً بك في عرض Barakeat التجريبي",
+      "desc": "سنرشدك عبر التطبيق دون إنشاء طلب حقيقي. اضغط على ابدأ عندما تكون جاهزاً، أو اخرج للإلغاء.",
+      "start": "ابدأ العرض التجريبي",
+      "quit": "خروج"
+    },
+    "discover": {
+      "title": "استكشاف",
+      "desc": "تصفح السلال المفاجئة المتاحة بالقرب منك. فلتر حسب الفئة أو المسافة أو السعر."
+    },
+    "orders": {
+      "title": "طلباتي",
+      "desc": "تتبع حجوزاتك الحالية، عرض الطلبات السابقة، والتواصل مع المتاجر."
+    },
+    "favorites": {
+      "title": "المفضلات",
+      "desc": "اعثر على أماكنك المفضلة بضغطة واحدة واحصل على إشعار عند توفر سلال."
+    },
+    "profile": {
+      "title": "ملفي الشخصي",
+      "desc": "مستواك وشاراتك وإحصائيات تأثيرك وإعداداتك. تابع تقدمك!"
+    },
     "biz": {
-      "addLocation": { "title": "أضف موقعك الأول", "desc": "قبل إنشاء السلال أو استلام الطلبات، أضف عنوان متجرك. اضغط على الزر الأخضر للبدء." },
-      "dashboard": { "title": "لوحة القيادة", "desc": "نظرة شاملة على مبيعاتك وطلبات اليوم والإحصائيات." },
-      "baskets": { "title": "سلالي", "desc": "أنشئ وأدر سلال المفاجآت. حدد الأسعار والكميات وأوقات الاستلام." },
-      "basketCreate": { "title": "إنشاء سلة", "desc": "اضغط على زر + إضافة سلة لفتح نموذج الإنشاء. ستحدد الاسم والوصف والسعر الأصلي والسعر المخفض والكمية وأوقات الاستلام، ثم اضغط حفظ. ستستأنف الجولة عند عودتك." },
-      "orders": { "title": "الطلبات", "desc": "عرض حجوزات اليوم والسجل. لكل طلب قيد الانتظار زر تأكيد — اضغط عليه لإدخال الرمز من 4 أرقام الخاص بالعميل أو مسح رمز QR الخاص به." },
-      "pickup": { "title": "تأكيد الاستلام", "desc": "طريقتان للتحقق من الاستلام: 1) زر تأكيد على الطلب — يقرأ العميل رمزه المكون من 4 أرقام وتقوم بإدخاله. 2) زر QR هذا (المميّز) — يفتح الماسح لقراءة رمز العميل مباشرة. جربه الآن." },
-      "profile": { "title": "الملف الشخصي", "desc": "إدارة معلومات عملك وساعاته وصوره." },
-      "team": { "title": "إدارة الفريق", "desc": "ادعُ الأعضاء، وعيّن الأدوار (مدير، عضو) واربطهم بمواقع محددة." },
-      "settingsDemo": { "title": "إعادة تشغيل الجولة", "desc": "يمكنك العودة إلى هنا في أي وقت والضغط على \"وضع العرض التوضيحي\" لمشاهدة هذه الجولة مرة أخرى.", "hint": "ابحث عن صف وضع العرض التوضيحي المحدد." }
+      "addLocation": {
+        "title": "أضف موقعك الأول",
+        "desc": "قبل إنشاء السلال أو استلام الطلبات، أضف عنوان متجرك. اضغط على الزر الأخضر للبدء."
+      },
+      "dashboard": {
+        "title": "لوحة القيادة",
+        "desc": "نظرة شاملة على مبيعاتك وطلبات اليوم والإحصائيات."
+      },
+      "baskets": {
+        "title": "سلالي",
+        "desc": "أنشئ وأدر سلال المفاجآت. حدد الأسعار والكميات وأوقات الاستلام."
+      },
+      "basketCreate": {
+        "title": "إضافة سلة",
+        "desc": "اضغط على زر + إضافة سلة. يمكنك إعادة استخدام سلة موجودة في مؤسستك، أو إنشاء سلة جديدة من الصفر."
+      },
+      "reuseBasket": {
+        "title": "إعادة استخدام سلة",
+        "desc": "تظهر سِلالك الحالية هنا. اضغط «استخدام» لإضافة نفس السلة إلى هذا الموقع — تُنسخ بكمية خاصة بها مستقلة عن الأصل (تحددها لاحقًا)."
+      },
+      "createNewBasket": {
+        "title": "إنشاء سلة جديدة",
+        "desc": "أو أنشئ واحدة من الصفر: اضغط «إنشاء سلة جديدة» لفتح النموذج. ستستأنف الجولة عند فتح النموذج."
+      },
+      "orders": {
+        "title": "الطلبات",
+        "desc": "عرض حجوزات اليوم والسجل. لكل طلب قيد الانتظار زر تأكيد — اضغط عليه لإدخال الرمز من 4 أرقام الخاص بالعميل أو مسح رمز QR الخاص به."
+      },
+      "pickup": {
+        "title": "تأكيد الاستلام",
+        "desc": "طريقتان للتحقق من الاستلام: 1) زر تأكيد على الطلب — يقرأ العميل رمزه المكون من 4 أرقام وتقوم بإدخاله. 2) زر QR هذا (المميّز) — يفتح الماسح لقراءة رمز العميل مباشرة. جربه الآن."
+      },
+      "profile": {
+        "title": "الملف الشخصي",
+        "desc": "إدارة معلومات عملك وساعاته وصوره."
+      },
+      "team": {
+        "title": "إدارة الفريق",
+        "desc": "ادعُ الأعضاء، وعيّن الأدوار (مدير، عضو) واربطهم بمواقع محددة."
+      },
+      "settingsDemo": {
+        "title": "إعادة تشغيل الجولة",
+        "desc": "يمكنك العودة إلى هنا في أي وقت والضغط على \"وضع العرض التوضيحي\" لمشاهدة هذه الجولة مرة أخرى.",
+        "hint": "ابحث عن صف وضع العرض التوضيحي المحدد."
+      }
+    },
+    "customer": {
+      "demoLocationName": "Chez Joe (démo)",
+      "demoBasketName": "سلة المفاجأة",
+      "demoBasketDesc": "تجربة — لا يتم إنشاء طلب حقيقي.",
+      "firstCard": {
+        "title": "سلة متاحة",
+        "desc": "اضغط على البطاقة لعرض التفاصيل والحجز."
+      },
+      "restaurantBasket": {
+        "title": "سلة المفاجأة",
+        "desc": "هذه سلة معروضة من هذا المكان. اضغط عليها لعرض التفاصيل."
+      },
+      "reserveBtn": {
+        "title": "احجز هذه السلة",
+        "desc": "اضغط على زر «احجز» لبدء الطلب."
+      },
+      "reserveQty": {
+        "title": "اختر الكمية",
+        "desc": "حدد عدد السلات التي تريد حجزها."
+      },
+      "reservePayment": {
+        "title": "طريقة الدفع",
+        "desc": "اختر «نقدًا» أو «بطاقة» أو «الرصيد»."
+      },
+      "reserveConfirm": {
+        "title": "أكد الحجز",
+        "desc": "اضغط على «تأكيد» لإرسال طلب العرض التوضيحي."
+      },
+      "demoOrderCard": {
+        "title": "حجزك",
+        "desc": "ها هو طلبك في تبويب الطلبات. اضغط على البطاقة لعرض تفاصيل الاستلام."
+      },
+      "demoPickupCode": {
+        "title": "رمز الاستلام",
+        "desc": "أظهر هذا الرمز للتاجر عند وصولك لاستلام السلة."
+      },
+      "backToHome": {
+        "title": "العودة إلى الرئيسية",
+        "desc": "الآن لنكتشف بقية التطبيق."
+      }
     }
   },
   "messages": {
@@ -1162,5 +1430,67 @@
     "sendMessage": "إرسال رسالة",
     "messageLabel": "رسالة",
     "messagePlaceholder": "اكتب رسالة للعميل..."
+  },
+  "faq": {
+    "general": {
+      "title": "عام",
+      "surprise": {
+        "q": "ما هو \"الكيس المفاجئ\" بالضبط؟",
+        "a": "الكيس المفاجئ هو مجموعة من المنتجات المتنوعة من تاجر أغذية (مخبزة، مطعم، مقهى...). لكن ما الذي يحتويه بالضبط؟ مفاجأة..."
+      },
+      "why": {
+        "q": "لماذا إطلاق هذا المفهوم في تونس؟",
+        "a": "يكلف هدر الطعام السكان التونسيين أكثر من 500 مليون دينار سنويا. إذن أنت توفر المال وفي المقابل تنقذ الكوكب!"
+      },
+      "region": {
+        "q": "في أي منطقة يتوفر برَكات؟",
+        "a": "حاليا، يتوفر برَكات في جميع مدن تونس الكبرى. سنبقيك على اطلاع بوصولنا إلى المناطق الأخرى."
+      },
+      "impact": {
+        "q": "هل سأساعد فعلا في محاربة هدر الطعام؟",
+        "a": "نعم، بشكل كبير! كل كيس يتم إنقاذه يمنع الموارد الثمينة من الانتهاء في القمامة. كل خطوة مهمة!"
+      }
+    },
+    "orders": {
+      "title": "الطلبات",
+      "knowContent": {
+        "q": "هل أعرف ما يوجد في \"كيسي المفاجئ\"؟",
+        "a": "إنها مفاجأة! رغم أنك لا تعرف القائمة الدقيقة للأصناف مسبقا، أنت مضمون لاستلام منتجات التاجر المعني!"
+      },
+      "whyUnknown": {
+        "q": "لماذا لا أعرف ما يوجد في \"الكيس المفاجئ\"؟",
+        "a": "لأنها منتجات اليوم غير المباعة. لا تستطيع المتاجر التنبؤ بما سيتبقى ووعدك بمحتوى محدد."
+      },
+      "stillGood": {
+        "q": "هل الطعام الذي أتلقاه لا يزال جيدا؟",
+        "a": "بالتأكيد! المنتجات المعروضة هي من نفس اليوم، طازجة، وصالحة تماما للاستهلاك."
+      },
+      "pickup": {
+        "q": "كيف يعمل الاستلام؟",
+        "a": "بعد حجز كيس، تستلم رمز استلام. توجه إلى المتجر خلال الفترة الزمنية المحددة، اعرض رمزك، ادفع وغادر بكيسك!"
+      },
+      "cancel": {
+        "q": "هل يمكنني إلغاء طلبي؟",
+        "a": "نعم، يمكنك الإلغاء قبل بداية فترة الاستلام. قد تؤثر الإلغاءات المتأخرة على حسابك."
+      }
+    },
+    "payment": {
+      "title": "الدفع",
+      "howToPay": {
+        "q": "كيف أدفع؟",
+        "a": "«يتم الدفع إما عبر الإنترنت بالبطاقة البنكية، أو برصيد برَكات، أو نقدا مباشرة في محل التاجر عند الاستلام»"
+      },
+      "credits": {
+        "q": "ما هي أرصدة برَكات؟",
+        "a": "هذه أرصدة تكسبها من خلال إحالة الأصدقاء أو عبر رموز الهدايا. يمكن استخدامها لتقليل سعر أكياسك التالية."
+      }
+    },
+    "merchants": {
+      "title": "التجار",
+      "become": {
+        "q": "كيف أصبح تاجرا شريكا؟",
+        "a": "سجل مباشرة في التطبيق كتاجر أو اتصل بنا على contact@barakeat.tn. التسجيل مجاني!"
+      }
+    }
   }
 }

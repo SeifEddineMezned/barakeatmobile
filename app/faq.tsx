@@ -10,39 +10,35 @@ import { StatusBar } from 'expo-status-bar';
 interface FAQItem { q: string; a: string; }
 interface FAQCategory { title: string; icon: any; items: FAQItem[]; }
 
-const FAQ_DATA_FR: FAQCategory[] = [
+// FAQ content is i18n-keyed under `faq.*` in each locale (en/fr/ar) so
+// the dedicated FAQ screen displays in the user's current language
+// instead of always rendering French. The list of question keys lives
+// here; the strings live in the locale JSONs.
+const FAQ_KEYS: { title: string; icon: any; items: string[] }[] = [
   {
-    title: 'Général', icon: Info,
-    items: [
-      { q: "C'est quoi exactement un « panier surprise » ?", a: "Le « panier surprise » est un lot qui contient divers produits d'un commerce alimentaire (boulangerie, restaurant, café…). Mais quoi exactement ? Surprise…" },
-      { q: "Pourquoi lancer ce concept en Tunisie ?", a: "Le gaspillage alimentaire coûte plus de 500 millions de dinars par an à la population tunisienne. Alors vous économisez de l'argent et en retour, vous sauvez la planète !" },
-      { q: "Dans quelle région est disponible Barakeat ?", a: "Actuellement, Barakeat est disponible dans toutes les villes du Grand Tunis. Nous vous tiendrons au courant de notre arrivée dans les autres régions." },
-      { q: "Est-ce que je vais vraiment aider à la lutte contre le gaspillage alimentaire ?", a: "Oui, massivement ! Chaque panier sauvé évite que des ressources précieuses ne finissent à la poubelle. Chaque geste compte !" },
-    ],
+    title: 'faq.general.title',
+    icon: Info,
+    items: ['surprise', 'why', 'region', 'impact'],
   },
   {
-    title: 'Commandes', icon: ShoppingBag,
-    items: [
-      { q: "Est-ce que je sais ce qu'il y a dans mon « panier surprise » ?", a: "C'est une surprise ! Mais bien que vous ne connaissiez pas la liste exacte des articles à l'avance, vous êtes garanti de recevoir les produits du commerce en question !" },
-      { q: "Pourquoi je ne sais pas ce qu'il y a dans le « panier surprise » ?", a: "Parce qu'il s'agit d'invendus du jour. Les commerces ne peuvent pas prédire ce qu'il leur reste et vous promettre un contenu spécifique." },
-      { q: "Est-ce que la nourriture que je reçois est encore bonne ?", a: "Absolument ! Les produits proposés sont ceux du jour même, frais, et parfaitement propres à la consommation." },
-      { q: "Comment fonctionne le retrait ?", a: "Après avoir réservé un panier, vous recevez un code de retrait. Rendez-vous au commerce pendant le créneau indiqué, présentez votre code, payez et repartez avec votre panier !" },
-      { q: "Puis-je annuler ma commande ?", a: "Oui, vous pouvez annuler avant le début du créneau de retrait. Les annulations tardives peuvent affecter votre compte." },
-    ],
+    title: 'faq.orders.title',
+    icon: ShoppingBag,
+    items: ['knowContent', 'whyUnknown', 'stillGood', 'pickup', 'cancel'],
   },
   {
-    title: 'Paiement', icon: CreditCard,
-    items: [
-      { q: "Comment je paie ?", a: "Le paiement se fait directement au commerçant lors du retrait. Espèces acceptées partout." },
-      { q: "Qu'est-ce que les crédits Barakeat ?", a: "Ce sont des crédits que vous gagnez en parrainant des amis ou via des codes cadeaux. Ils peuvent être utilisés pour réduire le prix de vos prochains paniers." },
-    ],
+    title: 'faq.payment.title',
+    icon: CreditCard,
+    // `howToPay` was rewritten to spell out the three accepted methods
+    // (online card / Barakeat credits / cash on pickup) per the launch
+    // checklist. Old text only mentioned cash on pickup.
+    items: ['howToPay', 'credits'],
   },
   {
-    title: 'Commerçants', icon: Store,
-    items: [
-      { q: "Comment devenir commerçant partenaire ?", a: "Inscrivez-vous directement sur l'application en tant que commerçant ou contactez-nous à contact@barakeat.tn. L'inscription est gratuite !" },
-      { q: "Comment je gère mes paniers ?", a: "Depuis votre tableau de bord commerçant, vous pouvez créer des paniers, définir les prix et quantités, et suivre les réservations en temps réel." },
-    ],
+    title: 'faq.merchants.title',
+    icon: Store,
+    // `manage` was removed — the customer FAQ has no business reason
+    // to surface partner-only how-to.
+    items: ['become'],
   },
 ];
 
@@ -76,6 +72,18 @@ export default function FAQScreen() {
   const theme = useTheme();
   const router = useRouter();
 
+  const categories: FAQCategory[] = FAQ_KEYS.map((cat) => ({
+    title: t(cat.title, { defaultValue: cat.title }),
+    icon: cat.icon,
+    items: cat.items.map((key) => {
+      const base = cat.title.replace(/\.title$/, '');
+      return {
+        q: t(`${base}.${key}.q`, { defaultValue: key }),
+        a: t(`${base}.${key}.a`, { defaultValue: '' }),
+      };
+    }),
+  }));
+
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: theme.colors.bg }}>
       <StatusBar style="dark" />
@@ -88,7 +96,7 @@ export default function FAQScreen() {
         </Text>
       </View>
       <ScrollView contentContainerStyle={{ padding: 20, paddingBottom: 40 }}>
-        {FAQ_DATA_FR.map((cat, ci) => {
+        {categories.map((cat, ci) => {
           const CatIcon = cat.icon;
           return (
             <View key={ci} style={{ marginBottom: 24 }}>

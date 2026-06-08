@@ -1,7 +1,10 @@
 import React, { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react';
-import { View, Text, TouchableOpacity, Modal, Animated, StyleSheet, PanResponder, TouchableWithoutFeedback } from 'react-native';
+import { View, Text, TouchableOpacity, Modal, Animated, StyleSheet, PanResponder, TouchableWithoutFeedback, Platform } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { LinearGradient } from 'expo-linear-gradient';
 import { XCircle, CheckCircle2, AlertTriangle, Info } from 'lucide-react-native';
+import { tokens } from '@/src/theme/tokens';
+import { PaperSurface } from './ui/PaperSurface';
 
 type AlertType = 'success' | 'error' | 'warning' | 'info';
 type AlertLayout = 'center' | 'sheet';
@@ -44,6 +47,15 @@ const AlertContext = createContext<AlertContextType>({
   showSuccess: () => {},
   showError: () => {},
 });
+
+// Module-level bridge so NON-React code (the react-query global error handler,
+// axios interceptors, etc.) can surface a translated Barakeat popup instead of
+// letting an uncaught error reach the red Expo error screen. The provider
+// registers its live `showAlert` on mount.
+let _globalShowAlert: AlertContextType['showAlert'] | null = null;
+export function showGlobalAlert(title: string, message?: string) {
+  _globalShowAlert?.(title, message);
+}
 
 export const useCustomAlert = () => useContext(AlertContext);
 
@@ -105,6 +117,13 @@ export function CustomAlertProvider({ children }: { children: React.ReactNode })
     });
   }, []);
 
+  // Register the live showAlert on the module bridge so non-React callers
+  // (react-query global onError) can trigger a translated popup.
+  useEffect(() => {
+    _globalShowAlert = showAlert;
+    return () => { _globalShowAlert = null; };
+  }, [showAlert]);
+
   // Drive the sheet animation alongside alert.visible for sheet layout.
   useEffect(() => {
     if (alert.layout !== 'sheet') return;
@@ -121,16 +140,34 @@ export function CustomAlertProvider({ children }: { children: React.ReactNode })
     }
   }, [alert.visible, alert.layout, sheetY, backdrop]);
 
+  // Velocity-projected, follow-finger dismiss. Same model as the
+  // shared useSwipeToDismiss hook — inlined here because the sheet
+  // has its own slide-in animation tied to `sheetY` we want to share.
+  const dismissRef = useRef(dismiss);
+  dismissRef.current = dismiss;
   const panResponder = useRef(
     PanResponder.create({
-      onMoveShouldSetPanResponder: (_, g) => g.dy > 8 && Math.abs(g.dy) > Math.abs(g.dx),
+      onStartShouldSetPanResponder: () => true,
+      onStartShouldSetPanResponderCapture: () => true,
+      onMoveShouldSetPanResponder: (_, g) => Math.abs(g.dy) > 4 && Math.abs(g.dy) > Math.abs(g.dx),
+      onMoveShouldSetPanResponderCapture: (_, g) => Math.abs(g.dy) > 4 && Math.abs(g.dy) > Math.abs(g.dx),
+      onPanResponderTerminationRequest: () => false,
       onPanResponderMove: (_, g) => {
-        if (g.dy > 0) sheetY.setValue(g.dy);
+        if (g.dy >= 0) sheetY.setValue(g.dy);
+        else sheetY.setValue(g.dy / 3);
       },
       onPanResponderRelease: (_, g) => {
-        if (g.dy > 90 || g.vy > 0.9) dismiss();
-        else Animated.spring(sheetY, { toValue: 0, useNativeDriver: true, friction: 12, tension: 100 }).start();
+        const projection = g.dy + g.vy * 60;
+        if (projection > 80 || g.vy > 0.6) {
+          const duration = Math.max(120, Math.min(280, 220 - g.vy * 50));
+          Animated.timing(sheetY, { toValue: 800, duration, useNativeDriver: true }).start(({ finished }) => {
+            if (finished) dismissRef.current();
+          });
+        } else {
+          Animated.spring(sheetY, { toValue: 0, useNativeDriver: true, friction: 10, tension: 80 }).start();
+        }
       },
+      onPanResponderTerminate: () => sheetY.setValue(0),
     })
   ).current;
 
@@ -149,8 +186,16 @@ export function CustomAlertProvider({ children }: { children: React.ReactNode })
         </TouchableOpacity>
       );
     }
+    // 3+ actions stack vertically as full-width rows (classic iOS action-
+    // sheet pattern). With each button getting the full sheet width the
+    // longest French label like "Choisir depuis la galerie" fits cleanly
+    // on a single line at the normal 15 px size, so every button shares
+    // identical padding + font without needing adjustsFontSizeToFit. 2-
+    // button confirm dialogs (Annuler / Confirmer, Annuler / Supprimer)
+    // stay side-by-side — they read better as a left/right pair.
+    const stackVertical = alert.actions.length >= 3;
     return (
-      <View style={{ flexDirection: fullWidth ? 'row' : 'row', gap: 10, width: '100%' }}>
+      <View style={{ flexDirection: stackVertical ? 'column' : 'row', gap: 10, width: '100%' }}>
         {alert.actions.map((action, i) => {
           const isDestructive = action.style === 'destructive';
           const isCancel = action.style === 'cancel';
@@ -159,9 +204,14 @@ export function CustomAlertProvider({ children }: { children: React.ReactNode })
               key={i}
               onPress={() => { dismiss(); action.onPress?.(); }}
               style={{
-                flex: 1,
+                // Same width treatment for every button in the same group:
+                // either full-width (stacked) or equally-split (side-by-side).
+                ...(stackVertical ? { width: '100%' } : { flex: 1 }),
                 borderRadius: 12,
-                paddingVertical: 14,
+                // Identical padding across destructive / cancel / primary so
+                // the rows read as one cluster.
+                paddingVertical: 16,
+                paddingHorizontal: 16,
                 alignItems: 'center',
                 justifyContent: 'center',
                 backgroundColor: isDestructive ? '#d94f4f' : isCancel ? '#f5f5f1' : '#114b3c',
@@ -169,13 +219,16 @@ export function CustomAlertProvider({ children }: { children: React.ReactNode })
                 borderColor: '#e8e8e3',
               }}
             >
-              <Text style={{
-                fontSize: 15,
-                fontFamily: isCancel ? 'Poppins_600SemiBold' : 'Poppins_700Bold',
-                fontWeight: isCancel ? '600' : '700',
-                textAlign: 'center',
-                color: isDestructive ? '#fff' : isCancel ? '#1a1a1a' : '#fff',
-              }}>
+              <Text
+                numberOfLines={1}
+                style={{
+                  fontSize: 15,
+                  fontFamily: isCancel ? 'Poppins_600SemiBold' : 'Poppins_700Bold',
+                  fontWeight: isCancel ? '600' : '700',
+                  textAlign: 'center',
+                  color: isDestructive ? '#fff' : isCancel ? '#1a1a1a' : '#fff',
+                }}
+              >
                 {action.text}
               </Text>
             </TouchableOpacity>
@@ -186,11 +239,22 @@ export function CustomAlertProvider({ children }: { children: React.ReactNode })
   };
 
   const isSheet = alert.layout === 'sheet';
+  // For the sheet layout, extend behind the Android virtual nav bar so the
+  // popup's bg reaches the screen edge (no gap above the system buttons).
+  // Gated to virtual-nav devices only — gesture-nav and iOS are unchanged.
+  const sheetExtendsUnderNavBar = isSheet && Platform.OS === 'android' && insets.bottom > 16;
 
   return (
     <AlertContext.Provider value={{ showAlert, showSuccess, showError }}>
       {children}
-      <Modal visible={alert.visible} transparent animationType={isSheet ? 'none' : 'fade'} onRequestClose={dismiss}>
+      <Modal
+        visible={alert.visible}
+        transparent
+        animationType={isSheet ? 'none' : 'fade'}
+        onRequestClose={dismiss}
+        statusBarTranslucent={Platform.OS === 'android'}
+        navigationBarTranslucent={sheetExtendsUnderNavBar}
+      >
         {isSheet ? (
           // Sheet layout — slide-up, drag to dismiss, left-aligned content.
           // The icon sits inline with the title (no tinted circle backdrop)
@@ -200,7 +264,6 @@ export function CustomAlertProvider({ children }: { children: React.ReactNode })
               <Animated.View style={{ ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.4)', opacity: backdrop }} />
             </TouchableWithoutFeedback>
             <Animated.View
-              {...panResponder.panHandlers}
               style={{
                 position: 'absolute',
                 left: 0,
@@ -209,9 +272,10 @@ export function CustomAlertProvider({ children }: { children: React.ReactNode })
                 backgroundColor: '#fff',
                 borderTopLeftRadius: 20,
                 borderTopRightRadius: 20,
-                paddingHorizontal: 20,
-                paddingTop: 8,
-                paddingBottom: insets.bottom + 16,
+                borderTopWidth: 1,
+                borderColor: tokens.colors.border,
+                paddingHorizontal: 24,
+                paddingBottom: insets.bottom + 24,
                 transform: [{ translateY: sheetY }],
                 shadowColor: '#000',
                 shadowOffset: { width: 0, height: 6 },
@@ -220,8 +284,22 @@ export function CustomAlertProvider({ children }: { children: React.ReactNode })
                 elevation: 8,
               }}
             >
-              <View style={{ alignItems: 'center', paddingBottom: 16 }}>
-                <View style={{ width: 36, height: 4, borderRadius: 2, backgroundColor: '#e8e8e3' }} />
+              {/* Warm-paper gradient wash behind the sheet content (sits first
+                  so it paints behind the handle + text). */}
+              <LinearGradient
+                colors={tokens.gradients.paper}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 0, y: 1 }}
+                style={{ ...StyleSheet.absoluteFillObject, borderTopLeftRadius: 20, borderTopRightRadius: 20 }}
+              />
+              {/* Swipe zone — top strip hosts the handle pill + the
+                  PanResponder so any inner content (action buttons,
+                  message text) keeps normal tap behaviour. */}
+              <View
+                {...panResponder.panHandlers}
+                style={{ alignItems: 'center', paddingTop: 10, paddingBottom: 14, marginHorizontal: -20 }}
+              >
+                <View style={{ width: 40, height: 5, borderRadius: 3, backgroundColor: '#e8e8e3' }} />
               </View>
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 10 }}>
                 <Icon size={22} color={color} />
@@ -243,7 +321,7 @@ export function CustomAlertProvider({ children }: { children: React.ReactNode })
           // color-opacity hex trick) so it feels consistent with the rest of
           // the app's refreshed neutrals.
           <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 24 }}>
-            <View style={{ backgroundColor: '#fff', borderRadius: 20, padding: 24, width: '100%', maxWidth: 340, alignItems: 'center' }}>
+            <PaperSurface radius={20} style={{ padding: 24, width: '100%', maxWidth: 340, alignItems: 'center' }}>
               <View style={{ backgroundColor: '#f5f5f1', width: 52, height: 52, borderRadius: 26, justifyContent: 'center', alignItems: 'center', marginBottom: 14 }}>
                 <Icon size={26} color={color} />
               </View>
@@ -256,7 +334,7 @@ export function CustomAlertProvider({ children }: { children: React.ReactNode })
                 </Text>
               ) : <View style={{ height: 12 }} />}
               {renderActions(false)}
-            </View>
+            </PaperSurface>
           </View>
         )}
       </Modal>

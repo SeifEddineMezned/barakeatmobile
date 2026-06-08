@@ -25,6 +25,12 @@ const ERROR_MAP: Record<string, string> = {
   'OTP expired': 'errors.otpExpired',
   'Too many failed attempts': 'errors.tooManyAttempts',
   'Please wait a minute before requesting another code': 'errors.rateLimited',
+  // ── Rate-limit (429) from any endpoint ─────────────────────────────────────
+  // Substring match (case-insensitive) catches the backend's full string
+  // "too many requests please slow down" and its variations.
+  'too many requests': 'errors.rateLimited',
+  'rate limit exceeded': 'errors.rateLimited',
+  'slow down': 'errors.rateLimited',
   'Password too short': 'errors.passwordTooShort',
   'Email not verified': 'errors.emailNotVerified',
   'Missing required fields': 'errors.missingFields',
@@ -44,6 +50,14 @@ const ERROR_MAP: Record<string, string> = {
   // ── Basket / price errors ───────────────────────────────────────────────────
   'Selling price must be at least 50%': 'errors.priceDiscount',
   'Le prix réduit doit être': 'errors.priceDiscount',
+
+  // ── Team / multi-org errors ───────────────────────────────────────────────
+  // Backend rejects a partner add when the email is already enrolled in a
+  // different org. The add-member form has its own specialized alert that
+  // also surfaces the conflicting org name; this entry is the fallback for
+  // any other caller that surfaces backend errors through the shared map.
+  'email_already_partner_elsewhere': 'errors.emailAlreadyPartnerElsewhere',
+  'Cet email est déjà associé à un autre commerce': 'errors.emailAlreadyPartnerElsewhere',
 
   // ── Reservation errors ─────────────────────────────────────────────────────
   'Restaurant is paused': 'errors.restaurantPaused',
@@ -65,6 +79,42 @@ const ERROR_MAP: Record<string, string> = {
   'Network Error': 'errors.networkError',
   'timeout of 15000ms exceeded': 'errors.timeout',
   'An unexpected error occurred': 'errors.serverError',
+
+  // ── Technical / infrastructure (substring matches, case-insensitive) ───────
+  // These should NEVER reach the user as-is — they read like the app is broken.
+  // Map them to friendly "session expired" / "unavailable" / "network" copy.
+  'jwt': 'errors.sessionExpired',
+  'session expired': 'errors.sessionExpired',
+  'invalid signature': 'errors.sessionExpired',
+  'malformed': 'errors.sessionExpired',
+  'token not authorized': 'errors.unavailable',
+  'not authorized for this app': 'errors.unavailable',
+  'token expired': 'errors.sessionExpired',
+  'invalid token': 'errors.sessionExpired',
+  'service unavailable': 'errors.unavailable',
+  'temporarily unavailable': 'errors.unavailable',
+  'endpoint not found': 'errors.unavailable',
+  'network request failed': 'errors.networkError',
+  'failed to fetch': 'errors.networkError',
+  'econnaborted': 'errors.timeout',
+  'econnrefused': 'errors.networkError',
+  'timeout': 'errors.timeout',
+  'request failed with status code 5': 'errors.serverError',
+  'internal server': 'errors.serverError',
+
+  // ── Profile errors ─────────────────────────────────────────────────────────
+  // 'Phone number already registered' is also surfaced by PUT /api/users/profile
+  // when the unique users_phone_key index fires — it's already mapped above
+  // alongside the auth-side phone-conflict entries.
+  'Failed to update user profile': 'errors.profileUpdateFailed',
+
+  // ── Location / team management ────────────────────────────────────────────
+  'Failed to update location': 'errors.locationUpdateFailed',
+  'Failed to add location': 'errors.locationAddFailed',
+  'Failed to remove location': 'errors.locationDeleteFailed',
+  'Non autorisé à modifier cet emplacement': 'errors.forbidden',
+  'Only the owner can remove locations': 'errors.forbidden',
+  "Seul l'admin de l'organisation peut ajouter un emplacement": 'errors.forbidden',
 };
 
 export function mapErrorToI18nKey(message: string): string | null {

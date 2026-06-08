@@ -1,12 +1,13 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Animated, Image, Modal, ScrollView } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Animated, Image, Modal, ScrollView, Platform } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
-import { Heart, Clock, MapPin, MapPinOff, Star, ShoppingBag, Tag, Layers, Info, X, TimerOff } from 'lucide-react-native';
+import { Heart, Clock, MapPin, Star, ShoppingBag, Tag, Layers, Info, X, TimerOff } from 'lucide-react-native';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { Basket } from '@/src/types';
 import { isPickupExpiredInTz } from '@/src/utils/timezone';
 import { useAddressStore } from '@/src/stores/addressStore';
+import { useSwipeToDismiss } from '@/src/hooks/useSwipeToDismiss';
 
 interface BasketCardProps {
   basket: Basket;
@@ -26,14 +27,20 @@ export function BasketCard({ basket, onFavoritePress, isFavorite = false }: Bask
   const entranceOpacity = React.useRef(new Animated.Value(0)).current;
   const entranceTranslateY = React.useRef(new Animated.Value(20)).current;
   const [infoVisible, setInfoVisible] = useState(false);
+  const infoSwipe = useSwipeToDismiss(() => setInfoVisible(false));
 
   // Determine unavailability reason:
   // - "Épuisé" = ALL basket types sold out (quantityTotal === 0, no stock at all)
-  // - "Expiré" = had stock but pickup window passed, OR backend flagged inactive
+  // - "Expiré" = pickup window has passed (clock-driven), OR had stock but now empty, OR backend flagged inactive
+  // Reading the pickup window directly — not just quantityLeft — keeps the
+  // search-list expiry signal in sync with the restaurant page's per-basket
+  // expiry badge, so a location with a closed pickup window appears expired
+  // here too instead of looking "available" until the user opens it.
   const rawTotal = (basket as any).quantityTotal ?? basket.quantityLeft;
   const isGenuinelySoldOut = rawTotal <= 0; // No stock at all
   const isSoldOut = basket.quantityLeft <= 0 && isGenuinelySoldOut;
-  const isPickupExpired = basket.quantityLeft <= 0 && !isGenuinelySoldOut; // Had stock but time passed or paused
+  const isPickupTimeExpired = isPickupExpiredInTz(basket.pickupWindow?.end);
+  const isPickupExpired = isPickupTimeExpired || (basket.quantityLeft <= 0 && !isGenuinelySoldOut);
   const isInactive = basket.isActive === false && !isSoldOut && !isPickupExpired;
   const isUnavailable = isSoldOut || isPickupExpired || isInactive;
 
@@ -111,7 +118,18 @@ export function BasketCard({ basket, onFavoritePress, isFavorite = false }: Bask
             {
               backgroundColor: isUnavailable ? '#f0f0f0' : theme.colors.surface,
               borderRadius: theme.radii.r16,
-              ...theme.shadows.shadowMd,
+              // iOS keeps the soft shadow; on Android we strip `elevation`
+              // entirely and use a hairline border instead. Reason: when
+              // category filters remove a card from the list, the parent
+              // unmounts it instantly and Android's window-manager-drawn
+              // elevation shadow lingers for ~1 frame at the old spot
+              // before clearing — the same ghost-shadow class we saw on
+              // the basket detail modal. Removing elevation kills the
+              // ghost at the source; the border keeps the card visually
+              // separated from neighbors.
+              ...(Platform.OS === 'android'
+                ? { borderWidth: 1, borderColor: theme.colors.divider }
+                : theme.shadows.shadowMd),
             },
           ]}
         >
@@ -147,7 +165,20 @@ export function BasketCard({ basket, onFavoritePress, isFavorite = false }: Bask
                   {basket.quantityLeft >= 10 ? '9+' : basket.quantityLeft}
                 </Text>
               </View>
-              {/* Basket types badge removed — was confusing for users */}
+              {/* Basket types badge — shown when the location offers more
+                  than one distinct basket type. The Layers icon + count
+                  signals variety. */}
+              {basket.basketTypeCount != null && basket.basketTypeCount > 1 && (
+                <View style={[
+                  styles.bagsLeftBadge,
+                  { backgroundColor: '#e3ff5c', borderRadius: theme.radii.r12, position: 'relative', top: 0, left: 0 },
+                ]}>
+                  <Layers size={16} color="#114b3c" />
+                  <Text style={[styles.bagsLeftText, { color: '#114b3c', ...theme.typography.bodySm, fontWeight: '700' as const, marginLeft: 5 }]}>
+                    {basket.basketTypeCount}
+                  </Text>
+                </View>
+              )}
             </View>
 
             {/* Top-right buttons row: heart */}
@@ -157,6 +188,7 @@ export function BasketCard({ basket, onFavoritePress, isFavorite = false }: Bask
                 onPress={handleFavoritePress}
                 accessibilityLabel={isFavorite ? t('basket.removeFavorite', { defaultValue: 'Remove from favorites' }) : t('basket.addFavorite', { defaultValue: 'Add to favorites' })}
                 accessibilityRole="button"
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                 style={[
                   styles.iconButton,
                   { backgroundColor: 'rgba(255,255,255,0.92)', ...theme.shadows.shadowSm },
@@ -236,29 +268,26 @@ export function BasketCard({ basket, onFavoritePress, isFavorite = false }: Bask
             {/* Details row: chips + price */}
             <View style={[styles.detailsRow, { marginTop: theme.spacing.xs }]}>
               <View style={styles.chipRow}>
-                <View style={[styles.inlineChip, { backgroundColor: theme.colors.bg, borderRadius: theme.radii.pill, paddingHorizontal: 8, paddingVertical: 3 }]}>
+                <View style={[styles.inlineChip, { backgroundColor: theme.colors.bg, borderRadius: theme.radii.pill, paddingHorizontal: 8, paddingVertical: 3, flexShrink: 0 }]}>
                   <Clock size={11} color={theme.colors.textSecondary} />
-                  <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, marginLeft: 3 }]}>
+                  <Text
+                    style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, marginLeft: 3 }]}
+                    numberOfLines={1}
+                  >
                     {basket.pickupWindow.start}-{basket.pickupWindow.end}
                   </Text>
                 </View>
-                <View style={[styles.inlineChip, { backgroundColor: theme.colors.bg, borderRadius: theme.radii.pill, paddingHorizontal: 8, paddingVertical: 3 }]}>
-                  {hasSelectedAddress ? (
-                    <>
-                      <MapPin size={11} color={theme.colors.textSecondary} />
-                      <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, marginLeft: 3 }]}>
-                        {`${basket.distance}km`}
-                      </Text>
-                    </>
-                  ) : (
-                    <>
-                      <MapPinOff size={11} color={theme.colors.muted} />
-                      <Text style={[{ color: theme.colors.muted, ...theme.typography.caption, marginLeft: 3, fontStyle: 'italic' }]}>
-                        {t('basket.noAddressSet', { defaultValue: 'Aucune adresse' })}
-                      </Text>
-                    </>
-                  )}
-                </View>
+                {hasSelectedAddress && (
+                  <View style={[styles.inlineChip, { backgroundColor: theme.colors.bg, borderRadius: theme.radii.pill, paddingHorizontal: 8, paddingVertical: 3, flexShrink: 0 }]}>
+                    <MapPin size={11} color={theme.colors.textSecondary} />
+                    <Text
+                      style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, marginLeft: 3 }]}
+                      numberOfLines={1}
+                    >
+                      {`${basket.distance}km`}
+                    </Text>
+                  </View>
+                )}
               </View>
               <View style={styles.priceBlock}>
                 <Text style={[{ color: theme.colors.muted, ...theme.typography.caption, textDecorationLine: 'line-through' }]}>
@@ -293,9 +322,20 @@ export function BasketCard({ basket, onFavoritePress, isFavorite = false }: Bask
           activeOpacity={1}
           onPress={() => setInfoVisible(false)}
         >
-          <View style={styles.modalSheet}>
-            {/* Handle */}
-            <View style={styles.modalHandle} />
+          <Animated.View
+            style={[styles.modalSheet, { transform: [{ translateY: infoSwipe.translateY }] }]}
+          >
+            {/* Swipe zone — hosts the handle pill AND the PanResponder.
+                The internal ScrollView for the description below keeps
+                its own scrolling; the swipe-down only triggers on this
+                top strip. negative marginHorizontal cancels the sheet's
+                paddingHorizontal so the grab area spans full width. */}
+            <View
+              {...infoSwipe.panHandlers}
+              style={{ paddingTop: 4, paddingBottom: 12, alignItems: 'center', marginHorizontal: -20 }}
+            >
+              <View style={{ width: 40, height: 5, borderRadius: 3, backgroundColor: '#e0e0e0' }} />
+            </View>
             {/* Header */}
             <View style={styles.modalHeader}>
               {basket.merchantLogo ? (
@@ -327,7 +367,7 @@ export function BasketCard({ basket, onFavoritePress, isFavorite = false }: Bask
                 </Text>
               </ScrollView>
             </View>
-          </View>
+          </Animated.View>
         </TouchableOpacity>
       </Modal>
     </>

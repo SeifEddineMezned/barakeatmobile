@@ -10,7 +10,6 @@ import {
   TextInput,
   Image,
   Modal,
-  Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -22,15 +21,18 @@ import { useTheme } from '@/src/theme/ThemeProvider';
 import { StatusBar } from 'expo-status-bar';
 import { PrimaryCTAButton } from '@/src/components/PrimaryCTAButton';
 import { submitReview } from '@/src/services/reviews';
+import { useCustomAlert } from '@/src/components/CustomAlert';
 
 function StarRatingRow({
   label,
   value,
   onChange,
+  required,
 }: {
   label: string;
   value: number;
   onChange: (v: number) => void;
+  required?: boolean;
 }) {
   const theme = useTheme();
 
@@ -54,6 +56,7 @@ function StarRatingRow({
         ]}
       >
         {label}
+        {required ? <Text style={{ color: theme.colors.error }}> *</Text> : null}
       </Text>
       <View style={starStyles.stars}>
         {[1, 2, 3, 4, 5].map((star) => (
@@ -115,6 +118,7 @@ export default function ReviewScreen() {
   const theme = useTheme();
   const router = useRouter();
   const queryClient = useQueryClient();
+  const customAlert = useCustomAlert();
 
   const [ratingService, setRatingService] = useState(0);
   const [ratingQuantity, setRatingQuantity] = useState(0);
@@ -155,14 +159,18 @@ export default function ReviewScreen() {
   };
 
   const pickImage = () => {
-    Alert.alert(
+    // Replaced the native `Alert.alert` ActionSheet — it looks generic on
+    // both iOS and Android and breaks the brand feel — with the Barakeat
+    // CustomAlert in its sheet layout. Same three options, branded UI.
+    customAlert.showAlert(
       t('common.addPhoto', { defaultValue: 'Ajouter une photo' }),
       undefined,
       [
         { text: t('common.takePhoto', { defaultValue: 'Prendre une photo' }), onPress: launchCamera },
         { text: t('common.chooseFromGallery', { defaultValue: 'Choisir depuis la galerie' }), onPress: launchLibrary },
         { text: t('common.cancel', { defaultValue: 'Annuler' }), style: 'cancel' },
-      ]
+      ],
+      { layout: 'sheet' },
     );
   };
 
@@ -217,7 +225,7 @@ export default function ReviewScreen() {
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       >
         <View style={[styles.header, { padding: theme.spacing.xl }]}>
-          <TouchableOpacity onPress={() => router.back()}>
+          <TouchableOpacity onPress={() => router.back()} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
             <X size={24} color={theme.colors.textPrimary} />
           </TouchableOpacity>
           <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h2 }]}>
@@ -328,21 +336,25 @@ export default function ReviewScreen() {
               label={t('basket.reviewService')}
               value={ratingService}
               onChange={setRatingService}
+              required
             />
             <StarRatingRow
               label={t('basket.reviewQuantite')}
               value={ratingQuantity}
               onChange={setRatingQuantity}
+              required
             />
             <StarRatingRow
               label={t('basket.reviewQualite')}
               value={ratingQuality}
               onChange={setRatingQuality}
+              required
             />
             <StarRatingRow
               label={t('basket.reviewVariete')}
               value={ratingVariety}
               onChange={setRatingVariety}
+              required
             />
           </View>
 
@@ -378,16 +390,25 @@ export default function ReviewScreen() {
             maxLength={500}
           />
 
-          {/* Photo upload */}
+          {/* Photo upload — same shape as claim.tsx: section subtitle on top,
+              identical dark-green button below. The "(optionnel)" lives in
+              the subtitle here; the button copy itself is the action, not
+              the optionality flag. */}
           <View style={{ marginTop: theme.spacing.xl }}>
+            <Text style={{ color: theme.colors.textPrimary, ...theme.typography.body, fontWeight: '600', marginBottom: 8 }}>
+              {t('review.addPhotoLabel', { defaultValue: 'Ajouter une photo (optionnel)' })}
+            </Text>
             <TouchableOpacity
               onPress={pickImage}
               style={{
                 flexDirection: 'row',
                 alignItems: 'center',
+                justifyContent: 'center',
+                gap: 10,
                 backgroundColor: '#114b3c',
                 borderRadius: theme.radii.r16,
-                padding: theme.spacing.lg,
+                paddingVertical: 16,
+                paddingHorizontal: 16,
                 ...theme.shadows.shadowSm,
               }}
             >
@@ -396,19 +417,10 @@ export default function ReviewScreen() {
                 style={{
                   color: '#e3ff5c',
                   ...theme.typography.body,
-                  marginLeft: theme.spacing.sm,
-                  flex: 1,
+                  fontWeight: '600',
                 }}
               >
-                {t('review.addPhoto', { defaultValue: 'Add a photo' })}
-              </Text>
-              <Text
-                style={{
-                  color: 'rgba(227, 255, 92, 0.6)',
-                  ...theme.typography.caption,
-                }}
-              >
-                {t('review.photoOptional', { defaultValue: 'Optional' })}
+                {t('common.insertOrTakePhoto', { defaultValue: 'Insérer ou prendre une photo' })}
               </Text>
             </TouchableOpacity>
             <Text style={{ color: theme.colors.muted, fontSize: 11, lineHeight: 16, marginTop: 8, paddingHorizontal: 4 }}>

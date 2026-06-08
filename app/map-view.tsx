@@ -23,13 +23,14 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import { useRouter } from 'expo-router';
 import { useQuery } from '@tanstack/react-query';
-import { Search, Navigation, X, Clock, MapPin, ShoppingBag, ChevronUp, ChevronLeft, ChevronRight, Sparkles } from 'lucide-react-native';
+import { Search, Navigation, X, Clock, MapPin, ShoppingBag, Store, ChevronUp, ChevronLeft, ChevronRight, Sparkles } from 'lucide-react-native';
+import { captureRef } from 'react-native-view-shot';
+import Supercluster from 'supercluster';
 import * as Location from 'expo-location';
 import { StatusBar } from 'expo-status-bar';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { MapFallback } from '@/src/components/MapFallback';
-import { SmartMarker } from '@/src/components/SmartMarker';
 import { fetchLocations } from '@/src/services/restaurants';
 import { normalizeLocationToBasket } from '@/src/utils/normalizeRestaurant';
 import type { Basket } from '@/src/types';
@@ -37,6 +38,7 @@ import { FeatureFlags } from '@/src/lib/featureFlags';
 import { useAddressStore } from '@/src/stores/addressStore';
 import { useFavoritesStore } from '@/src/stores/favoritesStore';
 import { useWalkthroughStore } from '@/src/stores/walkthroughStore';
+import { buildDemoListingBasket, DEMO_LOCATION_ID } from '@/src/lib/demoData';
 import { BasketCard } from '@/src/components/BasketCard';
 import { SubScreenWalkthroughOverlay } from '@/src/components/SubScreenWalkthroughOverlay';
 
@@ -51,7 +53,7 @@ if (Platform.OS !== 'web') {
   Circle = maps.Circle;
 }
 
-const { height: SCREEN_HEIGHT } = Dimensions.get('window');
+const { height: SCREEN_HEIGHT, width: SCREEN_WIDTH } = Dimensions.get('window');
 
 const MAP_STYLE = [
   { featureType: 'water', elementType: 'geometry.fill', stylers: [{ color: '#d4e4dc' }] },
@@ -84,7 +86,47 @@ function getDistance(lat1: number, lon1: number, lat2: number, lon2: number): nu
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
+// Business pins are pre-rendered to PNG via react-native-view-shot and passed
+// to <Marker image={...}>. Custom React children inside <Marker> don't render
+// reliably on Android (react-native-maps@1.20.1 — bitmap-capture race), but
+// `image` is just a static PNG which the native side blits at the lat/lng. So
+// we render each unique marker design once in a hidden off-screen layer below,
+// snapshot it, cache the URI, and reference it from the on-map Marker.
+type MapRegion = { latitude: number; longitude: number; latitudeDelta: number; longitudeDelta: number };
+
+// Supercluster zoom levels work like Google/Mapbox tiles:
+//   z=0 → whole world,  z=20 → individual building.
+// MAX_ZOOM = 16 means clustering can happen at ANY normal zoom level — even
+// if you're zoomed in tight on a neighbourhood, two pins that overlap on
+// screen will still merge into a cluster. Below maxZoom every step out of
+// zoom halves the visible area, so the cluster set rebuilds gradually as
+// you zoom — small clusters → bigger ones → eventually one.
+//
+// `radius` = screen-pixel merge distance. Pins within this many px on
+// screen are clustered together at any zoom ≤ maxZoom.
+const SUPERCLUSTER_MAX_ZOOM = 16;
+const SUPERCLUSTER_RADIUS_PX = 50;
+
+// Merchant-name text color + shadow are platform-conditional because the two
+// base maps have very different luminance: Apple's `mutedStandard` is darker
+// (white text reads), Google Maps with our custom style has bright white
+// roads (black text reads — white disappears against the road shapes).
+const MERCHANT_LABEL_STYLE = Platform.OS === 'android'
+  ? {
+      color: '#000',
+      textShadowColor: 'rgba(255,255,255,0.85)',
+      textShadowOffset: { width: 0, height: 0 } as const,
+      textShadowRadius: 2,
+    }
+  : {
+      color: '#fff',
+      textShadowColor: 'rgba(0,0,0,0.6)',
+      textShadowOffset: { width: 0, height: 1 } as const,
+      textShadowRadius: 3,
+    };
+
 type BasketWithDist = Basket & { dist: number };
+
 
 const SLIDER_MIN = 1;
 const SLIDER_MAX = 60;
@@ -268,8 +310,110 @@ export default function MapViewScreen() {
   const [userLocation, setUserLocation] = useState<{ latitude: number; longitude: number } | null>(null);
   const [locationStatus, setLocationStatus] = useState<'loading' | 'granted' | 'denied'>('loading');
   const mapRef = useRef<any>(null);
+
+  // Step-driven re-measure for the map screen halos. /map-view is a pushed
+  // Stack screen, so the onLayout that publishes mapRadiusPill /
+  // mapCategoryRow can fire MID push-animation — that rect then becomes
+  // stale by the time the screen has fully settled, and the SubScreen
+  // overlay's haveRect fast-path paints the halo at the animation-in-
+  // progress y for a frame before snapping to the correct position. Same
+  // pattern as payment/credits/wallet: clear the rect when the step
+  // becomes active so the overlay falls into its "dim-only while we wait"
+  // branch, then republish from a ref ~250 ms later once the push has
+  // finished animating.
+  const mapRadiusPillRef = useRef<View>(null);
+  const mapRadiusExpandedRef = useRef<View>(null);
+  const mapCategoryRowRef = useRef<View>(null);
+  const mapWalkthroughKey = useWalkthroughStore((s) => s.currentStep?.measureKey);
+  useEffect(() => {
+    if (mapWalkthroughKey !== 'mapRadiusPill') return;
+    useWalkthroughStore.getState().setMeasuredRect('mapRadiusPill', null);
+    const t = setTimeout(() => {
+      mapRadiusPillRef.current?.measureInWindow((x, y, w, h) => {
+        if (w > 0 && h > 0) useWalkthroughStore.getState().setMeasuredRect('mapRadiusPill', { x, y, w, h });
+      });
+    }, 280);
+    return () => clearTimeout(t);
+  }, [mapWalkthroughKey]);
+  useEffect(() => {
+    if (mapWalkthroughKey !== 'mapCategoryRow') return;
+    useWalkthroughStore.getState().setMeasuredRect('mapCategoryRow', null);
+    const t = setTimeout(() => {
+      mapCategoryRowRef.current?.measureInWindow((x, y, w, h) => {
+        if (w > 0 && h > 0) useWalkthroughStore.getState().setMeasuredRect('mapCategoryRow', { x, y, w, h });
+      });
+    }, 280);
+    return () => clearTimeout(t);
+  }, [mapWalkthroughKey]);
+
+  // Advance the walkthrough from the mapRadiusPill step the moment the
+  // user actually expands the radius pill (taps it open). The step is
+  // marked requireTap so the tooltip's Next button is hidden — the user
+  // is expected to interact with the pill itself. Without this effect
+  // the walkthrough would dead-end on the radius step.
+  useEffect(() => {
+    if (!radiusExpanded) return;
+    if (mapWalkthroughKey !== 'mapRadiusPill') return;
+    useWalkthroughStore.getState().nextStep(Number.MAX_SAFE_INTEGER);
+  }, [radiusExpanded, mapWalkthroughKey]);
+
+  // Step-driven re-measure for the expanded radius card. Fires when the
+  // walkthrough reaches `mapRadiusExpanded` — clear the prior rect (the
+  // card just mounted, so a mid-mount onLayout would publish a flicker
+  // value), then republish from the ref ~280 ms later once layout has
+  // settled.
+  useEffect(() => {
+    if (mapWalkthroughKey !== 'mapRadiusExpanded') return;
+    useWalkthroughStore.getState().setMeasuredRect('mapRadiusExpanded', null);
+    const t = setTimeout(() => {
+      mapRadiusExpandedRef.current?.measureInWindow((x, y, w, h) => {
+        if (w > 0 && h > 0) useWalkthroughStore.getState().setMeasuredRect('mapRadiusExpanded', { x, y, w, h });
+      });
+    }, 280);
+    return () => clearTimeout(t);
+  }, [mapWalkthroughKey]);
   const [showConstellationBanner, setShowConstellationBanner] = useState(false);
   const constellationShown = useRef(false);
+
+  // Latest committed map region — drives zoom-gated label visibility and the
+  // easter-egg threshold.
+  const [mapRegion, setMapRegion] = useState<MapRegion | null>(null);
+
+  // Debounced copy of mapRegion. Used as the source of truth for cluster
+  // computation. iOS MapKit was crashing when annotations were swapped
+  // immediately on onRegionChangeComplete — the native pinch-animation cleanup
+  // wasn't fully done yet. Waiting ~400ms gives MapKit time to settle before
+  // we mount/unmount cluster markers.
+  const [debouncedRegion, setDebouncedRegion] = useState<MapRegion | null>(null);
+  useEffect(() => {
+    if (!mapRegion) return;
+    const t = setTimeout(() => setDebouncedRegion(mapRegion), 400);
+    return () => clearTimeout(t);
+  }, [mapRegion]);
+
+  // Cache of merchantId-keyed PNG URIs produced by view-shot. Each entry's key
+  // also encodes the rendered content (stock, isNearby, showLabel) so a content
+  // change invalidates only the affected pin's cache.
+  const [pinImages, setPinImages] = useState<Record<string, string>>({});
+  const pinRefs = useRef<Record<string, View | null>>({});
+
+  const captureMarkerForKey = useCallback((key: string) => {
+    // Android-only — iOS uses native custom-children markers and doesn't go
+    // through view-shot. Skipping on iOS keeps Expo Go (which lacks the
+    // view-shot native module) from throwing.
+    if (Platform.OS !== 'android') return;
+    // Wait two RAFs after onLayout so Text + lucide SVG finish painting before
+    // view-shot snapshots the view. Without this, the PNG comes back partial.
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      const ref = pinRefs.current[key];
+      if (!ref) return;
+      captureRef(ref, { format: 'png', quality: 1, result: 'tmpfile' })
+        .then((uri) => {
+          setPinImages((prev) => prev[key] ? prev : { ...prev, [key]: uri });
+        })
+        .catch((e) => { console.warn('[map] marker capture failed', key, e); });
+    }));
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -318,10 +462,14 @@ export default function MapViewScreen() {
     }
   }, [selectedAddr, userLocation, radius]);
 
-  // Auto-center on first location fix — mirrors the arrow-button behavior exactly.
+  // Auto-center on first GPS fix — but ONLY if the user has not chosen an
+  // in-app address. The chosen address always wins (same priority as the
+  // re-center button in handleRecenter above), otherwise the GPS fix
+  // arriving a few hundred ms after mount would yank the camera off the
+  // user's selected location.
   const hasAutocentered = useRef(false);
   useEffect(() => {
-    if (userLocation && mapRef.current && !hasAutocentered.current) {
+    if (userLocation && mapRef.current && !hasAutocentered.current && !selectedAddr) {
       hasAutocentered.current = true;
       const timer = setTimeout(() => {
         if (mapRef.current && userLocation) {
@@ -333,7 +481,7 @@ export default function MapViewScreen() {
       }, 350);
       return () => clearTimeout(timer);
     }
-  }, [userLocation, radius]);
+  }, [userLocation, radius, selectedAddr]);
 
   // Auto-zoom map when radius changes so the circle stays visible
   useEffect(() => {
@@ -394,7 +542,10 @@ export default function MapViewScreen() {
       }),
   [sheetHeight]);
 
-  const locationsQuery = useQuery({ queryKey: ['locations'], queryFn: fetchLocations, staleTime: 30_000, refetchInterval: 60_000, refetchOnMount: 'always' });
+  // Shares the ['locations'] cache with (tabs)/index.tsx. 5-min stale +
+  // no interval — opening the map tab after browsing home serves from
+  // cache; map markers reflect writes via invalidation.
+  const locationsQuery = useQuery({ queryKey: ['locations'], queryFn: fetchLocations, staleTime: 5 * 60_000, refetchOnReconnect: true });
 
   const baskets = useMemo(() => {
     if (!locationsQuery.data) return [];
@@ -410,16 +561,45 @@ export default function MapViewScreen() {
     return baskets.filter((b) => b.category === mapCategory);
   }, [baskets, mapCategory]);
 
-  // All baskets with coords + distance
+  // All baskets with coords + distance.
+  // We populate BOTH `dist` (used internally for radius filtering / marker
+  // styling) AND `distance` (the field BasketCard reads when rendering the
+  // bottom-sheet list). Without overwriting `distance`, the cards showed
+  // "0 km" because the value coming from normalizeLocationToBasket is 0.
   const allCoordsBaskets: BasketWithDist[] = useMemo(() => {
     return filteredBaskets
       .filter((b) => b.hasCoords)
-      .map((b) => ({ ...b, dist: getDistance(center.latitude, center.longitude, b.latitude as number, b.longitude as number) }))
+      .map((b) => {
+        const d = getDistance(center.latitude, center.longitude, b.latitude as number, b.longitude as number);
+        return { ...b, dist: d, distance: Math.round(d * 10) / 10 };
+      })
       .sort((a, b) => a.dist - b.dist);
   }, [filteredBaskets, center]);
 
   // Nearby baskets for the bottom sheet list (filtered by radius)
-  const nearbyBaskets = useMemo(() => allCoordsBaskets.filter((b) => b.dist <= radius), [allCoordsBaskets, radius]);
+  const nearbyBasketsRaw = useMemo(() => allCoordsBaskets.filter((b) => b.dist <= radius), [allCoordsBaskets, radius]);
+
+  // During the customer demo, inject the synthetic "Café Démo" basket at
+  // the top of the bottom-sheet list. The card's merchantId routes taps to
+  // /restaurant/demo where the demo flow takes over. Listed unconditionally
+  // (no radius filter) so it stays visible even if the user fiddles with the
+  // radius slider mid-tour.
+  const demoCustomerActive = useWalkthroughStore((s) => s.demoCustomerActive);
+  const demoListingBasket = useMemo(
+    () => buildDemoListingBasket({
+      merchantName: t('walkthrough.customer.demoLocationName', { defaultValue: 'Chez Joe (démo)' }),
+      name: t('walkthrough.customer.demoBasketName', { defaultValue: 'Panier Surprise' }),
+      description: t('walkthrough.customer.demoBasketDesc', { defaultValue: 'Démonstration — aucune commande réelle n\'est créée.' }),
+    }),
+    [t],
+  );
+  const demoBasketWithDist: BasketWithDist = useMemo(() => ({ ...demoListingBasket, dist: 0.4 }), [demoListingBasket]);
+  const nearbyBaskets = useMemo(
+    () => (demoCustomerActive
+      ? [demoBasketWithDist, ...nearbyBasketsRaw.filter((b) => b.id !== DEMO_LOCATION_ID)]
+      : nearbyBasketsRaw),
+    [demoCustomerActive, demoBasketWithDist, nearbyBasketsRaw],
+  );
 
   // Single stable pin list — deduplicate ALL baskets by merchantId + coordinates.
   // This list NEVER changes length during zoom/drag (only `dist` values change),
@@ -450,6 +630,139 @@ export default function MapViewScreen() {
 
   const noCoordBaskets = useMemo(() => filteredBaskets.filter((b) => !b.hasCoords), [filteredBaskets]);
 
+  // Zoom-driven UI state. Falls back to initialRegion's latitudeDelta so the
+  // very first paint (before any onRegionChangeComplete) decides correctly.
+  // We read from `debouncedRegion` rather than the raw `mapRegion` so cluster
+  // transitions don't happen until iOS MapKit's gesture animation is fully
+  // settled (~400ms after release).
+  const currentLngDelta = debouncedRegion?.longitudeDelta ?? Math.max(0.02, radius * 0.015);
+  // Convert lng-delta into a Google/Mapbox-style tile zoom integer. This is
+  // what supercluster uses to decide which pins to merge. The formula is
+  // viewport-aware (uses SCREEN_WIDTH and the 256-px tile size convention)
+  // — the simpler `log2(360/lngDelta)` form assumes a 256-px-wide viewport
+  // and underestimates zoom by ~1.5 on a real phone, which made clustering
+  // jump straight from "off" to "fully collapsed".
+  const currentZoom = Math.max(0, Math.min(20,
+    Math.round(Math.log2((SCREEN_WIDTH * 360) / (256 * Math.max(currentLngDelta, 0.0001))))
+  ));
+  const shouldCluster = currentZoom <= SUPERCLUSTER_MAX_ZOOM;
+  // Labels always show on individual pins. Clusters never have labels — they
+  // show the count instead — so the user's "only hide names when collapsed"
+  // rule is satisfied implicitly: a stacked group becomes a cluster (no
+  // name), an unclustered pin keeps its name.
+  const showLabels = true;
+
+  // PNG cache key — content that changes the rendered marker. Re-using the
+  // same key returns the cached image; any content change generates a fresh
+  // snapshot the next time the off-screen view lays out.
+  const getPinKey = useCallback((merchantId: string, totalQty: number, isNearby: boolean, withLabel: boolean) =>
+    `${merchantId}|${totalQty}|${isNearby ? 1 : 0}|${withLabel ? 1 : 0}`,
+    [],
+  );
+
+  // Cluster cache key — only the count drives the rendered visual.
+  const getClusterKey = useCallback((count: number) => `cluster|${count}`, []);
+
+  // Clustering is done by supercluster — the KD-tree algorithm that Uber Eats /
+  // Mapbox / Google Maps use under the hood. It clusters by SCREEN-PIXEL
+  // distance, so pins that visually overlap on screen always merge (no grid-
+  // boundary gaps where stacked pins fail to cluster, which was the failure
+  // mode of the old grid hash). Cluster IDs come from the internal tile
+  // hierarchy and are stable across re-renders.
+  type DisplayItem =
+    | { kind: 'single'; itemKey: string; pin: BasketWithDist & { totalQty: number } }
+    | { kind: 'cluster'; itemKey: string; lat: number; lng: number; count: number };
+
+  const superclusterIndex = useMemo(() => {
+    const valid = allPins.filter((p) => p.hasCoords && Number.isFinite(p.latitude as number) && Number.isFinite(p.longitude as number));
+    const features = valid.map((p, i) => ({
+      type: 'Feature' as const,
+      geometry: { type: 'Point' as const, coordinates: [p.longitude as number, p.latitude as number] as [number, number] },
+      properties: { pinIndex: i },
+    }));
+    const idx = new Supercluster<{ pinIndex: number }>({
+      radius: SUPERCLUSTER_RADIUS_PX,
+      maxZoom: SUPERCLUSTER_MAX_ZOOM,
+      minPoints: 2,
+    });
+    idx.load(features);
+    return { idx, valid };
+  }, [allPins]);
+
+  const displayPins = useMemo<DisplayItem[]>(() => {
+    const { idx, valid } = superclusterIndex;
+    if (valid.length === 0) return [];
+    // Whole-earth bbox so pins outside the immediate viewport still render —
+    // matches the previous behaviour where all pins were always considered.
+    const features = idx.getClusters([-180, -85, 180, 85], currentZoom);
+    const result: DisplayItem[] = [];
+    for (const f of features) {
+      const lng = f.geometry.coordinates[0];
+      const lat = f.geometry.coordinates[1];
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+      const props = f.properties as any;
+      if (props.cluster) {
+        result.push({
+          kind: 'cluster',
+          itemKey: `cluster-${props.cluster_id}`,
+          lat,
+          lng,
+          count: props.point_count,
+        });
+      } else {
+        const pin = valid[props.pinIndex];
+        if (!pin) continue;
+        result.push({ kind: 'single', itemKey: `single-${pin.merchantId}`, pin });
+      }
+    }
+    return result;
+  }, [superclusterIndex, currentZoom]);
+
+  // Tap a cluster → zoom in 2.5x centered on it. The next render breaks the
+  // cluster apart (or sub-clusters if pins are still close).
+  const zoomToCluster = useCallback((lat: number, lng: number) => {
+    if (!mapRef.current) return;
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+    const baseDelta = Number.isFinite(currentLngDelta) && currentLngDelta > 0 ? currentLngDelta : 0.1;
+    const newDelta = Math.max(0.01, baseDelta / 2.5);
+    mapRef.current.animateToRegion({
+      latitude: lat,
+      longitude: lng,
+      latitudeDelta: newDelta,
+      longitudeDelta: newDelta,
+    }, 350);
+  }, [currentLngDelta]);
+
+  // tracksViewChanges flip for iOS cluster markers. We arm it true when the
+  // cluster set changes (so MapKit snapshots the new bitmaps) and lock it
+  // false after a short settle. Permanent `true` was making MapKit re-snapshot
+  // on every parent re-render which races the pinch animation.
+  const iosClusterKeysSnapshot = displayPins
+    .filter((it) => it.kind === 'cluster')
+    .map((it) => it.itemKey)
+    .join('|');
+  const [iosClusterTracking, setIosClusterTracking] = useState(true);
+  useEffect(() => {
+    setIosClusterTracking(true);
+    const t = setTimeout(() => setIosClusterTracking(false), 500);
+    return () => clearTimeout(t);
+  }, [iosClusterKeysSnapshot]);
+
+  // Stable cluster-tap handler. Markers receive a `cluster:lat,lng` identifier
+  // and this handler decodes it. We pass the SAME function reference to every
+  // cluster Marker on every render, instead of `() => zoomToCluster(...)`
+  // closures — that closure churn was making iOS re-snapshot every cluster's
+  // bitmap on every parent re-render and racing the pinch gesture.
+  const handleClusterMarkerPress = useCallback((e: any) => {
+    const id: string | undefined = e?.nativeEvent?.id;
+    if (!id || !id.startsWith('cluster:')) return;
+    const [latStr, lngStr] = id.slice('cluster:'.length).split(',');
+    const lat = parseFloat(latStr);
+    const lng = parseFloat(lngStr);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+    zoomToCluster(lat, lng);
+  }, [zoomToCluster]);
+
   const markers = allCoordsBaskets.map((b) => ({ id: b.id, name: b.merchantName, lat: b.latitude as number, lng: b.longitude as number }));
 
   // Search suggestions — search ALL locations (not radius-limited)
@@ -457,7 +770,10 @@ export default function MapViewScreen() {
   const searchSuggestions = useMemo(() => {
     if (!searchQuery.trim() && !searchCategory) return [];
     const withCoords = baskets.filter((b) => b.hasCoords);
-    const withDist = withCoords.map((b) => ({ ...b, dist: getDistance(center.latitude, center.longitude, b.latitude as number, b.longitude as number) }));
+    const withDist = withCoords.map((b) => {
+      const d = getDistance(center.latitude, center.longitude, b.latitude as number, b.longitude as number);
+      return { ...b, dist: d, distance: Math.round(d * 10) / 10 };
+    });
     let filtered = withDist;
     if (searchCategory) {
       filtered = filtered.filter((b) => b.category === searchCategory);
@@ -492,6 +808,7 @@ export default function MapViewScreen() {
       {/* ── Back button — returns to Découvrir cleanly ── */}
       <TouchableOpacity
         onPress={() => router.back()}
+        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
         style={[styles.backBtn, { top: insets.top + 8, backgroundColor: 'rgba(255,255,255,0.92)', shadowColor: '#000', shadowOpacity: 0.12, shadowRadius: 8, shadowOffset: { width: 0, height: 2 }, elevation: 5 }]}
         accessibilityLabel="Back to Découvrir"
       >
@@ -511,6 +828,7 @@ export default function MapViewScreen() {
 
       {/* ── Full-screen Map ── */}
       {Platform.OS !== 'web' && MapView ? (
+        <>
         <MapView
           ref={mapRef}
           style={StyleSheet.absoluteFillObject}
@@ -522,6 +840,7 @@ export default function MapViewScreen() {
           showsMyLocationButton={false}
           clusteringEnabled={false}
           onRegionChangeComplete={(region: any) => {
+            setMapRegion(region);
             if (FeatureFlags.ENABLE_EASTER_EGGS && FeatureFlags.ENABLE_MAP_EASTER_EGG && region.latitudeDelta > 0.3 && nearbyBaskets.length >= 2 && !constellationShown.current) {
               constellationShown.current = true;
               setShowConstellationBanner(true);
@@ -529,10 +848,8 @@ export default function MapViewScreen() {
             }
           }}
         >
-          {/* ── Address pin + radius circle — rendered FIRST with stable keys.
-              These never unmount. The pin uses a native image marker (no custom
-              View child) so react-native-maps treats it as a lightweight native
-              object that survives child-list reconciliation on both iOS and Android. */}
+          {/* Address pin — shape-only (no Text/SVG), renders fine on both
+              platforms as a native Marker child. */}
           {Marker && (
             <Marker
               key="address-pin"
@@ -553,49 +870,220 @@ export default function MapViewScreen() {
           {Circle && (
             <Circle key="radius-circle" center={center} radius={radius * 1000} fillColor={circleFillColor} strokeColor={circleStrokeColor} strokeWidth={2.5} />
           )}
-          {/* ── Business pins — ONE stable list, never changes length during zoom/drag.
-              Each pin is styled rich (nearby) or simple (far) based on distance. */}
-          {allPins.map((pin) => {
-            if (!Marker || !pin.hasCoords) return null;
-            const isNearby = pin.dist <= radius;
-            // bustKey re-captures the marker bitmap on Android whenever the
-            // pin's visual state changes (nearby/far toggle, stock count), so
-            // dragging the radius slider live-updates the markers. Without it,
-            // Android freezes the first bitmap and the icons look clipped.
-            const bustKey = `${isNearby ? 'near' : 'far'}-${pin.totalQty}`;
-            if (isNearby) {
-              // Nearby: show name + basket count badge (with number)
-              const hasStock = pin.totalQty > 0;
-              const pinBg = hasStock ? '#e3ff5c' : '#333';
-              const pinText = hasStock ? '#114b3c' : '#fff';
+          {/* ── Pins + clusters. iOS uses native custom-children <Marker>
+              (Expo-Go-friendly). Android uses an image-based <Marker> fed by
+              the view-shot PNG cache — see off-screen layer below the MapView.
+              Source of truth is `displayPins`: each item is either a single pin
+              or a cluster (grid-aggregated when latitudeDelta > CLUSTER_LAT_DELTA). */}
+          {Marker && Platform.OS === 'ios' && displayPins.map((item) => {
+            if (item.kind === 'cluster') {
               return (
-                <SmartMarker MarkerComponent={Marker} key={`pin-${pin.merchantId}`} bustKey={bustKey} coordinate={{ latitude: pin.latitude as number, longitude: pin.longitude as number }} anchor={{ x: 0.5, y: 1 }} onPress={() => router.push(`/restaurant/${pin.merchantId}` as never)}>
-                  <View style={{ alignItems: 'center', width: 140, paddingVertical: 2 }} renderToHardwareTextureAndroid>
-                    <Text style={{ color: '#fff', fontSize: 10, fontWeight: '700', fontFamily: 'Poppins_700Bold', textAlign: 'center', marginBottom: 2, textShadowColor: 'rgba(0,0,0,0.6)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 3 }} numberOfLines={1}>{pin.merchantName}</Text>
-                    <View style={{ backgroundColor: pinBg, borderRadius: 14, paddingHorizontal: 8, paddingVertical: 4, flexDirection: 'row', alignItems: 'center', gap: 4, elevation: 5 }}>
-                      <ShoppingBag size={12} color={pinText} />
-                      <Text style={{ color: pinText, fontSize: 11, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>{pin.totalQty}</Text>
-                    </View>
-                    <View style={{ width: 0, height: 0, borderLeftWidth: 5, borderRightWidth: 5, borderTopWidth: 6, borderLeftColor: 'transparent', borderRightColor: 'transparent', borderTopColor: pinBg }} />
+                <Marker
+                  key={item.itemKey}
+                  identifier={`cluster:${item.lat},${item.lng}`}
+                  coordinate={{ latitude: item.lat, longitude: item.lng }}
+                  anchor={{ x: 0.5, y: 0.5 }}
+                  tracksViewChanges={iosClusterTracking}
+                  onPress={handleClusterMarkerPress}
+                >
+                  <View style={{
+                    minWidth: 48,
+                    minHeight: 24,
+                    backgroundColor: '#e3ff5c',
+                    borderRadius: 14,
+                    paddingHorizontal: 8,
+                    paddingVertical: 4,
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    borderWidth: 1.5,
+                    borderColor: '#114b3c',
+                  }}>
+                    <Store size={12} color="#114b3c" />
+                    <Text style={{ color: '#114b3c', fontWeight: '700', fontSize: 11, fontFamily: 'Poppins_700Bold', marginLeft: 4 }}>
+                      {item.count > 99 ? '99+' : String(item.count)}
+                    </Text>
                   </View>
-                </SmartMarker>
+                </Marker>
               );
             }
-            // Far: show name + icon only (no number). Outer container has an
-            // explicit width so Android doesn't clip the icon box.
+            const pin = item.pin;
+            const isNearby = pin.dist <= radius;
+            const hasStock = isNearby && pin.totalQty > 0;
+            const pinBg = isNearby ? (hasStock ? '#e3ff5c' : '#333') : '#114b3c';
+            const pinText = isNearby ? (hasStock ? '#114b3c' : '#fff') : '#fff';
             return (
-              <SmartMarker MarkerComponent={Marker} key={`pin-${pin.merchantId}`} bustKey={bustKey} coordinate={{ latitude: pin.latitude as number, longitude: pin.longitude as number }} anchor={{ x: 0.5, y: 1 }} onPress={() => router.push(`/restaurant/${pin.merchantId}` as never)}>
-                <View style={{ alignItems: 'center', width: 140, paddingVertical: 2 }} renderToHardwareTextureAndroid>
-                  <Text style={{ color: '#fff', fontSize: 9, fontWeight: '600', textAlign: 'center', marginBottom: 2, textShadowColor: 'rgba(0,0,0,0.6)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 3 }} numberOfLines={1}>{pin.merchantName}</Text>
-                  <View style={{ backgroundColor: '#114b3c', borderRadius: 12, width: 28, height: 28, justifyContent: 'center', alignItems: 'center', elevation: 3 }}>
-                    <ShoppingBag size={14} color="#fff" />
-                  </View>
-                  <View style={{ width: 0, height: 0, borderLeftWidth: 4, borderRightWidth: 4, borderTopWidth: 5, borderLeftColor: 'transparent', borderRightColor: 'transparent', borderTopColor: '#114b3c' }} />
+              <Marker
+                key={`pin-${pin.merchantId}`}
+                coordinate={{ latitude: pin.latitude as number, longitude: pin.longitude as number }}
+                anchor={{ x: 0.5, y: 1 }}
+                tracksViewChanges={true}
+                onPress={() => router.push(`/restaurant/${pin.merchantId}` as never)}
+              >
+                <View style={{ alignItems: 'center', width: 140, height: 56, paddingVertical: 2 }}>
+                  {showLabels && (
+                    <Text style={{ width: 140, fontSize: isNearby ? 10 : 9, fontWeight: isNearby ? '700' : '600', fontFamily: isNearby ? 'Poppins_700Bold' : undefined, textAlign: 'center', marginBottom: 2, ...MERCHANT_LABEL_STYLE }} numberOfLines={1}>
+                      {pin.merchantName}
+                    </Text>
+                  )}
+                  {isNearby ? (
+                    <>
+                      <View style={{ backgroundColor: pinBg, borderRadius: 14, paddingHorizontal: 8, paddingVertical: 4, flexDirection: 'row', alignItems: 'center' }}>
+                        <ShoppingBag size={12} color={pinText} />
+                        <Text style={{ color: pinText, fontSize: 11, fontWeight: '700', fontFamily: 'Poppins_700Bold', marginLeft: 4 }}>{pin.totalQty}</Text>
+                      </View>
+                      <View style={{ width: 0, height: 0, borderLeftWidth: 5, borderRightWidth: 5, borderTopWidth: 6, borderLeftColor: 'transparent', borderRightColor: 'transparent', borderTopColor: pinBg }} />
+                    </>
+                  ) : (
+                    <>
+                      <View style={{ backgroundColor: '#114b3c', borderRadius: 12, width: 28, height: 28, justifyContent: 'center', alignItems: 'center' }}>
+                        <ShoppingBag size={14} color="#fff" />
+                      </View>
+                      <View style={{ width: 0, height: 0, borderLeftWidth: 4, borderRightWidth: 4, borderTopWidth: 5, borderLeftColor: 'transparent', borderRightColor: 'transparent', borderTopColor: '#114b3c' }} />
+                    </>
+                  )}
                 </View>
-              </SmartMarker>
+              </Marker>
+            );
+          })}
+          {Marker && Platform.OS === 'android' && displayPins.map((item) => {
+            if (item.kind === 'cluster') {
+              const key = getClusterKey(item.count);
+              const uri = pinImages[key];
+              if (!uri) return null;
+              return (
+                <Marker
+                  key={item.itemKey}
+                  identifier={`cluster:${item.lat},${item.lng}`}
+                  coordinate={{ latitude: item.lat, longitude: item.lng }}
+                  anchor={{ x: 0.5, y: 0.5 }}
+                  image={{ uri }}
+                  onPress={handleClusterMarkerPress}
+                />
+              );
+            }
+            const pin = item.pin;
+            const isNearby = pin.dist <= radius;
+            const key = getPinKey(pin.merchantId, pin.totalQty, isNearby, showLabels);
+            const uri = pinImages[key];
+            if (!uri) return null;
+            return (
+              <Marker
+                key={`pin-${pin.merchantId}`}
+                coordinate={{ latitude: pin.latitude as number, longitude: pin.longitude as number }}
+                anchor={{ x: 0.5, y: 1 }}
+                image={{ uri }}
+                onPress={() => router.push(`/restaurant/${pin.merchantId}` as never)}
+              />
             );
           })}
         </MapView>
+
+        {/* Android-only off-screen rendering layer for view-shot snapshots.
+            iOS skips this entirely — its rich markers render natively inside
+            the MapView above. `collapsable={false}` ensures Android wraps each
+            pin in its own native view (otherwise captureRef would fail). */}
+        {Platform.OS === 'android' && (
+          <View
+            pointerEvents="none"
+            style={{ position: 'absolute', top: -10000, left: 0, opacity: 0 }}
+            collapsable={false}
+          >
+            {(() => {
+              // Dedupe by cache key — multiple clusters with the same count share
+              // one cluster|N cache entry, so React would otherwise see duplicate
+              // sibling keys. We only need to render+snapshot each unique design
+              // once.
+              const seen = new Set<string>();
+              return displayPins.map((item) => {
+                if (item.kind === 'cluster') {
+                  const key = getClusterKey(item.count);
+                  if (seen.has(key) || pinImages[key]) return null;
+                  seen.add(key);
+                  return (
+                    <View
+                      key={key}
+                      ref={(r) => { pinRefs.current[key] = r; }}
+                      onLayout={() => captureMarkerForKey(key)}
+                      collapsable={false}
+                      style={{
+                        // alignSelf: 'flex-start' prevents the cluster from
+                        // stretching to the parent's width on Android — the
+                        // off-screen <View> has no explicit width, so without
+                        // this the captured PNG came out very wide.
+                        alignSelf: 'flex-start',
+                        backgroundColor: '#e3ff5c',
+                        borderRadius: 14,
+                        paddingHorizontal: 6,
+                        paddingVertical: 4,
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        borderWidth: 1.5,
+                        borderColor: '#114b3c',
+                      }}
+                    >
+                      <Store size={12} color="#114b3c" />
+                      <Text style={{ color: '#114b3c', fontWeight: '700', fontSize: 11, fontFamily: 'Poppins_700Bold', marginLeft: 4 }}>
+                        {item.count > 99 ? '99+' : String(item.count)}
+                      </Text>
+                    </View>
+                  );
+                }
+                const pin = item.pin;
+                const isNearby = pin.dist <= radius;
+                const key = getPinKey(pin.merchantId, pin.totalQty, isNearby, showLabels);
+                if (seen.has(key) || pinImages[key]) return null;
+                seen.add(key);
+                const hasStock = isNearby && pin.totalQty > 0;
+                const pinBg = isNearby ? (hasStock ? '#e3ff5c' : '#333') : '#114b3c';
+                const pinText = isNearby ? (hasStock ? '#114b3c' : '#fff') : '#fff';
+                return (
+                  <View
+                    key={key}
+                    ref={(r) => { pinRefs.current[key] = r; }}
+                    onLayout={() => captureMarkerForKey(key)}
+                    collapsable={false}
+                    style={{ alignItems: 'center', width: 140, paddingVertical: 2 }}
+                  >
+                    {showLabels && (
+                      <Text
+                        style={{
+                          width: 140,
+                          fontSize: isNearby ? 10 : 9,
+                          fontWeight: isNearby ? '700' : '600',
+                          fontFamily: isNearby ? 'Poppins_700Bold' : undefined,
+                          textAlign: 'center',
+                          marginBottom: 2,
+                          ...MERCHANT_LABEL_STYLE,
+                        }}
+                        numberOfLines={1}
+                      >
+                        {pin.merchantName}
+                      </Text>
+                    )}
+                    {isNearby ? (
+                      <>
+                        <View style={{ backgroundColor: pinBg, borderRadius: 14, paddingHorizontal: 8, paddingVertical: 4, flexDirection: 'row', alignItems: 'center' }}>
+                          <ShoppingBag size={12} color={pinText} />
+                          <Text style={{ color: pinText, fontSize: 11, fontWeight: '700', fontFamily: 'Poppins_700Bold', marginLeft: 4 }}>{pin.totalQty}</Text>
+                        </View>
+                        <View style={{ width: 0, height: 0, borderLeftWidth: 5, borderRightWidth: 5, borderTopWidth: 6, borderLeftColor: 'transparent', borderRightColor: 'transparent', borderTopColor: pinBg }} />
+                      </>
+                    ) : (
+                      <>
+                        <View style={{ backgroundColor: '#114b3c', borderRadius: 12, width: 28, height: 28, justifyContent: 'center', alignItems: 'center' }}>
+                          <ShoppingBag size={14} color="#fff" />
+                        </View>
+                        <View style={{ width: 0, height: 0, borderLeftWidth: 4, borderRightWidth: 4, borderTopWidth: 5, borderLeftColor: 'transparent', borderRightColor: 'transparent', borderTopColor: '#114b3c' }} />
+                      </>
+                    )}
+                  </View>
+                );
+              });
+            })()}
+          </View>
+        )}
+        </>
       ) : (
         <MapFallback markers={markers} radius={radius} style={StyleSheet.absoluteFillObject} />
       )}
@@ -604,6 +1092,7 @@ export default function MapViewScreen() {
       {!searchFullScreen && (
         <TouchableOpacity
           onPress={openSearch}
+          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
           style={{
             position: 'absolute', top: insets.top + 8, right: 16, zIndex: 30,
             width: 44, height: 44, backgroundColor: theme.colors.surface, borderRadius: 22,
@@ -647,7 +1136,7 @@ export default function MapViewScreen() {
           {/* Search results */}
           <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 16 }} keyboardShouldPersistTaps="handled">
             {/* Category chips — always visible at top */}
-            <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, fontWeight: '600', marginBottom: 10, textTransform: 'uppercase', letterSpacing: 0.5 }}>
+            <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, fontWeight: '600', marginBottom: 10, textTransform: 'none', letterSpacing: 0.5 }}>
               {t('home.categories.all', { defaultValue: 'Categories' })}
             </Text>
             <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 20 }}>
@@ -667,7 +1156,7 @@ export default function MapViewScreen() {
             {/* Results */}
             {searchSuggestions.length > 0 ? (
               <>
-                <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, fontWeight: '600', marginBottom: 10, textTransform: 'uppercase', letterSpacing: 0.5 }}>
+                <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, fontWeight: '600', marginBottom: 10, textTransform: 'none', letterSpacing: 0.5 }}>
                   {t('home.searchResults', { defaultValue: 'Résultats' })} ({searchSuggestions.length})
                 </Text>
                 {searchSuggestions.map((s) => (
@@ -721,7 +1210,23 @@ export default function MapViewScreen() {
         {/* Category chips row — sits ABOVE the radius card. Always visible on
             the main map view; tap a chip to filter map pins + bottom list. */}
         <ScrollView
+          ref={mapCategoryRowRef as any}
           onLayout={(e) => {
+            // Suppress publishes during the customer walkthrough. We
+            // can't rely on `currentStep.measureKey` because the (tabs)
+            // layout's [step] effect that calls setCurrentStep is
+            // async — when /map-view mounts after the user taps the
+            // map button, this onLayout can fire BEFORE the layout
+            // overlay's effect has set currentStep to 'mapRadiusPill',
+            // so the previous check missed it and a mid-push-animation
+            // rect leaked into the store. Checking `step !== null &&
+            // demoCustomerActive` catches the race because step is
+            // updated SYNCHRONOUSLY by nextStep before the navigation
+            // even starts. Outside the demo (regular users on /map-view)
+            // demoCustomerActive is false, so this is a pure pass-
+            // through.
+            const s = useWalkthroughStore.getState();
+            if (s.step !== null && s.demoCustomerActive) return;
             (e.target as any)?.measureInWindow?.((x: number, y: number, w: number, h: number) => {
               if (w > 0 && h > 0) useWalkthroughStore.getState().setMeasuredRect('mapCategoryRow', { x, y, w, h });
             });
@@ -757,7 +1262,21 @@ export default function MapViewScreen() {
         </ScrollView>
 
         {radiusExpanded ? (
-          <View style={[styles.radiusCard, { backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, ...theme.shadows.shadowMd, padding: 12 }]}>
+          <View
+            ref={mapRadiusExpandedRef}
+            onLayout={(e) => {
+              // Same race-proof skip as the pill / category onLayouts —
+              // suppress mid-mount publishes during the customer demo;
+              // the step-driven 280 ms re-measure above is the
+              // authoritative publisher.
+              const s = useWalkthroughStore.getState();
+              if (s.step !== null && s.demoCustomerActive) return;
+              (e.target as any)?.measureInWindow?.((x: number, y: number, w: number, h: number) => {
+                if (w > 0 && h > 0) useWalkthroughStore.getState().setMeasuredRect('mapRadiusExpanded', { x, y, w, h });
+              });
+            }}
+            style={[styles.radiusCard, { backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, ...theme.shadows.shadowMd, padding: 12 }]}
+          >
             <TouchableOpacity onPress={() => setRadiusExpanded(false)} style={styles.radiusRow} activeOpacity={0.7}>
               <MapPin size={14} color={theme.colors.primary} />
               <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, marginLeft: 4, flex: 1 }]}>{t('home.radiusFilter')}</Text>
@@ -780,7 +1299,12 @@ export default function MapViewScreen() {
           </View>
         ) : (
           <TouchableOpacity
+            ref={mapRadiusPillRef as any}
             onLayout={(e) => {
+              // Same step!=null + demoCustomerActive race-proof check as
+              // the category row above — see comment there.
+              const s = useWalkthroughStore.getState();
+              if (s.step !== null && s.demoCustomerActive) return;
               (e.target as any)?.measureInWindow?.((x: number, y: number, w: number, h: number) => {
                 if (w > 0 && h > 0) useWalkthroughStore.getState().setMeasuredRect('mapRadiusPill', { x, y, w, h });
               });
@@ -803,6 +1327,7 @@ export default function MapViewScreen() {
       <TouchableOpacity
         style={[styles.locationButton, { bottom: COLLAPSED_HEIGHT + 16, right: 16, backgroundColor: theme.colors.surface, borderRadius: 28, width: 48, height: 48, ...theme.shadows.shadowLg }]}
         onPress={handleRecenter}
+        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
         accessibilityLabel="Re-center map"
       >
         {locationStatus === 'loading' ? (
@@ -851,7 +1376,7 @@ export default function MapViewScreen() {
                   </Text>
                 )}
               </View>
-              <TouchableOpacity onPress={toggleSheet}>
+              <TouchableOpacity onPress={toggleSheet} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
                 <ChevronUp size={20} color={theme.colors.muted} style={{ transform: [{ rotate: isExpanded ? '180deg' : '0deg' }] }} />
               </TouchableOpacity>
             </View>
@@ -893,7 +1418,10 @@ export default function MapViewScreen() {
                   </View>
                   {filteredBaskets
                     .filter(b => b.hasCoords && b.isActive && b.quantityLeft > 0)
-                    .map(b => ({ ...b, dist: getDistance(center.latitude, center.longitude, b.latitude as number, b.longitude as number) }))
+                    .map(b => {
+                      const d = getDistance(center.latitude, center.longitude, b.latitude as number, b.longitude as number);
+                      return { ...b, dist: d, distance: Math.round(d * 10) / 10 };
+                    })
                     .sort((a, b) => a.dist - b.dist)
                     .map((basket) => (
                       <BasketCard
@@ -936,7 +1464,7 @@ export default function MapViewScreen() {
           an element on this screen (radius pill / category row). The (tabs)
           layout's overlay sits underneath /map-view in the Stack so it would
           otherwise be invisible here. */}
-      <SubScreenWalkthroughOverlay keys={['mapRadiusPill', 'mapCategoryRow']} />
+      <SubScreenWalkthroughOverlay keys={['mapRadiusPill', 'mapRadiusExpanded', 'mapCategoryRow']} />
     </View>
   );
 }

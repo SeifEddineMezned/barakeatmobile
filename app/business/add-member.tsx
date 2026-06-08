@@ -15,9 +15,13 @@ import {
 } from '@/src/services/teams';
 import { useCustomAlert } from '@/src/components/CustomAlert';
 import { getErrorMessage } from '@/src/lib/api';
+import { formatLocationName } from '@/src/utils/formatLocation';
 
 type PermissionKey = 'confirm_pickup' | 'edit_quantities' | 'edit_basket_info' | 'create_delete_baskets' | 'view_history' | 'messaging' | 'cancel_order';
-type RolePreset = 'org_admin' | 'full_access' | 'orders_only' | 'view_only';
+// Unified with the change-role popup (TeamRoleChangeModal) — three roles
+// only: Membre / Admin de l'emplacement / Admin de l'organisation.
+// Finer-grained controls live behind "Permissions avancées" below.
+type RolePreset = 'member' | 'location_admin' | 'org_admin';
 
 function permBoolToString(val: boolean): string {
   return val ? 'write' : 'none';
@@ -33,32 +37,27 @@ interface PresetConfig {
 
 const ROLE_PRESETS: PresetConfig[] = [
   {
+    id: 'member',
+    labelKey: 'business.team.roleMember',
+    descKey: 'business.team.roleMemberDesc',
+    role: 'member',
+    // Sensible baseline — most members will need to confirm pickups and
+    // message customers. Anything else is opt-in via "Permissions avancées".
+    permissions: { confirm_pickup: true, edit_quantities: false, edit_basket_info: false, create_delete_baskets: false, view_history: false, messaging: true, cancel_order: false },
+  },
+  {
+    id: 'location_admin',
+    labelKey: 'business.team.roleLocationAdmin',
+    descKey: 'business.team.roleLocationAdminDesc',
+    role: 'admin',
+    permissions: { confirm_pickup: true, edit_quantities: true, edit_basket_info: true, create_delete_baskets: true, view_history: true, messaging: true, cancel_order: true },
+  },
+  {
     id: 'org_admin',
     labelKey: 'business.team.roleOrgAdmin',
     descKey: 'business.team.roleOrgAdminDesc',
     role: 'admin',
     permissions: { confirm_pickup: true, edit_quantities: true, edit_basket_info: true, create_delete_baskets: true, view_history: true, messaging: true, cancel_order: true },
-  },
-  {
-    id: 'full_access',
-    labelKey: 'business.team.roleFullAccess',
-    descKey: 'business.team.roleFullAccessDesc',
-    role: 'member',
-    permissions: { confirm_pickup: true, edit_quantities: true, edit_basket_info: true, create_delete_baskets: true, view_history: true, messaging: true, cancel_order: true },
-  },
-  {
-    id: 'orders_only',
-    labelKey: 'business.team.roleOrdersOnly',
-    descKey: 'business.team.roleOrdersOnlyDesc',
-    role: 'member',
-    permissions: { confirm_pickup: true, edit_quantities: false, edit_basket_info: false, create_delete_baskets: false, view_history: false, messaging: true, cancel_order: false },
-  },
-  {
-    id: 'view_only',
-    labelKey: 'business.team.roleViewOnly',
-    descKey: 'business.team.roleViewOnlyDesc',
-    role: 'member',
-    permissions: { confirm_pickup: false, edit_quantities: false, edit_basket_info: false, create_delete_baskets: false, view_history: true, messaging: false, cancel_order: false },
   },
 ];
 
@@ -83,7 +82,7 @@ export default function AddMemberScreen() {
     if (preSelectedLocation) set.add(preSelectedLocation);
     return set;
   });
-  const [selectedPreset, setSelectedPreset] = useState<RolePreset | null>('orders_only');
+  const [selectedPreset, setSelectedPreset] = useState<RolePreset | null>('member');
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [sendCredentials, setSendCredentials] = useState(true);
   const [permissions, setPermissions] = useState<Record<PermissionKey, boolean>>({
@@ -176,7 +175,10 @@ export default function AddMemberScreen() {
         }
       }
       const locationNames = assignedLocationIds
-        .map((id) => (locations as any[]).find((l: any) => l.id === id)?.name)
+        .map((id) => {
+          const bare = (locations as any[]).find((l: any) => l.id === id)?.name;
+          return bare ? formatLocationName(contextQuery.data?.organization_name, bare) : null;
+        })
         .filter(Boolean);
       const locationLine = locationNames.length > 0
         ? `\n${t('business.team.assignedTo', { defaultValue: 'Assigné à' })}: ${locationNames.join(', ')}`
@@ -188,7 +190,25 @@ export default function AddMemberScreen() {
       );
     },
     onError: (err: any) => {
-      alert.showAlert(t('common.error'), err?.message ?? t('common.errorOccurred'));
+      // Backend rejects cross-org partner adds with a typed 409. Surface a
+      // dedicated alert that names the conflicting org so the admin knows
+      // exactly why the email was refused. The apiClient interceptor
+      // unwraps the axios error to { status, message, data, isApiError },
+      // so the payload lives at err.data (not err.response.data).
+      if (err?.data?.error === 'email_already_partner_elsewhere') {
+        const otherOrg =
+          err.data.other_org_name
+          || t('business.team.addMemberError.otherCommerce', { defaultValue: 'un autre commerce' });
+        alert.showAlert(
+          t('business.team.addMemberError.title', { defaultValue: 'Email déjà utilisé' }),
+          t('business.team.addMemberError.emailInOtherOrg', {
+            org: otherOrg,
+            defaultValue: `Cet email est déjà associé à ${otherOrg}. Utilisez une adresse différente, ou retirez d'abord ce membre de l'autre commerce.`,
+          }),
+        );
+        return;
+      }
+      alert.showAlert(t('common.error'), getErrorMessage(err));
     },
   });
 
@@ -209,6 +229,7 @@ export default function AddMemberScreen() {
         {/* ── Name ── */}
         <Text style={styles.sectionLabel}>
           {t('business.team.fieldName', { defaultValue: 'Nom complet' })}
+          <Text style={{ color: theme.colors.error }}> *</Text>
         </Text>
         <TextInput
           style={[styles.input, { backgroundColor: theme.colors.surface, borderColor: theme.colors.divider, color: theme.colors.textPrimary }]}
@@ -222,6 +243,7 @@ export default function AddMemberScreen() {
         {/* ── Email ── */}
         <Text style={[styles.sectionLabel, { marginTop: 20 }]}>
           {t('business.team.fieldEmail', { defaultValue: 'Email' })}
+          <Text style={{ color: theme.colors.error }}> *</Text>
         </Text>
         <TextInput
           style={[styles.input, { backgroundColor: theme.colors.surface, borderColor: theme.colors.divider, color: theme.colors.textPrimary }]}
@@ -236,6 +258,7 @@ export default function AddMemberScreen() {
         {/* ── Password ── */}
         <Text style={[styles.sectionLabel, { marginTop: 20 }]}>
           {t('business.team.fieldPassword', { defaultValue: 'Mot de passe temporaire' })}
+          <Text style={{ color: theme.colors.error }}> *</Text>
         </Text>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
           <TextInput
@@ -425,7 +448,7 @@ const styles = StyleSheet.create({
   },
   sectionLabel: {
     color: '#114b3c', fontSize: 13, fontWeight: '700',
-    textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6,
+    textTransform: 'none', letterSpacing: 0.5, marginBottom: 6,
   },
   input: {
     borderWidth: 1, borderRadius: 12, padding: 14, fontSize: 15,

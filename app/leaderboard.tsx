@@ -218,11 +218,12 @@ export default function LeaderboardScreen() {
             styles.filterTab,
             {
               backgroundColor: activeFilter === 'all' ? theme.colors.primary : theme.colors.surface,
-              borderRadius: theme.radii.pill,
+              borderRadius: 8,
+              borderWidth: 1,
+              borderColor: activeFilter === 'all' ? theme.colors.primary : theme.colors.divider,
               paddingHorizontal: theme.spacing.lg,
               paddingVertical: theme.spacing.sm,
               marginRight: theme.spacing.sm,
-              ...theme.shadows.shadowSm,
             },
           ]}
         >
@@ -242,10 +243,11 @@ export default function LeaderboardScreen() {
             styles.filterTab,
             {
               backgroundColor: activeFilter === 'region' ? theme.colors.primary : theme.colors.surface,
-              borderRadius: theme.radii.pill,
+              borderRadius: 8,
+              borderWidth: 1,
+              borderColor: activeFilter === 'region' ? theme.colors.primary : theme.colors.divider,
               paddingHorizontal: theme.spacing.lg,
               paddingVertical: theme.spacing.sm,
-              ...theme.shadows.shadowSm,
             },
           ]}
         >

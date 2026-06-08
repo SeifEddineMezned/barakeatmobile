@@ -3,6 +3,8 @@
     "cancel": "Cancel",
     "confirm": "Confirm",
     "continue": "Continue",
+    "showMore": "Show more",
+    "showLess": "Show less",
     "skip": "Skip",
     "close": "Close",
     "save": "Save",
@@ -38,19 +40,25 @@
     "signOutAndSignIn": "Sign out",
     "takePhoto": "Take a photo",
     "chooseFromGallery": "Choose from gallery",
+    "choose": "Choose",
+    "crop": "Crop",
     "cameraPermRequired": "Camera access is required.",
-    "photoPermRequired": "Photo library access is required."
+    "photoPermRequired": "Photo library access is required.",
+    "warning": "Warning",
+    "youSuffix": "(You)"
   },
   "claims": {
     "title": "Report an issue",
     "regarding": "Regarding:",
+    "basket": "Basket:",
     "selectReason": "Reason for the report",
     "foodQuality": "Food quality",
     "wrongInfo": "Incorrect information",
     "hygiene": "Hygiene",
     "notReceived": "Order not received",
     "other": "Other",
-    "description": "Description (optional)",
+    "description": "Description",
+    "descriptionRequired": "Please describe the problem.",
     "descPlaceholder": "Describe the issue...",
     "addPhotoOptional": "Add a photo (optional)",
     "insertOrTakePhoto": "Insert or take a photo",
@@ -133,6 +141,10 @@
     "chooseAccountType": "How will you use Barakeat?",
     "customerRole": "I'm a Customer",
     "customerRoleDesc": "Find and reserve surprise baskets near you",
+    "genderTitle": "You are?",
+    "genderSubtitle": "This helps us personalize your experience. You can skip this step.",
+    "genderMale": "Man",
+    "genderFemale": "Woman",
     "businessRoleDesc": "Sell surplus food and reduce waste",
     "passwordRequirements": "Min 8 characters with uppercase, lowercase, a number and a special character (!@#$%...)",
     "tosRequired": "Please accept the Terms of Service to continue.",
@@ -143,7 +155,9 @@
     "termsOfService": "Terms of Service",
     "privacyPolicy": "Privacy Policy",
     "continueWithApple": "Continue with Apple",
-    "appleAuthError": "Apple sign-in failed. Please try again."
+    "appleAuthError": "Apple sign-in failed. Please try again.",
+    "appleUnavailable": "Apple Sign-In is unavailable right now. Please use email or Google to sign in.",
+    "businessMustUseEmail": "Merchants sign in with email only."
   },
   "address": {
     "addresses": "Addresses",
@@ -245,7 +259,18 @@
     "tapToView": "Tap to view details",
     "addFavorite": "Add to favorites",
     "removeFavorite": "Remove from favorites",
-    "reserve": "Reserve"
+    "reserve": "Reserve",
+    "pickupInstructionsCollapse": "Collapse",
+    "pickupInstructionsExpand": "… Read more",
+    "dietary": {
+      "vegan": "Vegan",
+      "vegetarian": "Vegetarian",
+      "halal": "Halal",
+      "gluten_free": "Gluten-free",
+      "dairy_free": "Dairy-free",
+      "organic": "Organic"
+    },
+    "pickupInstructionsTapToExpand": "Tap to read"
   },
   "reserve": {
     "title": "Reserve Basket",
@@ -288,7 +313,9 @@
     "cashWarningIntro": "Ready to pick up this basket?\n\nIf your plans change, please cancel early, it frees up the spot for someone else.",
     "cashWarningBan": "Repeated no shows without cancelling may lead to a temporary pause on your reservations.",
     "shareCode": "Share pickup info",
-    "goToOrders": "My Orders"
+    "goToOrders": "My Orders",
+    "basketsCount": "× {{count}} basket(s)",
+    "subtotal": "Subtotal"
   },
   "orders": {
     "title": "Orders",
@@ -318,6 +345,17 @@
     "emptyDesc": "Reserve a surprise bag to save food and money!",
     "findBasket": "Find a Surprise Bag",
     "emptyPastDesc": "Your completed and cancelled orders will appear here.",
+    "cancelReasonPlaceholder": "Tell us more...",
+    "cancelReasonOtherRequired": "Please describe the reason.",
+    "cancelReasons": {
+      "changed_mind": "I changed my mind",
+      "cant_make_it": "I can't make it",
+      "ordered_mistake": "Ordered by mistake",
+      "emergency": "Emergency",
+      "other": "Other"
+    },
+    "motifFromBusiness": "from the business",
+    "motifFromCustomer": "from the customer",
     "yourImpact": "Your Impact",
     "todayPickups": "Today's Pickups",
     "startsIn": "Starts in",
@@ -340,7 +378,9 @@
     "cancelBasketReturned": "The basket goes back to the shop",
     "cancelIrreversible": "This action is permanent and cannot be undone.",
     "keepOrder": "Keep",
-    "cancelContinue": "Cancel"
+    "cancelContinue": "Cancel",
+    "impactCo2Label": "CO₂ avoided",
+    "impactMoneyLabel": "Saved"
   },
   "review": {
     "title": "Leave a Review",
@@ -411,6 +451,15 @@
     "switchRole": "Switch demo role",
     "changePassword": "Change Password",
     "passwordChanged": "Password changed successfully.",
+    "wrongCurrentPassword": "Current password is incorrect.",
+    "changeEmail": "Change Email",
+    "currentEmail": "Current Email",
+    "newEmail": "New Email",
+    "emailChanged": "Email changed successfully.",
+    "sendCode": "Send code",
+    "emailCodeSent": "We sent a 6-digit code to {{email}}. Enter it below to confirm.",
+    "confirmationCode": "Confirmation code",
+    "verifyAndSave": "Verify & save",
     "foodPreferences": "Food Preferences",
     "preferencesUpdated": "Preferences updated.",
     "currentPassword": "Current Password",
@@ -458,8 +507,9 @@
     "cta": "Report this business",
     "reasonLabel": "Select a reason",
     "reasonPlaceholder": "Select a reason...",
-    "detailsLabel": "Additional details (optional)",
+    "detailsLabel": "Details",
     "detailsPlaceholder": "Describe the issue...",
+    "detailsRequired": "Please describe the problem.",
     "submit": "Submit Report",
     "localConfirmTitle": "Report recorded",
     "localConfirmMsg": "Thank you. Your report has been saved locally and will be reviewed when our team syncs reports.",
@@ -484,7 +534,9 @@
     "coordinates": "Coordinates",
     "dragToMove": "Drag the map to reposition the pin",
     "deleteConfirmTitle": "Delete this address?",
-    "deleteIrreversible": "This action is permanent."
+    "deleteIrreversible": "This action is permanent.",
+    "detectedLabel": "Detected address",
+    "useDetected": "Use"
   },
   "map": {
     "title": "Nearby",
@@ -493,22 +545,21 @@
     "availableLocations": "Available locations"
   },
   "categories": {
-    "bakery": "Bakery",
-    "boulangerie": "Bakery",
+    "bakery": "Bakery/Pastry",
+    "boulangerie": "Bakery/Pastry",
     "patisserie": "Pastry Shop",
     "restaurant": "Restaurant",
     "restaurants": "Restaurant",
-    "meals": "Meals",
     "supermarket": "Supermarket",
-    "grocery": "Grocery",
     "cafe": "Café",
     "café": "Café",
     "coffee": "Coffee Shop",
     "fast_food": "Fast Food",
     "fast food": "Fast Food",
     "snack": "Snack",
-    "fresh": "Fresh Produce",
-    "traiteur": "Catering"
+    "pizzeria": "Pizzeria",
+    "traiteur": "Catering",
+    "healthy": "Healthy"
   },
   "timeAgo": {
     "seconds": "{{count}}s",
@@ -527,20 +578,35 @@
     "notif_title_reservation_cancelled": "Reservation Cancelled",
     "notif_title_pickup_confirmed": "Pickup Confirmed",
     "notif_title_basket_picked_up": "Basket Picked Up",
-    "notif_message_basket_picked_up": "{{customerName}} picked up {{quantity}} basket(s) at {{location}}.",
+    "notif_message_basket_picked_up_one": "{{customerName}} picked up {{count}} basket at {{location}}.",
+    "notif_message_basket_picked_up_other": "{{customerName}} picked up {{count}} baskets at {{location}}.",
     "notif_title_review_received": "New Review",
     "notif_title_new_review": "New Review",
-    "notif_message_new_reservation": "{{customerName}} reserved {{count}} basket(s) at {{location}}",
-    "notif_message_reservation_cancelled": "{{customerName}} cancelled {{count}} reservation(s) at {{location}}",
-    "notif_message_business_cancelled_internal": "{{customerName}}'s order ({{count}} basket(s)) at {{location}} was cancelled by the business",
-    "notif_message_buyer_cancellation": "Your reservation at {{location}} ({{count}} basket(s)) has been cancelled.",
-    "notif_title_business_cancelled": "Order cancelled by business",
-    "notif_message_business_cancelled_buyer": "Your reservation at {{location}} ({{count}} basket(s)) was cancelled by the business.",
+    "notif_message_new_reservation_one": "{{customerName}} reserved {{count}} basket at {{location}}",
+    "notif_message_new_reservation_other": "{{customerName}} reserved {{count}} baskets at {{location}}",
+    "notif_message_reservation_cancelled_one": "{{customerName}} cancelled {{count}} reservation at {{location}}",
+    "notif_message_reservation_cancelled_other": "{{customerName}} cancelled {{count}} reservations at {{location}}",
+    "notif_message_business_cancelled_internal_one": "{{customerName}}'s order ({{count}} basket) at {{location}} was cancelled by the business",
+    "notif_message_business_cancelled_internal_other": "{{customerName}}'s order ({{count}} baskets) at {{location}} was cancelled by the business",
+    "notif_message_buyer_cancellation_one": "You cancelled your reservation at {{location}}.",
+    "notif_message_buyer_cancellation_other": "You cancelled your reservation at {{location}}.",
+    "notif_title_business_cancelled": "Reservation Cancelled",
+    "notif_message_business_cancelled_buyer_one": "Your reservation at {{location}} was cancelled by the business.",
+    "notif_message_business_cancelled_buyer_other": "Your reservation at {{location}} was cancelled by the business.",
+    "cancellationReasonLabel": "Reason",
+    "bravoTitle": "Bravo!",
+    "bonAppetitTitle": "Bon Appétit!",
+    "bravoCustomerDesc": "Your pickup at {{location}} is complete. Would you like to share your experience?",
+    "bravoBusinessDesc": "You turned unsold goods into revenue while helping protect the environment. Keep reducing food waste with Barakeat!",
+    "cancellation_payment_cash": "Since you'd chosen cash payment, nothing was charged.",
+    "cancellation_payment_refunded": "Since you'd paid by {{payment_method_label}}, you'll be refunded {{refund_amount}} TND to your Barakeat balance.",
+    "cancellation_payment_not_charged": "Your payment hadn't gone through yet, so nothing will be charged.",
     "notif_title_order_confirmed": "Order Confirmed",
     "notif_message_order_confirmed": "Your order at {{location}} is confirmed! Pickup: {{time}}. Code: {{code}}",
     "notif_message_pickup_confirmed": "Your pickup at {{restaurant}} was confirmed! Rate your experience?",
     "notif_message_review_received": "A customer left you a review",
-    "notif_new_review": "You received a {{rating}}-star review",
+    "notif_new_review_one": "You received a {{count}}-star review",
+    "notif_new_review_other": "You received a {{count}}-star review",
     "pickupStartsTitle": "Pickup time!",
     "pickupStartsBody": "Your order is ready for pickup.",
     "pickupEndingSoonTitle": "Pickup ending soon!",
@@ -552,9 +618,11 @@
     "markRead": "Mark read",
     "seeAll": "View all notifications",
     "notif_title_streak_expired": "Streak Expired",
-    "notif_message_streak_expired": "Your {{streak}}-day streak expired after 7 days of inactivity. Order now to start a new one!",
+    "notif_message_streak_expired_one": "Your {{count}}-day streak expired after 7 days of inactivity. Order now to start a new one!",
+    "notif_message_streak_expired_other": "Your {{count}}-day streak expired after 7 days of inactivity. Order now to start a new one!",
     "notif_title_streak_expiring": "Streak Expiring Soon!",
-    "notif_message_streak_expiring": "You have {{daysLeft}} day(s) left to keep your {{streak}}-day streak. Order now!",
+    "notif_message_streak_expiring_one": "You have {{daysLeft}} day left to keep your {{count}}-day streak. Order now!",
+    "notif_message_streak_expiring_other": "You have {{daysLeft}} day left to keep your {{count}}-day streak. Order now!",
     "notif_title_new_message": "New Message",
     "notif_message_new_message": "{{senderName}} sent you a message.",
     "notif_title_new_reply": "New Message",
@@ -610,14 +678,45 @@
       "revenueLegend": "Revenue",
       "noData": "No data available yet",
       "days": {
-        "Mon": "Mon", "Tue": "Tue", "Wed": "Wed", "Thu": "Thu", "Fri": "Fri", "Sat": "Sat", "Sun": "Sun",
-        "Monday": "Mon", "Tuesday": "Tue", "Wednesday": "Wed", "Thursday": "Thu", "Friday": "Fri", "Saturday": "Sat", "Sunday": "Sun"
+        "Mon": "Mon",
+        "Tue": "Tue",
+        "Wed": "Wed",
+        "Thu": "Thu",
+        "Fri": "Fri",
+        "Sat": "Sat",
+        "Sun": "Sun",
+        "Monday": "Mon",
+        "Tuesday": "Tue",
+        "Wednesday": "Wed",
+        "Thursday": "Thu",
+        "Friday": "Fri",
+        "Saturday": "Sat",
+        "Sunday": "Sun"
       },
       "months": {
-        "Jan": "Jan", "Feb": "Feb", "Mar": "Mar", "Apr": "Apr", "May": "May", "Jun": "Jun",
-        "Jul": "Jul", "Aug": "Aug", "Sep": "Sep", "Oct": "Oct", "Nov": "Nov", "Dec": "Dec",
-        "January": "Jan", "February": "Feb", "March": "Mar", "April": "Apr", "June": "Jun",
-        "July": "Jul", "August": "Aug", "September": "Sep", "October": "Oct", "November": "Nov", "December": "Dec"
+        "Jan": "Jan",
+        "Feb": "Feb",
+        "Mar": "Mar",
+        "Apr": "Apr",
+        "May": "May",
+        "Jun": "Jun",
+        "Jul": "Jul",
+        "Aug": "Aug",
+        "Sep": "Sep",
+        "Oct": "Oct",
+        "Nov": "Nov",
+        "Dec": "Dec",
+        "January": "Jan",
+        "February": "Feb",
+        "March": "Mar",
+        "April": "Apr",
+        "June": "Jun",
+        "July": "Jul",
+        "August": "Aug",
+        "September": "Sep",
+        "October": "Oct",
+        "November": "Nov",
+        "December": "Dec"
       }
     },
     "baskets": {
@@ -638,6 +737,7 @@
       "onlyOneActive": "Only one basket can be active at a time",
       "quantityAvailable": "Quantity available",
       "saveChanges": "Save changes",
+      "updateFailed": "Could not update the basket. Please try again.",
       "willDeactivate": "will be deactivated.",
       "todayQty": "Today",
       "defaultQty": "Daily Reset",
@@ -646,13 +746,18 @@
       "sameAllDays": "Same for all days",
       "withinHours": "Must be within location hours",
       "timeOutOfRange": "Pickup time must be within location hours ({{start}} - {{end}})",
-      "endBeforeStart": "End time must be after start time"
+      "endBeforeStart": "End time must be after start time",
+      "locationHoursLabel": "Business hours",
+      "usingLocationHours": "Business hours",
+      "pausedBadge": "Paused",
+      "pauseBasket": "Pause",
+      "resumeBasket": "Resume"
     },
     "orders": {
       "title": "Orders",
       "incoming": "Incoming",
       "completed": "Completed",
-      "pendingPickup": "awaiting pickup",
+      "pendingPickup": "Pending",
       "confirmPickup": "Confirm Pickup",
       "cancelOrder": "Cancel",
       "pickupCode": "Pickup Code",
@@ -663,10 +768,23 @@
       "issues_one": "cancelled",
       "issues_other": "cancelled",
       "cancelledBy": "Cancelled by",
-      "cancelledByBuyer": "the customer",
-      "cancelledByBusiness": "the business",
+      "cancelledByBuyer": "Customer",
+      "cancelledByBusiness": "Business",
       "cancelledByMember": "{{name}} (business)",
+      "cancelledByMemberSub": "— {{name}}",
       "cancelReason": "Reason",
+      "cancelReasons": {
+        "expired_no_pickup": "Expired, not picked up",
+        "out_of_stock": "Out of stock",
+        "closing_early": "Unexpected closure",
+        "pricing_error": "Pricing error",
+        "cannot_prepare": "Unable to prepare the basket",
+        "customer_no_show": "Customer no-show",
+        "customer_cancelled": "Cancelled by customer",
+        "business_cancelled": "Cancelled by business",
+        "payment_failed": "Payment failed",
+        "other": "Other"
+      },
       "filterToday": "Today",
       "filterMonth": "This month",
       "filterYear": "This year",
@@ -675,8 +793,8 @@
       "callCustomer": "Call",
       "statusReadyForPickup": "Ready for pickup",
       "statusPickedUp": "Picked up",
-      "statusPickedUp_one": "sold",
-      "statusPickedUp_other": "sold",
+      "statusPickedUp_one": "Sold",
+      "statusPickedUp_other": "Sold",
       "statusPickedUpCard": "Sold",
       "statusCancelled": "Cancelled",
       "noCompletedOrders": "No completed orders",
@@ -696,10 +814,18 @@
       "paymentMethod": "Payment",
       "paymentCash": "Cash",
       "paymentCredits": "Paid with credits",
-      "cancelOrderConfirm": "The customer will be refunded if the order was paid by card or with credits. This action cannot be undone.",
+      "cancelOrderConfirm": "You are about to cancel an order. The customer will be notified immediately. This action is irreversible.",
       "cancelHelpTitle": "About cancellation",
-      "cancelHelpDesc": "Only cancel in unexpected situations: missing stock, unplanned closure, etc. The customer will be notified and refunded if they paid in advance. Repeated cancellations can affect your visibility.",
+      "cancelHelpDesc": "Only cancel in unexpected situations: missing stock, unplanned closure, etc. The customer will be notified and refunded if they paid in advance.",
       "confirmCancel": "Cancel order",
+      "cancelReasonTitle": "Why are you cancelling this order?",
+      "cancelReasonPlaceholder": "Describe the reason…",
+      "cancelContinue": "Continue",
+      "cancelCustomerNotified": "The customer has been notified and refunded if needed.",
+      "cancelWarnNotified": "The customer will be notified of the cancellation",
+      "cancelWarnNoRefundCash": "No refund — cash payment",
+      "cancelWarnRefund": "The customer will be refunded in credits",
+      "cancelWarnBasketReturned": "The basket returns to stock",
       "reservedAt": "Reserved at"
     },
     "profile": {
@@ -741,7 +867,9 @@
       "tempPassword": "Temporary password",
       "imageUpdated": "Image updated successfully.",
       "memberAdded": "Team member added successfully.",
-      "allLocationsLabel": "Organization"
+      "allLocationsLabel": "Organization",
+      "closedDay": "Closed",
+      "closedAllDay": "Closed all day"
     },
     "team": {
       "members": "Members",
@@ -754,6 +882,12 @@
       "confirmRemove": "Remove",
       "locations": "Locations",
       "assignLocation": "Assign to Location",
+      "assignLocationCta": "Assign",
+      "orphanMembersTitle": "Members without a location",
+      "orphanMembersNote": "No location assigned. Assign one so they appear in location filters.",
+      "pickLocationsForDemotion": "Pick locations",
+      "pickLocationsForDemotionHint": "Tick the locations to assign. A membership row will be created for each.",
+      "noLocationsForDemotion": "No locations available. Create one before demoting.",
       "tempPasswordLabel": "Password",
       "membersCount": "{{count}} members",
       "addLocation": "Add Location",
@@ -782,9 +916,16 @@
       "noOrgDesc": "Create an organization to manage your team and locations.",
       "deleteLocation": "Delete Location",
       "deleteLocationConfirm": "Are you sure you want to delete this location?",
+      "deleteLocationNote": "The location and its baskets will be hidden. Past orders and customer conversations remain accessible for history.",
+      "deleteLocationFailed": "Could not hide the location. Please try again.",
       "memberDetail": "Member",
       "recentActivity": "Recent Activity",
       "noActivity": "No recent activity",
+      "addMemberError": {
+        "title": "Email already in use",
+        "emailInOtherOrg": "This email is already linked to {{org}}. Use a different address, or first remove this member from the other business.",
+        "otherCommerce": "another business"
+      },
       "emailSent": "Email sent successfully.",
       "emailSendFailed": "Failed to send email",
       "changeRole": "Change role",
@@ -815,7 +956,8 @@
         "grocery": "Grocery",
         "cafe": "Cafe",
         "supermarket": "Supermarket"
-      }
+      },
+      "changeRoleRetry": "Couldn't update this role right now. Please try again."
     },
     "createBasket": {
       "title": "New Basket",
@@ -843,7 +985,23 @@
       "menuItemsDesc": "Select which menu items are in this basket (optional)",
       "noMenuItems": "No menu items yet — add some in Menu Items",
       "aiSuggestionTitle": "AI Suggestion",
-      "aiSuggestionFilled": "AI suggested content filled in! Adjust as needed."
+      "aiSuggestionFilled": "AI suggested content filled in! Adjust as needed.",
+      "useBusinessHours": "Use business hours",
+      "usingLocationDefault": "Location default pickup window",
+      "pickExistingTitle": "Add a basket",
+      "createManually": "Create a new basket",
+      "createManuallyHint": "Fill out the form from scratch",
+      "orPickExisting": "Or pick an existing basket",
+      "noOrgBaskets": "No baskets in your organization yet.",
+      "useThis": "Use",
+      "useForAllLocations": "Available across all locations",
+      "useForAllLocationsHint": "Creates a copy of this basket in each of the {{count}} locations in the organization.",
+      "replicateFailed": "Basket created, but copying to other locations failed.",
+      "dailyResetNotice": "Baskets reset to their daily quantity every day at {{time}} (Tunisia time).",
+      "alreadyHere": "Already here",
+      "oneLocationChip": "1 location",
+      "manyLocationsChip": "{{count}} locations",
+      "noLocationChip": "No location"
     },
     "auth": {
       "businessSignIn": "Business Sign In",
@@ -896,8 +1054,20 @@
       "save": "Save Changes",
       "saved": "Availability updated successfully.",
       "conflictTitle": "Baskets outside hours",
-      "conflictMessage": "{{count}} basket(s) have times outside the new business window ({{start}}-{{end}}). Their times will be adjusted to fit. Continue?",
-      "adjustAndSave": "Adjust and save"
+      "conflictMessage_one": "{{count}} basket has times outside the new business window ({{start}}-{{end}}). Its times will be adjusted to fit. Continue?",
+      "conflictMessage_other": "{{count}} baskets have times outside the new business window ({{start}}-{{end}}). Their times will be adjusted to fit. Continue?",
+      "adjustAndSave": "Adjust and save",
+      "adjustedRecapTitle": "Baskets adjusted",
+      "adjustedRecap_one": "{{count}} basket was adjusted to the new window ({{start}}-{{end}}). Please review it.",
+      "adjustedRecap_other": "{{count}} baskets were adjusted to the new window ({{start}}-{{end}}). Please review them.",
+      "invalidWindow": "End time must be different from start time.",
+      "invalidTimeFormat": "Invalid time format.",
+      "allDaysClosed": "At least one day must remain open.",
+      "pauseTitle": "Pause reservations",
+      "pauseDesc": "Temporarily blocks customers from reserving. Your basket counts are kept.",
+      "openAllDay": "Open all day",
+      "crossReset": "Pickup window can't cross the 03:30 daily reset. Either start at 03:30 or later, or end at 03:29 or earlier.",
+      "crossResetHint": "Pickup window can't cross 03:30 (daily reset). Start at 03:30 or later, or end at 03:29 or earlier."
     },
     "menuItems": {
       "title": "Menu Items",
@@ -917,12 +1087,23 @@
       "addSelectedItems": "Add {{count}} item(s)",
       "cameraPermRequired": "Camera permission is required to take photos.",
       "takePhoto": "Photo"
+    },
+    "settings": {
+      "roleDisplay": {
+        "orgAdmin": "Admin of {{org}}",
+        "locationAdmin": "Admin of {{org}} - {{location}}",
+        "locationAdminNoLocation": "Admin of {{org}}",
+        "member": "Member of {{org}} - {{location}}",
+        "memberNoLocation": "Member of {{org}}"
+      }
     }
   },
   "errors": {
     "invalidEmail": "Invalid email format.",
+    "sameEmail": "The new email must be different.",
     "invalidCredentials": "Invalid email or password.",
     "emailExists": "This email is already registered.",
+    "emailAlreadyPartnerElsewhere": "This email is already linked to another business.",
     "phoneExists": "This phone number is already registered.",
     "userNotFound": "User not found.",
     "invalidPassword": "Invalid password.",
@@ -942,7 +1123,25 @@
     "notFound": "The requested resource was not found.",
     "serverError": "Something went wrong. Please try again later.",
     "networkError": "No internet connection. Please check your network.",
-    "timeout": "Request timed out. Please try again."
+    "sessionExpired": "Your session has expired. Please sign in again.",
+    "unavailable": "This service is temporarily unavailable. Please try again later.",
+    "tooManyAttempts": "Too many attempts. Please try again later.",
+    "missingFields": "Please fill in all required fields.",
+    "phoneRequired": "A phone number is required.",
+    "invalidPhone": "Please enter a valid Tunisian phone number.",
+    "invalidUserType": "Invalid account type.",
+    "registrationFailed": "Registration failed. Please try again.",
+    "loginFailed": "Login failed. Please try again.",
+    "accountIsBusiness": "This account is registered as a business. Please switch to business mode.",
+    "accountIsCustomer": "This account is registered as a customer. Please switch to customer mode.",
+    "googleAuthFailed": "Google Sign-In is unavailable right now. Please use email to sign in.",
+    "priceDiscount": "The discounted price must be at least 50% lower than the original price.",
+    "timeout": "Request timed out. Please try again.",
+    "rateLimited": "Too many requests. Please slow down.",
+    "profileUpdateFailed": "Could not save your profile changes. Please try again.",
+    "locationUpdateFailed": "Could not save the location changes. Please try again.",
+    "locationAddFailed": "Could not add the location. Please try again.",
+    "locationDeleteFailed": "Could not delete the location. Please try again."
   },
   "settings": {
     "title": "Settings",
@@ -979,7 +1178,7 @@
     "xpProgress": "{{current}} / {{next}} XP",
     "mealsSaved": "Meals Saved",
     "moneySaved": "Money Saved",
-    "co2Saved": "CO\u2082 Saved",
+    "co2Saved": "CO₂ Saved",
     "currentStreak": "Current Streak",
     "days": "days",
     "badges": "Badges",
@@ -995,7 +1194,26 @@
     "showAll": "Show full leaderboard",
     "showLess": "Show less",
     "levelUp": "Level Up!",
-    "levelUpDesc": "You reached level {{level}}!"
+    "levelUpDesc": "You reached level {{level}}!",
+    "copy": {
+      "co2": {
+        "low": "You've saved {{value}} kg of CO₂. Keep going!",
+        "mid": "{{value}} kg of CO₂ saved. Nice work, keep it up!",
+        "high": "{{value}} kg of CO₂ saved. You're a real climate hero!"
+      },
+      "money": {
+        "low": "You've saved {{value}} TND. Keep going!",
+        "mid": "{{value}} TND saved. Well done, keep it up!",
+        "high": "{{value}} TND saved. What a champion!"
+      },
+      "baskets": {
+        "low": "You've rescued {{value}} baskets. A few more!",
+        "mid": "{{value}} baskets rescued. You're picking up steam!",
+        "high": "{{value}} baskets rescued. You're a force of nature!"
+      }
+    },
+    "perOrderCo2": "−{{value}} kg CO₂",
+    "perOrderMoney": "+{{value}} TND saved"
   },
   "level": {
     "description": "Earn XP by saving food. The bar fills up and you level up when it reaches 100 XP.",
@@ -1008,7 +1226,8 @@
   "streak": {
     "warningTitle": "Your streak is about to expire!",
     "warningDesc": "Order soon to keep your streak alive. It expires after 7 days of inactivity.",
-    "days": "day streak",
+    "days_one": "day streak",
+    "days_other": "day streak",
     "orderNow": "Order Now",
     "later": "Later",
     "current": "Current streak",
@@ -1016,13 +1235,14 @@
     "lastOrder": "Last order",
     "expiresLabel": "Expires in",
     "expiresIn": "Expires in {{days}} day(s)",
-    "expires": "Expires",
+    "expires": "Expires on",
     "expiresOn": "{{date}}",
     "expiresInDays_one": "in {{count}} day",
     "expiresInDays_other": "in {{count}} days",
     "expiresSoon": "Expires soon!",
     "description": "Your streak counts consecutive weeks with at least one order. It resets after 7 days of inactivity.",
-    "daysUnit": "days"
+    "daysUnit_one": "day",
+    "daysUnit_other": "days"
   },
   "badges": {
     "newBadge": "New Badge Unlocked!",
@@ -1123,64 +1343,266 @@
     "finishDemo": "OK, finish demo",
     "exitDemo": "Exit demo",
     "tapToContinue": "Tap the highlighted button to continue.",
-    "discover": { "title": "Explore", "desc": "Browse surprise baskets available near you. Filter by category, distance, or price." },
-    "orders": { "title": "My Orders", "desc": "Track your current reservations, view past orders, and communicate with businesses." },
-    "favorites": { "title": "Favorites", "desc": "Find your favorite places in one tap and get notified when they have baskets available." },
-    "profile": { "title": "My Profile", "desc": "Your level, badges, impact stats, and settings. Track your progress!" },
+    "tapCardToContinue": "Tap the highlighted card to continue.",
+    "demoWelcome": {
+      "title": "Welcome to the Barakeat demo",
+      "desc": "We'll walk you through the app without creating a real order. Tap Start when you're ready, or Quit to cancel.",
+      "start": "Start demo",
+      "quit": "Quit"
+    },
+    "discover": {
+      "title": "Explore",
+      "desc": "Browse surprise baskets available near you. Filter by category, distance, or price."
+    },
+    "orders": {
+      "title": "My Orders",
+      "desc": "Track your current reservations, view past orders, and communicate with businesses."
+    },
+    "favorites": {
+      "title": "Favorites",
+      "desc": "Find your favorite places in one tap and get notified when they have baskets available."
+    },
+    "profile": {
+      "title": "My Profile",
+      "desc": "Your level, badges, impact stats, and settings. Track your progress!"
+    },
     "biz": {
-      "addLocation": { "title": "Add your first location", "desc": "Before creating baskets or receiving orders, add your business address. Tap the green button to get started." },
-      "dashboard": { "title": "Dashboard", "desc": "Overview of your sales, today's orders, and stats. All at a glance." },
-      "baskets": { "title": "My Baskets", "desc": "Create and manage your surprise baskets. Set prices, quantities, and pickup times." },
-      "basketCreate": { "title": "Create a Basket", "desc": "Tap the + Add basket button to open the creation form. You'll set the name, description, original and reduced prices, quantity, and pickup window — then tap Save. The tour continues when you return." },
-      "orders": { "title": "Orders", "desc": "This is the orders page — empty for now. Tap Next to see what happens when an order arrives." },
-      "pickup": { "title": "Confirm Pickup", "desc": "Two ways to verify a pickup: 1) the Confirm button on the order — the customer reads out their 4-digit code and you type it in. 2) This QR button (highlighted) — opens the scanner to read their code directly. Try it now." },
-      "profile": { "title": "Profile", "desc": "Manage your business info, hours, and photos." },
-      "team": { "title": "Team Management", "desc": "Invite members, assign roles (admin, member) and tie them to specific locations." },
-      "settingsDemo": { "title": "Replay this tour", "desc": "You can come back here any time and tap \"Demo Mode\" to see this walkthrough again.", "hint": "Look for the highlighted Demo Mode row." },
+      "addLocation": {
+        "title": "Add your first location",
+        "desc": "Before creating baskets or receiving orders, add your business address. Tap the green button to get started."
+      },
+      "dashboard": {
+        "title": "Dashboard",
+        "desc": "Overview of your sales, today's orders, and stats. All at a glance."
+      },
+      "baskets": {
+        "title": "My Baskets",
+        "desc": "Create and manage your surprise baskets. Set prices, quantities, and pickup times."
+      },
+      "basketCreate": {
+        "title": "Add a Basket",
+        "desc": "Tap the + Add basket button. You can reuse a basket already created in your organization, or create a brand-new one from scratch."
+      },
+      "reuseBasket": {
+        "title": "Reuse a basket",
+        "desc": "Your existing baskets appear here. Tap \"Use\" to add the same basket to this location — it's copied with its own quantity, independent from the original (you set it afterwards)."
+      },
+      "createNewBasket": {
+        "title": "Create a new basket",
+        "desc": "Or build one from scratch: tap \"Create a new basket\" to open the form. The tour resumes when the form opens."
+      },
+      "orders": {
+        "title": "Orders",
+        "desc": "This is the orders page — empty for now. Tap Next to see what happens when an order arrives."
+      },
+      "pickup": {
+        "title": "Confirm Pickup",
+        "desc": "Two ways to verify a pickup: 1) the Confirm button on the order — the customer reads out their 4-digit code and you type it in. 2) This QR button (highlighted) — opens the scanner to read their code directly. Try it now."
+      },
+      "profile": {
+        "title": "Profile",
+        "desc": "Manage your business info, hours, and photos."
+      },
+      "team": {
+        "title": "Team Management",
+        "desc": "Invite members, assign roles (admin, member) and tie them to specific locations."
+      },
+      "settingsDemo": {
+        "title": "Replay this tour",
+        "desc": "You can come back here any time and tap \"Demo Mode\" to see this walkthrough again.",
+        "hint": "Look for the highlighted Demo Mode row."
+      },
       "demoBasketName": "Surprise Basket (demo)",
-      "demoBasketDesc": "Demo \u2014 changes won't affect your real baskets.",
+      "demoBasketDesc": "Demo — changes won't affect your real baskets.",
       "demoOrderBasket": "Surprise Basket",
       "demoOrderCustomer": "Sami (demo)",
       "demoNotifTitle": "New reservation",
       "demoNotifMessage": "Sami reserved 2 Surprise Baskets.",
-      "formPickup": { "title": "Pickup window", "desc": "The time slot when customers come to collect their basket. Tick the box only if this basket has hours different from your shop's — otherwise leave it unchecked and your profile hours (which you'll see later) will be used." },
-      "formReinit": { "title": "Daily reset", "desc": "How many baskets you put back in stock each day." },
-      "formConfirm": { "title": "Publish basket", "desc": "Tap here to publish your basket. (Nothing is sent in demo mode.)" },
-      "demoBasket": { "title": "Your demo basket", "desc": "This is what a published basket looks like in your list." },
-      "basketQty": { "title": "Adjust quantity", "desc": "Tap the highlighted basket card to open the availability sheet. You can adjust today's quantity with the +/- buttons there, no need to recreate the basket." },
-      "modalMinus": { "title": "Decrease quantity", "desc": "Tap − to remove one basket from today's quantity." },
-      "modalPlus": { "title": "Increase quantity", "desc": "Tap + to add one basket to today's quantity." },
-      "modalSave": { "title": "Save", "desc": "Tap \"Save\" to confirm the new availability. (Nothing is sent in demo mode.)" },
-      "basketCardQty": { "title": "Quantity updated", "desc": "The new quantity is now visible on the basket card. Tap \"Next\" to continue." },
-      "orderArrives": { "title": "An order is arriving!", "desc": "A new order just came in." },
-      "orderCard": { "title": "An order!", "desc": "Tap the card to expand and see all order details." },
-      "orderChat": { "title": "Message the customer", "desc": "Tap the chat icon to open the conversation with the customer." },
-      "chatBack": { "title": "Back to the order", "desc": "This is the conversation with the customer. Tap the back arrow at the top-left to return to the orders list and continue the demo." },
-      "orderConfirm": { "title": "Confirm pickup", "desc": "Tap the highlighted button to open the pickup verification sheet." },
-      "verifyInput": { "title": "Enter the pickup code", "desc": "The customer shows you their pickup code. Type it here — for example DEMO1 — then tap \"Confirm Code\" to validate, or tap Next to continue the demo.", "short": "Type DEMO1" },
-      "notifPopup": { "desc": "A new order just came in. Tap \"View order\" to open it." },
-      "qrFab": { "title": "QR scan shortcut", "desc": "Don't want to scroll through the list? Tap this bottom-right button to jump straight to the scanner." },
-      "scanQrBack": { "title": "Scan the customer's QR", "desc": "This is the scan screen. In real use you'd scan the QR code on the customer's phone. Tap the highlighted × at the top-left to return to the orders and continue the demo." },
-      "scanManual": { "title": "Type the code", "desc": "No QR? The highlighted icon (top-right) toggles to manual code entry." },
-      "profileTeam": { "title": "Team management", "desc": "Tap the highlighted card to open team management." },
-      "teamOrg": { "title": "Your organization", "desc": "A snapshot of your organization: members and locations. This is the overall scope you manage here." },
-      "teamMembers": { "title": "Your members", "desc": "All team members appear here. Invite new ones, adjust their roles and permissions, or remove them." },
-      "teamLocations": { "title": "Your locations", "desc": "All your points of sale appear here. You can add new ones, edit them, or remove them." },
-      "teamAddLocation": { "title": "Add a location", "desc": "Tap the highlighted + button to add a new point of sale." },
-      "teamAddMember": { "title": "Add a member", "desc": "Tap the highlighted + button to invite a new member to the team." },
-      "profileInfo": { "title": "Business info", "desc": "Edit your address, hours, and contact details." }
+      "formPickup": {
+        "title": "Pickup window",
+        "desc": "The time slot when customers come to collect their basket. Tick the box only if this basket has hours different from your shop's — otherwise leave it unchecked and your profile hours (which you'll see later) will be used."
+      },
+      "formReinit": {
+        "title": "Daily reset",
+        "desc": "How many baskets you put back in stock each day."
+      },
+      "formConfirm": {
+        "title": "Publish basket",
+        "desc": "Tap here to publish your basket. (Nothing is sent in demo mode.)"
+      },
+      "demoBasket": {
+        "title": "Your demo basket",
+        "desc": "This is what a published basket looks like in your list."
+      },
+      "basketQty": {
+        "title": "Adjust quantity",
+        "desc": "Tap the highlighted basket card to open the availability sheet. You can adjust today's quantity with the +/- buttons there, no need to recreate the basket."
+      },
+      "modalMinus": {
+        "title": "Decrease quantity",
+        "desc": "Tap − to remove one basket from today's quantity."
+      },
+      "modalPlus": {
+        "title": "Increase quantity",
+        "desc": "Tap + to add one basket to today's quantity."
+      },
+      "modalSave": {
+        "title": "Save",
+        "desc": "Tap \"Save\" to confirm the new availability. (Nothing is sent in demo mode.)"
+      },
+      "basketCardQty": {
+        "title": "Quantity updated",
+        "desc": "The new quantity is now visible on the basket card. Tap \"Next\" to continue."
+      },
+      "orderArrives": {
+        "title": "An order is arriving!",
+        "desc": "A new order just came in."
+      },
+      "orderCard": {
+        "title": "An order!",
+        "desc": "Tap the card to expand and see all order details."
+      },
+      "orderChat": {
+        "title": "Message the customer",
+        "desc": "Tap the chat icon to open the conversation with the customer."
+      },
+      "chatBack": {
+        "title": "Back to the order",
+        "desc": "This is the conversation with the customer. Tap the back arrow at the top-left to return to the orders list and continue the demo."
+      },
+      "orderConfirm": {
+        "title": "Confirm pickup",
+        "desc": "Tap the highlighted button to open the pickup verification sheet."
+      },
+      "verifyInput": {
+        "title": "Enter the pickup code",
+        "desc": "The customer shows you their pickup code. Type it here — for example DEMO1 — then tap \"Confirm Code\" to validate, or tap Next to continue the demo.",
+        "short": "Type DEMO1"
+      },
+      "notifPopup": {
+        "desc": "A new order just came in. Tap \"View order\" to open it."
+      },
+      "qrFab": {
+        "title": "QR scan shortcut",
+        "desc": "Don't want to scroll through the list? Tap this bottom-right button to jump straight to the scanner."
+      },
+      "scanQrBack": {
+        "title": "Scan the customer's QR",
+        "desc": "This is the scan screen. In real use you'd scan the QR code on the customer's phone. Tap the highlighted × at the top-left to return to the orders and continue the demo."
+      },
+      "scanManual": {
+        "title": "Type the code",
+        "desc": "No QR? The highlighted icon (top-right) toggles to manual code entry."
+      },
+      "profileTeam": {
+        "title": "Team management",
+        "desc": "Tap the highlighted card to open team management."
+      },
+      "teamOrg": {
+        "title": "Your organization",
+        "desc": "A snapshot of your organization: members and locations. This is the overall scope you manage here."
+      },
+      "teamMembers": {
+        "title": "Your members",
+        "desc": "All team members appear here. Invite new ones, adjust their roles and permissions, or remove them."
+      },
+      "teamLocations": {
+        "title": "Your locations",
+        "desc": "All your points of sale appear here. You can add new ones, edit them, or remove them."
+      },
+      "teamAddLocation": {
+        "title": "Add a location",
+        "desc": "Tap the highlighted + button to add a new point of sale."
+      },
+      "teamAddMember": {
+        "title": "Add a member",
+        "desc": "Tap the highlighted + button to invite a new member to the team."
+      },
+      "profileInfo": {
+        "title": "Business info",
+        "desc": "Edit your address, hours, and contact details."
+      }
     },
     "customer": {
-      "firstCard": { "title": "An available basket", "desc": "Tap the card to see details and reserve." },
-      "openMap": { "title": "Open the map", "desc": "Tap this button to see all baskets around you on a map." },
-      "heart": { "title": "Add to favorites", "desc": "Find your favorite places in the Favorites tab." },
-      "wallet": { "title": "Your credits", "desc": "Use them as a payment method any time." },
-      "recharge": { "title": "Top up", "desc": "Add credits or redeem a gift code." },
-      "notif": { "title": "Notifications", "desc": "Track your orders and discounts in real time." },
-      "radius": { "title": "Search radius", "desc": "Adjust the maximum distance around your address." },
-      "category": { "title": "Category filters", "desc": "Narrow by business type (restaurant, bakery\u2026)." },
-      "cash": { "title": "Cash payment", "desc": "Read the note before confirming your reservation." },
-      "pickup": { "title": "Pickup code", "desc": "Show this code to the merchant to collect your basket." }
+      "firstCard": {
+        "title": "An available basket",
+        "desc": "Tap the card to see details and reserve."
+      },
+      "openMap": {
+        "title": "Open the map",
+        "desc": "Tap this button to see all baskets around you on a map."
+      },
+      "heart": {
+        "title": "Add to favorites",
+        "desc": "Find your favorite places in the Favorites tab."
+      },
+      "wallet": {
+        "title": "Your credits",
+        "desc": "Use them as a payment method any time."
+      },
+      "recharge": {
+        "title": "Top up",
+        "desc": "Add credits or redeem a gift code."
+      },
+      "notif": {
+        "title": "Notifications",
+        "desc": "Track your orders and discounts in real time."
+      },
+      "radius": {
+        "title": "Search radius",
+        "desc": "Tap the radius to expand it or make it smaller — control how far around your address we search."
+      },
+      "radiusExpanded": {
+        "title": "Adjust your radius",
+        "desc": "Drag the slider to widen or narrow the search distance. You can also change the address from this card."
+      },
+      "category": {
+        "title": "Category filters",
+        "desc": "Narrow by business type (restaurant, bakery…)."
+      },
+      "cash": {
+        "title": "Cash payment",
+        "desc": "Read the note before confirming your reservation."
+      },
+      "pickup": {
+        "title": "Pickup code",
+        "desc": "Show this code to the merchant to collect your basket."
+      },
+      "demoLocationName": "Chez Joe (démo)",
+      "demoBasketName": "Surprise Basket",
+      "demoBasketDesc": "Demo — no real order is created.",
+      "restaurantBasket": {
+        "title": "The surprise basket",
+        "desc": "Here is a basket offered by this spot. Tap it to see the details."
+      },
+      "reserveBtn": {
+        "title": "Reserve this basket",
+        "desc": "Tap the \"Reserve\" button to start the order."
+      },
+      "reserveQty": {
+        "title": "Choose quantity",
+        "desc": "Pick how many baskets you want to reserve."
+      },
+      "reservePayment": {
+        "title": "Payment method",
+        "desc": "Pick \"Cash\", \"Card\" or \"Credits\"."
+      },
+      "reserveConfirm": {
+        "title": "Confirm reservation",
+        "desc": "Tap \"Confirm\" to send your demo order."
+      },
+      "demoOrderCard": {
+        "title": "Your reservation",
+        "desc": "Here's your order on the Orders tab. Tap the card to see the pickup details."
+      },
+      "demoPickupCode": {
+        "title": "Pickup code",
+        "desc": "Show this code to the merchant when you arrive to collect your basket."
+      },
+      "backToHome": {
+        "title": "Back to Home",
+        "desc": "Now let's see the rest of the app."
+      }
     }
   },
   "messages": {
@@ -1202,5 +1624,67 @@
     "sendMessage": "Send a message",
     "messageLabel": "Message",
     "messagePlaceholder": "Write a message to the customer..."
+  },
+  "faq": {
+    "general": {
+      "title": "General",
+      "surprise": {
+        "q": "What exactly is a \"surprise basket\"?",
+        "a": "The \"surprise basket\" is a set of various products from a food merchant (bakery, restaurant, café…). But what exactly? Surprise…"
+      },
+      "why": {
+        "q": "Why launch this concept in Tunisia?",
+        "a": "Food waste costs the Tunisian population more than 500 million dinars per year. So you save money and in return, you save the planet!"
+      },
+      "region": {
+        "q": "In which region is Barakeat available?",
+        "a": "Barakeat is currently available in all cities of Greater Tunis. We will keep you informed about our arrival in other regions."
+      },
+      "impact": {
+        "q": "Will I really help fight food waste?",
+        "a": "Yes, massively! Each saved basket prevents precious resources from ending up in the trash. Every action counts!"
+      }
+    },
+    "orders": {
+      "title": "Orders",
+      "knowContent": {
+        "q": "Do I know what is in my \"surprise basket\"?",
+        "a": "It's a surprise! Although you don't know the exact list of items in advance, you are guaranteed to receive products from the merchant in question!"
+      },
+      "whyUnknown": {
+        "q": "Why don't I know what is in the \"surprise basket\"?",
+        "a": "Because it's the day's unsold items. Merchants can't predict what they'll have left and promise you specific content."
+      },
+      "stillGood": {
+        "q": "Is the food I receive still good?",
+        "a": "Absolutely! The products offered are from the same day, fresh, and perfectly fit for consumption."
+      },
+      "pickup": {
+        "q": "How does pickup work?",
+        "a": "After reserving a basket, you receive a pickup code. Go to the merchant during the indicated time slot, show your code, pay and leave with your basket!"
+      },
+      "cancel": {
+        "q": "Can I cancel my order?",
+        "a": "Yes, you can cancel before the start of the pickup window. Late cancellations may affect your account."
+      }
+    },
+    "payment": {
+      "title": "Payment",
+      "howToPay": {
+        "q": "How do I pay?",
+        "a": "« Payment is made either online by credit card, by Barakeat credits, or in cash directly at the merchant's establishment upon pickup »"
+      },
+      "credits": {
+        "q": "What are Barakeat credits?",
+        "a": "These are credits you earn by referring friends or via gift codes. They can be used to reduce the price of your next baskets."
+      }
+    },
+    "merchants": {
+      "title": "Merchants",
+      "become": {
+        "q": "How to become a partner merchant?",
+        "a": "Sign up directly on the app as a merchant or contact us at contact@barakeat.tn. Registration is free!"
+      }
+    }
   }
 }

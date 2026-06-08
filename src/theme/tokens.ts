@@ -15,11 +15,17 @@ export const tokens = {
     // Quiet neutral tint for destructive-row insets and section eyebrows —
     // replaces the generic `color + '08'` opacity hack used across the app.
     surfaceMuted: '#f5f5f1',
+    // Bottom stop of the "warm paper" gradient wash used by PaperSurface —
+    // every popup card fades #FFFFFF → #fcfcfa for a subtle non-flat texture.
+    surfaceWash: '#fcfcfa',
 
     textPrimary: '#1a1a1a',
     textSecondary: '#6b6b6b',
     muted: '#a0a0a0',
     divider: '#e8e8e3',
+    // Hairline edge for popup cards / fields. Semantic alias of `divider` so
+    // call sites read as "border" rather than "divider line".
+    border: '#e8e8e3',
 
     success: '#2d8a6e',
     warning: '#e8a838',
@@ -132,16 +138,25 @@ export const tokens = {
       letterSpacing: 0.3,
       fontFamily: 'Poppins_600SemiBold',
     },
-    // Uppercase eyebrow — used for section headers, status labels above
-    // chips, form-field labels. Replaces the ad-hoc `fontSize: 11, fontWeight: '600', textTransform: 'uppercase'` styles scattered across screens.
+    // Small eyebrow label — used for section headers, status labels above
+    // chips, and form-field labels. Normal case (no uppercase transform):
+    // the app intentionally avoids ALL-CAPS text everywhere.
     label: {
       fontSize: 11,
       lineHeight: 14,
       fontWeight: '600' as const,
-      letterSpacing: 0.6,
+      letterSpacing: 0.4,
       fontFamily: 'Poppins_600SemiBold',
-      textTransform: 'uppercase' as const,
+      textTransform: 'none' as const,
     },
+  },
+
+  // Subtle two-stop washes for the "warm paper" popup texture. Consumed by
+  // PaperSurface via expo-linear-gradient. `paper` is the neutral card wash;
+  // `accent` is a faint brand-green tint for accented headers.
+  gradients: {
+    paper: ['#FFFFFF', '#fcfcfa'] as const,
+    accent: ['#114b3c10', '#114b3c04'] as const,
   },
 
   shadows: {

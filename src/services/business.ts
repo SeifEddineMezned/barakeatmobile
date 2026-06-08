@@ -128,12 +128,38 @@ export async function createBasketJSON(payload: {
   return data as BusinessBasketFromAPI;
 }
 
+// Duplicate a basket into one or more target locations within the same
+// organization. Used by the "Use for all locations" admin flow and by the
+// "Pick an existing org basket" intermediary screen — the backend creates
+// one fresh `baskets` row per target location, so future edits stay
+// per-location and don't bleed across siblings.
+export async function duplicateBasketToLocations(
+  basketId: number | string,
+  targetLocationIds: number[]
+): Promise<{ duplicated: BusinessBasketFromAPI[] }> {
+  console.log('[Business] Duplicating basket', basketId, '→ locations', targetLocationIds);
+  const res = await apiClient.post<{ duplicated: BusinessBasketFromAPI[] } | BusinessBasketFromAPI[]>(
+    `/api/baskets/${basketId}/duplicate`,
+    { target_location_ids: targetLocationIds }
+  );
+  const data = res.data;
+  if (Array.isArray(data)) return { duplicated: data };
+  return data;
+}
+
 export async function updateBasket(id: number | string, data: Record<string, any>): Promise<BusinessBasketFromAPI> {
   console.log('[Business] Updating basket:', id, 'data:', JSON.stringify(data));
   const res = await apiClient.put<BusinessBasketFromAPI | { basket: BusinessBasketFromAPI }>(`/api/baskets/${id}`, data);
   const resData = res.data;
   if (resData && typeof resData === 'object' && 'basket' in resData) return (resData as any).basket;
   return resData as BusinessBasketFromAPI;
+}
+
+// Pause / resume a basket without touching its stock. `paused` baskets stay
+// visible in the merchant UI (so the merchant doesn't lose track of how
+// many they had) but are hidden from customers and rejected at reserve.
+export async function setBasketPaused(id: number | string, paused: boolean): Promise<BusinessBasketFromAPI> {
+  return updateBasket(id, { status: paused ? 'paused' : 'available' });
 }
 
 export async function updateBasketWithImage(id: number | string, formData: FormData): Promise<BusinessBasketFromAPI> {
@@ -342,7 +368,14 @@ export async function verifyQR(qrData: string): Promise<{ valid: boolean; reserv
   if (!reservation_id || !pickup_code) {
     throw new Error('Invalid QR code data');
   }
-  const res = await apiClient.post<{ valid: boolean; reservation_id?: string; buyer_id?: number; buyer_name?: string; quantity?: number; pickup_code?: string; status?: string }>('/api/reservations/verify-qr', { reservation_id, pickup_code });
+  // verify-qr only READS (looks up + validates the reservation), so it's safe
+  // to auto-retry on a transient network failure — e.g. the first scan after
+  // the backend dyno woke from idle, which was surfacing as "Network Error".
+  const res = await apiClient.post<{ valid: boolean; reservation_id?: string; buyer_id?: number; buyer_name?: string; quantity?: number; pickup_code?: string; status?: string }>(
+    '/api/reservations/verify-qr',
+    { reservation_id, pickup_code },
+    { retryOnNetworkError: true } as any,
+  );
   return res.data;
 }
 

@@ -1,11 +1,11 @@
-import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider, MutationCache, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Stack, useRouter, useSegments } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
 import React, { useEffect, useState, useRef } from "react";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { ThemeProvider, useTheme } from "@/src/theme/ThemeProvider";
-import "@/src/i18n";
-import { StyleSheet, View, ActivityIndicator, Text, Modal, ScrollView, Dimensions, TouchableOpacity, Animated, Platform, Image } from "react-native";
+import i18n from "@/src/i18n";
+import { StyleSheet, View, ActivityIndicator, Text, Modal, ScrollView, Dimensions, TouchableOpacity, Animated, Platform, Image, AppState } from "react-native";
 import {
   useFonts,
   Poppins_400Regular,
@@ -21,30 +21,83 @@ import { ErrorBoundary } from "@/src/components/ErrorBoundary";
 import { useFavoritesStore } from "@/src/stores/favoritesStore";
 import { useOrdersStore } from "@/src/stores/ordersStore";
 import { useAddressStore } from "@/src/stores/addressStore";
+import { useReviewMapStore } from "@/src/stores/reviewMapStore";
+import { fetchReviewMap } from "@/src/services/reviews";
+import { fetchLocations } from "@/src/services/restaurants";
 import { useSplashStore } from "@/src/stores/splashStore";
 import { useCelebrationStore } from "@/src/stores/celebrationStore";
 import { useWalkthroughStore } from "@/src/stores/walkthroughStore";
 import { fetchGamificationStats } from "@/src/services/gamification";
-import { apiClient } from "@/src/lib/api";
+import { apiClient, getErrorMessage } from "@/src/lib/api";
 import { FeatureFlags } from "@/src/lib/featureFlags";
 import { Search, ShoppingBag, Trophy, LayoutDashboard, Package, BarChart3, MapPin } from "lucide-react-native";
 import { fetchMyContext } from "@/src/services/teams";
 import { InAppNotification } from "@/src/components/InAppNotification";
 import { useNotificationStore } from "@/src/stores/notificationStore";
 // import { registerForPushNotifications } from "@/src/services/pushNotifications";
-import * as Notifications from "expo-notifications";
-import * as NavigationBar from "expo-navigation-bar";
+// NOTE: `expo-notifications` is intentionally NOT imported at module scope.
+// SDK 53 Expo Go on Android logs a noisy "Android Push notifications was
+// removed from Expo Go" warning the moment certain exports are touched, even
+// by a static `import * as Notifications`. We lazy-require it inside the
+// effect below (already guarded against the isExpoGo + Android combo).
+import { useImmersiveNavBar } from "@/src/hooks/useImmersiveNavBar";
 import Constants from "expo-constants";
 
 const isExpoGo = Constants.appOwnership === 'expo';
 import { initSentry } from "@/src/lib/sentry";
 import { OfflineBanner } from "@/src/components/OfflineBanner";
-import { CustomAlertProvider } from "@/src/components/CustomAlert";
+import { CustomAlertProvider, showGlobalAlert } from "@/src/components/CustomAlert";
+import { ImageCropperProvider } from "@/src/components/ImageCropper";
 
 initSentry();
 SplashScreen.preventAutoHideAsync().catch(() => {});
 
-const queryClient = new QueryClient();
+const queryClient = new QueryClient({
+  // Global safety net for mutations: any mutation error NOT already handled by
+  // the mutation's own onError surfaces a translated Barakeat popup instead of
+  // bubbling up to the red Expo error screen. The motivating case is a team
+  // member whose permission was revoked server-side acting on stale UI — the
+  // backend returns 403 and we now show "Vous n'avez pas la permission…"
+  // (via getErrorMessage → errors.forbidden) rather than crashing. Mutations
+  // with their own onError keep full control of their UX (rollback, inline
+  // field errors, etc.) — we skip those to avoid a double popup.
+  mutationCache: new MutationCache({
+    onError: (error, _vars, _ctx, mutation) => {
+      // On a permission error, refresh the member's permissions so the stale
+      // UI re-gates and the now-blocked option disappears. Runs for EVERY
+      // mutation (even ones with their own onError) so the cause self-heals.
+      if ((error as any)?.status === 403) {
+        void queryClient.invalidateQueries({ queryKey: ['my-context'] });
+      }
+      if (mutation.options.onError) return;
+      showGlobalAlert(i18n.t('common.error', { defaultValue: 'Erreur' }), getErrorMessage(error));
+    },
+  }),
+  defaultOptions: {
+    queries: {
+      // Keep cached query results in memory for 24h instead of the 5-minute
+      // default. Tab revisits feel instant: previously fetched data is still
+      // in cache, screens render their last-known content immediately, any
+      // refetch happens silently in the background.
+      gcTime: 1000 * 60 * 60 * 24,
+      // 30s default freshness floor. Within 30s of a fetch, identical query
+      // keys (e.g. when two tabs both mount `['locations']`) serve from
+      // cache instead of double-fetching. Crucial under the strict
+      // express-rate-limit budget on the backend (20 req/min on
+      // /api/reservations + /api/messages + /api/reviews) — a fast tab
+      // bounce used to fire N parallel refetches; now it fires zero.
+      staleTime: 30_000,
+      // Bursty reconnect storms used to bring the rate-limit ceiling down
+      // on every WiFi/4G flip: every stale query would refire at once. The
+      // few queries that genuinely need freshness on reconnect opt back in
+      // per-query (locations, my-reservations).
+      refetchOnReconnect: false,
+      // RN doesn't have window focus, but be explicit so this doesn't
+      // change behaviour if the app ever ships a web target.
+      refetchOnWindowFocus: false,
+    },
+  },
+});
 
 function RootLayoutNav() {
   return (
@@ -53,8 +106,6 @@ function RootLayoutNav() {
       <Stack.Screen name="auth/sign-in" options={{ headerShown: false }} />
       <Stack.Screen name="auth/sign-up" options={{ headerShown: false }} />
       <Stack.Screen name="auth/forgot-password" options={{ headerShown: false }} />
-      <Stack.Screen name="admin/sign-in" options={{ headerShown: false }} />
-      <Stack.Screen name="(admin)" options={{ headerShown: false }} />
       <Stack.Screen name="notifications" options={{ headerShown: false }} />
       <Stack.Screen name="impact" options={{ headerShown: false }} />
       <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
@@ -65,6 +116,7 @@ function RootLayoutNav() {
       <Stack.Screen name="reserve" options={{ presentation: "card", headerShown: false }} />
       <Stack.Screen name="review" options={{ presentation: "modal", headerShown: false }} />
       <Stack.Screen name="business/create-basket" options={{ presentation: "card", headerShown: false }} />
+      <Stack.Screen name="business/select-org-basket" options={{ headerShown: false }} />
       <Stack.Screen name="business/availability" options={{ presentation: "modal", headerShown: false }} />
       <Stack.Screen name="business/menu-items" options={{ presentation: "modal", headerShown: false }} />
       <Stack.Screen name="business/scan-qr" options={{ presentation: "card", headerShown: false }} />
@@ -73,6 +125,7 @@ function RootLayoutNav() {
       <Stack.Screen name="business/add-location" options={{ headerShown: false }} />
       <Stack.Screen name="business/edit-location" options={{ headerShown: false }} />
       <Stack.Screen name="business/add-member" options={{ headerShown: false }} />
+      <Stack.Screen name="business/permissions/[membershipId]" options={{ headerShown: false }} />
       <Stack.Screen name="messages" options={{ headerShown: false }} />
       <Stack.Screen name="message/[id]" options={{ headerShown: false }} />
       <Stack.Screen name="wallet" options={{ headerShown: false }} />
@@ -113,8 +166,12 @@ function RootLayoutInner() {
   // Tutorial state
   const [showTutorial, setShowTutorial] = useState(false);
   const [tutorialPage, setTutorialPage] = useState(0);
-  const tutorialCheckedRef = useRef(false);
-  // Mirrors `tutorialCheckedRef` as state so other effects (notably the
+  // Which user id the onboarding/tutorial probe has run for. Keyed by user (not
+  // a bare boolean) so a different account logging in — e.g. after a logout, or
+  // a partner signing in on a device a customer used — gets its own first-login
+  // check instead of being suppressed by the previous user's run.
+  const tutorialCheckedForUserRef = useRef<string | null>(null);
+  // Mirrors the per-user tutorial probe as state so other effects (notably the
   // in-app notification poll) can gate on it. Without this, notifications
   // fire before the async onboarding probe resolves, racing the tutorial
   // carousel onto the screen.
@@ -124,6 +181,8 @@ function RootLayoutInner() {
   const hydrateFavorites = useFavoritesStore((s) => s.hydrate);
   const hydrateAddresses = useAddressStore((s) => s.hydrate);
   const hydrateOrders = useOrdersStore((s) => s.hydrate);
+  const hydrateReviewMap = useReviewMapStore((s) => s.hydrate);
+  const setReviewMap = useReviewMapStore((s) => s.setMap);
 
   const router = useRouter();
   const segments = useSegments();
@@ -133,7 +192,45 @@ function RootLayoutInner() {
     void hydrateFavorites();
     void hydrateAddresses();
     void hydrateOrders();
-  }, [hydrateFavorites, hydrateAddresses, hydrateOrders]);
+    void hydrateReviewMap();
+  }, [hydrateFavorites, hydrateAddresses, hydrateOrders, hydrateReviewMap]);
+
+  // Prefetch the location review-aggregate map at app boot so the search
+  // tab's rating chips paint instantly on first frame. The map is also
+  // persisted to AsyncStorage (see reviewMapStore) so subsequent cold-starts
+  // show ratings BEFORE this prefetch resolves. The key signature
+  // (sorted location ids) MUST match the one in app/(tabs)/index.tsx so the
+  // search tab reuses the cached entry instead of refetching.
+  useEffect(() => {
+    void (async () => {
+      try {
+        const locs = await qc.fetchQuery({
+          queryKey: ['locations'],
+          queryFn: fetchLocations,
+          staleTime: 5 * 60_000,
+        });
+        // Only prefetch ratings the backend did NOT embed. With avg_rating now
+        // on /api/locations this is empty and we skip the review fan-out at
+        // boot entirely; the key signature still matches index.tsx so the
+        // search tab reuses the same (empty) cache entry.
+        const ids = (locs ?? [])
+          .filter((l) => l.avg_rating == null)
+          .map((l) => Number(l.id))
+          .filter((n) => !Number.isNaN(n))
+          .sort((a, b) => a - b);
+        if (ids.length === 0) return;
+        const sig = ids.join(',');
+        const fresh = await qc.fetchQuery({
+          queryKey: ['review-map', sig],
+          queryFn: () => fetchReviewMap(ids),
+          staleTime: 5 * 60_000,
+        });
+        if (fresh && Object.keys(fresh).length > 0) setReviewMap(fresh);
+      } catch {
+        // Non-fatal: search tab falls back to AsyncStorage-hydrated cache.
+      }
+    })();
+  }, [qc, setReviewMap]);
 
   useEffect(() => {
     if (!isRestoringSession) {
@@ -147,8 +244,7 @@ function RootLayoutInner() {
 
     const inBusinessFlow = segments[0] === '(business)';
     const inTabsFlow = segments[0] === '(tabs)';
-    const inAdminFlow = segments[0] === '(admin)';
-    const inAuth = segments[0] === 'auth' || segments[0] === 'admin';
+    const inAuth = segments[0] === 'auth';
     const inOnboarding = segments[0] === 'onboarding';
 
     // Prototype mode: block ALL access to the app
@@ -171,15 +267,14 @@ function RootLayoutInner() {
     }
 
     const isBiz = user?.role === 'business' || (user as any)?.type === 'restaurant';
-    const isAdmin = user?.role === 'admin';
 
-    if (isAdmin && !inAdminFlow && !inAuth && !inOnboarding) {
-      console.log('[RootLayout] Routing admin user to (admin)/users');
-      router.replace('/(admin)/users' as never);
-    } else if (isBiz && !inBusinessFlow && !inAuth && !inOnboarding) {
+    // The in-app admin interface has been removed. Users whose role is still
+    // 'admin' on the server are treated as customers in the mobile app — admin
+    // tooling lives on the website (admin.html) only.
+    if (isBiz && !inBusinessFlow && !inAuth && !inOnboarding) {
       console.log('[RootLayout] Routing business user to (business)/dashboard');
       router.replace('/(business)/dashboard' as never);
-    } else if (!isBiz && !isAdmin && !inTabsFlow && !inAuth && !inOnboarding) {
+    } else if (!isBiz && !inTabsFlow && !inAuth && !inOnboarding) {
       console.log('[RootLayout] Routing customer user to (tabs)');
       router.replace('/(tabs)' as never);
     }
@@ -245,8 +340,11 @@ function RootLayoutInner() {
   // INSIDE the walkthrough itself (via a single dedicated step), not as a
   // re-trigger condition out here.
   useEffect(() => {
-    if (!isAuthenticated || isRestoringSession || tutorialCheckedRef.current) return;
-    tutorialCheckedRef.current = true;
+    if (!isAuthenticated || isRestoringSession) return;
+    const uid = user?.id ? String(user.id) : null;
+    if (!uid || tutorialCheckedForUserRef.current === uid) return;
+    tutorialCheckedForUserRef.current = uid;
+    setTutorialChecked(false); // re-gate notifications while we probe this user
     (async () => {
       let onboardingCompleted = false;
       try {
@@ -268,8 +366,15 @@ function RootLayoutInner() {
           // Treat fetch failures as "we don't know" — don't force the tutorial.
         }
       }
-      const hasCompleted = useWalkthroughStore.getState().hasCompletedWalkthrough;
-      if (!onboardingCompleted && !hasCompleted) {
+      // First login for THIS account — the per-user, server-side
+      // `onboarding_completed` flag is false. Show the welcome tutorial +
+      // interactive demo for customers AND partners. We reset the device-scoped
+      // `hasCompletedWalkthrough` gate so a brand-new account still gets it even
+      // on a device where a previous user already finished the demo (otherwise
+      // that flag would silently suppress it). dismissTutorial() flips the
+      // server flag to true afterwards, so it won't re-show on later logins.
+      if (!onboardingCompleted) {
+        useWalkthroughStore.getState().resetWalkthroughCompletion();
         setShowTutorial(true);
       }
       // Resolve the gate regardless of whether the tutorial shows — downstream
@@ -277,7 +382,7 @@ function RootLayoutInner() {
       // not on the tutorial actually appearing.
       setTutorialChecked(true);
     })();
-  }, [isAuthenticated, isRestoringSession, user?.role, (user as any)?.type]);
+  }, [isAuthenticated, isRestoringSession, user?.id, user?.role, (user as any)?.type]);
 
   // Register for push notifications (disabled for Expo Go compatibility)
   // useEffect(() => {
@@ -305,6 +410,13 @@ function RootLayoutInner() {
       resetNotifForLogout();
     }
   }, [isAuthenticated, isRestoringSession, user?.id, storeUserId, hydrateNotifForUser, resetNotifForLogout]);
+
+  // Notification-popup pump — exposed via a ref so the push listener can
+  // trigger an immediate poll when a push arrives in the foreground,
+  // instead of pushing a synthetic popup with a `Date.now()` id (which
+  // dedup-collides with the same notification when the poll later picks
+  // it up via the real backend id).
+  const pollNotifsRef = useRef<() => Promise<void>>(async () => {});
 
   useEffect(() => {
     if (!isAuthenticated || isRestoringSession || !storeHydrated) return;
@@ -359,31 +471,47 @@ function RootLayoutInner() {
         }
       } catch {}
     };
-    // Delay the first poll 1.5s so badge / streak / review effects (also
-    // splashDone-gated) have a clean turn to fire first. Then poll every 15s.
+    pollNotifsRef.current = poll;
+    // Expose the poll to the rest of the app via the store so the per-area
+    // unread-count queries (tabs / business layout) can fire it immediately
+    // when the count goes up — the bell otherwise advanced its badge well
+    // before the next 30 s tick refreshed the popup queue.
+    useNotificationStore.getState().setPopupPoller(poll);
+    // Trigger model: initial poll 1.5s after gates open, then every 30s while
+    // the app is foregrounded, plus an extra poll whenever AppState returns
+    // to 'active'. 30s = 2 req/min — same cadence as the unread-count poll
+    // in the tab layout, well under the rate-limit budget. The previous
+    // "once-only" model meant in-session notifications never surfaced as
+    // popups (they only appeared in the bell list).
     const initialTimer = setTimeout(poll, 1500);
-    const interval = setInterval(poll, 15000);
-    return () => { active = false; clearTimeout(initialTimer); clearInterval(interval); };
+    const interval = setInterval(poll, 30_000);
+    const appStateSub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') void poll();
+    });
+    return () => {
+      active = false;
+      clearTimeout(initialTimer);
+      clearInterval(interval);
+      appStateSub.remove();
+    };
   }, [isAuthenticated, isRestoringSession, storeHydrated, user?.id, storeUserId, pushPopups, splashDone, tutorialChecked, showTutorial, showWelcomeModal]);
 
   // Also listen for push notifications if available
-  // SDK 53+ removed Android push notification support from Expo Go
+  // SDK 53+ removed Android push notification support from Expo Go — we
+  // lazy-require expo-notifications here so the warning never fires in Go.
   useEffect(() => {
     if (isExpoGo && Platform.OS === 'android') return;
-    const subscription = Notifications.addNotificationReceivedListener((notification) => {
-      const { title, body, data } = notification.request.content;
-      pushPopups([{
-        id: Date.now(),
-        user_id: 0,
-        title: title ?? '',
-        message: body ?? '',
-        type: (data?.type as string) ?? '',
-        is_read: false,
-        created_at: new Date().toISOString(),
-      }]);
+    const Notifications = require('expo-notifications');
+    const subscription = Notifications.addNotificationReceivedListener(() => {
+      // Trigger an immediate refetch via the poll function — DO NOT push a
+      // synthetic popup with `Date.now()` as id, because the poll-driven
+      // copy of the same notification arrives shortly with the real
+      // backend id and `pushPopups`'s dedup-by-id would miss the duplicate,
+      // surfacing the same notification twice on screen.
+      void pollNotifsRef.current?.();
     });
     return () => subscription.remove();
-  }, [pushPopups]);
+  }, []);
 
   const startWalkthrough = useWalkthroughStore((s) => s.startWalkthrough);
 
@@ -440,6 +568,7 @@ function RootLayoutInner() {
       <ErrorBoundary>
       <InAppNotification />
       <RootLayoutNav />
+      <DemoWelcomeCover />
       {showSplash && (
         <SplashAnimation onFinish={() => {
           const wasLogin = wasLoginSplash;
@@ -452,7 +581,11 @@ function RootLayoutInner() {
           }
         }} />
       )}
-      {showWelcomeModal && user?.role !== 'business' && (
+      {/* "Welcome back" — returning users only. Gated on the onboarding probe
+          having resolved (tutorialChecked) AND the first-login tutorial NOT
+          showing, so a brand-new user never sees "back" (they get the welcome
+          tutorial + demo instead), with no flash before the probe resolves. */}
+      {showWelcomeModal && user?.role !== 'business' && tutorialChecked && !showTutorial && (
         <Modal visible transparent animationType="fade" onRequestClose={() => setShowWelcomeModal(false)}>
           <TouchableOpacity style={{
             flex: 1,
@@ -684,18 +817,11 @@ export default function RootLayout() {
     void restoreSession();
   }, [restoreSession]);
 
-  // ── Android navigation bar: hide globally on app open ─────────────────────
-  useEffect(() => {
-    if (Platform.OS !== 'android') return;
-    (async () => {
-      try {
-        await NavigationBar.setVisibilityAsync('hidden');
-        await NavigationBar.setBehaviorAsync('overlay-swipe');
-      } catch (e) {
-        console.warn('[RootLayout] Failed to hide Android navigation bar:', e);
-      }
-    })();
-  }, []);
+  // ── Android navigation bar: keep the on-screen buttons hidden ─────────────
+  // Hides the Samsung/virtual nav buttons app-wide and RE-asserts the hidden
+  // state on background→foreground, keyboard close, and screen navigation
+  // (Android resets immersive mode on all three). See the hook for details.
+  useImmersiveNavBar();
 
   // Enforce Poppins globally on every <Text>. The old defaultProps approach
   // only set Regular (400), so any Text with fontWeight: '600' / '700' fell
@@ -743,11 +869,105 @@ export default function RootLayout() {
     <QueryClientProvider client={queryClient}>
       <ThemeProvider>
         <CustomAlertProvider>
-          <OfflineBanner />
-          <RootLayoutInner />
+          <ImageCropperProvider>
+            <OfflineBanner />
+            <RootLayoutInner />
+          </ImageCropperProvider>
         </CustomAlertProvider>
       </ThemeProvider>
     </QueryClientProvider>
+  );
+}
+
+// ── Demo welcome cover ────────────────────────────────────────────────
+// Rendered at the ROOT navigator level (above every Stack screen) so it
+// can paint the instant the user taps "Mode démo" on /settings, BEFORE
+// any navigation transition. The previous (tabs)-layout-level version
+// only rendered after /settings transitioned out and /(tabs)/ came in,
+// so the user briefly saw the home tab during the transition.
+//
+// Lifecycle:
+//  1. settings.tsx flips `showDemoWelcome = true`. Cover appears over
+//     /settings synchronously — the user never sees a flash.
+//  2. User taps "Start demo". We `router.replace('/(tabs)/')` to put
+//     the home tab in the stack, KEEP the cover visible for ~350 ms
+//     (typical stack-pop animation), then flip `showDemoWelcome = false`
+//     + call `startWalkthrough` on the next frame. The cover hides
+//     exactly as the walkthrough overlay fades in — no visible gap.
+//  3. User taps "Quit". `showDemoWelcome = false`, no walkthrough fired.
+function DemoWelcomeCover() {
+  const show = useWalkthroughStore((s) => s.showDemoWelcome);
+  const setShow = useWalkthroughStore((s) => s.setShowDemoWelcome);
+  const startWalkthrough = useWalkthroughStore((s) => s.startWalkthrough);
+  const setDemoCustomerActive = useWalkthroughStore((s) => s.setDemoCustomerActive);
+  const { t } = useTranslation();
+  const theme = useTheme();
+  if (!show) return null;
+  const handleStart = () => {
+    // Single store write: startWalkthrough() clears showDemoWelcome (cover
+    // unmounts) in the same commit while the init override keeps
+    // demoCustomerActive=true so the demo card injection survives the
+    // start transition. The walkthrough starts at step 0 (Discover tab
+    // intro) — that's the first step users expect to see.
+    startWalkthrough({ demoCustomerActive: true });
+  };
+  const handleQuit = () => {
+    // Tidy up: turn off the demo-card injection too, since the user
+    // explicitly opted not to start the demo. Otherwise they'd land on
+    // a home tab still showing the Chez Joe card with no walkthrough.
+    setDemoCustomerActive(false);
+    setShow(false);
+  };
+  return (
+    <View
+      pointerEvents="auto"
+      style={{
+        position: 'absolute',
+        top: 0, left: 0, right: 0, bottom: 0,
+        backgroundColor: theme.colors.bg,
+        zIndex: 99999,
+        elevation: 99999,
+        paddingHorizontal: 28,
+        paddingTop: 100,
+        paddingBottom: 40,
+        alignItems: 'center',
+        justifyContent: 'space-between',
+      }}
+    >
+      <View style={{ alignItems: 'center', marginTop: 40 }}>
+        <View style={{ width: 88, height: 88, borderRadius: 44, backgroundColor: theme.colors.primary + '14', justifyContent: 'center', alignItems: 'center', marginBottom: 28 }}>
+          <Hand size={42} color={theme.colors.primary} />
+        </View>
+        <Text style={{ color: theme.colors.textPrimary, fontSize: 24, fontFamily: 'Poppins_700Bold', fontWeight: '700', textAlign: 'center', marginBottom: 12 }}>
+          {t('walkthrough.demoWelcome.title', { defaultValue: 'Bienvenue dans la démo Barakeat' })}
+        </Text>
+        <Text style={{ color: theme.colors.textSecondary, fontSize: 14, lineHeight: 21, textAlign: 'center', marginBottom: 8, maxWidth: 320 }}>
+          {t('walkthrough.demoWelcome.desc', { defaultValue: "Nous allons vous guider à travers l'application sans créer de vraie commande. Appuyez sur Démarrer quand vous êtes prêt, ou Quitter pour annuler." })}
+        </Text>
+      </View>
+      <View style={{ width: '100%', gap: 12 }}>
+        <TouchableOpacity
+          onPress={handleStart}
+          accessibilityRole="button"
+          accessibilityLabel={t('walkthrough.demoWelcome.start', { defaultValue: 'Démarrer la démo' })}
+          style={{ backgroundColor: '#114b3c', borderRadius: 14, paddingVertical: 16, alignItems: 'center' }}
+        >
+          <Text style={{ color: '#e3ff5c', fontSize: 15, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
+            {t('walkthrough.demoWelcome.start', { defaultValue: 'Démarrer la démo' })}
+          </Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          onPress={handleQuit}
+          accessibilityRole="button"
+          accessibilityLabel={t('walkthrough.demoWelcome.quit', { defaultValue: 'Quitter' })}
+          style={{ paddingVertical: 14, alignItems: 'center' }}
+        >
+          <Text style={{ color: theme.colors.muted, fontSize: 14, fontFamily: 'Poppins_500Medium' }}>
+            {t('walkthrough.demoWelcome.quit', { defaultValue: 'Quitter' })}
+          </Text>
+        </TouchableOpacity>
+      </View>
+    </View>
   );
 }
 

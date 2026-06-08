@@ -9,14 +9,16 @@ import { useTranslation } from 'react-i18next';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { useQuery } from '@tanstack/react-query';
 import {
-  ChevronRight, User, Mail, Phone,
+  ChevronRight, User, Mail,
   CreditCard, Leaf, Banknote, ShoppingBag, UtensilsCrossed, Edit3, X, Check,
   Flame, Lock, Trophy, Award, Star, Zap, Sun, Coffee, MapPin, Shuffle, Store, BookOpen, Heart, Moon, Medal, XCircle, CheckCircle2,
 } from 'lucide-react-native';
 import { useTheme } from '@/src/theme/ThemeProvider';
+import { EditIcon8 } from '@/src/components/ui/Icon8';
 import { useAuthStore } from '@/src/stores/authStore';
 import { fetchMyReservations } from '@/src/services/reservations';
 import { updateFoodPreferences, updateUserProfile } from '@/src/services/profile';
+import { getErrorMessage } from '@/src/lib/api';
 import {
   fetchGamificationStats,
   fetchLeaderboard,
@@ -79,7 +81,6 @@ export default function ProfileScreen() {
   const [streakModal, setStreakModal] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [editName, setEditName] = useState(user?.name ?? '');
-  const [editPhone, setEditPhone] = useState(user?.phone ?? '');
   const [editGender, setEditGender] = useState<string | null>((user as any)?.gender ?? null);
   const [saveLoading, setSaveLoading] = useState(false);
   const [toastMsg, setToastMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
@@ -95,7 +96,7 @@ export default function ProfileScreen() {
     queryKey: ['gamification-stats'],
     queryFn: fetchGamificationStats,
     enabled: isAuthenticated,
-    staleTime: 10_000,
+    staleTime: 5 * 60_000,
   });
 
   // Refetch gamification stats when the profile tab regains focus — catches
@@ -165,6 +166,69 @@ export default function ProfileScreen() {
     return { basketsBought, moneySaved, co2Saved, level, xp, xpInLevel, xpBandSize, xpProgress, currentStreak, longestStreak, lastPickupDate, daysUntilStreakExpiry, badges, businessesTried };
   }, [gamificationQuery.data, reservationsQuery.data]);
 
+  // Single fontSize applied to EVERY badge title in the row, picked so the
+  // longest single word in any visible badge still fits on one line. Previous
+  // code used `adjustsFontSizeToFit` per-Text, which shrank each badge
+  // independently — a long title like "Amateur de Boulangerie" ended up
+  // visibly smaller than its neighbours, and short titles wrapped mid-word
+  // ("premier s\nauvetage") because the break strategy couldn't relax.
+  // Approach: derive the smallest fontSize the row needs from the longest
+  // single word, clamp into a readable range, and apply uniformly. Badges
+  // can still wrap to a second line at a word boundary if needed.
+  const badgeFontSize = useMemo(() => {
+    const titles: string[] = stats.badges.map((b: any) => {
+      if (!b.unlocked) return t('impact.locked');
+      const bid = b.badge_id ?? b.id;
+      return b.nameKey
+        ? t(`badges.${b.nameKey}`, { defaultValue: b.name ?? bid })
+        : (b.name ?? bid);
+    });
+    // Badge card width 100, padding `theme.spacing.lg` (16) on each side →
+    // ~68px text width inside the card.
+    const availableWidth = 100 - 2 * 16;
+    // Poppins advance per pt (rounded up for safety so the longest single
+    // word is guaranteed to fit at the chosen size).
+    const charPerPx = 0.62;
+    let longestWordLen = 0;
+    for (const title of titles) {
+      for (const w of String(title).split(/\s+/)) {
+        if (w.length > longestWordLen) longestWordLen = w.length;
+      }
+    }
+    if (longestWordLen === 0) return 11;
+    const fits = Math.floor(availableWidth / (longestWordLen * charPerPx));
+    // Clamp: never below 8 (readability floor) or above 11 (caption default).
+    return Math.max(8, Math.min(11, fits));
+  }, [stats.badges, t]);
+
+  // Safety net — cross-check the backend's `meals_saved` against the local
+  // count of reservations that actually reached a "picked_up" state. The
+  // backend has historically counted reservations regardless of status,
+  // which inflates badge progress (e.g. "Héros du Sauvetage / 50 repas
+  // sauvés" unlocked at 23 confirmed pickups). When the two diverge by
+  // more than 10% (and > 2 absolute), log a console warning so we can
+  // catch backend regressions without touching the UI. Once the backend
+  // fixes its count this stops firing.
+  useEffect(() => {
+    const gStats = gamificationQuery.data as any;
+    const gStatsInner = gStats?.stats ?? gStats;
+    const backendMealsSaved = gStatsInner?.meals_saved;
+    if (backendMealsSaved == null) return;
+    const reservations = reservationsQuery.data ?? [];
+    const localPickupCount = reservations.filter((r) => {
+      const status = (r.status ?? '').toLowerCase();
+      return status === 'picked_up' || status === 'completed' || status === 'collected';
+    }).length;
+    const tolerance = Math.max(2, localPickupCount * 0.1);
+    if (Math.abs(backendMealsSaved - localPickupCount) > tolerance) {
+      console.warn(
+        '[Badges] meals_saved mismatch — backend:', backendMealsSaved,
+        'local pickup count:', localPickupCount,
+        '— backend may be counting non-pickup reservations',
+      );
+    }
+  }, [gamificationQuery.data, reservationsQuery.data]);
+
 
   // Animated XP bar
   const xpAnim = useRef(new Animated.Value(0)).current;
@@ -176,19 +240,45 @@ export default function ProfileScreen() {
     }).start();
   }, [stats.xpProgress]);
 
-  // Level-up detection
-  const prevLevelRef = useRef(stats.level);
-  const [showLevelUp, setShowLevelUp] = useState(false);
-  const levelUpScale = useRef(new Animated.Value(0)).current;
+  // Level-up popup is owned by the (tabs)/_layout post-reservation
+  // celebration ("Bien joué" banner). We used to ALSO fire a level-up
+  // popup here whenever stats.level increased — but because the profile
+  // tab stays mounted in the tab navigator, that effect ran in parallel
+  // with the layout's celebration and showed the same popup a second
+  // time (especially noticeable on Android). The layout effect is the
+  // single source of truth now.
+
+  // Step-driven re-measurement of the "Crédits Barakeat" row. The row's own
+  // onLayout fires only on layout changes, so a measurement taken at mount
+  // can go stale by the time the walkthrough reaches this step (avatar /
+  // stats data loads in, level-up modal animates, etc). When the
+  // walkthrough advances to `walletBalance`, refresh the rect from the ref
+  // so the halo lands precisely on the credits card. Mirrors the
+  // map-button / notif-bell pattern in (tabs)/_layout.tsx.
+  const creditsRowRef = useRef<View>(null);
+  // Reset Profile's scroll position before the credits halo measures, so the
+  // step always lands the halo at the same coordinates regardless of where
+  // the user happened to be scrolled when they started the demo. (tab
+  // screens preserve scroll position across navigation, so without this the
+  // halo can land at the pre-scroll y of the credits row.)
+  const mainScrollRef = useRef<ScrollView>(null);
+  const walkthroughKey = useWalkthroughStore((s) => s.currentStep?.measureKey);
   useEffect(() => {
-    if (stats.level > prevLevelRef.current && prevLevelRef.current > 0) {
-      setShowLevelUp(true);
-      levelUpScale.setValue(0);
-      Animated.spring(levelUpScale, { toValue: 1, friction: 5, tension: 60, useNativeDriver: true }).start();
-      setTimeout(() => setShowLevelUp(false), 4000);
-    }
-    prevLevelRef.current = stats.level;
-  }, [stats.level]);
+    if (walkthroughKey !== 'walletBalance') return;
+    // Clear the prior rect first so the layout overlay paints dim-only
+    // during the scroll-and-settle window — the user reported seeing the
+    // halo briefly land at the pre-scroll y before the re-measure snapped
+    // it into place. The credits row is always mounted on profile, so the
+    // 200 ms re-measure is guaranteed to fire and republish a fresh rect.
+    useWalkthroughStore.getState().setMeasuredRect('walletBalance', null);
+    mainScrollRef.current?.scrollTo({ y: 0, animated: false });
+    const t = setTimeout(() => {
+      creditsRowRef.current?.measureInWindow((x, y, w, h) => {
+        if (w > 0 && h > 0) useWalkthroughStore.getState().setMeasuredRect('walletBalance', { x, y, w, h });
+      });
+    }, 200);
+    return () => clearTimeout(t);
+  }, [walkthroughKey]);
 
   const [showAllLeaderboard, setShowAllLeaderboard] = useState(false);
   const leaderboardScrollRef = useRef<ScrollView>(null);
@@ -235,12 +325,12 @@ export default function ProfileScreen() {
   const handleSaveProfile = async () => {
     setSaveLoading(true);
     try {
-      await updateUserProfile({ name: editName.trim(), phone: editPhone.trim(), gender: editGender ?? undefined });
-      setUser({ ...user!, name: editName.trim(), phone: editPhone.trim(), gender: editGender });
+      await updateUserProfile({ name: editName.trim(), gender: editGender ?? undefined });
+      setUser({ ...user!, name: editName.trim(), gender: editGender });
       setToastMsg({ type: 'success', text: t('profile.profileUpdated') });
       setIsEditing(false);
     } catch (err: any) {
-      setToastMsg({ type: 'error', text: err?.message ?? t('common.errorOccurred') });
+      setToastMsg({ type: 'error', text: getErrorMessage(err) });
     } finally {
       setSaveLoading(false);
     }
@@ -255,6 +345,7 @@ export default function ProfileScreen() {
 
 
       <ScrollView
+        ref={mainScrollRef}
         style={styles.content}
         contentContainerStyle={[{ padding: theme.spacing.xl, paddingTop: 50, paddingBottom: 180 }]}
         showsVerticalScrollIndicator={false}
@@ -364,6 +455,7 @@ export default function ProfileScreen() {
 
         {/* Credits link */}
         <TouchableOpacity
+          ref={creditsRowRef as any}
           onLayout={(e) => {
             (e.target as any)?.measureInWindow?.((x: number, y: number, w: number, h: number) => {
               if (w > 0 && h > 0) useWalkthroughStore.getState().setMeasuredRect('walletBalance', { x, y, w, h });
@@ -393,7 +485,7 @@ export default function ProfileScreen() {
             <Text numberOfLines={2} style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, marginTop: 8, textAlign: 'center' }]}>
               {stats.moneySaved.toFixed(0)} TND
             </Text>
-            <Text adjustsFontSizeToFit minimumFontScale={0.75} numberOfLines={2} style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, textAlign: 'center' }]}>
+            <Text adjustsFontSizeToFit minimumFontScale={0.6} numberOfLines={2} textBreakStrategy="simple" style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, textAlign: 'center' }]}>
               {t('profile.moneySaved')}
             </Text>
           </TouchableOpacity>
@@ -404,7 +496,7 @@ export default function ProfileScreen() {
             <Text numberOfLines={2} style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, marginTop: 8, textAlign: 'center' }]}>
               {stats.co2Saved.toFixed(1)} kg
             </Text>
-            <Text adjustsFontSizeToFit minimumFontScale={0.75} numberOfLines={2} style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, textAlign: 'center' }]}>
+            <Text adjustsFontSizeToFit minimumFontScale={0.6} numberOfLines={2} textBreakStrategy="simple" style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, textAlign: 'center' }]}>
               {t('profile.co2Saved')}
             </Text>
           </TouchableOpacity>
@@ -415,7 +507,7 @@ export default function ProfileScreen() {
             <Text numberOfLines={2} style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, marginTop: 8, textAlign: 'center' }]}>
               {stats.basketsBought}
             </Text>
-            <Text adjustsFontSizeToFit minimumFontScale={0.75} numberOfLines={2} style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, textAlign: 'center' }]}>
+            <Text adjustsFontSizeToFit minimumFontScale={0.6} numberOfLines={2} textBreakStrategy="simple" style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, textAlign: 'center' }]}>
               {t('profile.basketsBought')}
             </Text>
           </TouchableOpacity>
@@ -426,7 +518,7 @@ export default function ProfileScreen() {
             <Text numberOfLines={2} style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, marginTop: 8, textAlign: 'center' }]}>
               {stats.businessesTried}
             </Text>
-            <Text adjustsFontSizeToFit minimumFontScale={0.75} numberOfLines={2} style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, textAlign: 'center' }]}>
+            <Text adjustsFontSizeToFit minimumFontScale={0.6} numberOfLines={2} textBreakStrategy="simple" style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, textAlign: 'center' }]}>
               {t('profile.businessesTried', { defaultValue: 'Places Tried' })}
             </Text>
           </TouchableOpacity>
@@ -487,17 +579,22 @@ export default function ProfileScreen() {
                     />
                   </View>
                   <Text
+                    numberOfLines={2}
+                    textBreakStrategy="balanced"
                     style={[
                       {
                         color: badge.unlocked
                           ? theme.colors.textPrimary
                           : theme.colors.muted,
                         ...theme.typography.caption,
+                        // Uniform per-row fontSize — see the `badgeFontSize`
+                        // useMemo above for why this overrides caption.
+                        fontSize: badgeFontSize,
+                        lineHeight: badgeFontSize + 4,
                         marginTop: theme.spacing.sm,
                         textAlign: 'center' as const,
                       },
                     ]}
-                    numberOfLines={2}
                   >
                     {badge.unlocked ? badgeName : t('impact.locked')}
                   </Text>
@@ -672,7 +769,6 @@ export default function ProfileScreen() {
               <TouchableOpacity
                 onPress={() => {
                   setEditName(user?.name ?? '');
-                  setEditPhone(user?.phone ?? '');
                   setEditGender((user as any)?.gender ?? null);
                   setIsEditing(true);
                 }}
@@ -680,7 +776,7 @@ export default function ProfileScreen() {
                 accessibilityRole="button"
                 style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}
               >
-                <Edit3 size={16} color={theme.colors.primary} />
+                <EditIcon8 size={16} />
               </TouchableOpacity>
             )}
           </View>
@@ -697,6 +793,7 @@ export default function ProfileScreen() {
               <User size={18} color={theme.colors.textSecondary} />
               <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.bodySm, marginLeft: 10 }]}>
                 {t('profile.name')}
+                {isEditing ? <Text style={{ color: theme.colors.error }}> *</Text> : null}
               </Text>
             </View>
             {isEditing ? (
@@ -732,37 +829,6 @@ export default function ProfileScreen() {
             <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '500' as const }]}>
               {user?.email ?? '-'}
             </Text>
-          </View>
-          {/* Phone row */}
-          <View
-            style={[styles.infoRow, {
-              paddingHorizontal: theme.spacing.lg,
-              paddingVertical: theme.spacing.md,
-              borderTopWidth: 1,
-              borderTopColor: theme.colors.divider,
-            }]}
-          >
-            <View style={styles.infoRowLeft}>
-              <Phone size={18} color={theme.colors.textSecondary} />
-              <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.bodySm, marginLeft: 10 }]}>
-                {t('profile.phone')}
-              </Text>
-            </View>
-            {isEditing ? (
-              <TextInput
-                style={{ flex: 1, textAlign: 'right', color: theme.colors.textPrimary, ...theme.typography.bodySm, backgroundColor: theme.colors.bg, borderRadius: theme.radii.r12, paddingHorizontal: 12, paddingVertical: 6, marginLeft: 8 }}
-                value={editPhone}
-                onChangeText={setEditPhone}
-                placeholder={t('profile.phone')}
-                placeholderTextColor={theme.colors.muted}
-                keyboardType="phone-pad"
-                accessibilityLabel={t('profile.phone')}
-              />
-            ) : (
-              <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '500' as const }]}>
-                {user?.phone ?? '-'}
-              </Text>
-            )}
           </View>
           {/* Gender row — optional */}
           <View
@@ -879,10 +945,23 @@ export default function ProfileScreen() {
         {/* Settings removed from buyer profile */}
       </ScrollView>
 
-      {/* Stat Modal — with real data preview */}
+      {/* Stat Modal — orders-page design language: green hero panel with
+          uppercase 11px label + big white number, then a preview list using
+          the rich icon-circle pattern (#114b3c bg + #e3ff5c icon), then a
+          yellow "Voir plus" CTA. */}
       <Modal visible={statModal !== null} transparent animationType="fade" onRequestClose={() => setStatModal(null)}>
         <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setStatModal(null)}>
-          <View style={[styles.modalContent, { backgroundColor: theme.colors.surface, borderRadius: theme.radii.r24, padding: theme.spacing.xl, ...theme.shadows.shadowLg, maxHeight: '70%' }]} onStartShouldSetResponder={() => true}>
+          <View
+            style={[styles.modalContent, {
+              backgroundColor: theme.colors.surface,
+              borderRadius: theme.radii.r24,
+              padding: theme.spacing.lg,
+              ...theme.shadows.shadowLg,
+              maxHeight: '75%',
+              width: '100%',
+            }]}
+            onStartShouldSetResponder={() => true}
+          >
             <TouchableOpacity
               onPress={() => setStatModal(null)}
               style={{ position: 'absolute', top: 12, right: 12, width: 32, height: 32, borderRadius: 16, backgroundColor: theme.colors.bg, justifyContent: 'center', alignItems: 'center', zIndex: 1 }}
@@ -892,20 +971,58 @@ export default function ProfileScreen() {
             >
               <X size={18} color={theme.colors.textSecondary} />
             </TouchableOpacity>
-            <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h2, textAlign: 'center', marginBottom: theme.spacing.sm }]}>
-              {statModal === 'money' ? t('profile.moneySaved')
+
+            {/* Green hero panel — matches the orders page Impact slide */}
+            {(() => {
+              const heroIcon = statModal === 'money' ? Banknote
+                : statModal === 'co2' ? Leaf
+                : statModal === 'baskets' ? ShoppingBag
+                : Store;
+              const HeroIcon = heroIcon;
+              const titleText = statModal === 'money' ? t('profile.moneySaved')
                 : statModal === 'co2' ? t('profile.co2Saved')
                 : statModal === 'baskets' ? t('profile.basketsBought')
-                : t('profile.businessesTried', { defaultValue: 'Places Tried' })}
-            </Text>
-            <Text style={[{ color: theme.colors.primary, ...theme.typography.h1, textAlign: 'center', marginBottom: theme.spacing.md }]}>
-              {statModal === 'money' ? `${stats.moneySaved.toFixed(0)} TND`
+                : t('profile.businessesTried', { defaultValue: 'Places Tried' });
+              const valueText = statModal === 'money' ? `${stats.moneySaved.toFixed(0)} TND`
                 : statModal === 'co2' ? `${stats.co2Saved.toFixed(1)} kg`
                 : statModal === 'baskets' ? String(stats.basketsBought)
-                : String(stats.businessesTried)}
-            </Text>
+                : String(stats.businessesTried);
+              return (
+                <View style={{
+                  backgroundColor: '#114b3c',
+                  borderRadius: theme.radii.r16,
+                  padding: 20,
+                  marginTop: theme.spacing.sm,
+                  marginBottom: theme.spacing.lg,
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  gap: 14,
+                }}>
+                  <View style={{ width: 44, height: 44, borderRadius: 22, backgroundColor: '#e3ff5c20', justifyContent: 'center', alignItems: 'center' }}>
+                    <HeroIcon size={22} color="#e3ff5c" />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={{
+                      color: 'rgba(255,255,255,0.7)',
+                      fontSize: 11,
+                      fontFamily: 'Poppins_600SemiBold',
+                      fontWeight: '600',
+                      letterSpacing: 0.6,
+                      textTransform: 'none',
+                      marginBottom: 4,
+                    }}>
+                      {titleText}
+                    </Text>
+                    <Text style={{ color: '#fff', ...theme.typography.h1 }}>
+                      {valueText}
+                    </Text>
+                  </View>
+                </View>
+              );
+            })()}
 
-            {/* Data preview — top 3 relevant items */}
+            {/* Data preview — top 3 relevant items, rich icon-circle pattern */}
+            <ScrollView showsVerticalScrollIndicator={false} style={{ width: '100%' }}>
             {(() => {
               const completed = (reservationsQuery.data ?? []).filter((r) => {
                 const s = (r.status ?? '').toLowerCase();
@@ -913,7 +1030,6 @@ export default function ProfileScreen() {
               });
 
               if (statModal === 'spots') {
-                // Group by restaurant, count orders per spot
                 const spotMap = new Map<string, { name: string; logo?: string; count: number }>();
                 completed.forEach((r: any) => {
                   const name = r.restaurant_name ?? r.restaurant?.name ?? r.basket?.merchantName ?? '';
@@ -926,72 +1042,86 @@ export default function ProfileScreen() {
                 return spots.length > 0 ? (
                   <View style={{ width: '100%', marginBottom: theme.spacing.md }}>
                     {spots.map((s, i) => (
-                      <View key={i} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 10, borderTopWidth: i > 0 ? 1 : 0, borderTopColor: theme.colors.divider }}>
-                        <View style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: theme.colors.primary + '15', justifyContent: 'center', alignItems: 'center' }}>
-                          <Store size={14} color={theme.colors.primary} />
+                      <View key={i} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 12, borderTopWidth: i > 0 ? 1 : 0, borderTopColor: theme.colors.divider }}>
+                        <View style={{ width: 30, height: 30, borderRadius: 15, backgroundColor: '#114b3c', justifyContent: 'center', alignItems: 'center' }}>
+                          <Store size={13} color="#e3ff5c" />
                         </View>
-                        <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '600', flex: 1, marginLeft: 10 }} numberOfLines={1}>{s.name}</Text>
-                        <Text style={{ color: theme.colors.muted, ...theme.typography.caption }}>{t('profile.orderCount', { count: s.count, defaultValue: '{{count}} commande(s)' })}</Text>
+                        <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '600', flex: 1, marginLeft: 12 }} numberOfLines={1}>{s.name}</Text>
+                        <Text style={{ color: theme.colors.primary, ...theme.typography.bodySm, fontWeight: '700' }}>
+                          {t('profile.orderCount', { count: s.count, defaultValue: '{{count}} commande(s)' })}
+                        </Text>
                       </View>
                     ))}
                   </View>
                 ) : null;
               }
 
-              // Unified preview for baskets, money, co2
               if (statModal === 'baskets' || statModal === 'money' || statModal === 'co2') {
-                const recent = completed.slice(0, 3);
-                return recent.length > 0 ? (
-                  <View style={{ width: '100%', marginBottom: theme.spacing.md }}>
-                    {recent.map((r: any, i: number) => {
-                      const basketName = r.basket_name ?? r.basket_type_name ?? r.basket?.name ?? '';
-                      const date = new Date(r.created_at ?? r.createdAt ?? '').toLocaleDateString('fr-FR');
-                      const qty = r.quantity ?? 1;
-                      const original = Number(r.original_price ?? r.basket?.original_price ?? r.basket?.originalPrice ?? 0);
-                      const paid = Number(r.price_tier ?? r.total_price ?? r.total ?? r.basket?.price_tier ?? 0);
-                      const saved = Math.max(0, (original - paid) * qty);
-                      const co2 = calcCO2Saved(qty);
-                      const IconComp = statModal === 'money' ? Banknote : statModal === 'co2' ? Leaf : ShoppingBag;
-                      const iconColor = statModal === 'money' ? theme.colors.primary : statModal === 'co2' ? '#22c55e' : theme.colors.primaryDark;
-                      const iconBg = statModal === 'money' ? theme.colors.primary + '15' : statModal === 'co2' ? '#22c55e15' : theme.colors.secondary + '20';
-                      return (
-                        <View key={i} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 10, borderTopWidth: i > 0 ? 1 : 0, borderTopColor: theme.colors.divider }}>
-                          <View style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: iconBg, justifyContent: 'center', alignItems: 'center' }}>
-                            <IconComp size={14} color={iconColor} />
-                          </View>
-                          <View style={{ flex: 1, marginLeft: 10 }}>
-                            <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '600' }} numberOfLines={1}>
-                              {basketName || (r.restaurant_name ?? r.basket?.merchantName ?? '')}
-                            </Text>
-                            <Text style={{ color: theme.colors.muted, ...theme.typography.caption }}>{date}</Text>
-                          </View>
-                          <Text style={{ color: statModal === 'money' ? '#22c55e' : statModal === 'co2' ? '#22c55e' : theme.colors.primary, ...theme.typography.bodySm, fontWeight: '700' }}>
-                            {statModal === 'money' ? (saved > 0 ? `-${saved.toFixed(0)} TND` : '-')
-                              : statModal === 'co2' ? `${co2.toFixed(1)} kg`
-                              : `x${qty}`}
-                          </Text>
-                        </View>
-                      );
-                    })}
+                // Light-touch encouragement copy instead of a recent-orders
+                // list — Yassine asked us to lighten this section. Per-order
+                // CO2 / money facts now live on the order cards themselves
+                // (see OrderCard), and the box just celebrates the total.
+                const value = statModal === 'money' ? stats.moneySaved
+                  : statModal === 'co2' ? stats.co2Saved
+                  : stats.basketsBought;
+                const tier = statModal === 'money'
+                  ? (value < 10 ? 'low' : value < 50 ? 'mid' : 'high')
+                  : statModal === 'co2'
+                  ? (value < 5 ? 'low' : value < 25 ? 'mid' : 'high')
+                  : (value < 5 ? 'low' : value < 25 ? 'mid' : 'high');
+                const valueStr = statModal === 'money' ? value.toFixed(0)
+                  : statModal === 'co2' ? value.toFixed(1)
+                  : String(value);
+                return (
+                  <View style={{ width: '100%', paddingVertical: theme.spacing.md, paddingHorizontal: theme.spacing.sm }}>
+                    <Text style={{ color: theme.colors.textPrimary, ...theme.typography.body, textAlign: 'center', lineHeight: 22 }}>
+                      {t(`impact.copy.${statModal}.${tier}`, { value: valueStr })}
+                    </Text>
                   </View>
-                ) : null;
+                );
               }
 
               return null;
             })()}
+            </ScrollView>
 
-            {/* See more button — navigates to full stat detail page */}
-            {(reservationsQuery.data ?? []).length > 3 && (
+            {/* See more — only for "spots" (commerces essayés) where the full
+                list is genuinely useful. CO2/money/baskets are summarised by
+                the encouragement copy above, no list to expand to. The
+                threshold counts UNIQUE merchants (matching the list shown
+                above, which dedupes by name) — not total reservations —
+                so a customer with 4 orders from the same shop doesn't see
+                a misleading "Voir plus" leading to a single-item screen. */}
+            {statModal === 'spots' && (() => {
+              const uniqueNames = new Set<string>();
+              (reservationsQuery.data ?? []).forEach((r: any) => {
+                const s = (r.status ?? '').toLowerCase();
+                if (s !== 'collected' && s !== 'completed' && s !== 'picked_up') return;
+                const name = r.restaurant_name ?? r.restaurant?.name ?? r.basket?.merchantName ?? '';
+                if (name) uniqueNames.add(name);
+              });
+              return uniqueNames.size > 3;
+            })() && (
               <TouchableOpacity
                 onPress={() => { const type = statModal; setStatModal(null); router.push({ pathname: '/stat-detail', params: { type: type ?? '' } } as never); }}
-                style={{ backgroundColor: theme.colors.primary + '10', borderRadius: 12, paddingVertical: 10, paddingHorizontal: 20, marginBottom: theme.spacing.md }}
+                style={{
+                  backgroundColor: '#e3ff5c',
+                  borderRadius: theme.radii.r12,
+                  paddingVertical: 12,
+                  paddingHorizontal: 18,
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  marginTop: theme.spacing.xs,
+                  gap: 6,
+                }}
               >
-                <Text style={{ color: theme.colors.primary, ...theme.typography.bodySm, fontWeight: '600', textAlign: 'center' }}>
+                <Text style={{ color: '#114b3c', ...theme.typography.bodySm, fontWeight: '700' }}>
                   {t('common.seeMore', { defaultValue: 'Voir plus' })}
                 </Text>
+                <ChevronRight size={16} color="#114b3c" />
               </TouchableOpacity>
             )}
-
           </View>
         </TouchableOpacity>
       </Modal>
@@ -1078,14 +1208,14 @@ export default function ProfileScreen() {
               <Flame size={32} color="#FF6B35" />
             </View>
             <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h2, textAlign: 'center', marginBottom: theme.spacing.xs }]}>
-              {stats.currentStreak} {t('streak.days')}
+              {stats.currentStreak} {t('streak.days', { count: stats.currentStreak })}
             </Text>
             {/* Streak info rows */}
             <View style={{ width: '100%', marginTop: theme.spacing.md, gap: 8 }}>
               {stats.longestStreak > 0 && (
                 <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 6, borderBottomWidth: 1, borderBottomColor: theme.colors.divider }}>
                   <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm }}>{t('streak.longest')}</Text>
-                  <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '600' as const }}>{stats.longestStreak} {t('streak.daysUnit')}</Text>
+                  <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '600' as const }}>{stats.longestStreak} {t('streak.daysUnit', { count: stats.longestStreak })}</Text>
                 </View>
               )}
               {stats.lastPickupDate && (
@@ -1195,35 +1325,6 @@ export default function ProfileScreen() {
           </View>
         </View>
       </Modal>
-
-      {/* Level Up Banner */}
-      {showLevelUp && (
-        <Animated.View
-          style={{
-            position: 'absolute',
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            backgroundColor: 'rgba(0,0,0,0.6)',
-            justifyContent: 'center',
-            alignItems: 'center',
-            transform: [{ scale: levelUpScale }],
-          }}
-        >
-          <View style={{ backgroundColor: theme.colors.surface, borderRadius: theme.radii.r24, padding: theme.spacing.xxl, alignItems: 'center', ...theme.shadows.shadowLg }}>
-            <View style={{ width: 72, height: 72, borderRadius: 36, backgroundColor: theme.colors.secondary, justifyContent: 'center', alignItems: 'center', marginBottom: theme.spacing.lg }}>
-              <Trophy size={36} color={theme.colors.primaryDark} />
-            </View>
-            <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h1, textAlign: 'center', marginBottom: theme.spacing.sm }]}>
-              {t('impact.levelUp', { defaultValue: 'Level Up!' })}
-            </Text>
-            <Text style={[{ color: theme.colors.primary, ...theme.typography.h2, textAlign: 'center' }]}>
-              {t('impact.level', { level: String(stats.level) })}
-            </Text>
-          </View>
-        </Animated.View>
-      )}
 
       {/* Success / Error toast modal */}
       <Modal visible={!!toastMsg} transparent animationType="fade" onRequestClose={() => setToastMsg(null)}>

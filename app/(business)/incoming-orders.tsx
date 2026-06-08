@@ -1,19 +1,23 @@
 import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Modal, TextInput, KeyboardAvoidingView, Platform, Dimensions, Keyboard } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Modal, TextInput, KeyboardAvoidingView, Platform, Dimensions, Keyboard, Animated, PanResponder } from 'react-native';
+import { useSwipeToDismiss } from '@/src/hooks/useSwipeToDismiss';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Path } from 'react-native-svg';
 import { DemoTapHintToast } from '@/src/components/DemoTapHintToast';
 import { useTranslation } from 'react-i18next';
-import { CheckCircle, XCircle, Clock, QrCode, ClipboardList, Check, X as XIcon, ChevronDown, ChevronUp, AlertTriangle, MessageCircle, Star, User, Banknote, Wallet, HelpCircle, Hand } from 'lucide-react-native';
-import { useRouter } from 'expo-router';
+import { CheckCircle, XCircle, QrCode, ClipboardList, ChevronDown, ChevronUp, AlertTriangle, MessageCircle, Star, User, Banknote, Wallet, HelpCircle, Hand } from 'lucide-react-native';
+import { useRouter, useFocusEffect } from 'expo-router';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { isPickupExpiredInTz } from '@/src/utils/timezone';
 import { StatusBar } from 'expo-status-bar';
 import { useBusinessStore } from '@/src/stores/businessStore';
 import { useWalkthroughStore } from '@/src/stores/walkthroughStore';
 import { useNotificationStore } from '@/src/stores/notificationStore';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { DEMO_BASKET_PHOTOS, DEMO_LOCATION_ADDRESS } from '@/src/lib/demoData';
+import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import { fetchTodayOrders, fetchLocationOrders, confirmPickup, type TodayReservationFromAPI } from '@/src/services/business';
+import { fetchBasketsByLocation } from '@/src/services/baskets';
+import { usePollWhenFocused } from '@/src/hooks/usePollWhenFocused';
 import { getErrorMessage, apiClient } from '@/src/lib/api';
 import { DelayedLoader } from '@/src/components/DelayedLoader';
 import { useCustomAlert } from '@/src/components/CustomAlert';
@@ -22,6 +26,9 @@ import { FilterChip } from '@/src/components/FilterChip';
 import { fetchConversationUnreads } from '@/src/services/messages';
 import { fetchMyContext, fetchOrganizationDetails } from '@/src/services/teams';
 import { NoLocationCTA } from '@/src/components/NoLocationCTA';
+import { PaperSurface } from '@/src/components/ui/PaperSurface';
+import { MotifText } from '@/src/components/MotifText';
+import { parseMotifRaw, motifDisplay, type MotifAuthor } from '@/src/utils/motif';
 import { orderIdToCode } from '@/src/utils/orderCode';
 
 // ─── Canonical UI status model ────────────────────────────────────────────────
@@ -36,6 +43,22 @@ import { orderIdToCode } from '@/src/utils/orderCode';
 // ─────────────────────────────────────────────────────────────────────────────
 
 type CanonicalStatus = 'confirmed' | 'picked_up' | 'cancelled' | 'expired';
+
+// Mirrors the timeAgo in notification cards so order cards read with the same
+// "il y a 3min" cadence the user already knows from the inbox.
+function timeAgo(dateStr: string | null | undefined, t: (key: string, opts?: Record<string, unknown>) => string): string {
+  if (!dateStr) return '';
+  const then = new Date(dateStr).getTime();
+  if (!Number.isFinite(then)) return '';
+  const diff = Math.floor((Date.now() - then) / 1000);
+  if (diff < 60) return t('timeAgo.seconds', { count: Math.max(diff, 0) });
+  if (diff < 3600) return t('timeAgo.minutes', { count: Math.floor(diff / 60) });
+  if (diff < 86400) return t('timeAgo.hours', { count: Math.floor(diff / 3600) });
+  const days = Math.floor(diff / 86400);
+  if (days < 7) return t('timeAgo.days', { count: days });
+  if (days < 30) return t('timeAgo.weeks', { count: Math.floor(days / 7) });
+  return t('timeAgo.months', { count: Math.floor(days / 30) });
+}
 
 interface OrderReview {
   rating_service?: number;
@@ -74,6 +97,31 @@ interface NormalizedOrder {
   basket_id?: number;
 }
 
+/**
+ * Reasons the backend stamps when the order wasn't really "cancelled" by a
+ * human — it expired or the customer no-showed. These are semantically
+ * EXPIRED, not cancelled, even though they arrive with status='cancelled'.
+ * The UI re-classifies them so the badge reads "Expiré" (orange) and the
+ * "Annulé par" / motif rows don't render.
+ */
+const EXPIRY_REASONS = new Set([
+  'expired_no_pickup',
+  'customer_no_show',
+  'no_show',
+  'expired',
+]);
+
+/**
+ * Render a cancellation motif from the raw reservation value, tagging the
+ * free-text "other" reason with who authored it. Delegates the parsing +
+ * translation to the shared util (also used by the notification popup).
+ */
+function formatMotif(raw: string, t: (k: string, opts?: any) => string, author: MotifAuthor = null): string {
+  if (!raw) return '';
+  const { key, note } = parseMotifRaw(raw);
+  return motifDisplay(key, note, author, t);
+}
+
 /** Map any legacy backend status string into the canonical UI status. */
 function normalizeStatus(raw: string | undefined): CanonicalStatus {
   switch (raw) {
@@ -106,42 +154,107 @@ export default function IncomingOrdersScreen() {
   const targetOrderTs = useBusinessStore((s) => s.targetOrderTs);
   const setSelectedLocationId = useBusinessStore((s) => s.setSelectedLocationId);
   const [activeTab, setActiveTab] = useState<'incoming' | 'completed' | 'issues'>('incoming');
-  const [dateFilter, setDateFilter] = useState<'today' | 'month' | 'all'>('month');
+  const [dateFilter, setDateFilter] = useState<'today' | 'month' | 'all'>('all');
   const [issueTypeFilter, setIssueTypeFilter] = useState<'all' | 'expired' | 'cancelled'>('all');
   const [showBizFilterModal, setShowBizFilterModal] = useState(false);
-  const statsScrollRef = useRef<ScrollView>(null);
   const queryClient = useQueryClient();
   const selectedLocationId = useBusinessStore((s) => s.selectedLocationId);
 
+  // Live today's-orders feed for the partner. 15s → 20s, paused when
+  // tab unfocused, and `refetchOnMount: 'always'` dropped (the global
+  // 30s staleTime now handles the "fresh-on-entry" case without
+  // double-firing every tab swap).
+  const todayRefetch = usePollWhenFocused(20_000);
   const todayQuery = useQuery({
     queryKey: ['today-orders', selectedLocationId],
     queryFn: () => fetchTodayOrders(selectedLocationId),
-    staleTime: 10_000,
-    refetchInterval: 15_000,
-    refetchOnMount: 'always',
+    // Don't fire while selectedLocationId is still hydrating from the store
+    // (the layout-level effect snaps it to a valid id within a frame). Without
+    // this gate, the page used to fire ['today-orders', null] first, then
+    // re-key once the location resolved, polluting the cache with an
+    // aggregated-across-all-locations result that the displayed key
+    // (`[realId, ...]`) was never refreshed against.
+    enabled: selectedLocationId != null,
+    staleTime: 15_000,
+    refetchInterval: todayRefetch,
     retry: 1,
+    // Keep the previous data visible while the key changes — without this,
+    // when selectedLocationId initializes from null → a real id, the query
+    // briefly displays empty (causing "0 orders" until the user changes
+    // filters and back, which only succeeded because the new fetch
+    // happened to land first).
+    placeholderData: keepPreviousData,
   });
 
-  // Historical orders for completed/issues tabs (supports date filtering)
+  // Historical orders (completed/issues tabs). No interval poll — the
+  // user only consults these on demand. Dropped `refetchOnMount: 'always'`
+  // because it was firing a fresh page load every tab swap; the global
+  // staleTime floor + the invalidation on confirm/cancel mutations are
+  // enough to keep this fresh in practice.
+  // Canonical basket-name lookup: the today-orders / location-orders
+  // responses return a top-level `basket_name` that is unreliable — observed
+  // returning the location's default basket name for every row regardless
+  // of which basket type was actually reserved. The reservation row's
+  // `basket_id` IS correct (it's the FK used when the customer reserved),
+  // so we resolve the displayed name via /api/baskets/location/:id and
+  // override per-row. Long staleTime — basket catalogs change rarely.
+  const basketsQuery = useQuery({
+    queryKey: ['baskets-by-location', selectedLocationId],
+    queryFn: () => fetchBasketsByLocation(String(selectedLocationId)),
+    enabled: selectedLocationId != null,
+    staleTime: 5 * 60_000,
+  });
+  const basketNameById = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const b of basketsQuery.data ?? []) {
+      if (b?.id != null && b?.name) m.set(String(b.id), b.name);
+    }
+    return m;
+  }, [basketsQuery.data]);
+
   const historyQuery = useQuery({
     queryKey: ['location-orders', selectedLocationId, dateFilter],
     queryFn: () => fetchLocationOrders(selectedLocationId, dateFilter),
-    staleTime: 15_000,
-    refetchOnMount: 'always',
+    // Same gate as todayQuery — without this, the "Tout" filter on first
+    // mount used to land with the null-key (all-locations-aggregated)
+    // fetch result lingering in cache; switching filter to "Mois" and back
+    // to "Tout" was the only reliable way to force a refetch against the
+    // real selectedLocationId, which is the symptom the user reported.
+    enabled: selectedLocationId != null,
+    staleTime: 60_000,
     retry: 2,
+    placeholderData: keepPreviousData,
   });
 
+  // Force-refresh both queries every time the screen comes into focus so
+  // tab swaps and deep-link re-entries can't leave a stale or partial
+  // cache visible. Bounded by selectedLocationId/dateFilter so a refetch
+  // only runs against the currently-displayed slice.
+  useFocusEffect(
+    useCallback(() => {
+      void todayQuery.refetch();
+      void historyQuery.refetch();
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [selectedLocationId, dateFilter])
+  );
+
+  // Conversation unreads — same query key as customer side, focus-gated
+  // and slowed to 30s. The interval is paused when the user is on a
+  // different tab; reentry runs the 30s staleTime check and only fires
+  // a refetch if the cached entry is older than 25s.
+  const msgUnreadsRefetch = usePollWhenFocused(30_000);
   const msgUnreadsQuery = useQuery({
     queryKey: ['conversation-unreads'],
     queryFn: fetchConversationUnreads,
-    staleTime: 5_000,
-    refetchInterval: 15_000,
-    refetchOnMount: 'always',
+    staleTime: 25_000,
+    refetchInterval: msgUnreadsRefetch,
   });
   const msgUnreads = msgUnreadsQuery.data ?? {};
 
-  // Permission checks for granular actions
-  const ctxQuery = useQuery({ queryKey: ['my-context'], queryFn: fetchMyContext, staleTime: 10_000 });
+  // Permission checks for granular actions. my-context staleTime
+  // matches the 5-min floor we set in the business layout — role
+  // changes mid-session are a non-issue.
+  const ctxQuery = useQuery({ queryKey: ['my-context'], queryFn: fetchMyContext, staleTime: 5 * 60_000 });
   const myRole = ctxQuery.data?.role ?? 'member';
   const isAdminOrOwner = myRole === 'owner' || myRole === 'admin';
 
@@ -236,10 +349,31 @@ export default function IncomingOrdersScreen() {
   const normalizeOrder = (o: TodayReservationFromAPI): NormalizedOrder => {
     const pickupStart = (o.pickup_start_time as string)?.substring(0, 5) ?? '';
     const pickupEnd = (o.pickup_end_time as string)?.substring(0, 5) ?? '';
+    // Resolve the displayed basket type name. Priority:
+    //   1. Look up by `basket_id` in basketNameById (built from
+    //      /api/baskets/location/:id) — this is the only source we trust
+    //      end-to-end because the today-orders endpoint's top-level
+    //      `basket_name` was observed returning the location's default
+    //      basket for every row regardless of which one was reserved.
+    //   2. Nested `basket.name` etc. (kept for resilience if the row ever
+    //      ships the nested object with the correct name).
+    //   3. Top-level `basket_name` / `restaurant_name` as last-resort.
+    const oa = o as any;
+    const bidStr = oa.basket_id != null ? String(oa.basket_id) : null;
+    const basketName: string =
+      (bidStr ? basketNameById.get(bidStr) : undefined)
+      ?? oa.basket?.name
+      ?? oa.basket?.basket_type_name
+      ?? oa.basket?.type_name
+      ?? oa.basket?.basket_name
+      ?? oa.basket_type_name
+      ?? oa.basket_name
+      ?? oa.restaurant_name
+      ?? t('orders.surpriseBag', { defaultValue: 'Panier Surprise' });
     return {
       id: String(o.id),
       buyerId: o.buyer_id,
-      basketName: (o as any).basket_name ?? (o as any).restaurant_name ?? t('orders.surpriseBag', { defaultValue: 'Panier Surprise' }),
+      basketName,
       quantity: o.quantity ?? 1,
       total: Number(o.price_tier ?? 0) * (o.quantity ?? 1),
       pickupWindow: { start: pickupStart, end: pickupEnd },
@@ -318,18 +452,38 @@ export default function IncomingOrdersScreen() {
     if (demoNotifFiredRef.current) return;
     demoNotifFiredRef.current = true;
     const timer = setTimeout(() => {
+      // Build a FULLY-POPULATED reservation notification so the demo popup
+      // shows exactly what a real "Nouvelle réservation" looks like — basket
+      // photo, customer, quantity, total, pickup window and code. The popup
+      // (NotificationDetail) reads these from the message JSON's `params`, and
+      // resolveNotifText renders the headline from `notif_message_new_reservation`
+      // (the same key real reservation notifications use). Values mirror the
+      // demo order card so the notif and the card stay consistent.
+      const notifParams = {
+        customerName: demoOrder.customerName,
+        count: demoOrder.quantity,
+        quantity: demoOrder.quantity,
+        location: t('walkthrough.biz.demoNotifLocation', { defaultValue: 'Barakeat — Tunis Centre' }),
+        basketName: demoOrder.basketName,
+        basketImage: DEMO_BASKET_PHOTOS[0],
+        price: demoOrder.total / demoOrder.quantity,
+        pickupStart: demoOrder.pickupWindow.start,
+        pickupEnd: demoOrder.pickupWindow.end,
+        code: demoOrder.pickupCode,
+        address: DEMO_LOCATION_ADDRESS,
+      };
       pushDemoPopup([{
         id: -Date.now(),
         user_id: 0,
         type: 'new_reservation',
-        title: t('walkthrough.biz.demoNotifTitle', { defaultValue: 'Nouvelle réservation' }),
-        message: t('walkthrough.biz.demoNotifMessage', { defaultValue: 'Sami a réservé 2 Paniers Surprise.' }),
+        title: 'notif_title_new_reservation',
+        message: JSON.stringify({ key: 'notif_message_new_reservation', params: notifParams }),
         is_read: false,
         created_at: new Date().toISOString(),
       }]);
     }, 250);
     return () => clearTimeout(timer);
-  }, [demoOrderActive, pushDemoPopup, t]);
+  }, [demoOrderActive, pushDemoPopup, t, demoOrder]);
 
   // Historical orders (for completed/issues tabs — uses date filter)
   const allOrders: NormalizedOrder[] = (historyQuery.data ?? []).map(normalizeOrder);
@@ -389,7 +543,14 @@ export default function IncomingOrdersScreen() {
   const displayedOrders = activeTab === 'incoming' ? incomingOrders : activeTab === 'completed' ? completedOrders : filteredIssueOrders;
 
   // ── Deep-link: navigate to exact order from activity log / notifications ──
-  // Deep-link: find and expand the target order
+  // Deep-link: find, expand, AND scroll to the target order. The scroll
+  // step matters because the order list can be long — "Tout" + completed
+  // / issues often pushes the target card well below the fold, and a
+  // user tapping a review expects to LAND on that order, not on the top
+  // of the orders page.
+  const ordersScrollRef = useRef<ScrollView | null>(null);
+  const orderCardYRef = useRef<Map<string, number>>(new Map());
+  const pendingScrollIdRef = useRef<string | null>(null);
   const lastOrderTsRef = useRef(0);
   useEffect(() => {
     // Read fresh values from store every time
@@ -401,7 +562,13 @@ export default function IncomingOrdersScreen() {
     if (tLocId && String(tLocId) !== String(selectedLocationId)) {
       setSelectedLocationId(tLocId);
     }
+    // Force "Tout" — without this, a review for an order outside the
+    // current date filter (today / this month) would never appear in
+    // the list and the deep-link would silently no-op. The user's
+    // expectation: tapping the review always lands them on the order
+    // regardless of which date filter they had selected.
     setDateFilter('all');
+    setIssueTypeFilter('all');
     void queryClient.invalidateQueries({ queryKey: ['today-orders'] });
     void queryClient.invalidateQueries({ queryKey: ['location-orders'] });
 
@@ -420,6 +587,19 @@ export default function IncomingOrdersScreen() {
         else if (status === 'cancelled' || status === 'expired') setActiveTab('issues');
         else setActiveTab('incoming');
         setExpandedOrderId(String(found.id));
+        // Flag the id we want to scroll to — onLayout below will fire
+        // once the card mounts in the now-correct tab/filter and trigger
+        // the scrollTo. We can't scroll immediately: the cards haven't
+        // remounted under the new activeTab/filter yet.
+        pendingScrollIdRef.current = String(found.id);
+        // If the card is already measured (was visible before the deep
+        // link fired), jump now — the onLayout path won't re-fire.
+        const knownY = orderCardYRef.current.get(String(found.id));
+        if (knownY != null) {
+          setTimeout(() => {
+            ordersScrollRef.current?.scrollTo({ y: Math.max(0, knownY - 12), animated: true });
+          }, 50);
+        }
         useBusinessStore.getState().setTargetOrder(null);
       } else if (attempts < 8) {
         attempts++;
@@ -429,21 +609,106 @@ export default function IncomingOrdersScreen() {
     setTimeout(tryExpand, 200);
   }, [targetOrderId, targetOrderTs]);
 
-  // Auto-scroll stat carousel to active tab
-  const statsTabIndex = activeTab === 'incoming' ? 0 : activeTab === 'completed' ? 1 : 2;
-  useEffect(() => {
-    const screenW = Dimensions.get('window').width;
-    const cardW = screenW * 0.38;
-    const gap = 8;
-    statsScrollRef.current?.scrollTo({ x: statsTabIndex * (cardW + gap) - (screenW - cardW) / 2 + cardW / 2, animated: true });
-  }, [statsTabIndex]);
-
   // ─── Verify-pickup modal state ──────────────────────────────────────────────
   const [verifyModalOrderId, setVerifyModalOrderId] = useState<string | null>(null);
   const [typedCode, setTypedCode] = useState('');
   const [verifyError, setVerifyError] = useState('');
   const [verifySuccess, setVerifySuccess] = useState(false);
   const [verifyLoading, setVerifyLoading] = useState(false);
+
+  // Cancel flow — mirrors the customer experience: a warning bottom-sheet
+  // first, then the shared full-page reason picker (/cancel-reservation in
+  // ?mode=business). The reason picker performs the DELETE + cache refresh,
+  // so this screen only needs to capture which order is being cancelled and
+  // hand off the details.
+  const [cancelWarning, setCancelWarning] = useState<{
+    id: string; customerName?: string; quantity: number; locationId?: string; paymentMethod?: string;
+  } | null>(null);
+  // Entrance is staged so the dim backdrop FADES IN (in place — it never
+  // slides) and only then does the sheet SLIDE UP. animationType is "none" so
+  // RN doesn't slide the whole modal (backdrop + sheet) up together.
+  const CANCEL_SHEET_OFFSET = 420;
+  const cancelBackdropOpacity = useRef(new Animated.Value(0)).current;
+  const cancelSheetY = useRef(new Animated.Value(CANCEL_SHEET_OFFSET)).current;
+  useEffect(() => {
+    if (!cancelWarning) return;
+    cancelBackdropOpacity.setValue(0);
+    cancelSheetY.setValue(CANCEL_SHEET_OFFSET);
+    Animated.sequence([
+      Animated.timing(cancelBackdropOpacity, { toValue: 1, duration: 200, useNativeDriver: true }),
+      // Deterministic slide (not an underdamped spring). With useNativeDriver
+      // the button's touch target sits at the settled position while the sheet
+      // is still visually moving/overshooting, so a tap during that window
+      // missed and the user had to tap "Continuer" twice. A short, non-
+      // overshooting slide settles the hit area almost immediately. (Same fix
+      // as the customer reserve sheet.)
+      Animated.timing(cancelSheetY, { toValue: 0, duration: 220, useNativeDriver: true }),
+    ]).start();
+  }, [cancelWarning, cancelBackdropOpacity, cancelSheetY]);
+  // Reverse the order on the way out: sheet slides down while the backdrop
+  // fades, then we unmount and run any follow-up (e.g. navigation).
+  const animateCloseCancelWarning = useCallback((after?: () => void) => {
+    Animated.parallel([
+      Animated.timing(cancelSheetY, { toValue: CANCEL_SHEET_OFFSET, duration: 180, useNativeDriver: true }),
+      Animated.timing(cancelBackdropOpacity, { toValue: 0, duration: 180, useNativeDriver: true }),
+    ]).start(() => {
+      setCancelWarning(null);
+      after?.();
+    });
+  }, [cancelBackdropOpacity, cancelSheetY]);
+  const closeCancelWarning = useCallback(() => animateCloseCancelWarning(), [animateCloseCancelWarning]);
+  // Drag-to-dismiss from the handle: the sheet follows the finger 1:1
+  // downward (rubber-bands a third when dragged up) and the backdrop fades
+  // proportionally, so the whole sheet slides down continuously as you drag.
+  // Release past the threshold / with downward velocity dismisses; otherwise
+  // it springs back. Mounted on the handle zone only.
+  const cancelDragResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: (_, g) => Math.abs(g.dy) > 3 && Math.abs(g.dy) > Math.abs(g.dx),
+      onPanResponderTerminationRequest: () => false,
+      onPanResponderMove: (_, g) => {
+        const dy = g.dy >= 0 ? g.dy : g.dy / 3;
+        cancelSheetY.setValue(dy);
+        cancelBackdropOpacity.setValue(Math.max(0, Math.min(1, 1 - Math.max(0, g.dy) / CANCEL_SHEET_OFFSET)));
+      },
+      onPanResponderRelease: (_, g) => {
+        const projection = g.dy + g.vy * 60;
+        if (projection > 80 || g.vy > 0.6) {
+          const duration = Math.max(120, Math.min(280, 220 - g.vy * 50));
+          Animated.parallel([
+            Animated.timing(cancelSheetY, { toValue: CANCEL_SHEET_OFFSET, duration, useNativeDriver: true }),
+            Animated.timing(cancelBackdropOpacity, { toValue: 0, duration, useNativeDriver: true }),
+          ]).start(() => setCancelWarning(null));
+        } else {
+          Animated.parallel([
+            Animated.spring(cancelSheetY, { toValue: 0, friction: 10, tension: 80, useNativeDriver: true }),
+            Animated.timing(cancelBackdropOpacity, { toValue: 1, duration: 150, useNativeDriver: true }),
+          ]).start();
+        }
+      },
+      onPanResponderTerminate: () => {
+        Animated.spring(cancelSheetY, { toValue: 0, friction: 10, tension: 80, useNativeDriver: true }).start();
+        cancelBackdropOpacity.setValue(1);
+      },
+    })
+  ).current;
+  const proceedToCancelReason = useCallback(() => {
+    if (!cancelWarning) return;
+    const target = cancelWarning;
+    animateCloseCancelWarning(() => {
+      router.push({
+        pathname: '/cancel-reservation',
+        params: {
+          mode: 'business',
+          reservationId: String(target.id),
+          quantity: String(target.quantity ?? 1),
+          locationId: target.locationId ?? '',
+          merchantName: target.customerName ?? '',
+        },
+      } as never);
+    });
+  }, [cancelWarning, router, animateCloseCancelWarning]);
 
   const openVerifyModal = useCallback((orderId: string) => {
     setTypedCode('');
@@ -458,6 +723,11 @@ export default function IncomingOrdersScreen() {
     setVerifyError('');
     setVerifySuccess(false);
   }, []);
+
+  // Swipe-down-to-close on the verify-pickup sheet. Disabled while a
+  // confirmation call is in flight so the user can't accidentally
+  // dismiss the loading state mid-network-call.
+  const verifySwipe = useSwipeToDismiss(closeVerifyModal, { disabled: verifyLoading });
 
   /** Single real flow: verify code → confirmPickup → invalidate queries */
   const handleVerifyCode = useCallback(async () => {
@@ -502,6 +772,19 @@ export default function IncomingOrdersScreen() {
       // Pass buyerId so backend can send pickup notification to the buyer
       await confirmPickup(order.id, order.pickupCode, order.buyerId);
 
+      // Optimistic: flip the just-confirmed order's status in the today-orders
+      // cache so it disappears from the "en cours" tab the instant the server
+      // returns 200. The deferred invalidation + refetch below then syncs
+      // ground truth; if confirmPickup had thrown we'd never reach this block,
+      // so we won't optimistically remove an order whose confirm actually
+      // failed.
+      queryClient.setQueryData<TodayReservationFromAPI[]>(
+        ['today-orders', selectedLocationId],
+        (prev) => (prev ?? []).map((r) =>
+          String(r.id) === String(verifyModalOrderId) ? { ...r, status: 'picked_up' } : r
+        )
+      );
+
       setVerifySuccess(true);
 
       // Invalidate + refetch after a brief pause to let the DB settle.
@@ -514,10 +797,16 @@ export default function IncomingOrdersScreen() {
           queryClient.invalidateQueries({ queryKey: ['today-orders'] }),
           queryClient.invalidateQueries({ queryKey: ['today-orders-count'] }),
           queryClient.invalidateQueries({ queryKey: ['location-orders'] }),
+          // Dashboard tiles read from business-stats / business-analytics —
+          // without these the revenue counters stay at 0 until app reload.
+          queryClient.invalidateQueries({ queryKey: ['business-stats'] }),
+          queryClient.invalidateQueries({ queryKey: ['business-analytics'] }),
         ]);
         await Promise.all([
           queryClient.refetchQueries({ queryKey: ['today-orders', selectedLocationId] }),
           queryClient.refetchQueries({ queryKey: ['location-orders', selectedLocationId, dateFilter] }),
+          queryClient.refetchQueries({ queryKey: ['business-stats', selectedLocationId] }),
+          queryClient.refetchQueries({ queryKey: ['business-analytics', selectedLocationId] }),
         ]);
       }, 500);
 
@@ -549,17 +838,14 @@ export default function IncomingOrdersScreen() {
     if (demoOrderActive) setExpandedOrderId(null);
   }, [demoOrderActive]);
 
-  // Sync demo-card expansion + verify-modal flags into the walkthrough store
-  // so the overlay's 'expand' / 'modal' advance triggers can fire. When the
-  // user expands the demo order, hold the flag for ~2.5 s before flipping
-  // it true so they have a moment to actually look at the expanded card
-  // before the demo moves on to the next step.
+  // Tapping the demo order card to EXPAND it advances the orderCard
+  // walkthrough step — mirrors how the demo BASKET card works (tap = advance)
+  // and matches the "Appuyez sur la carte" hint. The walkthrough store only
+  // acts on this flag while the current step has advanceOnFlag: 'expand'
+  // (orderCard); every other step resets it on entry, so flipping it here is
+  // a no-op outside that step.
   useEffect(() => {
-    if (expandedOrderId === 'demo-order-1') {
-      const id = setTimeout(() => setExpandedDemoCardFlag(true), 450);
-      return () => clearTimeout(id);
-    }
-    setExpandedDemoCardFlag(false);
+    setExpandedDemoCardFlag(expandedOrderId === 'demo-order-1');
   }, [expandedOrderId, setExpandedDemoCardFlag]);
   useEffect(() => {
     setVerifyModalOpenFlag(verifyModalOrderId !== null);
@@ -630,9 +916,11 @@ export default function IncomingOrdersScreen() {
             try {
               // Call backend to cancel the reservation
               await apiClient.delete(`/api/reservations/${orderId}`);
-              // Refetch to update the list
+              // Refetch to update the list + dashboard tiles
               void queryClient.invalidateQueries({ queryKey: ['today-orders'] });
               void queryClient.invalidateQueries({ queryKey: ['today-orders-count'] });
+              void queryClient.invalidateQueries({ queryKey: ['business-stats'] });
+              void queryClient.invalidateQueries({ queryKey: ['business-analytics'] });
             } catch (err) {
               alert.showAlert(t('common.error'), getErrorMessage(err));
             }
@@ -678,82 +966,98 @@ export default function IncomingOrdersScreen() {
         <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h1 }]}>
           {t('business.orders.title')}
         </Text>
-        {canViewHistory && (activeTab === 'completed' || activeTab === 'issues') && (
-          <FilterChip
-            icon={ClipboardList}
-            active={dateFilter !== 'today' || issueTypeFilter !== 'all'}
-            label={
-              dateFilter === 'today' ? t('business.orders.filterToday', { defaultValue: "Auj." })
-                : dateFilter === 'month' ? t('business.orders.filterMonth', { defaultValue: 'Mois' })
-                : t('business.orders.filterAll', { defaultValue: 'Tout' })
-            }
-            onPress={() => setShowBizFilterModal(true)}
-          />
-        )}
+        {/* Render the FilterChip on every tab and hide it visually on
+            'incoming' via opacity + pointerEvents='none'. That keeps the
+            occupied width identical across tabs so the "Commandes" title's
+            left edge never moves. An empty View with minWidth wasn't
+            reliable because flex-row + justify-content:'space-between' was
+            collapsing it when there was no child content. */}
+        {(() => {
+          const chipVisible = canViewHistory && (activeTab === 'completed' || activeTab === 'issues');
+          return (
+            <View style={{ opacity: chipVisible ? 1 : 0 }} pointerEvents={chipVisible ? 'auto' : 'none'}>
+              <FilterChip
+                icon={ClipboardList}
+                // Always render filled-green so the chip stays branded
+                // regardless of whether any filter is currently applied.
+                active
+                label={
+                  dateFilter === 'today' ? t('business.orders.filterToday', { defaultValue: "Auj." })
+                    : dateFilter === 'month' ? t('business.orders.filterMonth', { defaultValue: 'Mois' })
+                    : t('business.orders.filterAll', { defaultValue: 'Tout' })
+                }
+                onPress={() => setShowBizFilterModal(true)}
+              />
+            </View>
+          );
+        })()}
       </View>
 
-      {/* Stat carousel — syncs with active tab */}
-      {(() => {
-        const screenW = Dimensions.get('window').width;
-        const cardW = screenW * 0.38;
-        const gap = 8;
-
-        const allSlides = [
-          { key: 'incoming' as const, icon: Clock, iconColor: '#e3ff5c', bg: theme.colors.primary, textColor: '#fff', subColor: 'rgba(255,255,255,0.7)', count: incomingOrders.length, label: t('business.orders.pendingPickup', { defaultValue: 'en attente de retrait' }) },
-          { key: 'completed' as const, icon: Check, iconColor: '#114b3c', bg: '#e3ff5c', textColor: '#114b3c', subColor: theme.colors.textSecondary, count: completedOrders.length, label: t('business.orders.statusPickedUp', { count: completedOrders.length, defaultValue: completedOrders.length === 1 ? 'vendu' : 'vendus' }) },
-          { key: 'issues' as const, icon: XIcon, iconColor: theme.colors.error, bg: theme.colors.error + '14', textColor: theme.colors.error, subColor: theme.colors.textSecondary, count: issueOrders.length, label: t('business.orders.issues', { count: issueOrders.length, defaultValue: issueOrders.length === 1 ? 'annulée' : 'annulées' }) },
-        ];
-        const slides = canViewHistory ? allSlides : allSlides.filter(s => s.key === 'incoming');
-
-        return (
-        <ScrollView
-          ref={statsScrollRef}
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          style={{ marginTop: theme.spacing.sm, flexGrow: 0 }}
-          contentContainerStyle={{ paddingHorizontal: 20, gap }}
-        >
-          {slides.map((s) => {
-            const isActive = activeTab === s.key;
-            const SlideIcon = s.icon;
-            return (
-              <TouchableOpacity
-                key={s.key}
-                onPress={() => setActiveTab(s.key)}
-                activeOpacity={0.85}
-                style={{
-                  width: cardW,
-                  backgroundColor: s.bg,
-                  borderRadius: theme.radii.r12,
-                  height: 60,
-                  paddingHorizontal: 10,
-                  flexDirection: 'row',
-                  alignItems: 'center',
-                  gap: 8,
-                  opacity: isActive ? 1 : 0.5,
-                  borderWidth: isActive ? 2 : 0,
-                  borderColor: isActive ? s.textColor + '40' : 'transparent',
-                }}
-              >
-                <SlideIcon size={14} color={s.iconColor} />
-                <Text style={{ color: s.textColor, fontSize: 18, fontFamily: 'Poppins_700Bold' }}>
-                  {s.count}
+      {/* Fixed 3-stat green panel — mirrors the customer orders page's Impact
+          slide so business + customer interfaces share one visual language.
+          Always visible regardless of active tab. Restricted users (no
+          view_history permission) get only the "en attente" cell. */}
+      <View style={{
+        backgroundColor: theme.colors.primary,
+        borderRadius: theme.radii.r16,
+        padding: 20,
+        marginHorizontal: 20,
+        marginTop: theme.spacing.sm,
+      }}>
+        <View style={{ flexDirection: 'row' }}>
+          <View style={{ flex: 1, alignItems: 'center', paddingHorizontal: 4 }}>
+            <Text style={{ color: activeTab === 'incoming' ? theme.colors.secondary : '#fff', ...theme.typography.h2 }}>{incomingOrders.length}</Text>
+            <Text
+              style={{
+                color: activeTab === 'incoming' ? theme.colors.secondary : 'rgba(255,255,255,0.7)',
+                ...theme.typography.caption,
+                textAlign: 'center',
+              }}
+            >
+              {t('business.orders.pendingPickup', { defaultValue: 'En attente' })}
+            </Text>
+          </View>
+          {canViewHistory && (
+            <>
+              <View style={{ flex: 1, alignItems: 'center', paddingHorizontal: 4 }}>
+                <Text style={{ color: activeTab === 'completed' ? theme.colors.secondary : '#fff', ...theme.typography.h2 }}>{completedOrders.length}</Text>
+                <Text
+                  style={{
+                    color: activeTab === 'completed' ? theme.colors.secondary : 'rgba(255,255,255,0.7)',
+                    ...theme.typography.caption,
+                    textAlign: 'center',
+                  }}
+                >
+                  {t('business.orders.statusPickedUp', {
+                    count: completedOrders.length,
+                    defaultValue: completedOrders.length === 1 ? 'Vendu' : 'Vendus',
+                  })}
                 </Text>
-                <Text style={{ color: s.subColor, fontSize: 10, fontFamily: 'Poppins_400Regular', flex: 1 }} numberOfLines={1}>
-                  {s.label}
+              </View>
+              <View style={{ flex: 1, alignItems: 'center', paddingHorizontal: 4 }}>
+                <Text style={{ color: activeTab === 'issues' ? theme.colors.secondary : '#fff', ...theme.typography.h2 }}>{issueOrders.length}</Text>
+                <Text
+                  style={{
+                    color: activeTab === 'issues' ? theme.colors.secondary : 'rgba(255,255,255,0.7)',
+                    ...theme.typography.caption,
+                    textAlign: 'center',
+                  }}
+                >
+                  {t('business.orders.issues', { defaultValue: 'Problèmes' })}
                 </Text>
-              </TouchableOpacity>
-            );
-          })}
-        </ScrollView>
-        );
-      })()}
+              </View>
+            </>
+          )}
+        </View>
+      </View>
 
-      {/* Tab bar — En cours / Terminées / Problèmes */}
+      {/* Tab bar — labels deliberately reuse the same i18n keys as the green
+          info panel above so the tabs read as "En attente / Vendus / Problèmes"
+          and stay in lock-step with the stat-cell copy. */}
       <View style={[styles.tabs, { paddingHorizontal: theme.spacing.xl, marginTop: theme.spacing.sm }]}>
         {(canViewHistory ? ['incoming', 'completed', 'issues'] as const : ['incoming'] as const).map((tab) => {
-          const label = tab === 'incoming' ? t('business.orders.incoming')
-            : tab === 'completed' ? t('business.orders.completed')
+          const label = tab === 'incoming' ? t('business.orders.pendingPickup', { defaultValue: 'En attente' })
+            : tab === 'completed' ? t('business.orders.statusPickedUp', { count: completedOrders.length, defaultValue: completedOrders.length === 1 ? 'Vendu' : 'Vendus' })
             : t('business.orders.issues', { defaultValue: 'Problèmes' });
           const count = tab === 'incoming' ? incomingOrders.length : tab === 'completed' ? completedOrders.length : issueOrders.length;
           return (
@@ -789,6 +1093,7 @@ export default function IncomingOrdersScreen() {
       </View>
 
       <ScrollView
+        ref={ordersScrollRef}
         style={styles.content}
         contentContainerStyle={{ paddingHorizontal: theme.spacing.xl, paddingTop: theme.spacing.md, paddingBottom: 100 }}
         showsVerticalScrollIndicator={false}
@@ -834,7 +1139,18 @@ export default function IncomingOrdersScreen() {
           </View>
         ) : (
           displayedOrders.map((order) => {
-            const orderExpired = isOrderExpired(order) || (activeTab === 'issues' && order.status === 'confirmed');
+            // Re-classify status='cancelled' rows that carry an expiry-type
+            // reason (expired_no_pickup, customer_no_show, …) as EXPIRED.
+            // Server sends `status='cancelled'` for these, but semantically
+            // nobody cancelled — the window lapsed. UI must distinguish:
+            // expired = orange badge, no "Annulé par" / motif row.
+            const reasonIsExpiry =
+              order.status === 'cancelled'
+              && !!order.cancellationReason
+              && EXPIRY_REASONS.has(order.cancellationReason);
+            const orderExpired = isOrderExpired(order)
+              || (activeTab === 'issues' && order.status === 'confirmed')
+              || reasonIsExpiry;
             const displayStatus = orderExpired ? 'expired' as CanonicalStatus : order.status;
             const statusChip = getStatusTone(displayStatus);
             const isIncoming = order.status === 'confirmed' && !orderExpired;
@@ -845,7 +1161,23 @@ export default function IncomingOrdersScreen() {
               <TouchableOpacity
                 key={order.id}
                 ref={isDemoOrder ? (demoOrderCardRef as any) : undefined}
-                onLayout={isDemoOrder ? measureDemoOrderCard : undefined}
+                onLayout={(e) => {
+                  // Two purposes: (1) record the y-position of each card
+                  // so the deep-link effect can scroll to it; (2) keep
+                  // the demo measurement working when it's the demo card.
+                  const y = e.nativeEvent.layout.y;
+                  orderCardYRef.current.set(String(order.id), y);
+                  if (isDemoOrder) measureDemoOrderCard();
+                  // If a deep-link is waiting for THIS card to mount,
+                  // scroll now. Cleared so subsequent layout passes
+                  // don't yank the scroll position back.
+                  if (pendingScrollIdRef.current === String(order.id)) {
+                    pendingScrollIdRef.current = null;
+                    setTimeout(() => {
+                      ordersScrollRef.current?.scrollTo({ y: Math.max(0, y - 12), animated: true });
+                    }, 60);
+                  }
+                }}
                 activeOpacity={0.85}
                 onPress={() => {
                   // During the demo, only the demoOrderCard step asks the
@@ -934,7 +1266,14 @@ export default function IncomingOrdersScreen() {
                       </TouchableOpacity>
                     )}
                     {!isIncoming && (
-                      <StatusDot tone={statusChip.tone} label={statusChip.label} />
+                      <StatusDot
+                        tone={statusChip.tone}
+                        label={statusChip.label}
+                        // Orange-tint specifically for "Expiré" so it reads
+                        // distinct from the amber "Ready for pickup" warn
+                        // and the red "Annulé" danger.
+                        dotColor={displayStatus === 'expired' ? '#ee7b3c' : undefined}
+                      />
                     )}
                     {isExpanded
                       ? <ChevronUp size={16} color={theme.colors.textSecondary} />
@@ -942,9 +1281,17 @@ export default function IncomingOrdersScreen() {
                   </View>
                 </View>
 
-                {/* Order ID — bottom-right when collapsed, hidden when expanded */}
+                {/* Order ID + time-since-order — bottom-right when collapsed,
+                    hidden when expanded. The relative timestamp mirrors the
+                    notification-card cadence (timeAgo) and ticks via the
+                    same `timeTick` interval the rest of this screen uses. */}
                 {!isExpanded && (
                   <View style={{ alignItems: 'flex-end', marginTop: 4 }}>
+                    {order.createdAt ? (
+                      <Text style={[{ color: theme.colors.muted, ...theme.typography.caption }]}>
+                        {timeAgo(order.createdAt, t)}
+                      </Text>
+                    ) : null}
                     <Text style={[{ color: theme.colors.muted, ...theme.typography.caption }]}>
                       {orderIdToCode(order.id)}
                     </Text>
@@ -1013,9 +1360,9 @@ export default function IncomingOrdersScreen() {
                       {!isIncoming && (
                         <View style={[styles.detailRow, { marginTop: 4 }]}>
                           <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption }]}>
-                            {order.status === 'picked_up'
+                            {displayStatus === 'picked_up'
                               ? t('business.orders.collectedAt', { defaultValue: 'Récupéré le' })
-                              : order.status === 'expired'
+                              : displayStatus === 'expired'
                               ? t('business.orders.expiredAt', { defaultValue: 'Expiré le' })
                               : t('business.orders.cancelledAt', { defaultValue: 'Annulé le' })}
                           </Text>
@@ -1025,38 +1372,71 @@ export default function IncomingOrdersScreen() {
                         </View>
                       )}
 
-                      {/* Cancellation detail: who cancelled + free-text reason, if supplied. */}
-                      {order.status === 'cancelled' && (
+                      {/* Cancellation detail. ALWAYS renders for a cancelled
+                          order (even if backend didn't populate `cancelled_by`)
+                          — we default the actor to "Commerce" since the row
+                          must always tell the merchant who cancelled. Buyer
+                          path is the literal word "client" (not the customer
+                          name) per the merchant's spec; the member name only
+                          appears as a sub-line for Commerce cancellations.
+                          Suppressed when displayStatus is 'expired' — the
+                          orange "Expiré" badge already conveys that. */}
+                      {order.status === 'cancelled' && displayStatus !== 'expired' && (
                         <>
-                          {order.cancelledBy && (
-                            <View style={[styles.detailRow, { marginTop: 4, alignItems: 'flex-start' }]}>
-                              <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption }]}>
-                                {t('business.orders.cancelledBy', { defaultValue: 'Annulé par' })}
-                              </Text>
-                              <Text
-                                style={[{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '600', flex: 1, textAlign: 'right', marginLeft: 8 }]}
-                                numberOfLines={2}
-                                ellipsizeMode="tail"
-                              >
-                                {order.cancelledBy === 'buyer'
-                                  ? t('business.orders.cancelledByBuyer', { defaultValue: 'le client' })
-                                  : order.cancelledByName
-                                    ? t('business.orders.cancelledByMember', { name: order.cancelledByName, defaultValue: `${order.cancelledByName} (commerce)` })
-                                    : t('business.orders.cancelledByBusiness', { defaultValue: 'le commerce' })}
-                              </Text>
+                          <View style={[styles.detailRow, { marginTop: 4, alignItems: 'flex-start' }]}>
+                            <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption }]}>
+                              {t('business.orders.cancelledBy', { defaultValue: 'Annulé par' })}
+                            </Text>
+                            <View style={{ flex: 1, marginLeft: 8, alignItems: 'flex-end' }}>
+                              {order.cancelledBy === 'buyer' ? (
+                                <Text
+                                  style={[{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '600', textAlign: 'right' }]}
+                                  numberOfLines={1}
+                                >
+                                  {t('business.orders.cancelledByBuyer', { defaultValue: 'client' })}
+                                </Text>
+                              ) : (
+                                <>
+                                  <Text
+                                    style={[{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '600', textAlign: 'right' }]}
+                                    numberOfLines={1}
+                                  >
+                                    {t('business.orders.cancelledByBusiness', { defaultValue: 'Commerce' })}
+                                  </Text>
+                                  {order.cancelledByName ? (
+                                    <Text
+                                      style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, textAlign: 'right', marginTop: 2 }]}
+                                      numberOfLines={1}
+                                      ellipsizeMode="tail"
+                                    >
+                                      {t('business.orders.cancelledByMemberSub', { name: order.cancelledByName, defaultValue: `— ${order.cancelledByName}` })}
+                                    </Text>
+                                  ) : null}
+                                </>
+                              )}
                             </View>
-                          )}
+                          </View>
                           {order.cancellationReason ? (
-                            <View style={[styles.detailRow, { marginTop: 4, alignItems: 'flex-start' }]}>
+                            <View style={[styles.detailRow, { marginTop: 4, alignItems: 'flex-start', gap: 10 }]}>
                               <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption }]}>
                                 {t('business.orders.cancelReason', { defaultValue: 'Motif' })}
                               </Text>
-                              <Text
-                                style={[{ color: theme.colors.textPrimary, ...theme.typography.bodySm, flex: 1, textAlign: 'right' }]}
-                                numberOfLines={3}
-                              >
-                                {order.cancellationReason}
-                              </Text>
+                              {/* Collapses past 2 lines with a "Voir plus" toggle
+                                  when the motif is long; tags the free-text
+                                  reason with who cancelled. */}
+                              <MotifText
+                                value={formatMotif(
+                                  order.cancellationReason,
+                                  t,
+                                  order.cancelledBy === 'business' ? 'business' : order.cancelledBy === 'buyer' ? 'customer' : null,
+                                )}
+                                textStyle={{ ...theme.typography.bodySm }}
+                                color={theme.colors.textPrimary}
+                                linkColor={theme.colors.primary}
+                                align="right"
+                                collapsedLines={2}
+                                t={t}
+                              />
                             </View>
                           ) : null}
                         </>
@@ -1157,31 +1537,19 @@ export default function IncomingOrdersScreen() {
                                 useWalkthroughStore.getState().notifyTapHint();
                                 return;
                               }
-                              // TODO (next update): prompt the business to enter a cancellation reason
-                              // before confirming — this should discourage abusive cancellations and
-                              // give the customer more context in the notification.
-                              alert.showAlert(
-                                t('business.orders.cancelOrder', { defaultValue: 'Annuler la commande' }),
-                                t('business.orders.cancelOrderConfirm', { defaultValue: "Le client sera remboursé si la commande a été payée par carte ou en crédits. Cette action est irréversible." }),
-                                [
-                                  { text: t('orders.keepOrder', { defaultValue: 'Garder' }), style: 'cancel' },
-                                  { text: t('business.orders.confirmCancel', { defaultValue: 'Annuler la commande' }), style: 'destructive', onPress: async () => {
-                                    try {
-                                      await apiClient.delete(`/api/reservations/${order.id}`);
-                                      void queryClient.invalidateQueries({ queryKey: ['today-orders'] });
-                                      void queryClient.invalidateQueries({ queryKey: ['location-orders'] });
-                                      void queryClient.invalidateQueries({ queryKey: ['locations'] });
-                                      void queryClient.invalidateQueries({ queryKey: ['location', order.location_id] });
-                                      void queryClient.invalidateQueries({ queryKey: ['baskets'] });
-                                      void queryClient.invalidateQueries({ queryKey: ['baskets-by-location', order.location_id] });
-                                      if (order.basket_id) void queryClient.invalidateQueries({ queryKey: ['basket', String(order.basket_id)] });
-                                      void queryClient.invalidateQueries({ queryKey: ['reservations'] });
-                                      void queryClient.invalidateQueries({ queryKey: ['wallet'] });
-                                    } catch {}
-                                  }},
-                                ],
-                                { type: 'warning', layout: 'sheet' }
-                              );
+                              // Open the warning sheet first; confirming there
+                              // routes to the shared reason picker (which does
+                              // the DELETE). Backend rejects business
+                              // cancellations without a reason, and the buyer's
+                              // notification reads the reason + payment context
+                              // to explain what happens next.
+                              setCancelWarning({
+                                id: String(order.id),
+                                customerName: order.customerName,
+                                quantity: order.quantity,
+                                locationId: order.location_id != null ? String(order.location_id) : undefined,
+                                paymentMethod: order.payment_method,
+                              });
                             }}
                             style={{ paddingHorizontal: 10, paddingVertical: 8 }}
                             hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
@@ -1195,7 +1563,7 @@ export default function IncomingOrdersScreen() {
                               e.stopPropagation?.();
                               alert.showAlert(
                                 t('business.orders.cancelHelpTitle', { defaultValue: "À propos de l'annulation" }),
-                                t('business.orders.cancelHelpDesc', { defaultValue: "N'annulez qu'en cas d'imprévu : stock manquant, fermeture inattendue, etc. Le client sera notifié et remboursé s'il a payé en avance. Des annulations répétées peuvent affecter votre visibilité." }),
+                                t('business.orders.cancelHelpDesc', { defaultValue: "N'annulez qu'en cas d'imprévu : stock manquant, fermeture inattendue, etc. Le client sera notifié et remboursé s'il a payé en avance." }),
                                 undefined,
                                 { type: 'info', layout: 'sheet' }
                               );
@@ -1208,6 +1576,31 @@ export default function IncomingOrdersScreen() {
                         </View>
                         )}
                       </View>
+                    )}
+
+                    {/* Demo Suivant — replaces the previous 450 ms auto-advance
+                        timer. Visible only while the walkthrough is on the
+                        `demoOrderCard` step and the demo order card is
+                        expanded; tapping flips `expandedDemoCard` true which
+                        the walkthrough store watches via `advanceOnFlag`. */}
+                    {isDemoOrder && walkthroughCurrentStep?.measureKey === 'demoOrderCard' && (
+                      <TouchableOpacity
+                        onPress={(e) => {
+                          e.stopPropagation?.();
+                          setExpandedDemoCardFlag(true);
+                        }}
+                        style={{
+                          backgroundColor: '#114b3c',
+                          borderRadius: theme.radii.r12,
+                          paddingVertical: 12,
+                          alignItems: 'center',
+                          marginTop: theme.spacing.md,
+                        }}
+                      >
+                        <Text style={{ color: '#fff', fontFamily: 'Poppins_700Bold', fontWeight: '700', fontSize: 14 }}>
+                          {t('walkthrough.next', { defaultValue: 'Suivant' })}
+                        </Text>
+                      </TouchableOpacity>
                     )}
                   </>
                 )}
@@ -1257,12 +1650,16 @@ export default function IncomingOrdersScreen() {
         animationType="fade"
         onRequestClose={closeVerifyModal}
       >
+        {/* backgroundColor on the KeyboardAvoidingView so the keyboard
+            push-up region paints with the same dim color as the rest of
+            the backdrop — without it the window's default (white)
+            background leaks through beneath the keyboard. */}
         <KeyboardAvoidingView
           behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-          style={{ flex: 1 }}
+          style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)' }}
         >
           <TouchableOpacity
-            style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' }}
+            style={{ flex: 1, justifyContent: 'flex-end' }}
             activeOpacity={1}
             onPress={() => {
               // During the verifyModalInput demo step, the backdrop tap
@@ -1275,17 +1672,29 @@ export default function IncomingOrdersScreen() {
               closeVerifyModal();
             }}
           >
-            <View
+            <Animated.View
               style={{
                 backgroundColor: theme.colors.surface,
                 borderTopLeftRadius: 24,
                 borderTopRightRadius: 24,
-                padding: 24,
+                paddingHorizontal: 24,
                 paddingBottom: 40,
+                transform: [{ translateY: verifySwipe.translateY }],
                 ...theme.shadows.shadowLg,
               }}
               onStartShouldSetResponder={() => true}
             >
+              {/* Swipe zone — covers the full top strip of the sheet
+                  (no left/right exclusions, generous vertical padding)
+                  so the user can grab anywhere from the top edge down
+                  to past the handle pill to start the swipe-down. */}
+              <View
+                {...verifySwipe.panHandlers}
+                style={{ paddingTop: 10, paddingBottom: 14, alignItems: 'center' }}
+              >
+                <View style={{ width: 40, height: 5, borderRadius: 3, backgroundColor: theme.colors.divider }} />
+              </View>
+
               {/* Success state */}
               {verifySuccess ? (
                 <View style={{ alignItems: 'center', paddingVertical: 32 }}>
@@ -1301,10 +1710,6 @@ export default function IncomingOrdersScreen() {
                 </View>
               ) : (
                 <>
-                  {/* Handle */}
-                  <View style={{ alignItems: 'center', marginBottom: 16 }}>
-                    <View style={{ width: 36, height: 4, borderRadius: 2, backgroundColor: theme.colors.divider }} />
-                  </View>
 
                   <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h2, marginBottom: 8 }}>
                     {t('business.orders.verifyPickup', { defaultValue: 'Verify Pickup' })}
@@ -1419,7 +1824,7 @@ export default function IncomingOrdersScreen() {
                   </TouchableOpacity>
                 </>
               )}
-            </View>
+            </Animated.View>
           </TouchableOpacity>
 
           {/* ── Walkthrough overlay for the verifyModalInput step ──────────
@@ -1592,7 +1997,7 @@ export default function IncomingOrdersScreen() {
             <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3, marginBottom: 12 }}>
               {t('common.filter', { defaultValue: 'Filtrer' })}
             </Text>
-            <Text style={{ color: theme.colors.textSecondary, fontSize: 11, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8 }}>
+            <Text style={{ color: theme.colors.textSecondary, fontSize: 11, fontWeight: '600', textTransform: 'none', letterSpacing: 0.5, marginBottom: 8 }}>
               {t('business.orders.period', { defaultValue: 'Période' })}
             </Text>
             {(['today', 'month', 'all'] as const).map((f) => {
@@ -1612,7 +2017,7 @@ export default function IncomingOrdersScreen() {
             {activeTab === 'issues' && (
               <>
                 <View style={{ height: 1, backgroundColor: theme.colors.divider, marginVertical: 12 }} />
-                <Text style={{ color: theme.colors.textSecondary, fontSize: 11, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8 }}>
+                <Text style={{ color: theme.colors.textSecondary, fontSize: 11, fontWeight: '600', textTransform: 'none', letterSpacing: 0.5, marginBottom: 8 }}>
                   {t('business.orders.statusFilter', { defaultValue: 'Statut' })}
                 </Text>
                 {(['all', 'expired', 'cancelled'] as const).map((f) => {
@@ -1636,6 +2041,103 @@ export default function IncomingOrdersScreen() {
             </TouchableOpacity>
           </View>
         </TouchableOpacity>
+      </Modal>
+
+      {/* Cancel warning sheet — mirrors the customer's bottom-sheet warning.
+          Confirming here routes to the shared /cancel-reservation reason
+          picker (?mode=business), which records the motif and performs the
+          DELETE. Keeps the destructive confirmation a two-step flow. */}
+      <Modal
+        visible={!!cancelWarning}
+        transparent
+        animationType="none"
+        onRequestClose={closeCancelWarning}
+      >
+        <View style={{ flex: 1, justifyContent: 'flex-end' }}>
+          {/* Dim backdrop — fades in/out in place, never slides. */}
+          <Animated.View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.5)', opacity: cancelBackdropOpacity }} />
+          <TouchableOpacity style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }} activeOpacity={1} onPress={closeCancelWarning} />
+          {/* Sheet — slides up after the backdrop has faded in. */}
+          <Animated.View style={{ transform: [{ translateY: cancelSheetY }] }}>
+          <PaperSurface radius={24} shadow="lg" style={{ width: '100%', borderBottomLeftRadius: 0, borderBottomRightRadius: 0, paddingTop: 10, paddingBottom: insets.bottom + 20 }}>
+            {/* Drag zone — grab here to slide the sheet down to dismiss. */}
+            <View {...cancelDragResponder.panHandlers} style={{ alignItems: 'center', paddingTop: 6, paddingBottom: 14 }}>
+              <View style={{ width: 40, height: 5, borderRadius: 3, backgroundColor: theme.colors.divider }} />
+            </View>
+            <View style={{ alignItems: 'center', paddingHorizontal: 20 }}>
+              <View style={{ backgroundColor: theme.colors.error + '15', width: 56, height: 56, borderRadius: 28, justifyContent: 'center', alignItems: 'center', marginBottom: 16 }}>
+                <AlertTriangle size={28} color={theme.colors.error} />
+              </View>
+              <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3, fontWeight: '700' as const, textAlign: 'center', marginBottom: 4 }}>
+                {t('orders.cancelConfirmTitle', { defaultValue: 'Annuler cette commande ?' })}
+              </Text>
+              {cancelWarning?.customerName ? (
+                <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm, textAlign: 'center', marginBottom: 16 }}>
+                  {cancelWarning.customerName}
+                </Text>
+              ) : null}
+            </View>
+
+            <View style={{ paddingHorizontal: 20, paddingBottom: 4 }}>
+              <View style={{ backgroundColor: theme.colors.surfaceMuted, borderRadius: 14, padding: 16, gap: 10, marginBottom: 20, borderWidth: 1, borderColor: theme.colors.border }}>
+                <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '700' as const }}>
+                  {t('orders.cancelConsequences', { defaultValue: 'Si vous annulez :' })}
+                </Text>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                  <User size={14} color={theme.colors.textSecondary} />
+                  <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, flex: 1 }}>
+                    {t('business.orders.cancelWarnNotified', { defaultValue: 'Le client sera notifié de l\'annulation' })}
+                  </Text>
+                </View>
+                {cancelWarning?.paymentMethod === 'cash' ? (
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                    <Banknote size={14} color={theme.colors.textSecondary} />
+                    <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, flex: 1 }}>
+                      {t('business.orders.cancelWarnNoRefundCash', { defaultValue: 'Aucun remboursement — paiement en espèces' })}
+                    </Text>
+                  </View>
+                ) : (
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                    <Wallet size={14} color="#16a34a" />
+                    <Text style={{ color: '#16a34a', ...theme.typography.bodySm, fontWeight: '600', flex: 1 }}>
+                      {t('business.orders.cancelWarnRefund', { defaultValue: 'Le client sera remboursé en crédits' })}
+                    </Text>
+                  </View>
+                )}
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                  <ClipboardList size={14} color={theme.colors.textSecondary} />
+                  <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, flex: 1 }}>
+                    {t('business.orders.cancelWarnBasketReturned', { defaultValue: 'Le panier retourne en stock' })}
+                  </Text>
+                </View>
+              </View>
+
+              <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm, textAlign: 'center', marginBottom: 16, lineHeight: 20 }}>
+                {t('orders.cancelIrreversible', { defaultValue: 'Cette action est irréversible et ne peut pas être annulée.' })}
+              </Text>
+
+              <View style={{ flexDirection: 'row', gap: 10 }}>
+                <TouchableOpacity
+                  onPress={closeCancelWarning}
+                  style={{ flex: 1, backgroundColor: theme.colors.primary, borderRadius: 14, paddingVertical: 14, paddingHorizontal: 10, alignItems: 'center', justifyContent: 'center' }}
+                >
+                  <Text style={{ color: '#fff', fontSize: 13, fontWeight: '700', textAlign: 'center' }} numberOfLines={1} adjustsFontSizeToFit>
+                    {t('orders.keepOrder', { defaultValue: 'Garder' })}
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={proceedToCancelReason}
+                  style={{ flex: 1, backgroundColor: theme.colors.error, borderRadius: 14, paddingVertical: 14, paddingHorizontal: 10, alignItems: 'center', justifyContent: 'center' }}
+                >
+                  <Text style={{ color: '#fff', fontSize: 13, fontWeight: '700', textAlign: 'center' }} numberOfLines={1} adjustsFontSizeToFit>
+                    {t('business.orders.cancelContinue', { defaultValue: 'Continuer' })}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </PaperSurface>
+          </Animated.View>
+        </View>
       </Modal>
     </SafeAreaView>
   );

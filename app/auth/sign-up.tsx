@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, ScrollView, Animated, Modal } from 'react-native';
+import { View, Text, StyleSheet, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, ScrollView, Animated, Modal, Image, ActivityIndicator } from 'react-native';
 import { PasswordInput } from '@/src/components/PasswordInput';
 import { useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
@@ -13,7 +13,7 @@ import { FeatureFlags } from '@/src/lib/featureFlags';
 import type { UserRole, User as UserType } from '@/src/types';
 import { StatusBar } from 'expo-status-bar';
 
-type Step = 'role' | 'customer' | 'business' | 'businessSuccess';
+type Step = 'role' | 'customer' | 'gender' | 'business' | 'businessSuccess';
 
 export default function SignUpScreen() {
   const { t } = useTranslation();
@@ -26,8 +26,8 @@ export default function SignUpScreen() {
   // Customer form state
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
-  const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
+  const [gender, setGender] = useState<'male' | 'female' | null>(null);
   const [tosAccepted, setTosAccepted] = useState(false);
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -37,9 +37,10 @@ export default function SignUpScreen() {
   const [restaurantName, setRestaurantName] = useState('');
   const [bizEmail, setBizEmail] = useState('');
   const [bizPhone, setBizPhone] = useState('');
-  const [bizAddress, setBizAddress] = useState('');
 
-  const handleCustomerSignUp = async () => {
+  // Step 1 → validate the form, then move to the gender step (registration
+  // happens there, with the chosen gender or skipped).
+  const handleCustomerContinue = () => {
     if (FeatureFlags.IS_PROTOTYPE) {
       setErrorMsg(t('auth.prototypeMode', { defaultValue: 'L\'application est en mode prototype. L\'inscription n\'est pas disponible.' }));
       return;
@@ -48,12 +49,24 @@ export default function SignUpScreen() {
       setErrorMsg(t('auth.tosRequired'));
       return;
     }
-    if (!name.trim() || !email.trim() || !phone.trim() || !password.trim()) {
+    if (!name.trim() || !email.trim() || !password.trim()) {
       setErrorMsg(t('auth.fillAllFields'));
       return;
     }
     if (password.length < 8 || !/[A-Z]/.test(password) || !/[a-z]/.test(password) || !/[0-9]/.test(password) || !/[!@#$%^&*]/.test(password)) {
       setErrorMsg(t('auth.passwordRequirements'));
+      return;
+    }
+    setGender(null);
+    setStep('gender');
+  };
+
+  // Step 2 → register. `selectedGender` is the chosen value, or null when the
+  // user skips. We accept it as a param so a tap that both selects and submits
+  // doesn't race the gender state update.
+  const handleCustomerSignUp = async (selectedGender: 'male' | 'female' | null) => {
+    if (FeatureFlags.IS_PROTOTYPE) {
+      setErrorMsg(t('auth.prototypeMode', { defaultValue: 'L\'application est en mode prototype. L\'inscription n\'est pas disponible.' }));
       return;
     }
     setLoading(true);
@@ -62,7 +75,7 @@ export default function SignUpScreen() {
         name: name.trim(),
         email: email.trim(),
         password,
-        phone: phone.trim(),
+        gender: selectedGender,
         type: 'buyer' as const,
       };
       const res = await register(payload);
@@ -74,6 +87,7 @@ export default function SignUpScreen() {
         firstName: res.user.firstName,
         email: res.user.email,
         phone: res.user.phone,
+        gender: (res.user as any).gender ?? selectedGender ?? undefined,
         role: resolvedRole,
       };
       signIn(user, res.token);
@@ -90,7 +104,7 @@ export default function SignUpScreen() {
       setErrorMsg(t('auth.prototypeMode', { defaultValue: 'L\'application est en mode prototype. L\'inscription n\'est pas disponible.' }));
       return;
     }
-    if (!contactName.trim() || !restaurantName.trim() || !bizEmail.trim()) {
+    if (!contactName.trim() || !restaurantName.trim() || !bizEmail.trim() || !bizPhone.trim()) {
       setErrorMsg(t('auth.fillAllFields'));
       return;
     }
@@ -100,8 +114,7 @@ export default function SignUpScreen() {
         name: contactName.trim(),
         restaurantName: restaurantName.trim(),
         email: bizEmail.trim(),
-        phone: bizPhone.trim() || undefined,
-        address: bizAddress.trim() || undefined,
+        phone: bizPhone.trim(),
       });
       setStep('businessSuccess');
     } catch (err) {
@@ -147,7 +160,7 @@ export default function SignUpScreen() {
             {t('auth.welcomeTo', { defaultValue: 'Bienvenue chez' })}
           </Text>
           <Text style={{ color: '#114b3c', fontSize: 36, fontWeight: '700', fontFamily: 'Poppins_700Bold', textAlign: 'center', marginBottom: 6 }}>
-            Barakeat.
+            Barakeat
           </Text>
           <Text style={{ color: '#114b3c80', fontSize: 14, fontFamily: 'Poppins_400Regular', textAlign: 'center', marginBottom: theme.spacing.xxl * 1.5 }}>
             {t('auth.chooseAccountType')}
@@ -234,7 +247,9 @@ export default function SignUpScreen() {
               <View style={styles.form}>
                 {/* Name */}
                 <View style={[styles.inputContainer, { marginBottom: theme.spacing.lg }]}>
-                  <Text style={[styles.label, { color: '#114b3c', ...theme.typography.bodySm }]}>{t('auth.name')}</Text>
+                  <Text style={[styles.label, { color: '#114b3c', ...theme.typography.bodySm }]}>
+                    {t('auth.name')}<Text style={{ color: theme.colors.error }}> *</Text>
+                  </Text>
                   <TextInput
                     style={[styles.input, { backgroundColor: '#fff', borderColor: '#114b3c30', borderWidth: 1.5, borderRadius: 14, color: '#114b3c', ...theme.typography.body }]}
                     value={name} onChangeText={setName}
@@ -245,7 +260,9 @@ export default function SignUpScreen() {
 
                 {/* Email */}
                 <View style={[styles.inputContainer, { marginBottom: theme.spacing.lg }]}>
-                  <Text style={[styles.label, { color: '#114b3c', ...theme.typography.bodySm }]}>{t('auth.email')}</Text>
+                  <Text style={[styles.label, { color: '#114b3c', ...theme.typography.bodySm }]}>
+                    {t('auth.email')}<Text style={{ color: theme.colors.error }}> *</Text>
+                  </Text>
                   <TextInput
                     style={[styles.input, { backgroundColor: '#fff', borderColor: '#114b3c30', borderWidth: 1.5, borderRadius: 14, color: '#114b3c', ...theme.typography.body }]}
                     value={email} onChangeText={setEmail}
@@ -255,21 +272,11 @@ export default function SignUpScreen() {
                   />
                 </View>
 
-                {/* Phone */}
-                <View style={[styles.inputContainer, { marginBottom: theme.spacing.lg }]}>
-                  <Text style={[styles.label, { color: '#114b3c', ...theme.typography.bodySm }]}>{t('auth.phone')}</Text>
-                  <TextInput
-                    style={[styles.input, { backgroundColor: '#fff', borderColor: '#114b3c30', borderWidth: 1.5, borderRadius: 14, color: '#114b3c', ...theme.typography.body }]}
-                    value={phone} onChangeText={setPhone}
-                    placeholder="+216 XX XXX XXX" placeholderTextColor="#114b3c40"
-                    keyboardType="phone-pad"
-                    accessibilityLabel={t('auth.phone')}
-                  />
-                </View>
-
                 {/* Password */}
                 <View style={[styles.inputContainer, { marginBottom: theme.spacing.lg }]}>
-                  <Text style={[styles.label, { color: '#114b3c', ...theme.typography.bodySm }]}>{t('auth.password')}</Text>
+                  <Text style={[styles.label, { color: '#114b3c', ...theme.typography.bodySm }]}>
+                    {t('auth.password')}<Text style={{ color: theme.colors.error }}> *</Text>
+                  </Text>
                   <PasswordInput
                     containerStyle={{ backgroundColor: '#fff', borderColor: '#114b3c' }}
                     style={[styles.input, { color: '#114b3c', borderWidth: 0, ...theme.typography.body }]}
@@ -293,23 +300,38 @@ export default function SignUpScreen() {
                   </TouchableOpacity>
                   <Text style={{ color: '#114b3c', ...theme.typography.bodySm, flex: 1, flexWrap: 'wrap' }}>
                     {t('auth.agreeToThe', { defaultValue: 'I agree to the ' })}
-                    <Text style={{ color: '#114b3c', fontWeight: '600' as const, textDecorationLine: 'underline' as const }}>{t('auth.termsOfService', { defaultValue: 'Terms of Service' })}</Text>
+                    {/* Tappable links — route to the same /legal screen the
+                        settings "Mentions légales" rows use, so both surfaces
+                        render from the same i18n source. */}
+                    <Text
+                      onPress={() => router.push({ pathname: '/legal', params: { type: 'terms' } } as never)}
+                      accessibilityRole="link"
+                      style={{ color: '#114b3c', fontWeight: '600' as const, textDecorationLine: 'underline' as const }}
+                    >
+                      {t('auth.termsOfService', { defaultValue: 'Terms of Service' })}
+                    </Text>
                     {' ' + t('common.and', { defaultValue: 'and' }) + ' '}
-                    <Text style={{ color: '#114b3c', fontWeight: '600' as const, textDecorationLine: 'underline' as const }}>{t('auth.privacyPolicy', { defaultValue: 'Privacy Policy' })}</Text>
+                    <Text
+                      onPress={() => router.push({ pathname: '/legal', params: { type: 'privacy' } } as never)}
+                      accessibilityRole="link"
+                      style={{ color: '#114b3c', fontWeight: '600' as const, textDecorationLine: 'underline' as const }}
+                    >
+                      {t('auth.privacyPolicy', { defaultValue: 'Privacy Policy' })}
+                    </Text>
                   </Text>
                 </View>
 
                 <View style={[styles.buttonContainer, { marginTop: theme.spacing.xl }]}>
                   <TouchableOpacity
-                    onPress={handleCustomerSignUp}
-                    disabled={loading || !tosAccepted}
-                    style={{ height: 56, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 32, backgroundColor: '#114b3c', borderRadius: 14, opacity: loading || !tosAccepted ? 0.5 : 1 }}
+                    onPress={handleCustomerContinue}
+                    disabled={!tosAccepted}
+                    style={{ height: 56, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 32, backgroundColor: '#114b3c', borderRadius: 14, opacity: !tosAccepted ? 0.5 : 1 }}
                     activeOpacity={0.8}
-                    accessibilityLabel={loading ? t('common.loading') : t('auth.createAccount')}
+                    accessibilityLabel={t('common.continue', { defaultValue: 'Continue' })}
                     accessibilityRole="button"
                   >
                     <Text style={{ color: '#e3ff5c', ...theme.typography.button, textAlign: 'center', fontWeight: '700' as const }}>
-                      {loading ? t('common.loading') : t('auth.createAccount')}
+                      {t('common.continue', { defaultValue: 'Continue' })}
                     </Text>
                   </TouchableOpacity>
                 </View>
@@ -324,6 +346,86 @@ export default function SignUpScreen() {
             </View>
           </ScrollView>
         </KeyboardAvoidingView>
+      </SafeAreaView>
+    );
+  }
+
+  // ── Step 1b: Gender (customer only, skippable) ───────────────────────────
+  if (step === 'gender') {
+    const genderCard = (value: 'male' | 'female', img: any, label: string) => {
+      const selected = gender === value;
+      return (
+        <TouchableOpacity
+          // The image card IS the button: tapping it picks the gender and
+          // registers right away (skip is the no-gender path below).
+          onPress={() => { setGender(value); void handleCustomerSignUp(value); }}
+          activeOpacity={0.85}
+          disabled={loading}
+          style={{
+            flex: 1,
+            backgroundColor: selected ? '#114b3c12' : '#fff',
+            borderWidth: 2,
+            borderColor: selected ? '#114b3c' : '#114b3c20',
+            borderRadius: 20,
+            paddingVertical: theme.spacing.lg,
+            paddingHorizontal: theme.spacing.md,
+            alignItems: 'center',
+          }}
+          accessibilityRole="button"
+          accessibilityState={{ selected }}
+          accessibilityLabel={label}
+        >
+          <Image source={img} style={{ width: '100%', height: 150 }} resizeMode="contain" />
+          <Text style={{ color: '#114b3c', ...theme.typography.body, fontWeight: '700' as const, marginTop: theme.spacing.sm }}>
+            {label}
+          </Text>
+        </TouchableOpacity>
+      );
+    };
+
+    return (
+      <SafeAreaView style={[styles.container, { backgroundColor: '#fffff8' }]}>
+        <StatusBar style="dark" />
+        {renderErrorModal()}
+        <ScrollView contentContainerStyle={styles.scrollContent}>
+          <View style={[styles.content, { padding: theme.spacing.xxl }]}>
+            {/* Back to the form (keeps the entered name/email/password) */}
+            <TouchableOpacity onPress={() => setStep('customer')} style={[styles.backBtn, { marginBottom: theme.spacing.xl }]} accessibilityLabel={t('common.goBack', { defaultValue: 'Go back' })} accessibilityRole="button">
+              <ArrowLeft size={22} color="#114b3c" />
+            </TouchableOpacity>
+
+            <Text style={[styles.title, { color: '#114b3c', ...theme.typography.h1, marginBottom: theme.spacing.sm }]}>
+              {t('auth.genderTitle', { defaultValue: 'Vous êtes ?' })}
+            </Text>
+            <Text style={[styles.subtitle, { color: '#114b3c80', ...theme.typography.body, marginBottom: theme.spacing.xxl }]}>
+              {t('auth.genderSubtitle', { defaultValue: 'Cela nous aide à personnaliser votre expérience. Vous pouvez passer cette étape.' })}
+            </Text>
+
+            {/* Two image buttons, side by side */}
+            <View style={{ flexDirection: 'row', gap: theme.spacing.lg, marginBottom: theme.spacing.xl }}>
+              {genderCard('male', require('@/assets/images/man_holding_basket-removebg-preview.png'), t('auth.genderMale', { defaultValue: 'Homme' }))}
+              {genderCard('female', require('@/assets/images/woman_holding_basket-removebg-preview.png'), t('auth.genderFemale', { defaultValue: 'Femme' }))}
+            </View>
+
+            {loading ? (
+              <View style={{ height: 48, justifyContent: 'center', alignItems: 'center' }}>
+                <ActivityIndicator color="#114b3c" />
+              </View>
+            ) : (
+              /* Skip — register without a gender */
+              <TouchableOpacity
+                onPress={() => handleCustomerSignUp(null)}
+                style={{ height: 48, justifyContent: 'center', alignItems: 'center' }}
+                accessibilityLabel={t('common.skip', { defaultValue: 'Skip' })}
+                accessibilityRole="button"
+              >
+                <Text style={{ color: '#114b3c', ...theme.typography.body, fontWeight: '600' as const, textDecorationLine: 'underline' as const }}>
+                  {t('common.skip', { defaultValue: 'Skip' })}
+                </Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        </ScrollView>
       </SafeAreaView>
     );
   }
@@ -357,7 +459,9 @@ export default function SignUpScreen() {
               <View style={styles.form}>
                 {/* Contact name */}
                 <View style={[styles.inputContainer, { marginBottom: theme.spacing.lg }]}>
-                  <Text style={[styles.label, { color: '#114b3c', ...theme.typography.bodySm }]}>{t('business.auth.contactName')}</Text>
+                  <Text style={[styles.label, { color: '#114b3c', ...theme.typography.bodySm }]}>
+                    {t('business.auth.contactName')}<Text style={{ color: theme.colors.error }}> *</Text>
+                  </Text>
                   <TextInput
                     style={[styles.input, { backgroundColor: '#fff', borderColor: '#114b3c30', borderWidth: 1.5, borderRadius: 14, color: '#114b3c', ...theme.typography.body }]}
                     value={contactName} onChangeText={setContactName}
@@ -368,7 +472,9 @@ export default function SignUpScreen() {
 
                 {/* Restaurant name */}
                 <View style={[styles.inputContainer, { marginBottom: theme.spacing.lg }]}>
-                  <Text style={[styles.label, { color: '#114b3c', ...theme.typography.bodySm }]}>{t('business.auth.businessName')}</Text>
+                  <Text style={[styles.label, { color: '#114b3c', ...theme.typography.bodySm }]}>
+                    {t('business.auth.businessName')}<Text style={{ color: theme.colors.error }}> *</Text>
+                  </Text>
                   <TextInput
                     style={[styles.input, { backgroundColor: '#fff', borderColor: '#114b3c30', borderWidth: 1.5, borderRadius: 14, color: '#114b3c', ...theme.typography.body }]}
                     value={restaurantName} onChangeText={setRestaurantName}
@@ -379,7 +485,9 @@ export default function SignUpScreen() {
 
                 {/* Email */}
                 <View style={[styles.inputContainer, { marginBottom: theme.spacing.lg }]}>
-                  <Text style={[styles.label, { color: '#114b3c', ...theme.typography.bodySm }]}>{t('auth.email')}</Text>
+                  <Text style={[styles.label, { color: '#114b3c', ...theme.typography.bodySm }]}>
+                    {t('auth.email')}<Text style={{ color: theme.colors.error }}> *</Text>
+                  </Text>
                   <TextInput
                     style={[styles.input, { backgroundColor: '#fff', borderColor: '#114b3c30', borderWidth: 1.5, borderRadius: 14, color: '#114b3c', ...theme.typography.body }]}
                     value={bizEmail} onChangeText={setBizEmail}
@@ -389,11 +497,10 @@ export default function SignUpScreen() {
                   />
                 </View>
 
-                {/* Phone (optional) */}
-                <View style={[styles.inputContainer, { marginBottom: theme.spacing.lg }]}>
+                {/* Phone */}
+                <View style={[styles.inputContainer, { marginBottom: theme.spacing.xl }]}>
                   <Text style={[styles.label, { color: '#114b3c', ...theme.typography.bodySm }]}>
-                    {t('auth.phone')}{' '}
-                    <Text style={{ color: '#114b3c50' }}>({t('common.optional', { defaultValue: 'optional' })})</Text>
+                    {t('auth.phone')}<Text style={{ color: theme.colors.error }}> *</Text>
                   </Text>
                   <TextInput
                     style={[styles.input, { backgroundColor: '#fff', borderColor: '#114b3c30', borderWidth: 1.5, borderRadius: 14, color: '#114b3c', ...theme.typography.body }]}
@@ -401,20 +508,6 @@ export default function SignUpScreen() {
                     placeholder="+216 XX XXX XXX" placeholderTextColor="#114b3c40"
                     keyboardType="phone-pad"
                     accessibilityLabel={t('auth.phone')}
-                  />
-                </View>
-
-                {/* Address (optional) */}
-                <View style={[styles.inputContainer, { marginBottom: theme.spacing.xl }]}>
-                  <Text style={[styles.label, { color: '#114b3c', ...theme.typography.bodySm }]}>
-                    {t('business.auth.businessAddress')}{' '}
-                    <Text style={{ color: '#114b3c50' }}>({t('common.optional', { defaultValue: 'optional' })})</Text>
-                  </Text>
-                  <TextInput
-                    style={[styles.input, { backgroundColor: '#fff', borderColor: '#114b3c30', borderWidth: 1.5, borderRadius: 14, color: '#114b3c', ...theme.typography.body }]}
-                    value={bizAddress} onChangeText={setBizAddress}
-                    placeholder="Avenue Habib Bourguiba, Tunis" placeholderTextColor="#114b3c40"
-                    accessibilityLabel={t('business.auth.businessAddress')}
                   />
                 </View>
 

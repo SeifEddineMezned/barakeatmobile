@@ -21,9 +21,22 @@ export const useNotificationStore = create(
       hydrated: false,
       // The user ID currently owning this state. Used to scope AsyncStorage keys.
       currentUserId: null as string | null,
+      // Reference to the popup-poll function in app/_layout.tsx. The unread-count
+      // queries in (tabs)/_layout.tsx and (business)/_layout.tsx call this when
+      // the count goes UP so the popup queue refreshes instantly instead of
+      // waiting for the next 30 s tick (the bell-vs-popup desync the user
+      // reported).
+      popupPoller: null as null | (() => Promise<void>),
     },
     (set, get) => ({
       setUnreadCount: (count: number) => set({ unreadCount: count }),
+      setPopupPoller: (fn: () => Promise<void>) => set({ popupPoller: fn }),
+      triggerPopupPoll: async () => {
+        const { popupPoller } = get();
+        if (popupPoller) {
+          try { await popupPoller(); } catch {}
+        }
+      },
       decrementUnread: () => set((state) => ({ unreadCount: Math.max(0, state.unreadCount - 1) })),
       clearUnread: () => set({ unreadCount: 0 }),
       pushPopups: (notifs: NotificationFromAPI[]) => set((state) => {
@@ -115,6 +128,7 @@ export const useNotificationStore = create(
           shownPopupIds: new Set<number>(),
           hydrated: false,
           currentUserId: null,
+          popupPoller: null,
         });
       },
     })

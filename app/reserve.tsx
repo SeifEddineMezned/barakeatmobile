@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Animated, ActivityIndicator, Image, Modal, Share } from 'react-native';
+import React, { useState, useRef } from 'react';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Animated, ActivityIndicator, Image, Modal, Share, Dimensions } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
@@ -10,7 +10,7 @@ import { StatusBar } from 'expo-status-bar';
 import { PrimaryCTAButton } from '@/src/components/PrimaryCTAButton';
 import { fetchLocationById } from '@/src/services/restaurants';
 import { fetchBasketById } from '@/src/services/baskets';
-import { createReservation, fetchReservationQRCode } from '@/src/services/reservations';
+import { createReservation, fetchReservationQRCode, fetchMyReservations } from '@/src/services/reservations';
 import { fetchWallet } from '@/src/services/wallet';
 import { updateStreak, fetchGamificationStats, type StreakUpdateResult } from '@/src/services/gamification';
 // import { scheduleLocalNotification } from '@/src/services/pushNotifications';
@@ -19,7 +19,16 @@ import { calcLevelProgress } from '@/src/lib/impactCalculations';
 import { FeatureFlags } from '@/src/lib/featureFlags';
 import { isPickupWindowOpenInTz } from '@/src/utils/timezone';
 import { useCelebrationStore } from '@/src/stores/celebrationStore';
+import { useHeroStore } from '@/src/stores/heroStore';
+import { useWalkthroughStore } from '@/src/stores/walkthroughStore';
+import { SubScreenWalkthroughOverlay } from '@/src/components/SubScreenWalkthroughOverlay';
+import {
+  DEMO_LOCATION_ID,
+  DEMO_BASKET_ID,
+  buildDemoRawBasketById,
+} from '@/src/lib/demoData';
 import { BottomSheet } from '@/src/components/BottomSheet';
+import { useBottomSafePadding } from '@/src/hooks/useBottomSafePadding';
 
 export default function ReserveScreen() {
   const { basketId } = useLocalSearchParams();
@@ -31,6 +40,9 @@ export default function ReserveScreen() {
   const [paymentMethod, setPaymentMethod] = useState<'cash' | 'card' | 'credits'>('cash');
   const [showConfirmModal, setShowConfirmModal] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  // Bottom-safe padding for the sticky confirm bar — lifts the CTA above
+  // Samsung virtual nav buttons while extending the bar's bg to the edge.
+  const bottomSafePadding = useBottomSafePadding(16);
 
   // Confirmation animation state
   const [showConfirmation, setShowConfirmation] = useState(false);
@@ -102,22 +114,124 @@ export default function ReserveScreen() {
     runWave();
   };
 
+  // Demo short-circuit — when basketId points at the demo fixture, we never
+  // hit the backend. URL-based (no flag check) for robustness against
+  // walkthrough flag races; reserve.tsx is only reachable through the
+  // demo flow so a real user can't accidentally land here.
+  useWalkthroughStore((s) => s.demoCustomerActive); // subscribe for re-render
+  const isDemoReserve = String(basketId) === DEMO_BASKET_ID;
+
+  // Redundant step-advance + currentStep publish — same pattern as on the
+  // restaurant and basket demo pages. Without the explicit setCurrentStep,
+  // the SubScreenWalkthroughOverlay's keys filter doesn't see the new
+  // measureKey until the (tabs)/_layout's backgrounded [step] effect fires.
+  React.useEffect(() => {
+    if (!isDemoReserve) return;
+    const state = useWalkthroughStore.getState();
+    // Clear stale rects from any previous demo run BEFORE the page lays
+    // out (see restaurant/[id].tsx for the same fix and rationale). All
+    // three reserve-step keys re-publish from this page's own useEffects
+    // and onLayout handlers below, so clearing here can't strand them on
+    // a dim mask.
+    state.setMeasuredRect('reserveQtySection', null);
+    state.setMeasuredRect('reservePaymentSection', null);
+    state.setMeasuredRect('reserveConfirmBtn', null);
+    if (state.currentStep?.measureKey !== 'basketReserveBtn') return;
+    state.nextStep(Number.MAX_SAFE_INTEGER);
+    state.setCurrentStep({
+      measureKey: 'reserveQtySection',
+      titleKey: 'walkthrough.customer.reserveQty.title',
+      descKey: 'walkthrough.customer.reserveQty.desc',
+      tooltipPosition: 'bottom',
+      isLast: false,
+      stepIndex: 4,
+      totalSteps: 20,
+      requireTap: false,
+    });
+  }, [isDemoReserve]);
+
+  // Auto-scroll: when the walkthrough's `reservePaymentSection` step fires,
+  // scroll the ScrollView down so the payment row enters the viewport
+  // before the halo lands. Without this, the halo lands on the off-screen
+  // payment row and the user has to manually scroll to see it.
+  // The payment section sits roughly 380-440px into the scroll content
+  // (after basket header + qty selector + price summary), so we scroll to
+  // ~360 to center the buttons. After the scroll animation settles the
+  // payment row's onLayout re-fires with its NEW window position, and the
+  // halo updates accordingly.
+  const scrollRef = useRef<ScrollView>(null);
+  const paymentSectionRef = useRef<View>(null);
+  const qtySectionRef = useRef<View>(null);
+  const currentStepMeasureKey = useWalkthroughStore((s) => s.currentStep?.measureKey);
+
+  // Step-driven re-measure of the quantity section. Mirrors the credits /
+  // recharge / payment pattern: when the step fires, schedule a 150 ms
+  // settle then republish the rect from the ref. No scroll, no clear —
+  // qty sits at the top of the page and the user wants its halo unaffected
+  // by any scroll mechanics. The settle window covers the case where
+  // images / fonts above the section finish loading after the initial
+  // onLayout already published an early rect.
+  React.useEffect(() => {
+    if (!isDemoReserve) return;
+    if (currentStepMeasureKey !== 'reserveQtySection') return;
+    const t = setTimeout(() => {
+      qtySectionRef.current?.measureInWindow((x, y, w, h) => {
+        if (w > 0 && h > 0) useWalkthroughStore.getState().setMeasuredRect('reserveQtySection', { x, y, w, h });
+      });
+    }, 150);
+    return () => clearTimeout(t);
+  }, [isDemoReserve, currentStepMeasureKey]);
+  React.useEffect(() => {
+    if (!isDemoReserve) return;
+    if (currentStepMeasureKey !== 'reservePaymentSection') return;
+    // CRITICAL: clear the stale rect BEFORE scrolling. The payment section's
+    // onLayout already published a rect at its pre-scroll window y; if we
+    // leave it in the store, SubScreenWalkthroughOverlay takes its fast path
+    // (haveRect → setHaloReady(true) immediately) and paints the halo at the
+    // wrong y for ~380 ms before the post-scroll re-measure lands. Clearing
+    // forces the overlay into its "dim mask only while we wait" branch — the
+    // user sees the dim transition, then the halo appears directly at the
+    // correct position, no jitter.
+    useWalkthroughStore.getState().setMeasuredRect('reservePaymentSection', null);
+    scrollRef.current?.scrollTo({ y: 360, animated: true });
+    // onLayout doesn't refire on scroll (scrolling isn't a layout change),
+    // so the section's `measureInWindow` rect would still report its
+    // pre-scroll window y — the halo would land above where the section
+    // actually is on screen. We re-measure manually once the scroll
+    // animation has settled (~300 ms) and republish the rect.
+    const t = setTimeout(() => {
+      paymentSectionRef.current?.measureInWindow((x, y, w, h) => {
+        if (w > 0 && h > 0) useWalkthroughStore.getState().setMeasuredRect('reservePaymentSection', { x, y, w, h });
+      });
+    }, 380);
+    return () => clearTimeout(t);
+  }, [isDemoReserve, currentStepMeasureKey]);
+
   // ── Step 1: Fetch the selected basket so we can derive its parent location id ──
   const basketQuery = useQuery({
     queryKey: ['basket', basketId],
     queryFn: () => fetchBasketById(String(basketId)),
-    enabled: !!basketId,
+    enabled: !!basketId && !isDemoReserve,
     staleTime: 0,
     refetchOnMount: 'always',
   });
 
   // ── Step 2: Derive the real location/restaurant id from the basket payload ──
   // The basket API returns both location_id and restaurant_id; prefer location_id.
-  const rawBasketData = basketQuery.data as any;
-  const resolvedLocationId: string | null =
-    rawBasketData?.location_id != null ? String(rawBasketData.location_id)
-    : rawBasketData?.restaurant_id != null ? String(rawBasketData.restaurant_id)
-    : null;
+  // For the demo path we delegate to `buildDemoRawBasketById` so the basket
+  // image, the new "Chez Joe (démo)" / "Panier Surprise" naming, and the
+  // dynamic-tunis-tz pickup window all match what the restaurant + basket
+  // pages serve. Previously this inlined an outdated fixture with
+  // `image_url: null` and stale static pickup times.
+  const demoLocationName = t('walkthrough.customer.demoLocationName', { defaultValue: 'Chez Joe (démo)' });
+  const rawBasketData = isDemoReserve
+    ? buildDemoRawBasketById(DEMO_BASKET_ID, { restaurantName: demoLocationName })
+    : (basketQuery.data as any);
+  const resolvedLocationId: string | null = isDemoReserve
+    ? DEMO_LOCATION_ID
+    : (rawBasketData?.location_id != null ? String(rawBasketData.location_id)
+      : rawBasketData?.restaurant_id != null ? String(rawBasketData.restaurant_id)
+      : null);
 
   console.log('[Reserve] basketId:', basketId, '→ resolvedLocationId:', resolvedLocationId);
 
@@ -125,10 +239,21 @@ export default function ReserveScreen() {
   const locationQuery = useQuery({
     queryKey: ['location', resolvedLocationId],
     queryFn: () => fetchLocationById(String(resolvedLocationId)),
-    enabled: !!resolvedLocationId,
+    enabled: !!resolvedLocationId && !isDemoReserve,
   });
 
-  const location = locationQuery.data;
+  const location = isDemoReserve
+    ? {
+        id: DEMO_LOCATION_ID,
+        name: demoLocationName,
+        display_name: demoLocationName,
+        address: rawBasketData?.restaurant_address ?? '',
+        // Use the same dynamic pickup window as the basket (computed in Tunis
+        // TZ by buildDemoRawBasketById) so the location and basket agree.
+        pickup_start_time: rawBasketData?.pickup_start_time ?? '',
+        pickup_end_time: rawBasketData?.pickup_end_time ?? '',
+      }
+    : locationQuery.data;
   const locationName = location?.display_name ?? location?.name ?? rawBasketData?.restaurant_name ?? '';
   const address = location?.address ?? rawBasketData?.restaurant_address ?? rawBasketData?.location_address ?? '';
 
@@ -150,10 +275,6 @@ export default function ReserveScreen() {
   const reserveMutation = useMutation({
     // Use the real resolved id, not the basket id
     mutationFn: () => createReservation({ location_id: Number(resolvedLocationId), basket_id: basketId ? Number(basketId) : undefined, quantity, payment_method: paymentMethod }),
-    onError: (error: any) => {
-      console.log('[Reserve] Reservation failed:', error);
-      setErrorMessage(getErrorMessage(error));
-    },
     onSuccess: async (data) => {
       console.log('[Reserve] Reservation created:', data.id);
       const pickupCode = data.pickup_code ?? data.pickupCode ?? '';
@@ -248,9 +369,14 @@ export default function ReserveScreen() {
       // Phase 1 (bouncing) → Phase 2 (success) after 3s → then fire celebration
       setTimeout(() => {
         setConfirmPhase('success');
-        // Phase 2 (success) → dismiss and fire XP celebration after 3s
+        // Phase 2 (success) → fire XP celebration + navigate after 3s.
+        // Do NOT dismiss the confirmation modal here — its dark-green
+        // overlay needs to stay on top through the navigation transition,
+        // otherwise the user sees a brief black/white gap between the
+        // reserve screen sliding out and the celebration modal mounting
+        // on /(tabs)/orders. The modal is dismissed below after a delay
+        // long enough for the celebration to be fully visible.
         setTimeout(() => {
-          setShowConfirmation(false);
           setCelebration({
             xpGained,
             levelBefore,
@@ -263,13 +389,78 @@ export default function ReserveScreen() {
             newStreak: streakData?.current_streak ?? 0,
             confirmData: { pickupCode, pickupStart, pickupEnd, address, locationName, basketName, basketImage: basketImage ?? undefined, quantity, price, qrCodeUrl: qrUrl },
           });
+          // Returning to the search feed after this should land on the hero,
+          // not a stale collapsed (white) hero — flag a scroll reset for it.
+          useHeroStore.getState().requestScrollReset();
           router.replace('/(tabs)/orders' as never);
+          // Stack transition ~300 ms + celebration modal fade-in ~250 ms +
+          // a small buffer → 800 ms keeps the confirmation modal
+          // overlaying the screen until the celebration is fully visible.
+          setTimeout(() => {
+            setShowConfirmation(false);
+          }, 800);
         }, 3000);
       }, 3000);
     },
-    onError: (err) => {
+    onError: async (err: any) => {
       const msg = getErrorMessage(err);
       console.log('[Reserve] Error:', msg);
+      // Recovery path: the backend's POST /api/reservations does its business-
+      // member notification fanout and badge work inline. Slow networks +
+      // multi-member orgs can stretch the response past the client timeout
+      // while the server has already committed the row. Before showing a
+      // misleading "no internet" error, peek at the user's reservations list:
+      // if a matching one was created in the last 2 minutes, the order
+      // actually went through and we should land them on the success path.
+      const rawErrMsg = String(err?.message ?? msg ?? '').toLowerCase();
+      const looksLikeTimeoutOrNetwork =
+        rawErrMsg.includes('network')
+        || rawErrMsg.includes('timeout')
+        || rawErrMsg.includes('failed to fetch')
+        || rawErrMsg.includes('connexion');
+      if (looksLikeTimeoutOrNetwork) {
+        try {
+          const reservations = await fetchMyReservations();
+          const targetLocId = String(resolvedLocationId);
+          const targetBasketId = basketId ? String(basketId) : null;
+          const recent = reservations.find((r: any) => {
+            const matchLoc = String(r.location_id ?? r.restaurant_id ?? r.basket?.location_id ?? '') === targetLocId;
+            const matchBasket = !targetBasketId || String(r.basket_id ?? r.basket?.id ?? '') === targetBasketId;
+            const createdRaw = r.created_at ?? r.createdAt;
+            if (!createdRaw) return false;
+            const ageMs = Date.now() - new Date(createdRaw).getTime();
+            return matchLoc && matchBasket && ageMs >= 0 && ageMs < 2 * 60 * 1000;
+          });
+          if (recent) {
+            console.log('[Reserve] Recovered ghost-reservation:', (recent as any).id);
+            await queryClient.invalidateQueries({ queryKey: ['reservations'] });
+            void queryClient.refetchQueries({ queryKey: ['reservations'] });
+            // Skip the full XP celebration (we don't hold a reliable pre-XP
+            // delta on the recovery path) — surface a clean success modal
+            // and route to /orders where the new entry is visible.
+            setConfirmData({
+              pickupCode: String((recent as any).pickup_code ?? (recent as any).pickupCode ?? ''),
+              pickupStart,
+              pickupEnd,
+              address,
+              basketImageUrl: basketImage ?? undefined,
+              locationName,
+            });
+            setShowConfirmation(true);
+            setConfirmPhase('success');
+            setTimeout(() => {
+              setShowConfirmation(false);
+              useHeroStore.getState().requestScrollReset();
+              try { router.replace('/(tabs)/orders' as never); } catch {
+                try { router.back(); } catch {}
+              }
+            }, 2200);
+            return;
+          }
+        } catch (refetchErr) {
+          console.log('[Reserve] Recovery refetch failed:', refetchErr);
+        }
+      }
       setErrorMessage(msg);
     },
   });
@@ -289,6 +480,19 @@ export default function ReserveScreen() {
 
   const handleConfirm = () => {
     if (reserveMutation.isPending) return; // Prevent double-tap
+    // Demo mode bypass — never hit the backend, never gate on pickup window
+    // or credit balance (those checks reflect REAL data the demo doesn't have).
+    // Flip `demoOrderActive` so the (tabs)/orders page injects the demo order
+    // card, then navigate there. The walkthrough's `reserveConfirmBtn` step
+    // listens for `/(tabs)/orders` and auto-advances onto the new orders-tab
+    // demo steps.
+    if (isDemoReserve) {
+      useWalkthroughStore.getState().setDemoOrderActive(true);
+      try { router.replace('/(tabs)/orders' as never); } catch {
+        try { router.back(); } catch {}
+      }
+      return;
+    }
     // Frontend validation: check basket pickup window
     if (!isPickupWindowOpen()) {
       setErrorMessage(t('errors.pickupExpired', { defaultValue: 'The pickup window has expired.' }));
@@ -315,7 +519,7 @@ export default function ReserveScreen() {
   };
 
   // Show loading while the basket or location are loading
-  if (basketQuery.isLoading || (!!resolvedLocationId && locationQuery.isLoading)) {
+  if (!isDemoReserve && (basketQuery.isLoading || (!!resolvedLocationId && locationQuery.isLoading))) {
     return (
       <SafeAreaView edges={['top']} style={[styles.container, { backgroundColor: theme.colors.bg, justifyContent: 'center', alignItems: 'center' }]}>
         <ActivityIndicator size="large" color={theme.colors.primary} />
@@ -324,7 +528,7 @@ export default function ReserveScreen() {
   }
 
   // If basket fetch failed or returned no location id we cannot proceed
-  if (basketQuery.isError || !resolvedLocationId || !location) {
+  if (!isDemoReserve && (basketQuery.isError || !resolvedLocationId || !location)) {
     return (
       <SafeAreaView edges={['top']} style={[styles.container, { backgroundColor: theme.colors.bg, justifyContent: 'center', alignItems: 'center' }]}>
         <Text style={[{ color: theme.colors.error, ...theme.typography.body }]}>{t('common.errorOccurred')}</Text>
@@ -339,14 +543,14 @@ export default function ReserveScreen() {
     <SafeAreaView edges={['top']} style={[styles.container, { backgroundColor: theme.colors.bg }]}>
       <StatusBar style="dark" />
       <View style={[styles.header, { padding: theme.spacing.xl }]}>
-        <TouchableOpacity onPress={() => router.back()} accessibilityLabel={t('common.close', { defaultValue: 'Close' })} accessibilityRole="button">
+        <TouchableOpacity onPress={() => router.back()} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }} accessibilityLabel={t('common.close', { defaultValue: 'Close' })} accessibilityRole="button">
           <X size={24} color={theme.colors.textPrimary} />
         </TouchableOpacity>
         <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h2 }]}>{t('reserve.title')}</Text>
         <View style={{ width: 24 }} />
       </View>
 
-      <ScrollView style={styles.content} contentContainerStyle={[{ padding: theme.spacing.xl }]}>
+      <ScrollView ref={scrollRef} style={styles.content} contentContainerStyle={[{ padding: theme.spacing.xl }]}>
         {/* Basket info: image + name + location */}
         <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: theme.spacing.lg }}>
           {basketImage ? (
@@ -366,8 +570,18 @@ export default function ReserveScreen() {
           </View>
         </View>
 
-        {/* Quantity selector */}
-        <View style={[styles.section, { backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, padding: theme.spacing.xl, marginBottom: theme.spacing.lg, ...theme.shadows.shadowSm }]}>
+        {/* Quantity selector — halo wraps the entire white section card so
+            it covers the "Quantité" label, the +/- selector, and the
+            quantity number. */}
+        <View
+          ref={qtySectionRef}
+          style={[styles.section, { backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, padding: theme.spacing.xl, marginBottom: theme.spacing.lg, ...theme.shadows.shadowSm }]}
+          onLayout={(e) => {
+            (e.target as any)?.measureInWindow?.((x: number, y: number, w: number, h: number) => {
+              if (w > 0 && h > 0) useWalkthroughStore.getState().setMeasuredRect('reserveQtySection', { x, y, w, h });
+            });
+          }}
+        >
           <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.body, marginBottom: theme.spacing.lg }]}>
             {t('reserve.quantity')}
           </Text>
@@ -404,13 +618,26 @@ export default function ReserveScreen() {
           <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, marginBottom: theme.spacing.lg }]}>
             {t('reserve.summary')}
           </Text>
-          <View style={styles.summaryRow}>
-            <Text style={[{ flex: 1, color: theme.colors.textSecondary, ...theme.typography.body }]} numberOfLines={2}>
-              {basketName} <Text style={{ fontWeight: '700', color: theme.colors.textPrimary }}>(x {quantity})</Text>
+          {/* Vertical stack: basket name → quantity (× N paniers) → unit-cost
+              line with price on its own row right-aligned. Splitting quantity
+              and price onto their own rows makes the reservation totals
+              readable in a glance instead of a single dense `Name (xN) Price`
+              line. */}
+          <View>
+            <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.body, fontWeight: '600' as const }]} numberOfLines={2}>
+              {basketName}
             </Text>
-            <Text style={[{ flexShrink: 0, marginLeft: 8, color: theme.colors.textPrimary, ...theme.typography.body }]}>
-              {price * quantity} TND
+            <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.bodySm, marginTop: 4 }]}>
+              {t('reserve.basketsCount', { count: quantity, defaultValue: '× {{count}} panier(s)' })}
             </Text>
+            <View style={[styles.summaryRow, { marginTop: 8, alignItems: 'flex-end' }]}>
+              <Text style={[{ flex: 1, color: theme.colors.muted, ...theme.typography.caption }]}>
+                {t('reserve.subtotal', { defaultValue: 'Sous-total' })}
+              </Text>
+              <Text style={[{ flexShrink: 0, marginLeft: 8, color: theme.colors.textPrimary, ...theme.typography.body, fontWeight: '600' as const }]}>
+                {price * quantity} TND
+              </Text>
+            </View>
           </View>
           {originalPrice > 0 && originalPrice > price && (
             <View style={[styles.summaryRow, { marginTop: 4 }]}>
@@ -432,8 +659,19 @@ export default function ReserveScreen() {
           </View>
         </View>
 
-        {/* Payment Method — icons instead of emojis */}
-        <View style={[styles.section, { backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, padding: theme.spacing.xl, marginBottom: theme.spacing.lg, ...theme.shadows.shadowSm }]}>
+        {/* Payment Method — halo wraps the entire section card. The
+            section's window y changes after the auto-scroll fires, so we
+            attach a ref that the scroll effect uses to re-publish the rect
+            once the scroll settles. */}
+        <View
+          ref={paymentSectionRef}
+          style={[styles.section, { backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, padding: theme.spacing.xl, marginBottom: theme.spacing.lg, ...theme.shadows.shadowSm }]}
+          onLayout={(e) => {
+            (e.target as any)?.measureInWindow?.((x: number, y: number, w: number, h: number) => {
+              if (w > 0 && h > 0) useWalkthroughStore.getState().setMeasuredRect('reservePaymentSection', { x, y, w, h });
+            });
+          }}
+        >
           <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3, marginBottom: 12 }}>
             {t('reserve.paymentMethod')}
           </Text>
@@ -535,18 +773,29 @@ export default function ReserveScreen() {
         </View>
       </ScrollView>
 
-      <View style={[styles.footer, { backgroundColor: theme.colors.surface, paddingHorizontal: theme.spacing.xl, paddingVertical: theme.spacing.lg, borderTopWidth: 1, borderTopColor: theme.colors.divider, ...theme.shadows.shadowLg }]}>
+      <View
+        style={[styles.footer, { backgroundColor: theme.colors.surface, paddingHorizontal: theme.spacing.xl, paddingTop: theme.spacing.lg, paddingBottom: bottomSafePadding, borderTopWidth: 1, borderTopColor: theme.colors.divider, ...theme.shadows.shadowLg }]}
+        onLayout={(e) => {
+          (e.target as any)?.measureInWindow?.((x: number, y: number, w: number, h: number) => {
+            if (w > 0 && h > 0) useWalkthroughStore.getState().setMeasuredRect('reserveConfirmBtn', { x, y, w, h });
+          });
+        }}
+      >
         <PrimaryCTAButton
           compact
           onPress={handleConfirm}
           title={
-            totalAvailable <= 0
+            isDemoReserve
+              ? t('reserve.confirmReservation')
+              : totalAvailable <= 0
               ? t('basket.soldOut')
               : !isPickupWindowOpen()
               ? t('orders.status.expired', { defaultValue: 'Expired' })
               : t('reserve.confirmReservation')
           }
-          disabled={totalAvailable <= 0 || !isPickupWindowOpen() || reserveMutation.isPending}
+          // Demo mode keeps the CTA tappable regardless of pickup-window /
+          // stock state so the walkthrough's confirm step never dead-ends.
+          disabled={!isDemoReserve && (totalAvailable <= 0 || !isPickupWindowOpen() || reserveMutation.isPending)}
           loading={reserveMutation.isPending}
         />
       </View>
@@ -634,7 +883,7 @@ export default function ReserveScreen() {
                   <Animated.Text
                     key={i}
                     style={{
-                      color: '#fff',
+                      color: '#e3ff5c',
                       fontSize: 36,
                       fontWeight: '700',
                       fontFamily: 'Poppins_700Bold',
@@ -644,7 +893,6 @@ export default function ReserveScreen() {
                     {letter}
                   </Animated.Text>
                 ))}
-                <Text style={{ color: '#e3ff5c', fontSize: 36, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>.</Text>
               </View>
               <Text style={{ color: 'rgba(255,255,255,0.6)', ...theme.typography.body, marginTop: 16 }}>
                 {t('reserve.processing', { defaultValue: 'Traitement de votre réservation...' })}
@@ -675,6 +923,10 @@ export default function ReserveScreen() {
           ) : null}
         </View>
       </Modal>
+      {/* Customer demo walkthrough overlay — paints spotlights on the
+          quantity / payment / confirm sections so the walkthrough's
+          reserve sub-tour is visible above this pushed Stack screen. */}
+      <SubScreenWalkthroughOverlay keys={['reserveQtySection', 'reservePaymentSection', 'reserveConfirmBtn']} />
     </SafeAreaView>
   );
 }

@@ -10,6 +10,7 @@ import { fetchMyContext, fetchOrganizationDetails, updateLocation } from '@/src/
 import { getErrorMessage } from '@/src/lib/api';
 import { useCustomAlert } from '@/src/components/CustomAlert';
 import { LocationFormFields, type LocationFormValue } from '@/src/components/LocationFormFields';
+import { validateBizDayWindow } from '@/src/utils/timezone';
 
 export default function EditLocationScreen() {
   const { t } = useTranslation();
@@ -61,6 +62,18 @@ export default function EditLocationScreen() {
   const mutation = useMutation({
     mutationFn: async () => {
       if (!orgId || !locationId) throw new Error('Organisation ou emplacement introuvable');
+      // Same cross-03:30 / zero-duration check as add-location. Edits used
+      // to be able to introduce a previously-invalid window because only
+      // the business-profile hours sheet ran the validator.
+      if (form.pickupStart && form.pickupEnd) {
+        const status = validateBizDayWindow(form.pickupStart, form.pickupEnd);
+        if (status === 'zero') {
+          throw new Error(t('business.availability.invalidWindow', { defaultValue: "L'heure de fin doit être différente de l'heure de début." }));
+        }
+        if (status === 'crosses-reset') {
+          throw new Error(t('business.availability.crossReset', { defaultValue: "Le créneau ne peut pas traverser la réinitialisation quotidienne (03:30). Choisissez un début ≥ 03:30, ou une fin ≤ 03:29." }));
+        }
+      }
       return updateLocation(orgId, locationId, {
         name: form.name.trim() || undefined,
         address: form.address.trim() || undefined,
@@ -89,7 +102,18 @@ export default function EditLocationScreen() {
     },
   });
 
-  const canSubmit = !!orgId && !!locationId && !!form.category && !mutation.isPending;
+  // Save is enabled as soon as we have the IDs and a non-empty name. We do
+  // NOT require `form.category` here because legacy locations created before
+  // the category field was added come back with category=null/'' and would
+  // otherwise lock the save button forever. A location with no name is what's
+  // truly invalid; category is recommended but stays optional in edit mode.
+  // Pickup window IS required (mirrors add-location); a saved location must
+  // always carry a deliberate pickup_start/end, since baskets inherit it.
+  const canSubmit =
+    !!orgId && !!locationId &&
+    !!form.name.trim() &&
+    !!form.pickupStart && !!form.pickupEnd &&
+    !mutation.isPending;
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: theme.colors.bg }}>

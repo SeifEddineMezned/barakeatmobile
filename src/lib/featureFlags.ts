@@ -49,11 +49,6 @@ export const FeatureFlags = {
   ENABLE_REVIEWS: true,
   ENABLE_REPORTS: true,
 
-  // Exposes the "Admin Barakeat" link at the bottom of the sign-in screen.
-  // Disabled for public builds; the admin interface is still reachable by
-  // direct navigation to /admin/sign-in, this flag only controls the link.
-  ENABLE_ADMIN_SIGN_IN_LINK: false,
-
   // ── B1: Cross-platform (iOS + Android) fixes ────────────────────────────
   // Uses useSafeAreaInsets() everywhere instead of hardcoded Platform values.
   ENABLE_CROSS_PLATFORM_FIXES: true,

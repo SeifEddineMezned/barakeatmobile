@@ -17,8 +17,9 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { CheckCheck, ArrowLeft, ShoppingBag, Star, XCircle, Bell, CheckCircle, Clock, MapPin, Navigation, User, MoreHorizontal, EyeOff, X, Trash2, Check, MessageCircle, Zap } from 'lucide-react-native';
-import { useRouter } from 'expo-router';
+import { CheckCheck, ArrowLeft, ShoppingBag, Star, XCircle, Bell, CheckCircle, Clock, MapPin, Navigation, User, MoreHorizontal, EyeOff, X, Check, MessageCircle, Zap } from 'lucide-react-native';
+import { DeleteIcon8 } from '@/src/components/ui/Icon8';
+import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { StatusBar } from 'expo-status-bar';
 import {
@@ -73,6 +74,12 @@ function resolveNotifText(
       if (!params.location) {
         params.location = params.locationName ?? params.restaurant ?? params.restaurantName ?? '';
       }
+      // Backfill `count` from the legacy field names so old notifications (saved
+      // before the i18next plural conversion) still pick the right _one/_other
+      // variant instead of falling through to the missing base key.
+      if (params.count == null) {
+        params.count = params.quantity ?? params.qty ?? params.streak ?? params.rating;
+      }
       const i18nKey = `notifications.${parsed.key}`;
       const translated = t(i18nKey, params);
       // i18next returns the key string itself when missing → treat as unknown
@@ -116,15 +123,15 @@ function getNotifIcon(type?: string | null, title?: string | null): { Icon: any;
 }
 
 /** Notification card — swipe left to hide in one gesture, optional selection checkbox */
-function NotifCard({ item, theme, t, onPress, onHide, getReservationImage, isBusiness, selectionMode, isSelected, onToggleSelect }: {
+function NotifCard({ item, theme, t, onPress, onHide, getReservationImage, selectionMode, isSelected, onToggleSelect, isBusiness }: {
   item: NotificationFromAPI; theme: any; t: any;
   onPress: (item: NotificationFromAPI) => void;
   onHide: (id: number) => void;
   getReservationImage: (refId?: number) => string | null;
-  isBusiness?: boolean;
   selectionMode?: boolean;
   isSelected?: boolean;
   onToggleSelect?: (id: number) => void;
+  isBusiness?: boolean;
 }) {
   const translateX = useRef(new Animated.Value(0)).current;
   const { Icon, color, bg } = getNotifIcon(item.type, item.title);
@@ -135,12 +142,19 @@ function NotifCard({ item, theme, t, onPress, onHide, getReservationImage, isBus
     try {
       const parsed = JSON.parse(item.message);
       const p = parsed?.params ?? {};
-      const fromParams = p.locationImage ?? p.location_image ?? p.restaurant_image ?? p.image_url ?? p.basketImage ?? p.basket_image ?? null;
+      // Image preference depends on the viewer:
+      //   - Business: every notif card shows the BASKET image of the
+      //     concerned basket — the org logo would be redundant since the
+      //     business is reading from inside its own portal.
+      //   - Customer: prefer the partner's org logo (brand identity), with
+      //     basket/location images as fallbacks for older notifications.
+      const fromParams = isBusiness
+        ? (p.basketImage ?? p.basket_image ?? p.org_logo_url ?? p.locationImage ?? p.location_image ?? p.restaurant_image ?? p.image_url ?? null)
+        : (p.org_logo_url ?? p.locationImage ?? p.location_image ?? p.restaurant_image ?? p.image_url ?? p.basketImage ?? p.basket_image ?? null);
       if (fromParams) return fromParams;
     } catch {}
     return getReservationImage(item.reference_id) ?? null;
-  }, [item.message, item.reference_id, getReservationImage]);
-  const isOrderRelated = (item.type ?? '').includes('reservation') || (item.type ?? '').includes('order') || (item.type ?? '').includes('pickup') || (item.type ?? '').includes('cancelled');
+  }, [item.message, item.reference_id, getReservationImage, isBusiness]);
 
   const panResponder = useRef(PanResponder.create({
     onStartShouldSetPanResponder: () => false,
@@ -205,14 +219,12 @@ function NotifCard({ item, theme, t, onPress, onHide, getReservationImage, isBus
                 {isSelected && <CheckCircle size={12} color="#fff" />}
               </View>
             )}
-            {notifImage && isOrderRelated && !isBusiness ? (
-              <Image source={{ uri: notifImage }} style={{ width: 36, height: 36, borderRadius: 10, marginRight: theme.spacing.md }} resizeMode="cover" />
+            {notifImage ? (
+              // Org logo (circular) when the notification carries one.
+              // Notifications without org context (streak, wallet credit, etc.)
+              // keep the colored typed icon below so the inbox stays scannable.
+              <Image source={{ uri: notifImage }} style={{ width: 36, height: 36, borderRadius: 18, marginRight: theme.spacing.md }} resizeMode="cover" />
             ) : (
-              // Icon keeps its type color (primary for new reservations, red
-              // for cancelled, blue for messages, etc.) so business users can
-              // scan the inbox at a glance. No tinted background circle —
-              // the color lives on the glyph itself, which reads as modern
-              // rather than as an AI "status badge".
               <View style={{ width: 36, alignItems: 'center', marginRight: theme.spacing.md }}>
                 <Icon size={20} color={color} />
               </View>
@@ -255,8 +267,13 @@ export default function NotificationsScreen() {
     if (!refId) return null;
     const r = cachedReservations.find((res: any) => res.id === refId || String(res.id) === String(refId));
     if (!r) return null;
-    return r.restaurant_image ?? r.org_image_url ?? r.restaurant?.image_url ?? r.basket?.image_url ?? r.basket?.cover_image_url ?? null;
-  }, [cachedReservations]);
+    // Business viewers want the BASKET image on every card (the org logo is
+    // redundant from inside their own portal); customers prefer the partner's
+    // brand image. Mirrors the params-image preference in NotifCard.
+    return isBusiness
+      ? (r.basket?.image_url ?? r.basket?.cover_image_url ?? r.restaurant_image ?? r.org_image_url ?? r.restaurant?.image_url ?? null)
+      : (r.restaurant_image ?? r.org_image_url ?? r.restaurant?.image_url ?? r.basket?.image_url ?? r.basket?.cover_image_url ?? null);
+  }, [cachedReservations, isBusiness]);
   const [detailNotif, setDetailNotif] = useState<NotificationFromAPI | null>(null);
   const [filter, setFilter] = useState<'all' | 'unread' | 'hidden'>('all');
   const [hiddenIds, setHiddenIds] = useState<Set<number>>(new Set());
@@ -293,6 +310,23 @@ export default function NotificationsScreen() {
     staleTime: 30_000,
   });
 
+  // Auto-open a specific notification's detail modal when the page was opened
+  // via the in-app popup's bell shortcut (which appends ?openId=<id>). Waits
+  // for the list query to resolve so we can resolve the id to a notif row,
+  // and only fires once per id to survive re-renders.
+  const { openId } = useLocalSearchParams<{ openId?: string }>();
+  const openIdAppliedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!openId || openIdAppliedRef.current === openId) return;
+    const list = notificationsQuery.data ?? [];
+    if (list.length === 0) return;
+    const found = list.find((n) => String(n.id) === String(openId));
+    if (found) {
+      setDetailNotif(found);
+      openIdAppliedRef.current = openId;
+    }
+  }, [openId, notificationsQuery.data]);
+
   // Selection mode helpers
   const toggleSelect = useCallback((id: number) => {
     setSelectedIds(prev => {
@@ -302,14 +336,54 @@ export default function NotificationsScreen() {
     });
   }, []);
 
+  // Retention: read notifications older than 7 days are AUTO-MASKED — they
+  // join the "Masquées" filter alongside items the user manually swiped to
+  // hide. We don't write them into the AsyncStorage `hiddenIds` set (which
+  // would grow unbounded over time); we compute auto-masked status on the
+  // fly from `created_at + is_read` and OR it into the filter logic.
+  // Notifications of any state older than 30 days get hard-deleted from
+  // the backend once per app session (see the auto-delete effect below).
+  const RETENTION_ARCHIVE_DAYS = 7;
+  const RETENTION_DELETE_DAYS = 30;
+  const isAutoMasked = useCallback((n: NotificationFromAPI): boolean => {
+    if (!n.is_read) return false;
+    if (!n.created_at) return false;
+    const ageMs = Date.now() - new Date(n.created_at).getTime();
+    return ageMs > RETENTION_ARCHIVE_DAYS * 86400_000;
+  }, []);
+
   const filteredData = React.useMemo(() => {
     return (notificationsQuery.data ?? []).filter(n => {
-      if (filter === 'hidden') return hiddenIds.has(n.id);
-      if (hiddenIds.has(n.id)) return false;
+      const isHiddenOrMasked = hiddenIds.has(n.id) || isAutoMasked(n);
+      if (filter === 'hidden') return isHiddenOrMasked;
+      if (isHiddenOrMasked) return false;
       if (filter === 'unread' && n.is_read) return false;
       return true;
     });
-  }, [notificationsQuery.data, filter, hiddenIds]);
+  }, [notificationsQuery.data, filter, hiddenIds, isAutoMasked]);
+
+  // Auto-delete sweep — once per app session per fresh data arrival, delete
+  // notifications older than 30 days from the backend. Gated by a ref so it
+  // doesn't refire on every re-render. Batched via Promise.allSettled to
+  // avoid hammering the API.
+  const deleteSweepRunRef = useRef(false);
+  useEffect(() => {
+    if (deleteSweepRunRef.current) return;
+    const list = notificationsQuery.data;
+    if (!list || list.length === 0) return;
+    const cutoff = Date.now() - RETENTION_DELETE_DAYS * 86400_000;
+    const toDelete = list.filter((n) => n.created_at && new Date(n.created_at).getTime() < cutoff);
+    if (toDelete.length === 0) {
+      deleteSweepRunRef.current = true;
+      return;
+    }
+    deleteSweepRunRef.current = true;
+    console.log('[Notifications] Auto-delete sweep — removing', toDelete.length, 'notifications older than', RETENTION_DELETE_DAYS, 'days');
+    Promise.allSettled(toDelete.map((n) => deleteNotification(n.id))).then(() => {
+      void queryClient.invalidateQueries({ queryKey: ['notifications'] });
+      void queryClient.refetchQueries({ queryKey: ['unread-count'] });
+    });
+  }, [notificationsQuery.data, queryClient]);
 
   const selectAll = useCallback(() => {
     setSelectedIds(new Set(filteredData.map(n => n.id)));
@@ -388,9 +462,9 @@ export default function NotificationsScreen() {
 
   const renderItem = useCallback(
     ({ item }: { item: NotificationFromAPI }) => {
-      return <NotifCard item={item} theme={theme} t={t} onPress={handlePressNotification} onHide={hideNotification} getReservationImage={getReservationImage} isBusiness={isBusiness} selectionMode={selectionMode} isSelected={selectedIds.has(item.id)} onToggleSelect={toggleSelect} />;
+      return <NotifCard item={item} theme={theme} t={t} onPress={handlePressNotification} onHide={hideNotification} getReservationImage={getReservationImage} selectionMode={selectionMode} isSelected={selectedIds.has(item.id)} onToggleSelect={toggleSelect} isBusiness={isBusiness} />;
     },
-    [theme, handlePressNotification, hideNotification, t, selectionMode, selectedIds, toggleSelect]
+    [theme, handlePressNotification, hideNotification, t, selectionMode, selectedIds, toggleSelect, isBusiness]
   );
 
   return (
@@ -420,21 +494,21 @@ export default function NotificationsScreen() {
                 </Text>
               )}
             </View>
-            <TouchableOpacity onPress={exitSelectionMode}>
+            <TouchableOpacity onPress={exitSelectionMode} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
               <X size={22} color={theme.colors.textPrimary} />
             </TouchableOpacity>
           </>
         ) : (
           <>
             <View style={styles.headerLeft}>
-              <TouchableOpacity onPress={() => router.back()} style={{ marginRight: theme.spacing.md }}>
+              <TouchableOpacity onPress={() => router.back()} style={{ marginRight: theme.spacing.md }} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
                 <ArrowLeft size={24} color={theme.colors.textPrimary} />
               </TouchableOpacity>
               <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h2 }]}>
                 {t('notifications.title')}
               </Text>
             </View>
-            <TouchableOpacity onPress={() => setSelectionMode(true)}>
+            <TouchableOpacity onPress={() => setSelectionMode(true)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
               <MoreHorizontal size={22} color={theme.colors.textSecondary} />
             </TouchableOpacity>
           </>
@@ -536,7 +610,7 @@ export default function NotificationsScreen() {
                 onPress={batchDelete}
                 style={{ flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: theme.colors.error, borderRadius: 20, paddingVertical: 8, paddingHorizontal: 12 }}
               >
-                <Trash2 size={16} color="#fff" />
+                <DeleteIcon8 size={16} color="#fff" />
                 <Text style={{ color: '#fff', ...theme.typography.caption, fontWeight: '700' }}>
                   {t('common.delete', { defaultValue: 'Supprimer' })}
                 </Text>
@@ -587,10 +661,24 @@ export default function NotificationsScreen() {
             const basketName = msgParams.basketName ?? msgParams.basket_name ?? null;
             const qty = msgParams.quantity ?? msgParams.qty ?? msgParams.count ?? null;
             const price = msgParams.price ?? msgParams.total ?? null;
+            const isStreak = notifType.includes('streak');
             const handleAction = () => {
               setDetailNotif(null);
               if (isMessage) { router.push({ pathname: '/message/[id]', params: { id: String(detailNotif.reference_id ?? '') } } as never); return; }
-              if (isPickupConfirmed && !isBusiness) { router.push({ pathname: '/review', params: { reservationId: String(detailNotif.reference_id ?? ''), locationName: locationName ?? '', basketName: basketName ?? '', quantity: String(qty ?? 1), total: String(price ?? 0) } } as never); return; }
+              if (isStreak) { router.push('/(tabs)' as never); return; }
+              if (isPickupConfirmed && !isBusiness) {
+                router.push({ pathname: '/review', params: {
+                  reservationId: String(detailNotif.reference_id ?? ''),
+                  locationId: String(msgParams.location_id ?? msgParams.locationId ?? ''),
+                  locationName: locationName ?? '',
+                  locationLogo: msgParams.locationImage ?? msgParams.location_image ?? '',
+                  basketImage: msgParams.basketImage ?? msgParams.basket_image ?? '',
+                  basketName: basketName ?? '',
+                  quantity: String(qty ?? 1),
+                  total: String(price ?? 0),
+                } } as never);
+                return;
+              }
               if (isBasketPickedUp) {
                 if (isBusiness) {
                   useBusinessStore.getState().setTargetOrder(String(detailNotif.reference_id ?? ''), msgParams.location_id ?? null);

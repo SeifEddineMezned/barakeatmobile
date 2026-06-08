@@ -4,7 +4,9 @@ import { TimePicker } from '@/src/components/TimePicker';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
-import { X } from 'lucide-react-native';
+import { getErrorMessage } from '@/src/lib/api';
+import { X, Clock } from 'lucide-react-native';
+import { validateBizDayWindow } from '@/src/utils/timezone';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { PrimaryCTAButton } from '@/src/components/PrimaryCTAButton';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -107,12 +109,21 @@ export default function AvailabilityScreen() {
       router.back();
     },
     onError: (err: any) => {
-      const msg = err?.message ?? t('common.errorOccurred');
-      alert.showAlert(t('common.error'), msg);
+      alert.showAlert(t('common.error'), getErrorMessage(err));
     },
   });
 
   const handleSavePress = () => {
+    // Cross-03:30 / zero-duration check first — once the rule fires
+    // there's nothing else to validate.
+    const status = validateBizDayWindow(pickupStart, pickupEnd);
+    if (status !== 'ok') {
+      const msg = status === 'zero'
+        ? t('business.availability.invalidWindow', { defaultValue: "L'heure de fin doit être différente de l'heure de début." })
+        : t('business.availability.crossReset', { defaultValue: "Le créneau ne peut pas traverser la réinitialisation quotidienne (03:30). Choisissez un début ≥ 03:30, ou une fin ≤ 03:29." });
+      alert.showAlert(t('common.error', { defaultValue: 'Erreur' }), msg);
+      return;
+    }
     const newStart = toTimeField(pickupStart);
     const newEnd = toTimeField(pickupEnd);
     const baskets = basketsQuery.data ?? [];
@@ -172,11 +183,23 @@ export default function AvailabilityScreen() {
         contentContainerStyle={{ paddingHorizontal: theme.spacing.xl, paddingBottom: 40 }}
         showsVerticalScrollIndicator={false}
       >
+        {/* Cross-reset rule reminder — same copy as the hours modal in
+            business-profile so the constraint reads consistently from
+            either entry point. */}
+        <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 6, marginTop: theme.spacing.lg, paddingHorizontal: 4 }}>
+          <Clock size={12} color={theme.colors.muted} style={{ marginTop: 2 }} />
+          <Text style={{ color: theme.colors.muted, ...theme.typography.caption, flex: 1, lineHeight: 15 }}>
+            {t('business.availability.crossResetHint', {
+              defaultValue: 'Le créneau ne doit pas traverser 03:30 (réinitialisation quotidienne). Commencez ≥ 03:30 ou terminez ≤ 03:29.',
+            })}
+          </Text>
+        </View>
+
         <View style={{
           backgroundColor: theme.colors.surface,
           borderRadius: theme.radii.r16,
           padding: theme.spacing.xl,
-          marginTop: theme.spacing.lg,
+          marginTop: theme.spacing.md,
           ...theme.shadows.shadowSm,
         }}>
           <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, marginBottom: 6 }}>

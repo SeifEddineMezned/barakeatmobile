@@ -1,23 +1,20 @@
 import React, { useState, useCallback } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, Modal, Alert, Switch, TextInput } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, Modal, TextInput } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import { ArrowLeft, Mail, MapPin, Shield, ShieldCheck, Crown, ShoppingBag, Edit3, Clock, User, MoreVertical, Trash2, Key, X, CheckCircle, MessageCircle, Package, Users, Settings } from 'lucide-react-native';
 import { useTheme } from '@/src/theme/ThemeProvider';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { apiClient } from '@/src/lib/api';
-import { fetchMyContext, fetchOrganizationDetails, updateMember, sendMemberEmail } from '@/src/services/teams';
+import { useQuery } from '@tanstack/react-query';
+import { apiClient, getErrorMessage } from '@/src/lib/api';
+import { fetchMyContext, fetchOrganizationDetails, sendMemberEmail } from '@/src/services/teams';
 import { useBusinessStore } from '@/src/stores/businessStore';
 import { orderIdToCode } from '@/src/utils/orderCode';
 import { TeamRoleChangeModal } from '@/src/components/TeamRoleChangeModal';
 import { TeamLocationsManagerModal } from '@/src/components/TeamLocationsManagerModal';
 import { TeamRemoveMemberDialog } from '@/src/components/TeamRemoveMemberDialog';
-
-type PermissionKey = 'confirm_pickup' | 'edit_quantities' | 'edit_basket_info' | 'create_delete_baskets' | 'view_history' | 'messaging' | 'cancel_order';
-
-const permStringToBool = (val: any): boolean => val === 'write' || val === true;
-const permBoolToString = (val: boolean): string => val ? 'write' : 'none';
+import { ActionMenuCard, ActionMenuItem, ActionMenuDivider } from '@/src/components/ui/ActionMenu';
+import { PermissionIcon8, RoleIcon8, DeleteIcon8 } from '@/src/components/ui/Icon8';
 
 interface ActivityItem {
   id: number;
@@ -77,20 +74,12 @@ export default function MemberDetailScreen() {
   const theme = useTheme();
   const router = useRouter();
 
-  const queryClient = useQueryClient();
   const [showMenu, setShowMenu] = useState(false);
   const [activityFilter, setActivityFilter] = useState('all');
   // Removal runs through the shared TeamRemoveMemberDialog — this screen is
   // per-user (no filter), so it always targets every membership. Scoped removes
   // live in team.tsx where the admin might be filtered to one location.
   const [removeConfirmOpen, setRemoveConfirmOpen] = useState(false);
-
-  // Permissions modal state
-  const [showPermsModal, setShowPermsModal] = useState(false);
-  const [permsState, setPermsState] = useState<Record<PermissionKey, boolean>>({
-    confirm_pickup: false, edit_quantities: false, edit_basket_info: false, create_delete_baskets: false, view_history: false, messaging: false, cancel_order: false,
-  });
-  const [permsSaving, setPermsSaving] = useState(false);
 
   // Email modal state
   const [showEmailModal, setShowEmailModal] = useState(false);
@@ -123,16 +112,6 @@ export default function MemberDetailScreen() {
     staleTime: 30_000,
   });
 
-  const permissionLabels: { key: PermissionKey; label: string; desc: string }[] = [
-    { key: 'confirm_pickup', label: t('business.profile.permConfirmPickup', { defaultValue: 'Confirmer les retraits' }), desc: t('business.profile.permConfirmPickupDesc', { defaultValue: "Scanner le QR / saisir le code pour confirmer le retrait d'un client" }) },
-    { key: 'edit_quantities', label: t('business.profile.permEditQuantities', { defaultValue: 'Modifier les quantités' }), desc: t('business.profile.permEditQuantitiesDesc', { defaultValue: 'Changer la quantité disponible des paniers, mettre en pause les ventes' }) },
-    { key: 'edit_basket_info', label: t('business.profile.permEditBasketInfo', { defaultValue: 'Modifier les paniers' }), desc: t('business.profile.permEditBasketInfoDesc', { defaultValue: 'Modifier le prix, description, horaires de retrait et instructions' }) },
-    { key: 'create_delete_baskets', label: t('business.profile.permCreateDeleteBaskets', { defaultValue: 'Créer et supprimer des paniers' }), desc: t('business.profile.permCreateDeleteBasketsDesc', { defaultValue: 'Ajouter de nouveaux paniers ou supprimer des paniers existants' }) },
-    { key: 'view_history', label: t('business.profile.permViewHistory', { defaultValue: 'Historique et statistiques' }), desc: t('business.profile.permViewHistoryDesc', { defaultValue: "Voir les stats de vente, l'historique des commandes et les graphiques de performance" }) },
-    { key: 'messaging', label: t('business.profile.permMessaging', { defaultValue: 'Messagerie clients' }), desc: t('business.profile.permMessagingDesc', { defaultValue: 'Envoyer et recevoir des messages avec les clients' }) },
-    { key: 'cancel_order', label: t('business.profile.permCancelOrder', { defaultValue: 'Annuler des commandes' }), desc: t('business.profile.permCancelOrderDesc', { defaultValue: 'Annuler les commandes entrantes et rembourser les clients en crédits' }) },
-  ];
-
   // Resolve the current member row from the cached org details so we can
   // seed the role/location modals with today's values.
   const currentMember = React.useMemo(() => {
@@ -140,80 +119,27 @@ export default function MemberDetailScreen() {
     return members.find((m: any) => String(m.membership_id) === memberId || String(m.user_id) === memberId);
   }, [orgDetailsQuery.data, memberId]);
 
-  // Org admins implicitly have every permission at runtime — the toggles are
-  // locked on and the save is skipped so role demotions don't get overwritten
-  // by a stale all-true payload.
-  const isTargetOrgAdmin = currentMember?.role === 'admin' && !currentMember?.location_id;
-
   const handleOpenPermissions = useCallback(() => {
     setShowMenu(false);
-    if (isTargetOrgAdmin) {
-      setPermsState({
-        confirm_pickup: true, edit_quantities: true, edit_basket_info: true,
-        create_delete_baskets: true, view_history: true, messaging: true, cancel_order: true,
-      });
-      setShowPermsModal(true);
-      return;
-    }
-    const perms = currentMember?.permissions ?? {};
-    const parsed = typeof perms === 'string' ? JSON.parse(perms) : perms;
-    setPermsState({
-      confirm_pickup: permStringToBool(parsed?.confirm_pickup),
-      edit_quantities: permStringToBool(parsed?.edit_quantities),
-      edit_basket_info: permStringToBool(parsed?.edit_basket_info),
-      create_delete_baskets: permStringToBool(parsed?.create_delete_baskets),
-      view_history: permStringToBool(parsed?.view_history),
-      messaging: permStringToBool(parsed?.messaging),
-      cancel_order: permStringToBool(parsed?.cancel_order),
-    });
-    setShowPermsModal(true);
-  }, [currentMember, isTargetOrgAdmin]);
+    router.push({
+      pathname: '/business/permissions/[membershipId]',
+      params: {
+        membershipId: String(memberId),
+        orgId: orgId != null ? String(orgId) : '',
+        memberName: memberName ?? '',
+        memberRole: memberRole ?? '',
+      },
+    } as never);
+  }, [router, memberId, orgId, memberName, memberRole]);
 
   // All of this user's memberships in this org — used everywhere the
-  // user-centric actions need to fan out (perms save, role change, locations
+  // user-centric actions need to fan out (role change, locations
   // manager, remove).
   const userMemberships = React.useMemo(() => {
     const all = (orgDetailsQuery.data as any)?.members ?? [];
     if (!currentMember) return [];
     return all.filter((m: any) => String(m.user_id) === String(currentMember.user_id));
   }, [orgDetailsQuery.data, currentMember]);
-
-  const handleSavePermissions = useCallback(async () => {
-    if (!orgId || !memberId) return;
-    if (isTargetOrgAdmin) {
-      // Admin perms are implicit — nothing to persist. Just close.
-      setShowPermsModal(false);
-      return;
-    }
-    setPermsSaving(true);
-    try {
-      const permsPayload: Record<string, string> = {
-        confirm_pickup: permBoolToString(permsState.confirm_pickup),
-        edit_quantities: permBoolToString(permsState.edit_quantities),
-        edit_basket_info: permBoolToString(permsState.edit_basket_info),
-        create_delete_baskets: permBoolToString(permsState.create_delete_baskets),
-        view_history: permBoolToString(permsState.view_history),
-        messaging: permBoolToString(permsState.messaging),
-        cancel_order: permBoolToString(permsState.cancel_order),
-      };
-      // Apply the same perms to every membership the user holds in this org
-      // so "permissions" is a per-user concept in the UI (DB still stores per
-      // membership row, but we keep them in sync).
-      const targets = userMemberships.length > 0 ? userMemberships : [{ membership_id: memberId }];
-      console.log('[MemberDetail] Saving permissions to', targets.length, 'membership(s) for org', orgId);
-      for (const m of targets) {
-        await updateMember(orgId, m.membership_id, { permissions: permsPayload });
-      }
-      await queryClient.invalidateQueries({ queryKey: ['org-details'] });
-      await queryClient.invalidateQueries({ queryKey: ['my-context'] });
-      await queryClient.refetchQueries({ queryKey: ['org-details', orgId] });
-      setShowPermsModal(false);
-    } catch (err: any) {
-      console.error('[MemberDetail] Permission save failed:', err?.message, err?.data);
-      Alert.alert(t('common.error', { defaultValue: 'Erreur' }), err?.message ?? t('business.team.updateFailed', { defaultValue: 'Échec de la mise à jour des permissions' }));
-    }
-    setPermsSaving(false);
-  }, [orgId, memberId, permsState, queryClient, t, isTargetOrgAdmin, userMemberships]);
 
   const handleOpenRoleModal = useCallback(() => {
     setShowMenu(false);
@@ -245,7 +171,7 @@ export default function MemberDetailScreen() {
     } catch (err: any) {
       // Surface the server's error in the modal instead of silently failing
       // — previously the user couldn't tell whether the email actually went.
-      setEmailError(err?.message ?? t('business.team.emailSendFailed', { defaultValue: "L'envoi de l'email a échoué" }));
+      setEmailError(getErrorMessage(err, t('business.team.emailSendFailed', { defaultValue: "L'envoi de l'email a échoué" })));
     }
     setEmailSending(false);
   }, [orgId, memberId, emailSubject, emailBody, t]);
@@ -370,10 +296,10 @@ export default function MemberDetailScreen() {
                   key={key}
                   onPress={() => setActivityFilter(key)}
                   style={{
-                    paddingHorizontal: 12, paddingVertical: 6, borderRadius: 16,
-                    backgroundColor: isActive ? theme.colors.primary : theme.colors.bg,
-                    borderWidth: isActive ? 0 : 1,
-                    borderColor: theme.colors.divider,
+                    paddingHorizontal: 12, paddingVertical: 7, borderRadius: 8,
+                    backgroundColor: isActive ? theme.colors.primary : theme.colors.surface,
+                    borderWidth: 1,
+                    borderColor: isActive ? theme.colors.primary : theme.colors.divider,
                   }}
                 >
                   <Text style={{
@@ -404,6 +330,45 @@ export default function MemberDetailScreen() {
             activities.map((activity, index) => {
               const { Icon, color } = getActivityIcon(activity.action_type);
               const isOrderRelated = activity.action_type === 'pickup_confirmed' && activity.reference_id;
+              // The `#N` → BK-NNN substitution must only run on action types
+              // whose description embeds a reservation id. For
+              // location_updated / basket_edited etc. the `#N` refers to a
+              // location or basket id, and rendering it as "BK-..." made
+              // location edits look like order entries.
+              const ORDER_HASH_ACTIONS = new Set([
+                'pickup_confirmed',
+                'reservation_cancelled',
+                'message_sent', // description embeds the reservation id when the conversation has one
+              ]);
+              const descriptionText = ORDER_HASH_ACTIONS.has(activity.action_type)
+                ? activity.description.replace(/#(\d+)/g, (_, num) => orderIdToCode(Number(num)))
+                : activity.description;
+              // Legacy entries logged just "A modifié l'emplacement #N" with no
+              // inline change list. If metadata still carries the per-field
+              // diff, render it as a secondary line so the activity still
+              // says WHAT was changed.
+              const FIELD_LABELS_FR: Record<string, string> = {
+                name: 'nom', address: 'adresse', phone: 'téléphone', category: 'catégorie',
+                pickup_instructions: 'instructions de retrait', pickup_start_time: 'début retrait',
+                pickup_end_time: 'fin retrait', latitude: 'latitude', longitude: 'longitude',
+                status: 'statut', is_paused: 'pause', bag_description: 'description du panier',
+                quantity: 'quantité', original_price: 'prix original', discounted_price: 'prix réduit',
+              };
+              const fmtVal = (v: any) => (v === null || v === undefined || v === '') ? '∅' : String(v).substring(0, 40);
+              const hasInlineChanges = typeof descriptionText === 'string' && descriptionText.includes(' — ');
+              const rawChanges = (activity.metadata && activity.metadata.changes) || null;
+              let changeSummary = '';
+              if (!hasInlineChanges && rawChanges && typeof rawChanges === 'object') {
+                const parts: string[] = [];
+                for (const [field, diff] of Object.entries(rawChanges)) {
+                  if (diff && typeof diff === 'object' && ('from' in diff || 'to' in diff)) {
+                    const label = FIELD_LABELS_FR[field] || field;
+                    const d = diff as { from?: any; to?: any };
+                    parts.push(`${label}: ${fmtVal(d.from)} → ${fmtVal(d.to)}`);
+                  }
+                }
+                if (parts.length > 0) changeSummary = parts.join(', ');
+              }
               const Wrapper = isOrderRelated ? TouchableOpacity : View;
               return (
                 <Wrapper
@@ -421,8 +386,13 @@ export default function MemberDetailScreen() {
                   </View>
                   <View style={{ flex: 1 }}>
                     <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm }}>
-                      {activity.description.replace(/#(\d+)/g, (_, num) => orderIdToCode(Number(num)))}
+                      {descriptionText}
                     </Text>
+                    {changeSummary ? (
+                      <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, marginTop: 2, lineHeight: 16 }}>
+                        {changeSummary}
+                      </Text>
+                    ) : null}
                     <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 2, gap: 8 }}>
                       <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption }}>
                         {timeAgo(activity.created_at, t)}
@@ -445,45 +415,43 @@ export default function MemberDetailScreen() {
       {/* 3-dot menu modal */}
       <Modal visible={showMenu} transparent animationType="fade" onRequestClose={() => setShowMenu(false)}>
         <TouchableOpacity style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.4)' }} activeOpacity={1} onPress={() => setShowMenu(false)}>
-          <View style={{ position: 'absolute', top: 60, right: 20, backgroundColor: theme.colors.surface, borderRadius: 16, ...theme.shadows.shadowLg, overflow: 'hidden', minWidth: 220 }}>
-            <TouchableOpacity onPress={handleOpenPermissions} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 14, paddingHorizontal: 16, gap: 12 }}>
-              <Key size={18} color={theme.colors.primary} />
-              <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '500' }}>
-                {t('business.profile.permissions', { defaultValue: 'Permissions' })}
-              </Text>
-            </TouchableOpacity>
-            {memberRole !== 'owner' ? (
-              <>
-                <View style={{ height: 1, backgroundColor: theme.colors.divider }} />
-                <TouchableOpacity onPress={handleOpenRoleModal} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 14, paddingHorizontal: 16, gap: 12 }}>
-                  <ShieldCheck size={18} color={theme.colors.primary} />
-                  <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '500' }}>
-                    {t('business.team.changeRole', { defaultValue: 'Changer le rôle' })}
-                  </Text>
-                </TouchableOpacity>
-                <View style={{ height: 1, backgroundColor: theme.colors.divider }} />
-                <TouchableOpacity onPress={handleOpenLocationModal} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 14, paddingHorizontal: 16, gap: 12 }}>
-                  <MapPin size={18} color={theme.colors.primary} />
-                  <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '500' }}>
-                    {t('business.team.reassignLocation', { defaultValue: 'Réassigner à un emplacement' })}
-                  </Text>
-                </TouchableOpacity>
-              </>
-            ) : null}
-            <View style={{ height: 1, backgroundColor: theme.colors.divider }} />
-            <TouchableOpacity onPress={handleSendEmail} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 14, paddingHorizontal: 16, gap: 12 }}>
-              <Mail size={18} color={theme.colors.primary} />
-              <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '500' }}>
-                {t('business.team.sendEmail', { defaultValue: 'Envoyer un email' })}
-              </Text>
-            </TouchableOpacity>
-            <View style={{ height: 1, backgroundColor: theme.colors.divider }} />
-            <TouchableOpacity onPress={handleDeleteMember} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 14, paddingHorizontal: 16, gap: 12 }}>
-              <Trash2 size={18} color="#ef4444" />
-              <Text style={{ color: '#ef4444', ...theme.typography.bodySm, fontWeight: '500' }}>
-                {t('business.team.removeMember', { defaultValue: 'Retirer le membre' })}
-              </Text>
-            </TouchableOpacity>
+          <View style={{ position: 'absolute', top: 60, right: 20 }} onStartShouldSetResponder={() => true}>
+            <ActionMenuCard style={{ minWidth: 220 }}>
+              <ActionMenuItem
+                icon={<PermissionIcon8 size={18} />}
+                label={t('business.profile.permissions', { defaultValue: 'Permissions' })}
+                onPress={handleOpenPermissions}
+              />
+              {memberRole !== 'owner' ? (
+                <>
+                  <ActionMenuDivider />
+                  <ActionMenuItem
+                    icon={<RoleIcon8 size={18} />}
+                    label={t('business.team.changeRole', { defaultValue: 'Changer le rôle' })}
+                    onPress={handleOpenRoleModal}
+                  />
+                  <ActionMenuDivider />
+                  <ActionMenuItem
+                    icon={<MapPin size={18} color={theme.colors.primary} />}
+                    label={t('business.team.reassignLocation', { defaultValue: 'Réassigner à un emplacement' })}
+                    onPress={handleOpenLocationModal}
+                  />
+                </>
+              ) : null}
+              <ActionMenuDivider />
+              <ActionMenuItem
+                icon={<Mail size={18} color={theme.colors.primary} />}
+                label={t('business.team.sendEmail', { defaultValue: 'Envoyer un email' })}
+                onPress={handleSendEmail}
+              />
+              <ActionMenuDivider />
+              <ActionMenuItem
+                destructive
+                icon={<DeleteIcon8 size={18} />}
+                label={t('business.team.removeMember', { defaultValue: 'Retirer le membre' })}
+                onPress={handleDeleteMember}
+              />
+            </ActionMenuCard>
           </View>
         </TouchableOpacity>
       </Modal>
@@ -502,88 +470,18 @@ export default function MemberDetailScreen() {
         locations={(orgDetailsQuery.data as any)?.locations ?? []}
       />
 
-      {/* Permissions Modal */}
-      <Modal visible={showPermsModal} transparent animationType="fade" onRequestClose={() => setShowPermsModal(false)}>
-        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 24 }}>
-          {/* maxHeight caps the modal at 85% of the screen so the Save button is
-              always visible regardless of how many permission toggles exist or
-              how small the phone is. The toggle list inside scrolls. */}
-          <View style={{ backgroundColor: theme.colors.surface, borderRadius: 24, padding: 24, width: '100%', maxWidth: 380, maxHeight: '85%' }}>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-              <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3 }}>
-                {t('business.profile.permissions', { defaultValue: 'Permissions' })}
-              </Text>
-              <TouchableOpacity onPress={() => setShowPermsModal(false)}>
-                <X size={20} color={theme.colors.textSecondary} />
-              </TouchableOpacity>
-            </View>
-
-            {isTargetOrgAdmin && (
-              <View style={{ backgroundColor: theme.colors.primary + '12', borderRadius: 12, padding: 12, marginBottom: 12, flexDirection: 'row', alignItems: 'flex-start', gap: 8 }}>
-                <ShieldCheck size={16} color={theme.colors.primary} style={{ marginTop: 1 }} />
-                <Text style={{ color: theme.colors.textSecondary, fontSize: 12, lineHeight: 17, flex: 1 }}>
-                  {t('business.team.orgAdminLockedNote', { defaultValue: "Admin de l'organisation — toutes les permissions sont activées par défaut et ne peuvent pas être modifiées." })}
-                </Text>
-              </View>
-            )}
-
-            <ScrollView
-              style={{ flexShrink: 1 }}
-              contentContainerStyle={{ paddingBottom: 4 }}
-              showsVerticalScrollIndicator={false}
-            >
-              {permissionLabels.map(({ key, label, desc }) => (
-                <View
-                  key={key}
-                  style={{
-                    paddingVertical: 12,
-                    borderBottomWidth: 1,
-                    borderBottomColor: theme.colors.divider,
-                    opacity: isTargetOrgAdmin ? 0.55 : 1,
-                  }}
-                >
-                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '600', flex: 1, marginRight: 12 }}>
-                      {label}
-                    </Text>
-                    <Switch
-                      value={permsState[key]}
-                      onValueChange={(val) => { if (!isTargetOrgAdmin) setPermsState((prev) => ({ ...prev, [key]: val })); }}
-                      disabled={isTargetOrgAdmin}
-                      trackColor={{ false: theme.colors.divider, true: theme.colors.primary + '50' }}
-                      thumbColor={permsState[key] ? theme.colors.primary : theme.colors.muted}
-                    />
-                  </View>
-                  <Text style={{ color: permsState[key] ? theme.colors.textSecondary : theme.colors.muted, fontSize: 11, lineHeight: 15, marginTop: 3 }}>
-                    {desc}
-                  </Text>
-                </View>
-              ))}
-            </ScrollView>
-
-            <TouchableOpacity
-              onPress={handleSavePermissions}
-              disabled={permsSaving}
-              style={{ backgroundColor: theme.colors.primary, borderRadius: 14, paddingVertical: 14, alignItems: 'center', marginTop: 18, opacity: permsSaving ? 0.5 : 1 }}
-            >
-              {permsSaving ? (
-                <ActivityIndicator color="#fff" />
-              ) : (
-                <Text style={{ color: '#fff', fontWeight: '700', fontSize: 15 }}>
-                  {t('common.save', { defaultValue: 'Enregistrer' })}
-                </Text>
-              )}
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
-
       <TeamRoleChangeModal
         visible={showRoleModal}
         onClose={() => setShowRoleModal(false)}
         orgId={orgId}
         userId={currentMember?.user_id}
         memberships={userMemberships}
+        locations={(orgDetailsQuery.data as any)?.locations ?? []}
+        currentEmail={currentMember?.email ?? memberEmail ?? ''}
+        currentName={currentMember?.name ?? memberName ?? ''}
+        currentPermissions={(typeof currentMember?.permissions === 'string'
+          ? JSON.parse(currentMember.permissions)
+          : (currentMember?.permissions ?? {})) as Record<string, string>}
       />
 
       <TeamLocationsManagerModal
@@ -609,11 +507,11 @@ export default function MemberDetailScreen() {
               <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3 }}>
                 {t('business.team.sendEmailTo', { name: memberName, defaultValue: `Email à ${memberName ?? ''}` })}
               </Text>
-              <TouchableOpacity onPress={() => setShowEmailModal(false)}>
+              <TouchableOpacity onPress={() => setShowEmailModal(false)} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
                 <X size={20} color={theme.colors.textSecondary} />
               </TouchableOpacity>
             </View>
-            <Text style={{ color: theme.colors.primary, fontSize: 13, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 }}>
+            <Text style={{ color: theme.colors.primary, fontSize: 13, fontWeight: '700', textTransform: 'none', letterSpacing: 0.5, marginBottom: 6 }}>
               {t('business.team.emailSubject', { defaultValue: 'Sujet' })}
             </Text>
             <TextInput
@@ -623,7 +521,7 @@ export default function MemberDetailScreen() {
               placeholder={t('business.team.emailSubjectPlaceholder', { defaultValue: "Sujet de l'email..." })}
               placeholderTextColor={theme.colors.muted}
             />
-            <Text style={{ color: theme.colors.primary, fontSize: 13, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 }}>
+            <Text style={{ color: theme.colors.primary, fontSize: 13, fontWeight: '700', textTransform: 'none', letterSpacing: 0.5, marginBottom: 6 }}>
               {t('business.team.emailBody', { defaultValue: 'Message' })}
             </Text>
             <TextInput

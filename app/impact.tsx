@@ -96,7 +96,7 @@ export default function ImpactScreen() {
     queryKey: ['gamification-stats'],
     queryFn: fetchGamificationStats,
     enabled: isAuthenticated,
-    staleTime: 10_000,
+    staleTime: 5 * 60_000,
   });
 
   const leaderboardQuery = useQuery({
@@ -188,7 +188,7 @@ export default function ImpactScreen() {
           },
         ]}
       >
-        <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
+        <TouchableOpacity onPress={() => router.back()} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }} style={styles.backButton}>
           <ArrowLeft size={24} color={theme.colors.textPrimary} />
         </TouchableOpacity>
         <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h2, flex: 1, textAlign: 'center' }]}>

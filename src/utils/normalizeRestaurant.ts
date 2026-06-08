@@ -101,15 +101,37 @@ export interface RawBasketFromAPI {
   [key: string]: unknown;
 }
 
-export function normalizeRawBasketToBasket(b: RawBasketFromAPI, fallbackRestaurantName?: string): Basket {
+export function normalizeRawBasketToBasket(
+  b: RawBasketFromAPI,
+  fallbackRestaurantName?: string,
+  // Location's pickup hours, used as the inheritance fallback when the
+  // basket row has NULL pickup_start_time / pickup_end_time. The backend
+  // returns NULL on those columns to mean "this basket uses the location's
+  // current hours" (see baskets.ts header comment). Without this fallback
+  // the consumer-side normaliser would slap the hardcoded 18:00/19:00
+  // default on every "inheriting" basket — which is exactly the chez-joe
+  // bug ("6-7 PM" displayed instead of the location's actual hours).
+  locationDefaults?: { start?: string | null; end?: string | null },
+): Basket {
   const originalPrice = Number(b.original_price ?? 0);
   const discountedPrice = Number(b.selling_price ?? 0);
   const discountPercentage = originalPrice > 0
     ? Math.round(((originalPrice - discountedPrice) / originalPrice) * 100)
     : 0;
 
-  const quantityLeft = Number(b.quantity ?? 0);
+  // Treat paused baskets as "sold out" on the customer side. The merchant
+  // still sees the real stock count on their side (the business UI reads
+  // from its own service path, not this normaliser), but for the buyer
+  // a paused basket is functionally unavailable — showing the real count
+  // would let them try to reserve it and hit a backend error.
+  const rawQuantity = Number(b.quantity ?? 0);
+  const quantityLeft = b.status === 'paused' ? 0 : rawQuantity;
   const quantityTotal = Number(b.daily_reinitialization_quantity ?? 0);
+
+  const basketStart = formatTime(b.pickup_start_time);
+  const basketEnd = formatTime(b.pickup_end_time);
+  const locStart = formatTime(locationDefaults?.start);
+  const locEnd = formatTime(locationDefaults?.end);
 
   return {
     id: String(b.id),
@@ -126,8 +148,10 @@ export function normalizeRawBasketToBasket(b: RawBasketFromAPI, fallbackRestaura
     discountedPrice,
     discountPercentage,
     pickupWindow: {
-      start: formatTime(b.pickup_start_time) || '18:00',
-      end: formatTime(b.pickup_end_time) || '19:00',
+      // Inherit from the location when the basket row is NULL — only fall
+      // back to the hardcoded 18:00 default if both are missing.
+      start: basketStart || locStart || '18:00',
+      end: basketEnd || locEnd || '19:00',
     },
     quantityLeft,
     quantityTotal: Math.max(quantityTotal, quantityLeft),
@@ -159,12 +183,17 @@ export function normalizeRestaurantToBasket(r: RestaurantFromAPI): Basket {
     ? Math.round(((originalPrice - discountedPrice) / originalPrice) * 100)
     : 0;
 
-  const availableLeft = Number(r.available_left ?? r.available_quantity ?? 0);
+  // Treat paused restaurants/baskets as sold-out on the customer feed
+  // (same reasoning as in normalizeRawBasketToBasket — the buyer must
+  // not be invited to reserve something the merchant has explicitly
+  // taken offline). The badge logic downstream reads availableLeft to
+  // decide "Épuisé" vs the count, so zeroing it here flips the card
+  // into the sold-out treatment for free.
+  const isPausedForBuyer = !!r.is_paused || r.availability_status === 'paused';
+  const availableLeft = isPausedForBuyer ? 0 : Number(r.available_left ?? r.available_quantity ?? 0);
   const quantityTotal = Number(r.available_quantity || r.default_daily_quantity || 0);
 
-  const isActive = !r.is_paused
-    && r.availability_status !== 'paused'
-    && !r.pickup_expired;
+  const isActive = !isPausedForBuyer && !r.pickup_expired;
 
   const bagDesc = r.bag_description?.trim();
   const description = r.description?.trim();
@@ -279,8 +308,13 @@ export function normalizeLocationToBasket(loc: LocationFromAPI): Basket {
     merchantId: String(loc.id),
     merchantName: loc.display_name ?? loc.name ?? 'Unknown',
     merchantLogo: loc.image_url ?? undefined,
-    merchantRating: undefined,
-    reviewCount: undefined,
+    // Read aggregate rating + review count straight from the locations
+    // response when the backend includes them — that's the fast path and
+    // eliminates the "N/A → loads later" stall. The home page still
+    // overrides with a client-computed average (from /api/reviews) as a
+    // bridge fallback while the backend rolls this out.
+    merchantRating: loc.avg_rating != null ? Number(loc.avg_rating) : undefined,
+    reviewCount: loc.review_count != null ? Number(loc.review_count) : undefined,
     reviews: undefined,
     description: bagDesc || description || undefined,
     name: loc.display_name ?? loc.name ?? 'Surprise Bag',

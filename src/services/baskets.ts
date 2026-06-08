@@ -1,5 +1,35 @@
 import { apiClient } from '@/src/lib/api';
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Basket pickup-time inheritance convention
+//
+// Convention:
+//   - NULL `pickup_start_time` / `pickup_end_time` on a basket row  →  the
+//     basket inherits the location's current hours.
+//   - Non-NULL values  →  the basket has its own custom window.
+//
+// The mobile merchant form (app/business/create-basket.tsx) writes NULL when
+// the merchant ticks "use horaires du commerce". The backend correctly
+// persists and returns NULL on those columns.
+//
+// Resolution happens client-side in the consumer normalisers:
+// `normalizeRawBasketToBasket` in src/utils/normalizeRestaurant.ts accepts a
+// `locationDefaults` arg and falls back through:
+//   basket pickup time → location pickup time → hardcoded 18:00/19:00
+//
+// All consumer call sites pass the location's hours so an inheriting basket
+// correctly displays the location's window. Without that arg the normaliser
+// would slap on the hardcoded default (the original chez-joe "6-7 PM" bug).
+//
+// If you ever want the location-hours fallback to happen server-side too
+// (so the API is self-consistent for any other client), wrap the time
+// columns in COALESCE on the basket read endpoints:
+//   SELECT COALESCE(b.pickup_start_time, l.pickup_start_time) AS pickup_start_time,
+//          COALESCE(b.pickup_end_time,   l.pickup_end_time)   AS pickup_end_time
+//   FROM baskets b JOIN locations l ON b.location_id = l.id
+// Not required today — the mobile fallback handles it — but worth knowing.
+// ─────────────────────────────────────────────────────────────────────────────
+
 export interface BasketFromAPI {
   id: string;
   merchantId?: string;

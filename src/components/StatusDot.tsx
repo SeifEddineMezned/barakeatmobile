@@ -14,6 +14,11 @@ interface StatusDotProps {
    * label itself reads as copy, not as a loud colored chip.
    */
   color?: string;
+  /**
+   * Override the dot color (and tint the label the same). Use for one-off
+   * statuses that need a non-token color (e.g. "Expired" → orange).
+   */
+  dotColor?: string;
 }
 
 // Single-line status indicator — a tiny colored dot paired with a plain-color
@@ -23,7 +28,7 @@ interface StatusDotProps {
 // Usage:
 //   <StatusDot tone="danger" label="Annulée" />
 //   <StatusDot tone="success" label="Vendu" />
-export function StatusDot({ tone, label, compact, color }: StatusDotProps) {
+export function StatusDot({ tone, label, compact, color, dotColor }: StatusDotProps) {
   const theme = useTheme();
   const toneColor =
     tone === 'success' ? theme.colors.statusSuccess
@@ -32,6 +37,7 @@ export function StatusDot({ tone, label, compact, color }: StatusDotProps) {
       : tone === 'info' ? theme.colors.statusInfo
       : theme.colors.statusNeutral;
   const dotSize = compact ? 5 : 7;
+  const resolvedDot = dotColor ?? toneColor;
   return (
     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
       <View
@@ -39,12 +45,12 @@ export function StatusDot({ tone, label, compact, color }: StatusDotProps) {
           width: dotSize,
           height: dotSize,
           borderRadius: dotSize / 2,
-          backgroundColor: toneColor,
+          backgroundColor: resolvedDot,
         }}
       />
       <Text
         style={{
-          color: color ?? (compact ? theme.colors.textSecondary : theme.colors.textPrimary),
+          color: color ?? (dotColor ?? (compact ? theme.colors.textSecondary : theme.colors.textPrimary)),
           fontSize: compact ? 11 : 12,
           lineHeight: compact ? 14 : 16,
           fontFamily: 'Poppins_600SemiBold',

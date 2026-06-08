@@ -7,7 +7,7 @@
     "icon": "./assets/images/icon.png",
     "scheme": "barakeat",
     "userInterfaceStyle": "automatic",
-    "newArchEnabled": true,
+    "newArchEnabled": false,
     "splash": {
       "image": "./assets/images/splash-icon.png",
       "resizeMode": "contain",
@@ -28,7 +28,7 @@
         "backgroundColor": "#ffffff"
       },
       "package": "tn.barakeat.app",
-      "softwareKeyboardLayoutMode": "pan",
+      "softwareKeyboardLayoutMode": "resize",
       "permissions": [
         "android.permission.ACCESS_COARSE_LOCATION",
         "android.permission.ACCESS_FINE_LOCATION",
@@ -77,7 +77,9 @@
         }
       ],
       "expo-apple-authentication",
-      "./plugins/withRemovePermissions"
+      "./plugins/withRemovePermissions",
+      "./plugins/withTransparentSystemBars",
+      "./plugins/withDisableHaptics"
     ],
     "experiments": {
       "typedRoutes": true

@@ -1,15 +1,15 @@
 import React, { useCallback, useMemo, useState, useEffect, useRef } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, Modal, Animated, Dimensions } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Pressable, Image, Modal, Animated, Dimensions, useWindowDimensions, Platform } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import { useRouter, useLocalSearchParams } from 'expo-router';
-import { Plus, Clock, Edit3, Trash2, ShoppingBag, MoreVertical, Minus, Camera, X, MapPin, Hand } from 'lucide-react-native';
+import { Plus, Clock, ShoppingBag, MoreVertical, Minus, Camera, X, MapPin, Hand, TimerOff, Pause, AlertTriangle } from 'lucide-react-native';
 import { useTheme } from '@/src/theme/ThemeProvider';
-import { TimePicker } from '@/src/components/TimePicker';
 import { StatusBar } from 'expo-status-bar';
 import { useBusinessStore } from '@/src/stores/businessStore';
 import { useWalkthroughStore } from '@/src/stores/walkthroughStore';
+import { DEMO_BASKET_PHOTOS } from '@/src/lib/demoData';
 import { DemoTapHintToast } from '@/src/components/DemoTapHintToast';
 import { fetchMyContext, fetchOrganizationDetails } from '@/src/services/teams';
 import { NoLocationCTA } from '@/src/components/NoLocationCTA';
@@ -17,11 +17,15 @@ import { isPickupExpiredInTz } from '@/src/utils/timezone';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { fetchMyBaskets, deleteBasket as deleteBasketAPI, fetchMyProfile, updateQuantity, updateBasket as updateBasketAPI, updateBasketWithImage, type BusinessBasketFromAPI } from '@/src/services/business';
 import * as ImagePicker from 'expo-image-picker';
+import { useImageCropper } from '@/src/components/ImageCropper';
 import { getErrorMessage } from '@/src/lib/api';
 import { FeatureFlags } from '@/src/lib/featureFlags';
 import { DelayedLoader } from '@/src/components/DelayedLoader';
 import { useCustomAlert } from '@/src/components/CustomAlert';
+import { ActionMenuCard, ActionMenuItem, ActionMenuDivider } from '@/src/components/ui/ActionMenu';
+import { EditIcon8, DeleteIcon8, PlayIcon8, PauseIcon8 } from '@/src/components/ui/Icon8';
 import { effectiveDailyReinit } from '@/src/utils/dailyReinit';
+import { formatLocationName } from '@/src/utils/formatLocation';
 
 export default function MyBasketsScreen() {
   const targetBasketId = useBusinessStore((s) => s.targetBasketId);
@@ -33,6 +37,7 @@ export default function MyBasketsScreen() {
   const selectedLocationId = useBusinessStore((s) => s.selectedLocationId);
   const queryClient = useQueryClient();
   const alert = useCustomAlert();
+  const { pickAndCrop } = useImageCropper();
 
   // Permission check — granular basket permissions
   const contextQuery = useQuery({ queryKey: ['my-context'], queryFn: fetchMyContext, staleTime: 10_000 });
@@ -48,6 +53,10 @@ export default function MyBasketsScreen() {
     queryFn: () => fetchOrganizationDetails(orgIdForNoLoc!),
     enabled: !!orgIdForNoLoc,
     staleTime: 300_000,
+    // Force a fresh fetch every mount so the per-location pickup hours used
+    // by the inheritance fallback in `baskets` (below) reflect any recent
+    // location-hours edits made from business-profile.
+    refetchOnMount: 'always',
   });
   const isOrgAdmin = (myRole === 'owner' || myRole === 'admin') && !contextQuery.data?.location_id;
   const hasNoLocation = isOrgAdmin
@@ -64,7 +73,10 @@ export default function MyBasketsScreen() {
   const basketsQuery = useQuery({
     queryKey: ['my-baskets', selectedLocationId],
     queryFn: () => fetchMyBaskets(selectedLocationId),
-    staleTime: 60_000,
+    // Stock count is the fastest-changing field, but the mutations
+    // for quantity / pause / delete all invalidate this key. 2 min
+    // is plenty of room.
+    staleTime: 2 * 60_000,
     retry: 1,
   });
 
@@ -72,6 +84,10 @@ export default function MyBasketsScreen() {
     queryKey: ['my-profile', selectedLocationId],
     queryFn: () => fetchMyProfile(selectedLocationId),
     staleTime: 30_000,
+    // Force a fresh fetch on every mount so the inline pickup-editor's
+    // "use business hours" toggle always snaps to the location's CURRENT
+    // opening hours, not a possibly-stale cached snapshot.
+    refetchOnMount: 'always',
   });
 
   const currentQty = profileQuery.data?.available_quantity ?? 0;
@@ -116,12 +132,42 @@ export default function MyBasketsScreen() {
     },
     onError: (err: any) => {
       console.error('[MyBaskets] Save FAILED:', err?.status, err?.message, JSON.stringify(err?.data));
-      alert.showAlert(t('common.error'), err?.data?.error ?? err?.message ?? t('errors.serverError'));
+      // The server's `err.data.error` is English-only ("Failed to update basket")
+      // and we don't want to surface it raw to a French/Arabic user. Show the
+      // localized fallback instead; the console log above keeps the raw text
+      // available for debugging.
+      alert.showAlert(t('common.error'), getErrorMessage(err));
     },
   });
 
+  // Map of location_id -> location row from org-details, so a basket that
+  // inherits its pickup window from its location (basket columns NULL) can
+  // still display the right times even in "all locations" mode where every
+  // basket may belong to a different location than `selectedLocationId`.
+  const locationsById = React.useMemo(() => {
+    const m = new Map<number, { pickup_start_time?: string; pickup_end_time?: string; name?: string }>();
+    for (const loc of orgDetailsQuery.data?.locations ?? []) {
+      if (typeof loc.id === 'number') m.set(loc.id, loc);
+    }
+    return m;
+  }, [orgDetailsQuery.data?.locations]);
+
   // Normalize API baskets to match existing Basket type — no fallback to demo data
-  const baskets = (basketsQuery.data ?? []).map((b: BusinessBasketFromAPI) => ({
+  const baskets = (basketsQuery.data ?? []).map((b: BusinessBasketFromAPI) => {
+    // Inheritance fallback: when the basket's pickup columns are NULL (the
+    // "use business hours" contract), surface the basket's specific
+    // location's hours. Previously this fell back to a hardcoded
+    // '18:00'-'19:00', which is what produced the bug where saving with
+    // "use business hours" checked made the basket display 18:00-19:00
+    // regardless of the location's real hours.
+    const ownLoc = b.location_id != null ? locationsById.get(Number(b.location_id)) : undefined;
+    const fallbackStart = ownLoc?.pickup_start_time?.substring(0, 5)
+      ?? profileQuery.data?.pickup_start_time?.substring(0, 5)
+      ?? '09:00';
+    const fallbackEnd = ownLoc?.pickup_end_time?.substring(0, 5)
+      ?? profileQuery.data?.pickup_end_time?.substring(0, 5)
+      ?? '18:00';
+    return {
       id: String(b.id),
       merchantId: String(b.location_id ?? ''),
       merchantName: '',
@@ -133,9 +179,13 @@ export default function MyBasketsScreen() {
         ? Math.round(((Number(b.original_price ?? 0) - Number(b.selling_price ?? 0)) / Number(b.original_price ?? 0)) * 100)
         : 0,
       pickupWindow: {
-        start: b.pickup_start_time?.substring(0, 5) ?? '18:00',
-        end: b.pickup_end_time?.substring(0, 5) ?? '19:00',
+        start: b.pickup_start_time?.substring(0, 5) ?? fallbackStart,
+        end: b.pickup_end_time?.substring(0, 5) ?? fallbackEnd,
       },
+      // Raw pickup-override flag — true iff the basket has its own pickup
+      // time set on the row (i.e. NOT inheriting from the location). The
+      // edit modal reads this to default the "use business hours" checkbox.
+      hasPickupOverride: !!(b.pickup_start_time && b.pickup_end_time),
       quantityLeft: Number(b.quantity) || 0,
       quantityTotal: effectiveDailyReinit(b),
       distance: 0,
@@ -144,12 +194,24 @@ export default function MyBasketsScreen() {
       longitude: 0,
       exampleItems: [],
       imageUrl: b.image_url ?? undefined,
-      isActive: b.status !== 'deleted' && Number(b.quantity) > 0,
+      // A basket is active iff:
+      //   - it hasn't been soft-deleted, AND
+      //   - it hasn't been manually paused (`status === 'paused'`), AND
+      //   - it has stock available.
+      // The explicit `paused` status takes precedence so the merchant can
+      // stop reservations without zeroing their stock count.
+      isActive: b.status !== 'deleted' && b.status !== 'paused' && Number(b.quantity) > 0,
+      isPaused: b.status === 'paused',
       description: b.description ?? undefined,
       maxPerCustomer: (b as any).max_per_customer ?? 5,
       updatedAt: b.updated_at ?? undefined,
-      locationName: (b as any).location_name ?? undefined,
-    }));
+      // Resolve via orgDetails lookup so the label is a pure function of
+      // (location_id, orgDetails). The basket row's `location_name` field
+      // returns stale right after a location switch, which surfaced as the
+      // "Gourmandise basket shows Lac 1's label after switching" bug.
+      locationName: ownLoc?.name ?? (b as any).location_name ?? undefined,
+    };
+  });
 
   const { toggleBasketActive, updateBasket, profile } = store;
 
@@ -175,6 +237,11 @@ export default function MyBasketsScreen() {
   const deleteBasketMutation = useMutation({
     mutationFn: (id: string) => deleteBasketAPI(id),
     onSuccess: () => {
+      // Land the user back on the full baskets list after a delete — never
+      // on a stray detail modal or action popover left over from the flow
+      // that triggered the delete.
+      setDetailBasket(null);
+      setActionMenu(null);
       void queryClient.invalidateQueries({ queryKey: ['my-baskets'] });
       void queryClient.invalidateQueries({ queryKey: ['my-profile'] });
       void queryClient.invalidateQueries({ queryKey: ['locations'] });
@@ -186,10 +253,51 @@ export default function MyBasketsScreen() {
       alert.showAlert(t('common.error'), getErrorMessage(err));
     },
   });
-  const [menuOpenId, setMenuOpenId] = useState<string | null>(null);
   const [quantityModalBasket, setQuantityModalBasket] = useState<string | null>(null);
   const [tempQuantity, setTempQuantity] = useState(0);
   const [detailBasket, setDetailBasket] = useState<typeof baskets[0] | null>(null);
+  // Inline delete-confirmation overlay shown *inside* the detail modal.
+  // We can't reuse the global CustomAlert here because iOS won't render a
+  // second native <Modal> on top of an already-open one — the alert would
+  // silently vanish. This state drives an absolute-positioned card painted
+  // within the detail modal's own tree, so the confirmation visibly stacks
+  // on top of the availability sheet.
+  const [modalDeleteId, setModalDeleteId] = useState<string | null>(null);
+  // Anchored action popover (Modifier / Supprimer). Holds the screen-space
+  // anchor coordinates measured from the 3-dots button at open time so the
+  // popover renders next to the button. `surface` distinguishes the two
+  // call sites: 'list' = card 3-dots on the my-baskets page, 'modal' =
+  // 3-dots inside the basket detail modal. The list surface renders as a
+  // root-level <Modal> for clipping-proof overlay; the modal surface
+  // renders inline inside the detail modal (no nested Modals).
+  const [actionMenu, setActionMenu] = useState<{
+    basketId: string;
+    top: number;
+    right: number;
+    surface: 'list' | 'modal';
+  } | null>(null);
+  // Only the detail modal still has its own 3-dot menu; the card itself
+  // no longer renders one, so cardDotsRefs / openCardMenu are gone.
+  const modalDotsRef = React.useRef<View | null>(null);
+
+  const openModalMenu = useCallback(() => {
+    const screenW = Dimensions.get('window').width;
+    const id = detailBasket?.id;
+    if (!id) return;
+    const node = modalDotsRef.current;
+    if (!node || typeof (node as any).measureInWindow !== 'function') {
+      setActionMenu({ basketId: id, top: 80, right: 20, surface: 'modal' });
+      return;
+    }
+    (node as any).measureInWindow((x: number, y: number, w: number, h: number) => {
+      setActionMenu({
+        basketId: id,
+        top: y + h + 6,
+        right: Math.max(8, screenW - (x + w)),
+        surface: 'modal',
+      });
+    });
+  }, [detailBasket?.id]);
   // Custom 180 ms fade for the detail modal. RN's built-in animationType
   // ="fade" runs ~300 ms with no override, which combined with the
   // post-save step advance felt sluggish during the demo. `modalRender`
@@ -197,14 +305,21 @@ export default function MyBasketsScreen() {
   // animation can play before unmount.
   const modalBackdropAnim = useRef(new Animated.Value(0)).current;
   const [modalRender, setModalRender] = useState(false);
+  // Open with a 180 ms fade-in; close instantly. A fade-out left the
+  // inner cards (title/price block + qty +/− block) visibly hanging for
+  // ~200 ms because their background colors had to fade through opacity
+  // and Android elevation shadows linger separately. Snapping closed is
+  // the cleanest fix — no lingering rectangles, no ghost shadows.
+  const [closing, setClosing] = useState(false);
   useEffect(() => {
     if (detailBasket) {
+      setClosing(false);
       setModalRender(true);
       Animated.timing(modalBackdropAnim, { toValue: 1, duration: 180, useNativeDriver: true }).start();
     } else if (modalRender) {
-      Animated.timing(modalBackdropAnim, { toValue: 0, duration: 180, useNativeDriver: true }).start(({ finished }) => {
-        if (finished) setModalRender(false);
-      });
+      setClosing(true);
+      modalBackdropAnim.setValue(0);
+      setModalRender(false);
     }
   }, [detailBasket]);
 
@@ -218,8 +333,7 @@ export default function MyBasketsScreen() {
   // dim layer mounts inside the Modal, covers the whole window, and cuts
   // out only the active control and the instruction tooltip so both stay
   // crisp and tappable.
-  const SW_MODAL = Dimensions.get('window').width;
-  const SH_MODAL = Dimensions.get('window').height;
+  const { width: SW_MODAL, height: SH_MODAL } = useWindowDimensions();
   const qtyMinusBtnRef = useRef<View>(null);
   const qtyPlusBtnRef = useRef<View>(null);
   const qtySaveBtnRef = useRef<View>(null);
@@ -270,10 +384,6 @@ export default function MyBasketsScreen() {
   }, [detailBasket?.id]);
   const [showFullDesc, setShowFullDesc] = useState(false);
   const [descTruncated, setDescTruncated] = useState(false);
-  const [showPickupEditor, setShowPickupEditor] = useState(false);
-  const [pickupStartTime, setPickupStartTime] = useState('');
-  const [pickupEndTime, setPickupEndTime] = useState('');
-  const [useBusinessHours, setUseBusinessHours] = useState(false);
   const [detailMaxPerCustomer, setDetailMaxPerCustomer] = useState(1);
   // After the demo Save, override the demo basket's displayed qty so the
   // basket-card pill reflects what the user adjusted in the modal. Without
@@ -283,64 +393,54 @@ export default function MyBasketsScreen() {
 
   const isSupermarket = profile?.isSupermarket ?? false;
 
-  // Animated flash for time-out-of-range warning in availability modal
-  const modalTimeFlash = useRef(new Animated.Value(0)).current;
-  const [modalTimeWarning, setModalTimeWarning] = useState(false);
-  const flashModalTimeWarning = () => {
-    setModalTimeWarning(true);
-    modalTimeFlash.setValue(1);
-    Animated.sequence([
-      Animated.timing(modalTimeFlash, { toValue: 0, duration: 300, useNativeDriver: false }),
-      Animated.timing(modalTimeFlash, { toValue: 1, duration: 300, useNativeDriver: false }),
-      Animated.timing(modalTimeFlash, { toValue: 0, duration: 300, useNativeDriver: false }),
-      Animated.timing(modalTimeFlash, { toValue: 0.6, duration: 200, useNativeDriver: false }),
-    ]).start(() => {
-      setTimeout(() => setModalTimeWarning(false), 3000);
-    });
-  };
-
-  // Auto-expand a basket when targetBasketId is set via store
+  // Auto-expand a basket when targetBasketId is set via store (set by
+  // dashboard when the user taps a basket card there). Single-shot: clear
+  // the target BEFORE opening so React's batched re-renders can't re-fire
+  // this effect with the same `(targetBasketId, targetBasketTs)` after the
+  // user closes the modal. Symptom we fixed: pressing X once did nothing
+  // because the effect re-opened the modal in the same tick.
   const lastBasketTsRef = React.useRef(0);
   useEffect(() => {
-    if (targetBasketId && targetBasketTs > lastBasketTsRef.current && baskets.length > 0) {
-      const target = baskets.find((b) => String(b.id) === String(targetBasketId));
-      if (target) {
-        lastBasketTsRef.current = targetBasketTs;
-        setDetailBasket(target);
-        setDetailTodayQty(target.quantityLeft);
-        // Clear the target so it doesn't re-trigger
-        useBusinessStore.getState().setTargetBasket(null);
-      }
-    }
+    if (!(targetBasketId && targetBasketTs > lastBasketTsRef.current && baskets.length > 0)) return;
+    const target = baskets.find((b) => String(b.id) === String(targetBasketId));
+    if (!target) return;
+    lastBasketTsRef.current = targetBasketTs;
+    useBusinessStore.getState().setTargetBasket(null);  // clear FIRST
+    setDetailBasket(target);
+    setDetailTodayQty(target.quantityLeft);
   }, [targetBasketId, targetBasketTs, baskets]);
 
+  // Pause / resume a basket. Persists via PUT /baskets/:id (status =
+  // 'paused' | 'available'); the local store flip is just an optimistic
+  // reflection while the network round-trip lands. Without backend
+  // persistence, the toggle reverted on every reload — useless in
+  // production.
   const handleToggle = useCallback((id: string) => {
     const target = baskets.find((b) => b.id === id);
     if (!target) return;
 
     const willBeActive = !target.isActive;
-    if (willBeActive && !isSupermarket) {
-      const otherActive = baskets.find((b) => b.id !== id && b.isActive);
-      if (otherActive) {
-        alert.showAlert(
-          t('business.baskets.onlyOneActive'),
-          `"${otherActive.name}" sera désactivé.`,
-          [
-            { text: 'Annuler', style: 'cancel' },
-            {
-              text: t('common.confirm'),
-              onPress: () => toggleBasketActive(id),
-            },
-          ]
-        );
-        return;
+    const persistRemote = async () => {
+      try {
+        const { setBasketPaused } = await import('@/src/services/business');
+        await setBasketPaused(id, !willBeActive);
+        await queryClient.invalidateQueries({ queryKey: ['my-baskets'] });
+        await queryClient.invalidateQueries({ queryKey: ['baskets-by-location'] });
+        await queryClient.invalidateQueries({ queryKey: ['locations'] });
+      } catch (err: any) {
+        // Roll back the optimistic local flip so the UI matches reality.
+        toggleBasketActive(id);
+        alert.showAlert(t('common.error', { defaultValue: 'Erreur' }), getErrorMessage(err));
       }
-    }
+    };
     toggleBasketActive(id);
-  }, [toggleBasketActive, baskets, isSupermarket, t]);
+    void persistRemote();
+  }, [toggleBasketActive, baskets, t, alert, queryClient]);
 
   const handleDelete = useCallback((id: string) => {
-    setMenuOpenId(null);
+    // List-surface only — the detail-modal version uses an inline overlay
+    // (see modalDeleteId) because iOS won't stack a second native <Modal>
+    // on top of the detail modal.
     alert.showAlert(
       t('business.baskets.deleteConfirm'),
       t('business.baskets.deleteMessage'),
@@ -356,15 +456,19 @@ export default function MyBasketsScreen() {
         },
       ]
     );
-  }, [deleteBasketMutation, store, t]);
+  }, [deleteBasketMutation, store, t, alert]);
 
   const handleEdit = useCallback((id: string) => {
-    setMenuOpenId(null);
     router.push(`/business/create-basket?editId=${id}` as never);
   }, [router]);
 
   const handleCreate = useCallback(() => {
-    router.push('/business/create-basket' as never);
+    // Route through the intermediary picker so the user can choose between an
+    // existing org basket or the manual create flow. The picker itself
+    // gracefully falls back when the org has zero baskets (it shows the
+    // manual-create CTA as the only action), so we don't need a fast-path
+    // here to skip it.
+    router.push('/business/select-org-basket' as never);
   }, [router]);
 
   // ── Walkthrough: report the Add-basket button's window-coords rectangle so
@@ -404,15 +508,22 @@ export default function MyBasketsScreen() {
     // the qty row).
     const BELOW_QTY_GAP = 40;
     const ABOVE_QTY_GAP = 80;
-    if (ms === 'modalSave') {
-      // Screen y for top edge = qty.y - tooltipHeight - ABOVE_QTY_GAP.
-      // Subtract another 16 for padding correction.
-      return qty.y - tooltipHeight - (ABOVE_QTY_GAP + 16);
-    }
-    // Screen y for top edge = qty.y + qty.h + BELOW_QTY_GAP. Subtract 16
-    // for padding.
-    return qty.y + qty.h + (BELOW_QTY_GAP - 16);
-  }, [walkthroughCurrentStep?.measureKey, modalCutoutRects, tooltipHeight]);
+    const MARGIN = 24;
+    // Backdrop has padding:16, so a child `top: T` renders at screen y 16 + T.
+    const aboveT = qty.y - tooltipHeight - (ABOVE_QTY_GAP + 16);
+    const belowT = qty.y + qty.h + (BELOW_QTY_GAP - 16);
+    // Does the below placement fit fully on-screen?
+    const belowFitsOnScreen = (16 + belowT + tooltipHeight) <= (SH_MODAL - MARGIN);
+    // modalSave always sits above the qty row; the qty steps prefer below but
+    // flip above when there isn't room (small phones) so the tooltip never runs
+    // off the bottom of the screen — the bug the user hit on step 12 (modal +).
+    let T = (ms === 'modalSave' || !belowFitsOnScreen) ? aboveT : belowT;
+    // Final clamp so the whole tooltip stays within [MARGIN, SH_MODAL - MARGIN].
+    const minT = MARGIN - 16;
+    const maxT = SH_MODAL - tooltipHeight - MARGIN - 16;
+    T = Math.max(minT, Math.min(T, maxT));
+    return T;
+  }, [walkthroughCurrentStep?.measureKey, modalCutoutRects, tooltipHeight, SH_MODAL]);
   useEffect(() => {
     if (tooltipTopTarget == null) {
       tooltipPrimedRef.current = false;
@@ -526,15 +637,27 @@ export default function MyBasketsScreen() {
     latitude: 0,
     longitude: 0,
     exampleItems: [],
-    imageUrl: undefined as string | undefined,
+    // Use the shared demo "surprise basket" photo (meal-img2.jpeg) so the
+    // injected demo card looks like a real basket instead of the empty
+    // placeholder icon.
+    imageUrl: DEMO_BASKET_PHOTOS[0] as string | undefined,
     isActive: true,
+    isPaused: false,
+    hasPickupOverride: false,
     description: t('walkthrough.biz.demoBasketDesc', { defaultValue: 'Démonstration — modifications sans effet sur vos paniers réels.' }),
     maxPerCustomer: 5,
     updatedAt: new Date().toISOString(),
     locationName: undefined as string | undefined,
   }), [t, pickupStart, pickupEnd, demoBasketQtyOverride]);
 
-  const displayedBaskets = demoBasketActive
+  // Show the demo basket only AFTER the create-basket flow finishes. While
+  // the user is still on the `addBasket` step (about to tap Add Basket and
+  // walk through the form), the card hasn't logically been "created" yet —
+  // surfacing it on the list early gives away the demo and lets the user
+  // tap it before they're meant to.
+  const showDemoBasketInList = demoBasketActive
+    && walkthroughCurrentStep?.measureKey !== 'addBasket';
+  const displayedBaskets = showDemoBasketInList
     ? [demoBasket, ...baskets.filter((b) => b.id !== demoBasket.id)]
     : baskets;
 
@@ -555,33 +678,40 @@ export default function MyBasketsScreen() {
 
   // ─── Change Photo ────────────────────────────────────────────────────────────
   const handleChangePhoto = useCallback(async (basketId: string) => {
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== 'granted') {
-      alert.showAlert(t('common.error'), t('business.menuItems.photoPermRequired'));
+    // Unified picker + crop UX. On iOS the native picker handles cropping;
+    // on Android our in-app cropper (with a real "Choisir" button) runs.
+    const croppedUri = await pickAndCrop({ aspect: [4, 3], quality: 0.8 });
+    if (!croppedUri) {
+      // Distinguish permission denial from cancel by re-checking — keeps the
+      // existing toast wording without duplicating the permissions probe.
+      const perm = await ImagePicker.getMediaLibraryPermissionsAsync();
+      if (perm.status !== 'granted') {
+        alert.showAlert(t('common.error'), t('business.menuItems.photoPermRequired'));
+      }
       return;
     }
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: true,
-      aspect: [4, 3],
-      quality: 0.8,
-    });
-    if (result.canceled || !result.assets?.length) return;
-    const asset = result.assets[0];
+    // Demo basket has no backend row — sending its id to the API hits the
+    // baskets.id integer column and 500s ("invalid input syntax for type
+    // integer: demo-basket-1"). Mirror the picked photo onto the local
+    // detail-modal state so the user sees the new image during the demo.
+    if (basketId === 'demo-basket-1') {
+      setDetailBasket(prev => prev ? { ...prev, imageUrl: croppedUri } : prev);
+      return;
+    }
     const formData = new FormData();
     formData.append('image', {
-      uri: asset.uri,
-      name: asset.fileName ?? 'basket.jpg',
-      type: asset.mimeType ?? 'image/jpeg',
+      uri: croppedUri,
+      name: 'basket.jpg',
+      type: 'image/jpeg',
     } as any);
     try {
       await updateBasketWithImage(basketId, formData);
       void queryClient.invalidateQueries({ queryKey: ['my-baskets'] });
-      setDetailBasket(prev => prev ? { ...prev, imageUrl: asset.uri } : prev);
+      setDetailBasket(prev => prev ? { ...prev, imageUrl: `${croppedUri}#${Date.now()}` } : prev);
     } catch (err: any) {
-      alert.showAlert(t('common.error'), err?.message ?? t('errors.serverError'));
+      alert.showAlert(t('common.error'), getErrorMessage(err));
     }
-  }, [queryClient]);
+  }, [queryClient, alert, t, pickAndCrop]);
 
   // Bypass the loader during a walkthrough run — otherwise step 3 (Add
   // Basket halo) lands while my-baskets is still in its initial query and
@@ -621,6 +751,31 @@ export default function MyBasketsScreen() {
       </View>
 
       <ScrollView style={styles.content} contentContainerStyle={{ paddingHorizontal: theme.spacing.xl, paddingBottom: 100 }} showsVerticalScrollIndicator={false}>
+        {/* Location pickup hours summary — shows what time window the baskets
+            for this location inherit by default. Hidden in "all locations"
+            admin mode (selectedLocationId is null) because there's no single
+            location whose hours to display. */}
+        {selectedLocationId && profileQuery.data?.pickup_start_time && profileQuery.data?.pickup_end_time && (
+          <View style={{
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: 8,
+            backgroundColor: theme.colors.primary + '10',
+            borderRadius: theme.radii.r12,
+            paddingHorizontal: 12,
+            paddingVertical: 10,
+            marginTop: theme.spacing.sm,
+          }}>
+            <Clock size={14} color={theme.colors.primary} />
+            <Text style={{ color: theme.colors.primary, ...theme.typography.bodySm, fontWeight: '600' }}>
+              {t('business.baskets.locationHoursLabel', { defaultValue: 'Horaires du commerce' })} :
+            </Text>
+            <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '600' }}>
+              {pickupStart} - {pickupEnd}
+            </Text>
+          </View>
+        )}
+
         {hasNoLocation ? (
           <View style={{ marginTop: 40 }}>
             <NoLocationCTA />
@@ -640,12 +795,13 @@ export default function MyBasketsScreen() {
         ) : (
           displayedBaskets.map((basket) => {
             const isDemo = basket.id === 'demo-basket-1';
+            const isPaused = !isDemo && (basket as any).isPaused === true;
             const isSoldOut = !isDemo && basket.quantityLeft === 0;
             // Demo basket must NEVER show expired / sold-out / inactive —
             // the user's actual pickup window may already be past when the
             // demo runs, but the demo is conceptually "always live".
-            const isExpired = !isDemo && !isSoldOut && isPickupExpiredInTz(basket.pickupWindow?.end);
-            const isUnavailable = !isDemo && (isSoldOut || isExpired || !basket.isActive);
+            const isExpired = !isDemo && !isSoldOut && !isPaused && isPickupExpiredInTz(basket.pickupWindow?.end);
+            const isUnavailable = !isDemo && (isSoldOut || isExpired || isPaused || !basket.isActive);
             return (
               <View
                 key={basket.id}
@@ -658,7 +814,10 @@ export default function MyBasketsScreen() {
                     borderRadius: theme.radii.r16,
                     marginTop: theme.spacing.md,
                     ...theme.shadows.shadowSm,
-                    opacity: isUnavailable ? 0.65 : 1,
+                    // NOTE: the unavailable "fade" is applied to the inner
+                    // content (image + text) individually — NOT here — so the
+                    // quantity / Épuisé / Expiré badges stay at full opacity on
+                    // top instead of being dimmed with the rest of the card.
                   },
                 ]}
               >
@@ -684,14 +843,9 @@ export default function MyBasketsScreen() {
                         return;
                       }
                     }
-                    setMenuOpenId(null);
                     setDetailBasket(basket);
                     setDetailTodayQty(basket.quantityLeft);
                     setShowFullDesc(false);
-                    setPickupStartTime(basket.pickupWindow.start);
-                    setPickupEndTime(basket.pickupWindow.end);
-                    setShowPickupEditor(false);
-                    setUseBusinessHours(false);
                     setDetailMaxPerCustomer((basket as any).maxPerCustomer ?? 5);
                     // Advance the walkthrough into the modal sub-steps the
                     // moment the demo card is tapped. The auto-close effect
@@ -704,13 +858,18 @@ export default function MyBasketsScreen() {
                     {/* Image with quantity badge overlay */}
                     <View style={{ position: 'relative' }}>
                       {basket.imageUrl ? (
-                        <Image source={{ uri: basket.imageUrl }} style={[styles.basketImage, { borderRadius: theme.radii.r12 }]} />
+                        <Image source={{ uri: basket.imageUrl }} style={[styles.basketImage, { borderRadius: theme.radii.r12 }, isUnavailable && { opacity: 0.65 }]} />
                       ) : (
-                        <View style={[styles.basketImage, { borderRadius: theme.radii.r12, backgroundColor: theme.colors.primary + '10', justifyContent: 'center', alignItems: 'center' }]}>
+                        <View style={[styles.basketImage, { borderRadius: theme.radii.r12, backgroundColor: theme.colors.primary + '10', justifyContent: 'center', alignItems: 'center' }, isUnavailable && { opacity: 0.65 }]}>
                           <ShoppingBag size={28} color={theme.colors.primary} />
                         </View>
                       )}
-                      {/* Quantity badge — display only, overlaid top-right, slightly poking out of image */}
+                      {/* Stock badge over the image — quantity number, or
+                          "Épuisé" when sold out. NEVER "Expiré" here:
+                          expiration is time-based (not stock-based) and gets
+                          its own pill at the top-right of the CARD below so
+                          both states can be read simultaneously when a
+                          basket is both expired AND still has stock. */}
                       <View
                         ref={isDemo ? (demoBasketCardQtyRef as any) : undefined}
                         onLayout={isDemo ? measureDemoCardQty : undefined}
@@ -719,13 +878,13 @@ export default function MyBasketsScreen() {
                         position: 'absolute',
                         top: -4,
                         right: -6,
-                        backgroundColor: isExpired ? '#f59e0b' : isSoldOut ? theme.colors.error : theme.colors.primary,
+                        backgroundColor: isSoldOut ? theme.colors.error : theme.colors.primary,
                         borderRadius: theme.radii.pill,
-                        minWidth: isExpired || isSoldOut ? 44 : 24,
+                        minWidth: isSoldOut ? 44 : 24,
                         height: 24,
                         justifyContent: 'center',
                         alignItems: 'center',
-                        paddingHorizontal: isExpired || isSoldOut ? 8 : 6,
+                        paddingHorizontal: isSoldOut ? 8 : 6,
                         shadowColor: '#000',
                         shadowOffset: { width: 0, height: 1 },
                         shadowOpacity: 0.25,
@@ -734,34 +893,64 @@ export default function MyBasketsScreen() {
                         zIndex: 10,
                       }}>
                         <Text style={{ color: '#fff', fontSize: 10, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
-                          {isExpired ? t('orders.status.expired', { defaultValue: 'Expiré' }) : isSoldOut ? t('basket.soldOut', { defaultValue: 'Épuisé' }) : basket.quantityLeft >= 10 ? '9+' : basket.quantityLeft}
+                          {isSoldOut ? t('basket.soldOut', { defaultValue: 'Épuisé' }) : basket.quantityLeft >= 10 ? '9+' : basket.quantityLeft}
                         </Text>
                       </View>
                     </View>
                     <View style={styles.basketInfo}>
                       <View style={styles.basketNameRow}>
-                        <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.body, fontWeight: '600' as const, flex: 1 }]} numberOfLines={1}>
+                        <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.body, fontWeight: '600' as const, flex: 1 }, isUnavailable && { opacity: 0.65 }]} numberOfLines={1}>
                           {basket.name}
                         </Text>
-                        {(canEditBasketInfo || canCreateDeleteBaskets) && (
-                        <TouchableOpacity
-                          onPress={(e) => { e.stopPropagation(); setMenuOpenId(menuOpenId === basket.id ? null : basket.id); }}
-                          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                          style={styles.moreButton}
-                        >
-                          <MoreVertical size={18} color={theme.colors.textSecondary} />
-                        </TouchableOpacity>
-                        )}
+                        {/* Status pill at the top-right of the card.
+                            Priority: Pausé > Expiré (paused baskets aren't
+                            "expired" in a meaningful sense — the merchant
+                            intentionally took them offline). Both share the
+                            same slot so the merchant always sees the most
+                            actionable label without competing badges. */}
+                        {isPaused ? (
+                          <View style={{
+                            flexDirection: 'row',
+                            alignItems: 'center',
+                            backgroundColor: theme.colors.muted,
+                            borderRadius: theme.radii.pill,
+                            paddingHorizontal: 8,
+                            paddingVertical: 3,
+                            gap: 4,
+                            marginLeft: 8,
+                          }}>
+                            <Pause size={11} color="#fff" />
+                            <Text style={{ color: '#fff', fontSize: 10, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
+                              {t('business.baskets.pausedBadge', { defaultValue: 'Pausé' })}
+                            </Text>
+                          </View>
+                        ) : isExpired ? (
+                          <View style={{
+                            flexDirection: 'row',
+                            alignItems: 'center',
+                            backgroundColor: '#f59e0b',
+                            borderRadius: theme.radii.pill,
+                            paddingHorizontal: 8,
+                            paddingVertical: 3,
+                            gap: 4,
+                            marginLeft: 8,
+                          }}>
+                            <TimerOff size={11} color="#fff" />
+                            <Text style={{ color: '#fff', fontSize: 10, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
+                              {t('orders.status.expired', { defaultValue: 'Expiré' })}
+                            </Text>
+                          </View>
+                        ) : null}
                       </View>
                       {!selectedLocationId && (basket as any).locationName && (
-                        <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 3 }}>
+                        <View style={[{ flexDirection: 'row', alignItems: 'center', marginTop: 3 }, isUnavailable && { opacity: 0.65 }]}>
                           <MapPin size={10} color={theme.colors.muted} />
                           <Text style={{ color: theme.colors.muted, fontSize: 11, marginLeft: 4 }} numberOfLines={1}>
-                            {(basket as any).locationName}
+                            {formatLocationName(contextQuery.data?.organization_name, (basket as any).locationName)}
                           </Text>
                         </View>
                       )}
-                      <View style={[styles.priceRow, { marginTop: 6 }]}>
+                      <View style={[styles.priceRow, { marginTop: 6 }, isUnavailable && { opacity: 0.65 }]}>
                         <Text style={[{ color: theme.colors.primary, ...theme.typography.body, fontWeight: '700' as const }]}>
                           {basket.discountedPrice} TND
                         </Text>
@@ -770,7 +959,7 @@ export default function MyBasketsScreen() {
                         </Text>
                       </View>
                       {/* Meta row: daily reinit qty + custom pickup time (if different from location default) */}
-                      <View style={[styles.metaRow, { marginTop: 6 }]}>
+                      <View style={[styles.metaRow, { marginTop: 6 }, isUnavailable && { opacity: 0.65 }]}>
                         <View
                           ref={isDemo ? (demoBasketQtyRef as any) : undefined}
                           onLayout={isDemo ? measureDemoQty : undefined}
@@ -781,70 +970,68 @@ export default function MyBasketsScreen() {
                             {t('business.baskets.dailyReinit', { defaultValue: 'Réinit.' })} {basket.quantityTotal}
                           </Text>
                         </View>
-                        {(basket.pickupWindow.start !== pickupStart || basket.pickupWindow.end !== pickupEnd) && (
-                        <View style={[styles.metaChip, { backgroundColor: '#e3ff5c18', borderRadius: theme.radii.pill, paddingHorizontal: 8, paddingVertical: 3 }]}>
-                          <Clock size={10} color="#8a7d00" />
-                          <Text style={[{ color: '#8a7d00', ...theme.typography.caption, marginLeft: 3, fontWeight: '600' }]}>
-                            {basket.pickupWindow.start}-{basket.pickupWindow.end}
-                          </Text>
-                        </View>
+                        {/* Pickup time chip — yellow when basket has its own
+                            custom window, neutral when it's inheriting the
+                            location's hours. Driven by hasPickupOverride (the
+                            canonical inheritance flag) rather than a string
+                            compare against the SELECTED location, so it stays
+                            correct in "all locations" mode too. */}
+                        {(basket as any).hasPickupOverride ? (
+                          <View style={[styles.metaChip, { backgroundColor: '#e3ff5c18', borderRadius: theme.radii.pill, paddingHorizontal: 8, paddingVertical: 3 }]}>
+                            <Clock size={10} color="#8a7d00" />
+                            <Text style={[{ color: '#8a7d00', ...theme.typography.caption, marginLeft: 3, fontWeight: '600' }]}>
+                              {basket.pickupWindow.start}-{basket.pickupWindow.end}
+                            </Text>
+                          </View>
+                        ) : (
+                          <View style={[styles.metaChip, { backgroundColor: theme.colors.primary + '12', borderRadius: theme.radii.pill, paddingHorizontal: 8, paddingVertical: 3 }]}>
+                            <Clock size={10} color={theme.colors.primary} />
+                            <Text
+                              numberOfLines={1}
+                              style={[{ color: theme.colors.primary, ...theme.typography.caption, marginLeft: 3, fontWeight: '600', flexShrink: 1 }]}
+                            >
+                              {t('business.baskets.usingLocationHours', { defaultValue: 'Horaire commerce' })}
+                            </Text>
+                          </View>
                         )}
                       </View>
                     </View>
                   </View>
                 </TouchableOpacity>
-
-                {menuOpenId === basket.id && (
-                  <View style={[styles.dropdownMenu, {
-                    backgroundColor: theme.colors.surface,
-                    borderRadius: theme.radii.r12,
-                    ...theme.shadows.shadowMd,
-                    borderWidth: 1,
-                    borderColor: theme.colors.divider,
-                  }]}>
-                    {canEditBasketInfo && (
-                    <TouchableOpacity
-                      onPress={() => handleEdit(basket.id)}
-                      style={[styles.dropdownItem, { padding: theme.spacing.md, borderBottomWidth: canCreateDeleteBaskets ? 1 : 0, borderBottomColor: theme.colors.divider }]}
-                    >
-                      <Edit3 size={16} color={theme.colors.primary} />
-                      <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.bodySm, marginLeft: 10 }]}>
-                        {t('business.baskets.editBasket')}
-                      </Text>
-                    </TouchableOpacity>
-                    )}
-                    {canCreateDeleteBaskets && (
-                    <TouchableOpacity
-                      onPress={() => handleDelete(basket.id)}
-                      style={[styles.dropdownItem, { padding: theme.spacing.md }]}
-                    >
-                      <Trash2 size={16} color={theme.colors.error} />
-                      <Text style={[{ color: theme.colors.error, ...theme.typography.bodySm, marginLeft: 10 }]}>
-                        {t('business.baskets.delete')}
-                      </Text>
-                    </TouchableOpacity>
-                    )}
-                  </View>
-                )}
-
-
               </View>
             );
           })
         )}
       </ScrollView>
 
-      {/* Detail Modal — custom 180 ms fade via modalBackdropAnim. */}
+      {/* Detail Modal — custom 180 ms fade via modalBackdropAnim. The card
+          itself is also an Animated.View driven by the same value: relying
+          on parent-opacity composition alone left the card's rounded-rect
+          silhouette visible for ~1 frame on Android (background colour +
+          borderRadius + overflow:hidden re-composite a tick after the
+          backdrop drops). Animating the card's own opacity in lockstep
+          hides the form entirely with no border flash. Shadow is dropped
+          synchronously the moment closing starts so the native elevation
+          halo doesn't outlive the fade. */}
       <Modal visible={modalRender} transparent animationType="none" onRequestClose={() => setDetailBasket(null)}>
-        <Animated.View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', alignItems: 'center', padding: 16, opacity: modalBackdropAnim }}>
-          <View style={{
+        <Animated.View style={{
+          flex: 1,
+          backgroundColor: 'rgba(0,0,0,0.4)',
+          justifyContent: 'center',
+          alignItems: 'center',
+          padding: 16,
+          opacity: modalBackdropAnim,
+          ...(Platform.OS === 'android' && { elevation: 0 }),
+        }}>
+          <Animated.View style={{
             backgroundColor: theme.colors.bg,
             borderRadius: 24,
             maxHeight: '90%',
             width: '100%',
             maxWidth: 420,
             overflow: 'hidden',
-            ...theme.shadows.shadowLg,
+            opacity: modalBackdropAnim,
+            ...(closing ? null : theme.shadows.shadowLg),
           }}>
             <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ flexGrow: 0 }}>
               {/* Pause pill + close button header */}
@@ -882,12 +1069,16 @@ export default function MyBasketsScreen() {
                   ) : null}
                 </View>
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-                  {canEditBasketInfo && (
-                    <TouchableOpacity onPress={() => { setDetailBasket(null); handleEdit(detailBasket!.id); }} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                  {(canEditBasketInfo || canCreateDeleteBaskets) && (
+                    <TouchableOpacity
+                      ref={modalDotsRef as any}
+                      onPress={openModalMenu}
+                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                    >
                       <MoreVertical size={20} color={theme.colors.textSecondary} />
                     </TouchableOpacity>
                   )}
-                  <TouchableOpacity onPress={() => setDetailBasket(null)}>
+                  <TouchableOpacity onPress={() => setDetailBasket(null)} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
                     <X size={22} color={theme.colors.textSecondary} />
                   </TouchableOpacity>
                 </View>
@@ -905,12 +1096,13 @@ export default function MyBasketsScreen() {
                     </Text>
                   </View>
                 )}
-                {/* Camera button */}
+                {/* Camera button — top-right of the photo area. */}
                 <TouchableOpacity
                   onPress={() => detailBasket && void handleChangePhoto(detailBasket.id)}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                   style={{
                     position: 'absolute',
-                    bottom: 12,
+                    top: 12,
                     right: 12,
                     backgroundColor: theme.colors.primary,
                     borderRadius: 20,
@@ -918,21 +1110,23 @@ export default function MyBasketsScreen() {
                     height: 40,
                     justifyContent: 'center',
                     alignItems: 'center',
-                    ...theme.shadows.shadowMd,
+                    ...(closing ? null : theme.shadows.shadowMd),
                   }}
                 >
                   <Camera size={18} color="#fff" />
                 </TouchableOpacity>
               </View>
 
-              {/* Info card overlapping photo */}
+              {/* Info card overlapping photo. Shadow gated on !closing for
+                  the same reason as the outer card: Android elevation
+                  shadows aren't covered by parent opacity. */}
               <View style={{
                 backgroundColor: theme.colors.surface,
                 borderRadius: theme.radii.r16,
                 marginTop: -20,
                 marginHorizontal: 16,
                 padding: 20,
-                ...theme.shadows.shadowSm,
+                ...(closing ? null : theme.shadows.shadowSm),
               }}>
                 <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h2 }}>
                   {detailBasket?.name}
@@ -971,7 +1165,7 @@ export default function MyBasketsScreen() {
                 marginHorizontal: 16,
                 marginTop: 16,
                 padding: 20,
-                ...theme.shadows.shadowSm,
+                ...(closing ? null : theme.shadows.shadowSm),
               }}>
                 <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3, marginBottom: 16 }}>
                   {t('business.availability.title', { defaultValue: 'Availability' })}
@@ -1028,130 +1222,10 @@ export default function MyBasketsScreen() {
                   );
                 })()}
 
-                {/* Pickup Time editor — only show if basket has custom pickup times
-                     (different from location default) */}
-                {(detailBasket && canEditBasketInfo && (detailBasket.pickupWindow.start !== pickupStart || detailBasket.pickupWindow.end !== pickupEnd)) && (
-                <>
-                <TouchableOpacity
-                  onPress={() => setShowPickupEditor(!showPickupEditor)}
-                  style={{
-                    flexDirection: 'row',
-                    alignItems: 'center',
-                    gap: 8,
-                    paddingVertical: 8,
-                  }}
-                >
-                  <Clock size={15} color={theme.colors.primary} />
-                  <Text style={{ color: theme.colors.primary, ...theme.typography.bodySm, fontWeight: '600' }}>
-                    {showPickupEditor
-                      ? t('business.availability.hidePickupEditor', { defaultValue: 'Masquer l\'éditeur de créneau' })
-                      : t('business.availability.editPickupTime', { defaultValue: 'Modifier l\'heure de retrait' })}
-                  </Text>
-                </TouchableOpacity>
-                </>
-                )}
-
-                {/* Inline Pickup Time Editor */}
-                {showPickupEditor && (
-                  <View style={{
-                    backgroundColor: theme.colors.bg,
-                    borderRadius: theme.radii.r12,
-                    padding: 16,
-                    marginTop: 8,
-                  }}>
-                    {/* Business hours hint — flashes red when out of range */}
-                    <Animated.Text style={{
-                      ...theme.typography.caption,
-                      marginBottom: 8,
-                      color: modalTimeWarning ? theme.colors.error : theme.colors.muted,
-                      fontWeight: modalTimeWarning ? '700' : '400',
-                    }}>
-                      {modalTimeWarning
-                        ? t('business.baskets.timeOutOfRangeShort', { defaultValue: `Doit être dans les horaires du commerce (${pickupStart} - ${pickupEnd})` })
-                        : `${t('business.baskets.withinHours', { defaultValue: 'Doit être dans les horaires du commerce' })} (${pickupStart} - ${pickupEnd})`}
-                    </Animated.Text>
-
-                    {/* Start & End Time — side-by-side wheel pickers */}
-                    <View style={{ flexDirection: 'row', gap: 12, marginBottom: 12 }}>
-                      <View style={{ flex: 1 }}>
-                        <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, marginBottom: 6 }}>
-                          {t('business.availability.startTime', { defaultValue: 'Start Time' })}
-                        </Text>
-                        <TimePicker
-                          value={pickupStartTime}
-                          onChange={(val) => {
-                            const toMin = (t: string) => { const [h, m] = t.split(':').map(Number); return (h || 0) * 60 + (m || 0); };
-                            const locS = toMin(pickupStart);
-                            const locE = toMin(pickupEnd);
-                            const v = toMin(val);
-                            const overnight = locE < locS;
-                            const inRange = overnight ? (v >= locS || v <= locE) : (v >= locS && v <= locE);
-                            if (!inRange) {
-                              flashModalTimeWarning();
-                              return; // reject — don't update
-                            }
-                            setPickupStartTime(val);
-                          }}
-                          primaryColor={theme.colors.primary}
-                          textColor={theme.colors.textPrimary}
-                          bgColor={theme.colors.surface}
-                          mutedColor={theme.colors.muted}
-                        />
-                      </View>
-                      <View style={{ flex: 1 }}>
-                        <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, marginBottom: 6 }}>
-                          {t('business.availability.endTime', { defaultValue: 'End Time' })}
-                        </Text>
-                        <TimePicker
-                          value={pickupEndTime}
-                          onChange={(val) => {
-                            const toMin = (t: string) => { const [h, m] = t.split(':').map(Number); return (h || 0) * 60 + (m || 0); };
-                            const locS = toMin(pickupStart);
-                            const locE = toMin(pickupEnd);
-                            const v = toMin(val);
-                            const overnight = locE < locS;
-                            const inRange = overnight ? (v >= locS || v <= locE) : (v >= locS && v <= locE);
-                            if (!inRange) {
-                              flashModalTimeWarning();
-                              return; // reject
-                            }
-                            setPickupEndTime(val);
-                          }}
-                          primaryColor={theme.colors.primary}
-                          textColor={theme.colors.textPrimary}
-                          bgColor={theme.colors.surface}
-                          mutedColor={theme.colors.muted}
-                        />
-                      </View>
-                    </View>
-
-                    {/* Use business hours checkbox */}
-                    <TouchableOpacity
-                      onPress={() => {
-                        const newVal = !useBusinessHours;
-                        setUseBusinessHours(newVal);
-                        if (newVal) {
-                          setPickupStartTime(pickupStart);
-                          setPickupEndTime(pickupEnd);
-                        }
-                      }}
-                      style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 4 }}
-                    >
-                      <View style={{
-                        width: 22, height: 22, borderRadius: 6,
-                        borderWidth: 2,
-                        borderColor: useBusinessHours ? theme.colors.primary : theme.colors.muted,
-                        backgroundColor: useBusinessHours ? theme.colors.primary : 'transparent',
-                        justifyContent: 'center', alignItems: 'center',
-                      }}>
-                        {useBusinessHours && <Text style={{ color: '#fff', fontSize: 12, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>✓</Text>}
-                      </View>
-                      <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm }}>
-                        {t('business.availability.useBusinessHours', { defaultValue: 'Use business hours for pickup' })}
-                      </Text>
-                    </TouchableOpacity>
-                  </View>
-                )}
+                {/* Pickup time editing now lives only in the full edit-basket
+                    form (app/business/create-basket.tsx in edit mode) — the
+                    inline editor that used to sit here was removed to keep
+                    one source of truth and avoid two divergent UIs. */}
               </View>
               )}
 
@@ -1187,41 +1261,15 @@ export default function MyBasketsScreen() {
                       alert.showAlert(t('common.error'), t('business.createBasket.priceError'));
                       return;
                     }
-                    // Validate pickup times are within location hours before saving
-                    const lsH = parseInt(pickupStart) || 0;
-                    const lsM = parseInt(pickupStart.split(':')[1]) || 0;
-                    const leH = parseInt(pickupEnd) || 23;
-                    const leM = parseInt(pickupEnd.split(':')[1]) || 59;
-                    const lsMin = lsH * 60 + lsM;
-                    const leMin = leH * 60 + leM;
-                    const psH = parseInt(pickupStartTime) || 0;
-                    const psM = parseInt(pickupStartTime.split(':')[1]) || 0;
-                    const peH = parseInt(pickupEndTime) || 0;
-                    const peM = parseInt(pickupEndTime.split(':')[1]) || 0;
-                    let psMin = psH * 60 + psM;
-                    let peMin = peH * 60 + peM;
-
-                    // Force clamp on save
-                    if (psMin < lsMin) psMin = lsMin;
-                    if (psMin > leMin) psMin = leMin;
-                    if (peMin > leMin) peMin = leMin;
-                    if (peMin < lsMin) peMin = lsMin;
-                    if (peMin <= psMin) peMin = psMin + 5; // ensure end > start
-
-                    const clampedStart = `${String(Math.floor(psMin / 60)).padStart(2, '0')}:${String(psMin % 60).padStart(2, '0')}`;
-                    const clampedEnd = `${String(Math.floor(peMin / 60)).padStart(2, '0')}:${String(peMin % 60).padStart(2, '0')}`;
-
-                    // Only include pickup times if the editor was opened (user explicitly changed them)
+                    // Pickup times are not edited in this modal anymore — the
+                    // full edit-basket form owns that. Save only the fields
+                    // this modal actually exposes.
                     const saveData: Record<string, any> = {
                       name: detailBasket.name,
                       original_price: detailBasket.originalPrice,
                       selling_price: detailBasket.discountedPrice,
                       quantity: detailTodayQty,
                     };
-                    if (showPickupEditor) {
-                      saveData.pickup_start_time = `${clampedStart}:00`;
-                      saveData.pickup_end_time = `${clampedEnd}:00`;
-                    }
                     // Demo basket never hits the backend — there's no row
                     // server-side. Mirror the user's chosen qty onto the
                     // demo basket so the post-save "Quantité mise à jour"
@@ -1294,7 +1342,7 @@ export default function MyBasketsScreen() {
                 </Text>
               </TouchableOpacity>
             </ScrollView>
-          </View>
+          </Animated.View>
 
           {/* In-modal walkthrough dim — covers the whole window during the
               modalQty/modalSave sub-steps, with a cutout for the active
@@ -1439,6 +1487,160 @@ export default function MyBasketsScreen() {
               </Animated.View>
             );
           })()}
+
+          {/* Anchored action popover for the MODAL surface (detail-modal
+              3-dots). Rendered inline INSIDE this Modal so we don't have
+              to nest a second <Modal> (called out as flaky on Android
+              elsewhere). The transparent Pressable captures outside-taps
+              to dismiss without closing the detail modal itself. */}
+          {actionMenu?.surface === 'modal' && (
+            <View
+              pointerEvents="box-none"
+              style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}
+            >
+              <Pressable
+                style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}
+                onPress={() => setActionMenu(null)}
+              />
+              <View
+                onStartShouldSetResponder={() => true}
+                style={{ position: 'absolute', top: actionMenu.top, right: actionMenu.right }}
+              >
+                <ActionMenuCard>
+                  {canEditBasketInfo && (
+                    <ActionMenuItem
+                      icon={<EditIcon8 size={16} />}
+                      label={t('business.baskets.editBasket')}
+                      onPress={() => {
+                        const id = actionMenu.basketId;
+                        setActionMenu(null);
+                        setDetailBasket(null);
+                        handleEdit(id);
+                      }}
+                    />
+                  )}
+                  {(() => {
+                    const target = baskets.find((b) => b.id === actionMenu.basketId);
+                    const paused = (target as any)?.isPaused === true;
+                    return (
+                      <>
+                        <ActionMenuDivider />
+                        <ActionMenuItem
+                          icon={paused ? <PlayIcon8 size={16} /> : <PauseIcon8 size={16} />}
+                          label={paused
+                            ? t('business.baskets.resumeBasket', { defaultValue: 'Reprendre' })
+                            : t('business.baskets.pauseBasket', { defaultValue: 'Pause' })}
+                          onPress={() => {
+                            const id = actionMenu.basketId;
+                            setActionMenu(null);
+                            setDetailBasket(null);
+                            handleToggle(id);
+                          }}
+                        />
+                      </>
+                    );
+                  })()}
+                  {canCreateDeleteBaskets && <ActionMenuDivider />}
+                  {canCreateDeleteBaskets && (
+                    <ActionMenuItem
+                      destructive
+                      icon={<DeleteIcon8 size={16} />}
+                      label={t('business.baskets.delete')}
+                      onPress={() => {
+                        const id = actionMenu.basketId;
+                        setActionMenu(null);
+                        // Trigger the inline confirm overlay rendered below
+                        // (still inside this Modal). Using a nested native
+                        // <Modal> via the global alert would never appear on
+                        // iOS — see modalDeleteId state declaration above.
+                        setModalDeleteId(id);
+                      }}
+                    />
+                  )}
+                </ActionMenuCard>
+              </View>
+            </View>
+          )}
+
+          {/* Inline delete-confirmation overlay. Lives inside the detail
+              modal's tree so it visually stacks on top of the availability
+              sheet — using the global CustomAlert here would launch a second
+              native <Modal>, which iOS will not render while another Modal
+              is already presented. */}
+          {modalDeleteId && (
+            <View
+              pointerEvents="box-none"
+              style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.5)', padding: 24 }}
+            >
+              <Pressable
+                style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}
+                onPress={() => setModalDeleteId(null)}
+              />
+              <View
+                onStartShouldSetResponder={() => true}
+                style={{
+                  width: '100%',
+                  maxWidth: 340,
+                  backgroundColor: theme.colors.surface,
+                  borderRadius: 20,
+                  padding: 24,
+                  alignItems: 'center',
+                  ...theme.shadows.shadowLg,
+                }}
+              >
+                {/* Warning icon — matches CustomAlert's destructive/warning
+                    treatment so this inline overlay feels native to the rest
+                    of the app's confirmation dialogs. */}
+                <View style={{ backgroundColor: '#f5f5f1', width: 52, height: 52, borderRadius: 26, justifyContent: 'center', alignItems: 'center', marginBottom: 14 }}>
+                  <AlertTriangle size={26} color="#e8a838" />
+                </View>
+                <Text style={{ color: '#1a1a1a', fontSize: 17, fontFamily: 'Poppins_700Bold', fontWeight: '700' as const, textAlign: 'center', marginBottom: 8, letterSpacing: -0.2 }}>
+                  {t('business.baskets.deleteConfirm')}
+                </Text>
+                <Text style={{ color: '#6b6b6b', fontSize: 14, fontFamily: 'Poppins_400Regular', textAlign: 'center', lineHeight: 20, marginBottom: 20 }}>
+                  {t('business.baskets.deleteMessage')}
+                </Text>
+                <View style={{ flexDirection: 'row', gap: 12, width: '100%' }}>
+                  <TouchableOpacity
+                    onPress={() => setModalDeleteId(null)}
+                    style={{
+                      flex: 1,
+                      backgroundColor: theme.colors.bg,
+                      borderRadius: theme.radii.r12,
+                      paddingVertical: 14,
+                      alignItems: 'center',
+                    }}
+                    accessibilityRole="button"
+                  >
+                    <Text style={{ color: theme.colors.textPrimary, ...theme.typography.button }}>
+                      {t('common.cancel', { defaultValue: 'Annuler' })}
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    onPress={() => {
+                      const id = modalDeleteId;
+                      deleteBasketMutation.mutate(id);
+                      store.deleteBasket(id);
+                      setModalDeleteId(null);
+                      setDetailBasket(null);
+                    }}
+                    style={{
+                      flex: 1,
+                      backgroundColor: theme.colors.error,
+                      borderRadius: theme.radii.r12,
+                      paddingVertical: 14,
+                      alignItems: 'center',
+                    }}
+                    accessibilityRole="button"
+                  >
+                    <Text style={{ color: '#fff', ...theme.typography.button }}>
+                      {t('business.baskets.delete', { defaultValue: 'Supprimer' })}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </View>
+          )}
         </Animated.View>
       </Modal>
 
@@ -1477,6 +1679,79 @@ export default function MyBasketsScreen() {
               </Text>
             </TouchableOpacity>
           </View>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* Anchored action popover for the LIST surface (card 3-dots).
+          Rendered as a root-level <Modal> so it can never be clipped by
+          sibling cards in the ScrollView. Outside-tap closes via the
+          backdrop TouchableOpacity (standard app pattern). The popover is
+          absolute-positioned at the top/right coordinates measured from
+          the 3-dots button at open time. */}
+      <Modal
+        visible={actionMenu?.surface === 'list'}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setActionMenu(null)}
+      >
+        <TouchableOpacity
+          activeOpacity={1}
+          onPress={() => setActionMenu(null)}
+          style={{ flex: 1, backgroundColor: 'transparent' }}
+        >
+          {actionMenu?.surface === 'list' && (
+            <View
+              onStartShouldSetResponder={() => true}
+              style={{ position: 'absolute', top: actionMenu.top, right: actionMenu.right }}
+            >
+              <ActionMenuCard>
+                {canEditBasketInfo && (
+                  <ActionMenuItem
+                    icon={<EditIcon8 size={16} />}
+                    label={t('business.baskets.editBasket')}
+                    onPress={() => {
+                      const id = actionMenu.basketId;
+                      setActionMenu(null);
+                      handleEdit(id);
+                    }}
+                  />
+                )}
+                {(() => {
+                  const target = baskets.find((b) => b.id === actionMenu.basketId);
+                  const paused = (target as any)?.isPaused === true;
+                  return (
+                    <>
+                      <ActionMenuDivider />
+                      <ActionMenuItem
+                        icon={paused ? <PlayIcon8 size={16} /> : <PauseIcon8 size={16} />}
+                        label={paused
+                          ? t('business.baskets.resumeBasket', { defaultValue: 'Reprendre' })
+                          : t('business.baskets.pauseBasket', { defaultValue: 'Pause' })}
+                        onPress={() => {
+                          const id = actionMenu.basketId;
+                          setActionMenu(null);
+                          handleToggle(id);
+                        }}
+                      />
+                    </>
+                  );
+                })()}
+                {canCreateDeleteBaskets && <ActionMenuDivider />}
+                {canCreateDeleteBaskets && (
+                  <ActionMenuItem
+                    destructive
+                    icon={<DeleteIcon8 size={16} />}
+                    label={t('business.baskets.delete')}
+                    onPress={() => {
+                      const id = actionMenu.basketId;
+                      setActionMenu(null);
+                      handleDelete(id);
+                    }}
+                  />
+                )}
+              </ActionMenuCard>
+            </View>
+          )}
         </TouchableOpacity>
       </Modal>
     </SafeAreaView>
@@ -1536,21 +1811,13 @@ const styles = StyleSheet.create({
   metaRow: {
     flexDirection: 'row',
     alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 6,
   },
   metaChip: {
     flexDirection: 'row',
     alignItems: 'center',
-  },
-  dropdownMenu: {
-    position: 'absolute',
-    top: 44,
-    right: 14,
-    zIndex: 100,
-    minWidth: 180,
-  },
-  dropdownItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexShrink: 1,
   },
   cardActions: {
     flexDirection: 'row',

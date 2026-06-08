@@ -57,6 +57,34 @@ export default function WalletScreen() {
   const listRef = useRef<FlatList<WalletTransaction> | null>(null);
   const codeFormYRef = useRef(0);
 
+  // Step-driven re-measurement of the "Code Cadeau" recharge button. The
+  // button's own onLayout fires once on initial layout, so any later layout
+  // shift (wallet balance/transactions loading in above it, scroll offset
+  // changes) leaves the published rect stale and the halo lands off-target
+  // when the walkthrough reaches the `walletRecharge` step. We re-measure
+  // from this screen because the (tabs) layout overlay can't reach a ref
+  // inside a pushed Stack screen. Same pattern as the map-button / notif-
+  // bell re-measure in (tabs)/_layout.tsx.
+  const rechargeBtnRef = useRef<View>(null);
+  const walkthroughKey = useWalkthroughStore((s) => s.currentStep?.measureKey);
+  useEffect(() => {
+    if (walkthroughKey !== 'walletRecharge') return;
+    // Clear the prior rect first — /wallet is pushed onto the navigation
+    // stack, and the push animation can let an early onLayout publish a
+    // mid-animation rect. The SubScreen overlay's haveRect fast-path then
+    // paints the halo at that stale y for a frame before the re-measure
+    // below snaps it into place (the "wrong halo then corrects" symptom).
+    // Clearing puts the overlay into its dim-only branch until the
+    // 280 ms post-push re-measure publishes the settled rect.
+    useWalkthroughStore.getState().setMeasuredRect('walletRecharge', null);
+    const t = setTimeout(() => {
+      rechargeBtnRef.current?.measureInWindow((x, y, w, h) => {
+        if (w > 0 && h > 0) useWalkthroughStore.getState().setMeasuredRect('walletRecharge', { x, y, w, h });
+      });
+    }, 280);
+    return () => clearTimeout(t);
+  }, [walkthroughKey]);
+
   const walletQuery = useQuery({
     queryKey: ['wallet'],
     queryFn: fetchWallet,
@@ -199,7 +227,15 @@ export default function WalletScreen() {
         onLayout={(e) => { codeFormYRef.current = e.nativeEvent.layout.y; }}
       >
         <TouchableOpacity
+          ref={rechargeBtnRef as any}
           onLayout={(e) => {
+            // Skip the onLayout-driven publish while the walkthrough is at
+            // this step. The /wallet push animation fires onLayout with a
+            // mid-animation y, racing our step-driven re-measure — user
+            // briefly sees the halo at the wrong y before it corrects.
+            // The 280 ms re-measure effect above is the authoritative
+            // publisher during the walkthrough.
+            if (useWalkthroughStore.getState().currentStep?.measureKey === 'walletRecharge') return;
             (e.target as any)?.measureInWindow?.((x: number, y: number, w: number, h: number) => {
               if (w > 0 && h > 0) useWalkthroughStore.getState().setMeasuredRect('walletRecharge', { x, y, w, h });
             });
@@ -357,7 +393,7 @@ export default function WalletScreen() {
               <View style={{ ...StyleSheet.absoluteFillObject, justifyContent: 'center', alignItems: 'center' }} pointerEvents="none">
                 <View style={{ width: 250, height: 250, borderRadius: 24, borderWidth: 3, borderColor: '#e3ff5c' }} />
               </View>
-              <View style={{ position: 'absolute', bottom: 60, left: 40, right: 40, backgroundColor: 'rgba(0,0,0,0.6)', borderRadius: 16, paddingVertical: 14, paddingHorizontal: 20 }}>
+              <View style={{ position: 'absolute', bottom: insets.bottom + 60, left: 40, right: 40, backgroundColor: 'rgba(0,0,0,0.6)', borderRadius: 16, paddingVertical: 14, paddingHorizontal: 20 }}>
                 <Text style={{ color: '#fff', textAlign: 'center', fontSize: 14, fontFamily: 'Poppins_400Regular' }}>
                   {scanned
                     ? t('wallet.scanProcessing', { defaultValue: 'Traitement…' })

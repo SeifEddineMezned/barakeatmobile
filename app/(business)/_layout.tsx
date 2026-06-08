@@ -2,7 +2,7 @@ import { Tabs } from "expo-router";
 import { LayoutDashboard, ShoppingBag, ClipboardList, User, Bell, Settings, ChevronDown, MapPin, Check, Building2, Plus, QrCode, Hand, Clock, CheckCircle, MessageCircle, Store } from "lucide-react-native";
 import React from "react";
 import { useTranslation } from "react-i18next";
-import { View, Text, TouchableOpacity, Animated, Dimensions, PanResponder, Modal, StyleSheet, ScrollView } from "react-native";
+import { View, Text, TouchableOpacity, Animated, Dimensions, PanResponder, Modal, StyleSheet, ScrollView, useWindowDimensions, BackHandler } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter, useSegments } from "expo-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -18,6 +18,7 @@ import { NoLocationCTA } from "@/src/components/NoLocationCTA";
 import { DelayedLoader } from "@/src/components/DelayedLoader";
 import { DemoTapHintToast } from "@/src/components/DemoTapHintToast";
 import Svg, { Path } from 'react-native-svg';
+import { useOverlayOriginOffset } from "@/src/components/useOverlayOriginOffset";
 
 
 export default function BusinessTabLayout() {
@@ -127,6 +128,10 @@ export default function BusinessTabLayout() {
         void queryClient.invalidateQueries({ queryKey: ['baskets-by-location'] });
         // Restaurant stats card refreshes too, so revenue/basket counts track reality.
         void queryClient.invalidateQueries({ queryKey: ['restaurant-stats'] });
+        // Force an immediate popup refresh so the bell-count bump and the
+        // popup queue land on the same tick. Without this the bell shows
+        // a new unread but the popup waits up to 30 s for its own poll.
+        void useNotificationStore.getState().triggerPopupPoll();
       }
       prevUnreadRef.current = unreadQuery.data;
       setUnreadCount(unreadQuery.data);
@@ -139,15 +144,22 @@ export default function BusinessTabLayout() {
   // Fetch org context & locations for the location dropdown
   const [locationModalVisible, setLocationModalVisible] = React.useState(false);
 
+  // my-context (role / org / location memberships) doesn't change
+  // mid-session except when an admin actively re-assigns the user.
+  // Old config (staleTime 10s + refetchOnMount 'always' + 60s interval +
+  // refetchOnWindowFocus + refetchOnReconnect) was firing 1–2 req/min
+  // baseline plus a refetch on every tab swap. Dropped to 5 min stale
+  // + 5 min interval; opt back into reconnect explicitly so a fresh
+  // session after a network blip still picks up role changes. The
+  // 'always' mount and window-focus refetches are dropped — they
+  // were duplicating the work for zero benefit.
   const myContextQuery = useQuery({
     queryKey: ['my-context'],
     queryFn: fetchMyContext,
     enabled: isAuthenticated && user?.role === 'business',
-    staleTime: 10_000,
-    refetchOnMount: 'always',
-    refetchOnWindowFocus: true,
+    staleTime: 5 * 60_000,
+    refetchInterval: 5 * 60_000,
     refetchOnReconnect: true,
-    refetchInterval: 60_000, // Safety net: 1 req/min even if member stays on same page
   });
 
   const orgId = myContextQuery.data?.organization_id;
@@ -196,14 +208,22 @@ export default function BusinessTabLayout() {
     && !orgDetailsQuery.isLoading
     && orgLocations.length === 0;
   // Any user with 2+ location memberships can switch via the dropdown — even
-  // regular members. Single-location users see the name as static text.
-  const canSwitchLocation = isOrgAdmin || myLocationIds.length > 1;
+  // regular members. Single-location users (and org-admins in a single-
+  // location org) see the name as static text with no chevron — nothing
+  // to switch to, so the dropdown affordance would be misleading.
+  const canSwitchLocation =
+    (isOrgAdmin && orgLocations.length > 1) || myLocationIds.length > 1;
   const rawPerms = myContextQuery.data?.permissions ?? {};
   const hasPerm = (key: string) => { const v = (rawPerms as any)[key]; return v === true || v === 'true' || v === 'write'; };
   // New granular permission keys
   const canViewDashboard = true; // Dashboard always visible
   const canViewOrders = true; // Incoming orders always visible for all members
-  const canManageBaskets = isAdminOrOwner || hasPerm('edit_quantities') || hasPerm('edit_basket_info') || hasPerm('create_delete_baskets');
+  // Granular basket permissions — mirror the exact flags my-baskets.tsx uses
+  // to gate each action, so the demo only walks through what this member can
+  // actually do.
+  const canCreateDeleteBaskets = isAdminOrOwner || hasPerm('create_delete_baskets');
+  const canEditQuantities = isAdminOrOwner || hasPerm('edit_quantities');
+  const canManageBaskets = canCreateDeleteBaskets || canEditQuantities || hasPerm('edit_basket_info');
   // Profile tab — org admins see the full org profile; location admins see a
   // version scoped to their location only (the team screen enforces the scope).
   const canEditProfile = isOrgAdmin || isLocationAdmin;
@@ -220,35 +240,85 @@ export default function BusinessTabLayout() {
   const tabCount = visibleTabs.length;
   const tabWidth = navWidth / tabCount;
 
+  // Measure the floating tab bar in window coords so the demo's tab halos
+  // sit exactly on the pills (no inset/`bottom:20` guesswork). Re-measured on
+  // every layout (rotation, nav-bar changes) and published to the walkthrough
+  // store under 'bizTabBar'.
+  const tabBarMeasureRef = React.useRef<View>(null);
+  const setMeasuredRect = useWalkthroughStore((s) => s.setMeasuredRect);
+  const measureTabBar = React.useCallback(() => {
+    tabBarMeasureRef.current?.measureInWindow((x, y, w, h) => {
+      if (w > 0 && h > 0) setMeasuredRect('bizTabBar', { x, y, w, h });
+    });
+  }, [setMeasuredRect]);
+
   // Lock handled in the unified effect below
 
-  // When navigating away from dashboard (tab 0) with "all locations" selected,
-  // auto-pick the first location since other pages need a specific one.
-  // Non-org-admin users are confined to the locations in `myLocationIds`: if
-  // their current selection isn't one of theirs (e.g. stale from a prior
-  // session), snap it to their first one. Dashboard "all locations" is only
-  // valid for org admins — everyone else gets auto-picked.
+  // Auto-pick a valid location whenever the persisted / current selection
+  // isn't actually one the user can access. Three cases this catches:
+  //   1. Cold start with no persisted ID → pick the first valid one.
+  //   2. Cold start with a stale persisted ID (org changed, location was
+  //      soft-deleted, member reassigned) → snap to first valid.
+  //   3. Navigating away from the dashboard while admin still on "all" →
+  //      pick a specific location since other pages need one.
+  // Wait until orgDetailsQuery has resolved before deciding — running this
+  // against an empty in-flight list would falsely treat the persisted ID as
+  // invalid and reset it.
   const isDashboard = activeIndex === 0;
+  const locationDefaultApplied = useBusinessStore((s) => s.locationDefaultApplied);
+  const markLocationDefaultApplied = useBusinessStore((s) => s.markLocationDefaultApplied);
   React.useEffect(() => {
-    if (!isAdminOrOwner) {
-      // Non-admin: must be on one of their locations at all times.
-      if (myLocationIds.length === 0) return;
-      const selNum = selectedLocationId != null ? Number(selectedLocationId) : null;
-      if (selNum == null || !myLocationIds.includes(selNum)) {
-        setSelectedLocationId(myLocationIds[0]);
-      }
-    } else if (!isDashboard && !selectedLocationId && orgLocations.length > 0) {
-      setSelectedLocationId(orgLocations[0].id);
-    }
-  }, [isDashboard, selectedLocationId, orgLocations, setSelectedLocationId, isAdminOrOwner, myLocationIds]);
+    if (orgDetailsQuery.isLoading) return;
+    const validIds = isAdminOrOwner
+      ? orgLocations.map((l) => Number(l.id))
+      : myLocationIds.map(Number);
+    if (validIds.length === 0) return;
+    const selNum = selectedLocationId != null ? Number(selectedLocationId) : null;
+    const isValid = selNum != null && validIds.includes(selNum);
 
-  // Derive the current location name for display
+    // First-run path: nothing has ever been picked on this device. Always
+    // land on the first available location (top of list / most recent) so
+    // the dropdown shows an actual location name instead of "Tous les
+    // emplacements". After this fires once, locationDefaultApplied flips
+    // permanently true and subsequent nulls are treated as a deliberate
+    // user choice (Tous).
+    if (!locationDefaultApplied) {
+      if (!isValid) {
+        setSelectedLocationId(validIds[0]);  // also flips the flag (see store)
+      } else {
+        markLocationDefaultApplied();
+      }
+      return;
+    }
+
+    // Returning sessions:
+    //   • org admins on dashboard may legitimately have null (Tous)
+    //   • everyone else needs a concrete id for per-location queries
+    // Stale persisted IDs (org changed, location deleted, member reassigned)
+    // get snapped to the first valid.
+    const allowNull = isAdminOrOwner && isDashboard;
+    if (!isValid && !allowNull) {
+      setSelectedLocationId(validIds[0]);
+    } else if (!isValid && allowNull && selNum != null) {
+      // Stale ID for an admin on the dashboard → revert to Tous rather
+      // than displaying a phantom location name.
+      setSelectedLocationId(null);
+    }
+  }, [isDashboard, selectedLocationId, orgLocations, setSelectedLocationId, isAdminOrOwner, myLocationIds, orgDetailsQuery.isLoading, locationDefaultApplied, markLocationDefaultApplied]);
+
+  // Derive the current location name for display. Important: do NOT silently
+  // fall back to `orgLocations[0]?.name` when nothing is selected — that
+  // displayed a real location's name while `selectedLocationId` was still
+  // null, so per-location queries would return wrong data while the UI
+  // looked correct. The auto-pick effect above keeps `selectedLocationId`
+  // pointed at a valid id, so this null branch is rare and we surface it
+  // honestly with the placeholder copy.
   const selectedLocationName = React.useMemo(() => {
     if (!selectedLocationId) {
       if (isDashboard && isAdminOrOwner) {
         return myContextQuery.data?.organization_name ?? t('business.allLocations', { defaultValue: 'Tous les emplacements' });
       }
-      return orgLocations[0]?.name ?? t('business.location', { defaultValue: 'Emplacement' });
+      return t('business.location', { defaultValue: 'Emplacement' });
     }
     const loc = orgLocations.find((l) => l.id === Number(selectedLocationId));
     return loc?.name ?? t('business.location', { defaultValue: 'Location' });
@@ -264,12 +334,17 @@ export default function BusinessTabLayout() {
     },
   }), []);
 
+  // Layout-level pending-orders badge poll. NOT focus-gated — business
+  // users want to see the orders badge update across every tab in the
+  // partner app. Bumped 30s → 45s and staleTime 15s → 30s to cut the
+  // baseline drip; freshness is restored sharply when the user opens
+  // the incoming-orders tab (which invalidates this query).
   const todayOrdersQuery = useQuery({
     queryKey: ['today-orders-count', selectedLocationId],
     queryFn: () => fetchTodayOrders(selectedLocationId),
     enabled: isAuthenticated && user?.role === 'business',
-    refetchInterval: 30_000,
-    staleTime: 15_000,
+    refetchInterval: 45_000,
+    staleTime: 30_000,
   });
 
   const pendingOrderCount = (todayOrdersQuery.data ?? []).filter(
@@ -287,7 +362,9 @@ export default function BusinessTabLayout() {
 
   const headerBrand = () => (
     <Animated.View style={{
-      marginLeft: 16,
+      // marginLeft removed — the 16px left inset is provided by
+      // headerLeftContainerStyle below so the pill aligns pixel-perfectly with
+      // the dashboard's custom floating header (which uses `left: 16`).
       flexDirection: 'row',
       alignItems: 'center',
       opacity: brandAnim,
@@ -422,7 +499,22 @@ export default function BusinessTabLayout() {
         headerShown: true,
         headerTitle: '',
         headerShadowVisible: false,
-        headerStyle: { backgroundColor: theme.colors.bg },
+        // Pin the header content height to 52 so the location pill sits at a
+        // deterministic vertical position (insets.top + 26 center) on every
+        // tab — the dashboard's custom floating header mirrors this exactly so
+        // the pill never shifts when switching tabs. 52 also matches the
+        // location-dropdown modal's `insets.top + 52` anchor.
+        headerStyle: { backgroundColor: theme.colors.bg, height: insets.top + 52 },
+        headerStatusBarHeight: insets.top,
+        // Pin the headerLeft / headerRight container insets to the exact same
+        // horizontal anchor the dashboard's custom floating header uses (left: 16,
+        // right: 16). Without this, RN-Navigation applies its own platform-default
+        // paddingHorizontal to those containers — combined with the marginLeft: 16
+        // that used to live on `headerBrand` — that pushed the location pill
+        // several pixels further from the screen edge than on the dashboard, so
+        // the pill visibly jumped sideways when switching tabs.
+        headerLeftContainerStyle: { paddingLeft: 16, paddingRight: 0 },
+        headerRightContainerStyle: { paddingRight: 16, paddingLeft: 0 },
         headerLeft: headerBrand,
         headerRight: headerRight,
       }}
@@ -458,6 +550,8 @@ export default function BusinessTabLayout() {
 
         return (
           <View
+            ref={tabBarMeasureRef}
+            onLayout={measureTabBar}
             {...swipePanResponder.panHandlers}
             style={{
               position: 'absolute',
@@ -656,9 +750,10 @@ export default function BusinessTabLayout() {
           onStartShouldSetResponder={() => true}
         >
           <ScrollView showsVerticalScrollIndicator={false} style={{ maxHeight: 420 }}>
-            {/* "All locations" option for admin/owner — only on dashboard tab.
-                Uses the Store icon to match the dashboard's switcher. */}
-            {isDashboard && isAdminOrOwner && (
+            {/* "All locations" option — only on dashboard, and only when the
+                user actually sees 2+ locations. With a single location the
+                "Tous" entry is just visual noise. */}
+            {isDashboard && orgLocations.filter((loc) => isOrgAdmin || myLocationIds.includes(Number(loc.id))).length > 1 && (
               <TouchableOpacity
                 onPress={() => { setSelectedLocationId(null); setLocationModalVisible(false); }}
                 style={{
@@ -759,13 +854,15 @@ export default function BusinessTabLayout() {
       theme={theme}
       t={t}
       visibleTabs={visibleTabs}
-      canManageBaskets={canManageBaskets}
+      canCreateDeleteBaskets={canCreateDeleteBaskets}
+      canEditQuantities={canEditQuantities}
       canEditProfile={canEditProfile}
       canConfirmPickup={isAdminOrOwner || hasPerm('confirm_pickup')}
       canMessage={isAdminOrOwner || hasPerm('messaging')}
       isOrgAdmin={isOrgAdmin}
       hasNoLocation={hasNoLocation}
       insetsTop={insets.top}
+      insetsBottom={insets.bottom}
       router={router}
     />
     </>
@@ -794,6 +891,9 @@ interface BizStep {
   tooltipPosition?: 'bottom' | 'top';
   requireTap?: boolean;
   advanceOnPath?: string;
+  // What the user taps for a `requireTap` step — drives the tap-hint copy
+  // ("Appuyez sur la carte" vs "le bouton"). Defaults to 'button'.
+  tapTarget?: 'card' | 'button';
   // Watch a flag in the walkthrough store; advance when it flips true.
   // 'modal' watches verifyModalOpen (Verify Pickup modal opened); 'expand'
   // watches expandedDemoCard (user expanded the demo order card).
@@ -806,10 +906,15 @@ interface BizStep {
   enter?: { demoBasket?: boolean; demoOrder?: boolean; demoScanCode?: string | null };
 }
 
-const SCREEN_W_BIZ = Dimensions.get('window').width;
-const SCREEN_H_BIZ = Dimensions.get('window').height;
+// NOTE: Do NOT capture window dimensions at module load — on Pixel 6 (and
+// other tall Android devices) the live window height after edge-to-edge
+// initialisation is larger than the value Dimensions returns at first
+// require, which left the dim mask too short (visible un-dimmed sliver
+// above the system nav bar) and the tab halo too high (computed against
+// the stale height while the tab pill is positioned `bottom: 20` from
+// the live window). Live values come from `useWindowDimensions()` below.
 
-function buildWalkthroughSteps(visibleTabs: string[], canManageBaskets: boolean, canEditProfile: boolean, canConfirmPickup: boolean, canMessage: boolean, isOrgAdmin: boolean, hasNoLocation: boolean, insetsTop: number): BizStep[] {
+function buildWalkthroughSteps(visibleTabs: string[], canCreateDeleteBaskets: boolean, canEditQuantities: boolean, canEditProfile: boolean, canConfirmPickup: boolean, canMessage: boolean, isOrgAdmin: boolean, hasNoLocation: boolean, insetsTop: number, SCREEN_W_BIZ: number): BizStep[] {
   // ── Special case: no location yet ──────────────────────────────────────
   // Org admin with zero locations — every other step would point at a
   // screen that just shows NoLocationCTA, so we short-circuit to a single
@@ -839,8 +944,11 @@ function buildWalkthroughSteps(visibleTabs: string[], canManageBaskets: boolean,
   }
   // ── Baskets — interactive sub-tour through create-basket form ─────────
   const basketIdx = visibleTabs.indexOf('my-baskets');
-  if (basketIdx >= 0 && canManageBaskets) {
+  if (basketIdx >= 0 && (canCreateDeleteBaskets || canEditQuantities)) {
     steps.push({ tabIndex: basketIdx, routeName: 'my-baskets', icon: ShoppingBag, titleKey: 'walkthrough.biz.baskets.title', descKey: 'walkthrough.biz.baskets.desc', highlight: 'tab' });
+    // ── Create-basket flow — ONLY for members who can create/delete baskets.
+    // A quantity-only member skips straight to the demo basket card + qty edit.
+    if (canCreateDeleteBaskets) {
     // 1. Tap the real Add Basket button → form opens
     steps.push({
       tabIndex: basketIdx,
@@ -852,10 +960,42 @@ function buildWalkthroughSteps(visibleTabs: string[], canManageBaskets: boolean,
       target: { top: insetsTop + 54, right: 20, width: 140, height: 40, radius: 12 },
       tooltipPosition: 'bottom',
       requireTap: true,
-      advanceOnPath: '/business/create-basket',
+      // The "+" now opens the intermediary "Ajouter un panier" page first.
+      advanceOnPath: '/business/select-org-basket',
       measureKey: 'addBasket',
       // Activate demo basket NOW so create-basket pre-fills on mount.
       enter: { demoBasket: true },
+    });
+    // 1b. Intermediary page — reuse an existing org basket. Org-admins manage
+    // baskets across locations, so only they get this "you can reuse" step;
+    // other roles skip straight to the create-new CTA below.
+    if (isOrgAdmin) {
+      steps.push({
+        tabIndex: basketIdx,
+        routeName: 'my-baskets',
+        icon: ShoppingBag,
+        titleKey: 'walkthrough.biz.reuseBasket.title',
+        descKey: 'walkthrough.biz.reuseBasket.desc',
+        highlight: 'element',
+        target: { top: insetsTop + 130, left: 16, width: SCREEN_W_BIZ - 32, height: 76, radius: 12 },
+        tooltipPosition: 'bottom',
+        measureKey: 'selectOrgExistingList',
+      });
+    }
+    // 1c. The "Créer un nouveau panier" CTA on the intermediary page → opens
+    // the manual form. requireTap advances when the create-basket route loads.
+    steps.push({
+      tabIndex: basketIdx,
+      routeName: 'my-baskets',
+      icon: Plus,
+      titleKey: 'walkthrough.biz.createNewBasket.title',
+      descKey: 'walkthrough.biz.createNewBasket.desc',
+      highlight: 'element',
+      target: { top: insetsTop + 64, left: 16, width: SCREEN_W_BIZ - 32, height: 76, radius: 16 },
+      tooltipPosition: 'bottom',
+      requireTap: true,
+      advanceOnPath: '/business/create-basket',
+      measureKey: 'selectOrgCreateNew',
     });
     // 2. Daily reset card — Suivant (must come BEFORE the pickup-time step:
     // daily quantity is the field higher up the form, and the pickup-time
@@ -900,7 +1040,10 @@ function buildWalkthroughSteps(visibleTabs: string[], canManageBaskets: boolean,
       advanceOnPath: '/(business)/my-baskets',
       measureKey: 'formConfirmBtn',
     });
-    // 5. Demo basket card on list — Suivant
+    } // end create-basket flow
+    // 5. Demo basket card on list — Suivant. Shown for create OR quantity
+    // members. When the create flow was skipped (quantity-only member) we
+    // inject the demo basket here so there's a card to highlight and edit.
     steps.push({
       tabIndex: basketIdx,
       routeName: 'my-baskets',
@@ -911,7 +1054,11 @@ function buildWalkthroughSteps(visibleTabs: string[], canManageBaskets: boolean,
       target: { top: insetsTop + 110, left: 16, width: SCREEN_W_BIZ - 32, height: 100, radius: 16 },
       tooltipPosition: 'bottom',
       measureKey: 'demoBasketCard',
+      ...(canCreateDeleteBaskets ? {} : { enter: { demoBasket: true } }),
     });
+    // ── Quantity-edit flow — ONLY for members who can edit quantities. A
+    // create-only member sees the card above (step 5) then moves on to orders.
+    if (canEditQuantities) {
     // 6. Quantity edit — prompt the user to TAP the demo card to open the
     // availability sheet (which has the +/- controls). Highlight the whole
     // card; advance when the detail modal opens (expandedDemoCard flag).
@@ -925,6 +1072,7 @@ function buildWalkthroughSteps(visibleTabs: string[], canManageBaskets: boolean,
       target: { top: insetsTop + 110, left: 16, width: SCREEN_W_BIZ - 32, height: 100, radius: 16 },
       tooltipPosition: 'bottom',
       requireTap: true,
+      tapTarget: 'card',
       advanceOnFlag: 'expand',
       measureKey: 'demoBasketCard',
     });
@@ -976,6 +1124,7 @@ function buildWalkthroughSteps(visibleTabs: string[], canManageBaskets: boolean,
       tooltipPosition: 'bottom',
       measureKey: 'demoBasketCardQty',
     });
+    } // end quantity-edit flow
   }
   // ── Orders — interactive sub-tour ────────────────────────────────────
   const ordersIdx = visibleTabs.indexOf('incoming-orders');
@@ -1016,6 +1165,7 @@ function buildWalkthroughSteps(visibleTabs: string[], canManageBaskets: boolean,
       target: { top: insetsTop + 110, left: 16, width: SCREEN_W_BIZ - 32, height: 100, radius: 16 },
       tooltipPosition: 'bottom',
       requireTap: true,
+      tapTarget: 'card',
       advanceOnFlag: 'expand',
       measureKey: 'demoOrderCard',
     });
@@ -1146,6 +1296,7 @@ function buildWalkthroughSteps(visibleTabs: string[], canManageBaskets: boolean,
         target: { top: insetsTop + 200, left: 16, width: SCREEN_W_BIZ - 32, height: 80, radius: 16 },
         tooltipPosition: 'bottom',
         requireTap: true,
+        tapTarget: 'card',
         advanceOnPath: '/business/team',
         measureKey: 'profileTeamCard',
       });
@@ -1270,14 +1421,14 @@ function buildCutoutPath(sw: number, sh: number, x: number, y: number, w: number
 // element. If `onOutsidePress` is provided (tab steps), the frame taps call
 // it — preserves the "tap anywhere to advance the demo" UX. Otherwise the
 // frame taps are absorbed silently (no-op).
-function CutoutMask({ x, y, w, h, radius = 0, onOutsidePress }: { x: number; y: number; w: number; h: number; radius?: number; onOutsidePress?: () => void }) {
-  const d = buildCutoutPath(SCREEN_W_BIZ, SCREEN_H_BIZ, x, y, w, h, radius);
+function CutoutMask({ x, y, w, h, radius = 0, onOutsidePress, sw, sh }: { x: number; y: number; w: number; h: number; radius?: number; onOutsidePress?: () => void; sw: number; sh: number }) {
+  const d = buildCutoutPath(sw, sh, x, y, w, h, radius);
   // Clamp the cutout rect so the four frames don't get negative widths /
   // heights when the highlight is near a screen edge.
   const cx = Math.max(0, x);
   const cy = Math.max(0, y);
-  const cw = Math.max(0, Math.min(w, SCREEN_W_BIZ - cx));
-  const ch = Math.max(0, Math.min(h, SCREEN_H_BIZ - cy));
+  const cw = Math.max(0, Math.min(w, sw - cx));
+  const ch = Math.max(0, Math.min(h, sh - cy));
   const Frame = ({ style }: { style: any }) => (
     onOutsidePress
       ? <TouchableOpacity activeOpacity={1} onPress={onOutsidePress} style={style} />
@@ -1293,7 +1444,7 @@ function CutoutMask({ x, y, w, h, radius = 0, onOutsidePress }: { x: number; y: 
     <View style={StyleSheet.absoluteFillObject}>
       {/* Visual dim — non-interactive. */}
       <View pointerEvents="none" style={StyleSheet.absoluteFillObject}>
-        <Svg width={SCREEN_W_BIZ} height={SCREEN_H_BIZ} style={StyleSheet.absoluteFillObject} pointerEvents="none">
+        <Svg width={sw} height={sh} style={StyleSheet.absoluteFillObject} pointerEvents="none">
           <Path d={d} fill="rgba(0,0,0,0.55)" fillRule="evenodd" />
         </Svg>
       </View>
@@ -1306,8 +1457,21 @@ function CutoutMask({ x, y, w, h, radius = 0, onOutsidePress }: { x: number; y: 
   );
 }
 
-function BusinessWalkthroughOverlay({ navRef, tabWidth, theme, t, visibleTabs, canManageBaskets, canEditProfile, canConfirmPickup, canMessage, isOrgAdmin, hasNoLocation, insetsTop, router }: { navRef: any; tabWidth: number; theme: any; t: any; visibleTabs: string[]; canManageBaskets: boolean; canEditProfile: boolean; canConfirmPickup: boolean; canMessage: boolean; isOrgAdmin: boolean; hasNoLocation: boolean; insetsTop: number; router: any }) {
-  const BIZ_WALKTHROUGH_STEPS = React.useMemo(() => buildWalkthroughSteps(visibleTabs, canManageBaskets, canEditProfile, canConfirmPickup, canMessage, isOrgAdmin, hasNoLocation, insetsTop), [visibleTabs, canManageBaskets, canEditProfile, canConfirmPickup, canMessage, isOrgAdmin, hasNoLocation, insetsTop]);
+function BusinessWalkthroughOverlay({ navRef, tabWidth, theme, t, visibleTabs, canCreateDeleteBaskets, canEditQuantities, canEditProfile, canConfirmPickup, canMessage, isOrgAdmin, hasNoLocation, insetsTop, insetsBottom, router }: { navRef: any; tabWidth: number; theme: any; t: any; visibleTabs: string[]; canCreateDeleteBaskets: boolean; canEditQuantities: boolean; canEditProfile: boolean; canConfirmPickup: boolean; canMessage: boolean; isOrgAdmin: boolean; hasNoLocation: boolean; insetsTop: number; insetsBottom: number; router: any }) {
+  // Live dimensions — recompute on every window-size change (rotation,
+  // system-bar visibility changes, foldable hinge). The tab pill is
+  // positioned `bottom: 20` from the live window bottom, so the tab halo
+  // and the full-window dim mask both have to be computed against the
+  // same live values to stay aligned on tall devices like the Pixel 6.
+  const { width: SCREEN_W_LIVE, height: SCREEN_H_LIVE } = useWindowDimensions();
+  // Self-measure where this overlay's root sits in window coordinates. The
+  // halo + tooltip code below renders inside a wrapper that's translated by
+  // (-originX, -originY), so its (0, 0) coincides with absolute window (0, 0).
+  // That means `measureInWindow`-published rect coords can be used directly
+  // for `top:` / `left:` — no per-device guesswork (Samsung edge-to-edge vs
+  // Pixel 6 vs iOS) for status-bar offsets.
+  const { originRef, originX, originY, originMeasured, remeasure: remeasureOrigin } = useOverlayOriginOffset();
+  const BIZ_WALKTHROUGH_STEPS = React.useMemo(() => buildWalkthroughSteps(visibleTabs, canCreateDeleteBaskets, canEditQuantities, canEditProfile, canConfirmPickup, canMessage, isOrgAdmin, hasNoLocation, insetsTop, SCREEN_W_LIVE), [visibleTabs, canCreateDeleteBaskets, canEditQuantities, canEditProfile, canConfirmPickup, canMessage, isOrgAdmin, hasNoLocation, insetsTop, SCREEN_W_LIVE]);
   const step = useWalkthroughStore((s) => s.step);
   const nextStep = useWalkthroughStore((s) => s.nextStep);
   const skipWalkthrough = useWalkthroughStore((s) => s.skipWalkthrough);
@@ -1342,8 +1506,16 @@ function BusinessWalkthroughOverlay({ navRef, tabWidth, theme, t, visibleTabs, c
   // visible to the user as jitter. The dim mask still appears immediately
   // so the demo never feels frozen during the wait.
   const [haloReady, setHaloReady] = React.useState(false);
+  // Measured tooltip height — drives the on-screen clamp so the card always
+  // fits. Reset to 0 on every step so each step's content re-measures.
+  const [ttHeight, setTtHeight] = React.useState(0);
+  // Per-step content fade — the halo ring + tooltip fade in once the rect has
+  // settled (haloReady) so step-to-step transitions glide instead of popping.
+  const contentAnim = React.useRef(new Animated.Value(0)).current;
   React.useEffect(() => {
-    if (step === null) { setHaloReady(false); return; }
+    if (step === null) { setHaloReady(false); contentAnim.setValue(0); return; }
+    setTtHeight(0);
+    contentAnim.setValue(0);
     const mk = BIZ_WALKTHROUGH_STEPS[step]?.measureKey;
     // Team sub-screen steps run a scrollTo (60 ms) + deferred remeasure
     // (350–450 ms). The halo must wait for the remeasure to commit or it
@@ -1356,6 +1528,9 @@ function BusinessWalkthroughOverlay({ navRef, tabWidth, theme, t, visibleTabs, c
     const t = setTimeout(() => setHaloReady(true), delay);
     return () => clearTimeout(t);
   }, [step, BIZ_WALKTHROUGH_STEPS]);
+  React.useEffect(() => {
+    if (haloReady) Animated.timing(contentAnim, { toValue: 1, duration: 220, useNativeDriver: true }).start();
+  }, [haloReady, contentAnim]);
   React.useEffect(() => {
     if (step !== null) {
       if (!fadeInDoneRef.current) {
@@ -1400,6 +1575,7 @@ function BusinessWalkthroughOverlay({ navRef, tabWidth, theme, t, visibleTabs, c
           stepIndex: step,
           totalSteps: BIZ_WALKTHROUGH_STEPS.length,
           requireTap: !!s.requireTap,
+          tapTarget: s.tapTarget,
           // Pass the step's target radius through so SubScreenWalkthroughOverlay
           // can match it (it previously hardcoded 18, which mismatched
           // pill-shaped buttons like the create-basket confirm CTA).
@@ -1473,6 +1649,21 @@ function BusinessWalkthroughOverlay({ navRef, tabWidth, theme, t, visibleTabs, c
     }
   }, [pathname, step, BIZ_WALKTHROUGH_STEPS, nextStep]);
 
+  // Hardware-back interceptor: while the walkthrough is active, the only
+  // legitimate exit is the "Quitter la démo" / "OK, terminer la démo" button
+  // in the tooltip. Android's hardware back (or gesture-back) used to pop
+  // the navigation stack out from under the walkthrough — that left the
+  // demo basket / order injected on screens the demo didn't expect, and the
+  // user had no way to fully clean up without restarting.
+  // Returning true from the listener consumes the event so the navigator
+  // never sees it. The listener self-removes once `step` returns to null
+  // (after the user taps Quit, which calls skipWalkthrough → clearDemoState).
+  React.useEffect(() => {
+    if (step === null) return;
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => true);
+    return () => sub.remove();
+  }, [step]);
+
   // Auto-advance when a watched store flag flips true. Used for steps that
   // wait on the user to expand the demo card or open the verify modal.
   React.useEffect(() => {
@@ -1514,22 +1705,29 @@ function BusinessWalkthroughOverlay({ navRef, tabWidth, theme, t, visibleTabs, c
     // a stale fallback put the cutout on the bottom navbar (the demoBasket
     // race). Render nothing until the host screen publishes the rect.
     const measured = current.measureKey ? (measuredRects[current.measureKey] ?? null) : null;
-    if (current.measureKey && (!measured || !haloReady)) {
+    if (current.measureKey && (!measured || !haloReady || !originMeasured)) {
       // Wait for the measurement (and the post-step-change settling window)
       // — render only the dim mask in the meantime so we don't paint a
       // misplaced halo / off-screen tooltip that then snaps into place.
       return (
-        <Animated.View pointerEvents="box-none" style={{ ...StyleSheet.absoluteFillObject, zIndex: 9999, opacity: fadeAnim }}>
-          <View pointerEvents="none" style={[StyleSheet.absoluteFillObject, { backgroundColor: 'rgba(0,0,0,0.55)' }]} />
+        <Animated.View pointerEvents="box-none" style={{ ...StyleSheet.absoluteFillObject, zIndex: 9999, opacity: fadeAnim }} onLayout={remeasureOrigin}>
+          {/* Measure the overlay origin DURING the settle so the halo's first
+              visible frame (once haloReady flips) is already positioned with the
+              correct origin — no wrong-place-then-snap. Mirrors SubScreen. */}
+          <View ref={originRef} collapsable={false} pointerEvents="none" style={{ position: 'absolute', top: 0, left: 0, width: 1, height: 1 }} />
+          {/* Extend the dim past the window edges so the status bar / nav bar
+              area is covered on Samsung edge-to-edge (where the window doesn't
+              start at the physical top). Mirrors the customer/SubScreen dim. */}
+          <View pointerEvents="none" style={{ position: 'absolute', top: -insetsTop - 100, left: 0, right: 0, bottom: -insetsBottom - 100, backgroundColor: 'rgba(0,0,0,0.55)' }} />
         </Animated.View>
       );
     }
     const w = measured ? measured.w : (t2?.width ?? t2?.size ?? 44);
     const h = measured ? measured.h : (t2?.height ?? t2?.size ?? 44);
     const cx = measured ? measured.x + w / 2 :
-      (t2?.right != null ? SCREEN_W_BIZ - t2.right - w / 2 : (t2?.left ?? 0) + w / 2);
+      (t2?.right != null ? SCREEN_W_LIVE - t2.right - w / 2 : (t2?.left ?? 0) + w / 2);
     const cy = measured ? measured.y + h / 2 :
-      (t2?.bottom != null ? SCREEN_H_BIZ - t2.bottom - h / 2 : (t2?.top ?? 0) + h / 2);
+      (t2?.bottom != null ? SCREEN_H_LIVE - t2.bottom - h / 2 : (t2?.top ?? 0) + h / 2);
     // Expand by 6px for a visible breathing room around the element.
     rectX = cx - w / 2 - 6;
     rectY = cy - h / 2 - 6;
@@ -1537,72 +1735,84 @@ function BusinessWalkthroughOverlay({ navRef, tabWidth, theme, t, visibleTabs, c
     rectH = h + 12;
     rectRadius = (t2?.radius ?? 12) + 6;
 
-    // `tooltipPosition` in the step def describes where the TOOLTIP should
-    // render relative to the highlighted element:
-    //   'top'    → tooltip ABOVE the element (element is near the bottom)
-    //   'bottom' → tooltip BELOW the element (element is near the top)
-    // If unset, auto-pick based on where the element sits on screen.
-    // Then verify the chosen side actually fits in the visible viewport,
-    // accounting for the bottom tab bar — flip if not. The previous code
-    // honoured the preference blindly and pushed the formConfirm tooltip
-    // off the bottom of the screen.
-    const TAB_BAR_HEIGHT = 88; // 68px pill + 20px gap from screen bottom
-    const ESTIMATED_TOOLTIP_HEIGHT = 220;
-    const safeTop = insetsTop + 12;
-    const safeBottom = TAB_BAR_HEIGHT + 12;
-    const elementTop = rectY;
-    const elementBottom = rectY + rectH;
-    const fitsBelow = elementBottom + 20 + ESTIMATED_TOOLTIP_HEIGHT <= SCREEN_H_BIZ - safeBottom;
-    const fitsAbove = elementTop - 20 - ESTIMATED_TOOLTIP_HEIGHT >= safeTop;
-    let tooltipBelow = current.tooltipPosition
-      ? current.tooltipPosition === 'bottom'
-      : cy < SCREEN_H_BIZ / 2;
-    if (tooltipBelow && !fitsBelow && fitsAbove) tooltipBelow = false;
-    else if (!tooltipBelow && !fitsAbove && fitsBelow) tooltipBelow = true;
-    const ttLeft = Math.max(16, Math.min(cx - 140, SCREEN_W_BIZ - 296));
-    if (tooltipBelow) {
-      tooltipStyle = {
-        position: 'absolute' as const,
-        top: elementBottom + 20,
-        left: ttLeft,
-        width: 280,
-      };
-      arrowStyle = {
-        position: 'absolute' as const, top: -8,
-        left: Math.max(20, Math.min(cx - ttLeft - 8, 252)),
-        width: 16, height: 16, backgroundColor: '#fff',
-        transform: [{ rotate: '45deg' }],
-      };
-    } else {
-      tooltipStyle = {
-        position: 'absolute' as const,
-        bottom: SCREEN_H_BIZ - elementTop + 20,
-        left: ttLeft,
-        width: 280,
-      };
-      arrowStyle = {
-        position: 'absolute' as const, bottom: -8,
-        left: Math.max(20, Math.min(cx - ttLeft - 8, 252)),
-        width: 16, height: 16, backgroundColor: '#fff',
-        transform: [{ rotate: '45deg' }],
-      };
-    }
   } else {
-    // Tab highlight — position matches the bottom tab pill.
-    const pillCenterX = tabBarLeft + (current.tabIndex * tabWidth) + (tabWidth / 2);
-    rectX = tabBarLeft + (current.tabIndex * tabWidth) + 6 - 2;
-    rectY = SCREEN_H_BIZ - (20 + 8 + 52) - 2;
-    rectW = (tabWidth - 12) + 4;
+    // Tab highlight — use the MEASURED floating tab-bar rect (window coords)
+    // so the halo sits exactly on the pill, device-independently. No
+    // inset/`bottom:20` guesswork (the old formula subtracted insetsBottom and
+    // floated the halo above the real pill on home-indicator devices). Render
+    // the dim-only mask until the bar is measured + settled to avoid a flash.
+    const bar = measuredRects['bizTabBar'] ?? null;
+    if (!bar || !haloReady || !originMeasured) {
+      return (
+        <Animated.View pointerEvents="box-none" style={{ ...StyleSheet.absoluteFillObject, zIndex: 9999, opacity: fadeAnim }} onLayout={remeasureOrigin}>
+          {/* Measure origin during the settle (see element-branch note above). */}
+          <View ref={originRef} collapsable={false} pointerEvents="none" style={{ position: 'absolute', top: 0, left: 0, width: 1, height: 1 }} />
+          {/* Edge-extended dim — covers status bar / nav bar on Samsung edge-to-edge. */}
+          <View pointerEvents="none" style={{ position: 'absolute', top: -insetsTop - 100, left: 0, right: 0, bottom: -insetsBottom - 100, backgroundColor: 'rgba(0,0,0,0.55)' }} />
+        </Animated.View>
+      );
+    }
+    // Glass pill: 52px tall, vertically centered in the 68px bar; each tab
+    // spans `tabWidth` with the pill inset 6px on each side.
+    const pillW = tabWidth - 12;
+    const pillLeft = bar.x + (current.tabIndex * tabWidth) + 6;
+    const pillTop = bar.y + (bar.h - 52) / 2;
+    rectX = pillLeft - 2;
+    rectY = pillTop - 2;
+    rectW = pillW + 4;
     rectH = 52 + 4;
     rectRadius = 22;
-    const ttLeft = Math.max(16, Math.min(pillCenterX - 140, SCREEN_W_BIZ - 296));
-    tooltipStyle = { position: 'absolute' as const, bottom: 100, left: ttLeft, width: 280 };
-    arrowStyle = {
-      position: 'absolute' as const, bottom: -8,
-      left: Math.max(20, Math.min(pillCenterX - ttLeft - 8, 252)),
+  }
+
+  // ── Unified tooltip placement ── derived from the halo rect so it works for
+  // BOTH element and tab steps. Width is responsive (never wider than the
+  // screen), the side with room is chosen, and the final position is CLAMPED
+  // so the whole card always stays inside the safe viewport on any phone.
+  {
+    const TAB_BAR_HEIGHT = 88; // 68px pill + 20px gap from screen bottom
+    const ttWidth = Math.min(280, SCREEN_W_LIVE - 32);
+    const ttH = ttHeight || 220; // measured after first layout; estimate on first paint
+    const gap = 16;
+    const safeTop = insetsTop + 12;
+    const safeBottom = TAB_BAR_HEIGHT + insetsBottom + 12;
+    const anchorCx = rectX + rectW / 2;
+    const elementTop = rectY;
+    const elementBottom = rectY + rectH;
+    const spaceBelow = (SCREEN_H_LIVE - safeBottom) - (elementBottom + gap);
+    const spaceAbove = (elementTop - gap) - safeTop;
+    const fitsBelow = ttH <= spaceBelow;
+    const fitsAbove = ttH <= spaceAbove;
+    let below = current.tooltipPosition
+      ? current.tooltipPosition === 'bottom'
+      : (rectY + rectH / 2) < SCREEN_H_LIVE / 2;
+    if (below && !fitsBelow && fitsAbove) below = false;
+    else if (!below && !fitsAbove && fitsBelow) below = true;
+    else if (!fitsBelow && !fitsAbove) below = spaceBelow >= spaceAbove; // neither fits → roomier side
+    const ttLeft = Math.max(16, Math.min(anchorCx - ttWidth / 2, SCREEN_W_LIVE - ttWidth - 16));
+    // SHRINK, don't cover. Scale the tooltip to fit the room beside the element
+    // instead of clamping it on top of the highlighted element. Center-origin
+    // scale → offset layoutTop so the visual box sits in the gap.
+    const available = below ? spaceBelow : spaceAbove;
+    const ttScale = ttH > available ? Math.max(0.7, available / ttH) : 1;
+    const scaledH = ttH * ttScale;
+    const ttTop = below
+      ? (elementBottom + gap) - (ttH - scaledH) / 2
+      : (elementTop - gap) - (ttH + scaledH) / 2;
+    tooltipStyle = {
+      position: 'absolute' as const,
+      top: ttTop,
+      left: ttLeft,
+      width: ttWidth,
+      ...(ttScale < 1 ? { transform: [{ scale: ttScale }] } : null),
+    };
+    // Arrow only at full scale (center-origin scaling shifts the box edges).
+    arrowStyle = ttScale === 1 ? {
+      position: 'absolute' as const,
+      left: Math.max(20, Math.min(anchorCx - ttLeft - 8, ttWidth - 28)),
       width: 16, height: 16, backgroundColor: '#fff',
       transform: [{ rotate: '45deg' }],
-    };
+      ...(below ? { top: -8 } : { bottom: -8 }),
+    } : null;
   }
 
   const handleAdvance = () => nextStep(BIZ_WALKTHROUGH_STEPS.length);
@@ -1617,10 +1827,30 @@ function BusinessWalkthroughOverlay({ navRef, tabWidth, theme, t, visibleTabs, c
   const showTapHint = !!current.requireTap;
 
   return (
-    <Animated.View pointerEvents="box-none" style={{ ...StyleSheet.absoluteFillObject, zIndex: 9999, opacity: fadeAnim }}>
+    <Animated.View pointerEvents="box-none" style={{ ...StyleSheet.absoluteFillObject, zIndex: 9999, opacity: fadeAnim }} onLayout={remeasureOrigin}>
+      {/* 1×1 origin probe — measureInWindow on this ref tells us where the
+          overlay's own (0,0) sits in window coords. collapsable={false} is
+          essential on Android so RN doesn't optimise the view away. */}
+      <View ref={originRef} collapsable={false} pointerEvents="none" style={{ position: 'absolute', top: 0, left: 0, width: 1, height: 1 }} />
+      {/* Window-coords canvas — translating by (-originX, -originY) makes the
+          wrapper's (0, 0) coincide with window (0, 0), and giving it explicit
+          window-sized width/height makes `bottom:` based positioning also
+          measure from window bottom. Now all the inner code can use rectX /
+          rectY (which came from measureInWindow) directly for top: / left:. */}
+      <View pointerEvents="box-none" style={{ position: 'absolute', top: -originY, left: -originX, width: SCREEN_W_LIVE, height: SCREEN_H_LIVE }}>
+        {/* Edge-to-edge dim extensions — cover the status bar (above the window)
+            and the system nav bar (below the window) on Samsung edge-to-edge
+            devices, where useWindowDimensions() is shorter than the physical
+            screen and the SVG below would otherwise leave the very top/bottom
+            un-dimmed. Same rgba as the cutout SVG so the seams are invisible.
+            Mirrors the customer / SubScreen overlays. */}
+        <View pointerEvents="none" style={{ position: 'absolute', top: -insetsTop - 100, left: 0, right: 0, height: insetsTop + 100, backgroundColor: 'rgba(0,0,0,0.55)' }} />
+        <View pointerEvents="none" style={{ position: 'absolute', bottom: -insetsBottom - 100, left: 0, right: 0, height: insetsBottom + 100, backgroundColor: 'rgba(0,0,0,0.55)' }} />
         {/* Cutout mask — SVG path, the dim region exactly follows the rounded
             highlight shape (no rectangle-with-rounded-border mismatch). */}
-        <CutoutMask x={rectX} y={rectY} w={rectW} h={rectH} radius={rectRadius} onOutsidePress={maskPress} />
+        <CutoutMask x={rectX} y={rectY} w={rectW} h={rectH} radius={rectRadius} onOutsidePress={maskPress} sw={SCREEN_W_LIVE} sh={SCREEN_H_LIVE} />
+        {/* Halo ring + tooltip fade in together once the layout has settled. */}
+        <Animated.View pointerEvents="box-none" style={{ ...StyleSheet.absoluteFillObject, opacity: contentAnim }}>
         {/* Highlight ring — non-interactive (pointerEvents none) so taps on
             the element beneath the hole go through untouched. */}
         <View
@@ -1631,11 +1861,16 @@ function BusinessWalkthroughOverlay({ navRef, tabWidth, theme, t, visibleTabs, c
           }}
         />
         {/* Tooltip */}
-        <View style={{
-          ...tooltipStyle,
-          backgroundColor: '#fff', borderRadius: 20, padding: 20,
-          shadowColor: '#000', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.15, shadowRadius: 20, elevation: 10,
-        }}>
+        <View
+          onLayout={(e) => {
+            const h = Math.round(e.nativeEvent.layout.height);
+            if (h > 0 && h !== ttHeight) setTtHeight(h);
+          }}
+          style={{
+            ...tooltipStyle,
+            backgroundColor: '#fff', borderRadius: 20, padding: 20,
+            shadowColor: '#000', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.15, shadowRadius: 20, elevation: 10,
+          }}>
           <Text style={{ color: theme.colors.muted, fontSize: 12, fontFamily: 'Poppins_500Medium', marginBottom: 10 }}>
             {step + 1}/{BIZ_WALKTHROUGH_STEPS.length}
           </Text>
@@ -1654,7 +1889,9 @@ function BusinessWalkthroughOverlay({ navRef, tabWidth, theme, t, visibleTabs, c
             <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 14, backgroundColor: '#114b3c0f', paddingHorizontal: 10, paddingVertical: 8, borderRadius: 10 }}>
               <Hand size={14} color="#114b3c" />
               <Text style={{ color: '#114b3c', fontSize: 12, fontFamily: 'Poppins_600SemiBold', marginLeft: 6, flex: 1 }}>
-                {t('walkthrough.tapToContinue', { defaultValue: 'Appuyez sur le bouton entouré pour continuer.' })}
+                {current.tapTarget === 'card'
+                  ? t('walkthrough.tapCardToContinue', { defaultValue: 'Appuyez sur la carte entourée pour continuer.' })
+                  : t('walkthrough.tapToContinue', { defaultValue: 'Appuyez sur le bouton entouré pour continuer.' })}
               </Text>
             </View>
           )}
@@ -1675,12 +1912,14 @@ function BusinessWalkthroughOverlay({ navRef, tabWidth, theme, t, visibleTabs, c
               </TouchableOpacity>
             )}
           </View>
-          {/* Arrow */}
-          <View style={arrowStyle} />
+          {/* Arrow — only when the card sits adjacent to the element. */}
+          {arrowStyle && <View style={arrowStyle} />}
         </View>
+        </Animated.View>
         {/* "Follow instructions" toast — flashes when a blocked tap is
             absorbed by one of the four frame absorbers. */}
         <DemoTapHintToast />
+      </View>
       </Animated.View>
   );
 }

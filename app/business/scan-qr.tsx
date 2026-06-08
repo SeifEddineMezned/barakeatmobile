@@ -7,9 +7,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   TouchableOpacity,
-  Dimensions,
 } from 'react-native';
-import Svg, { Path } from 'react-native-svg';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import { useRouter, useLocalSearchParams } from 'expo-router';
@@ -25,6 +23,7 @@ import {
   verifyQR,
   type TodayReservationFromAPI,
 } from '@/src/services/business';
+import { fetchBasketById } from '@/src/services/baskets';
 import { getErrorMessage } from '@/src/lib/api';
 import { useCustomAlert } from '@/src/components/CustomAlert';
 import { useWalkthroughStore } from '@/src/stores/walkthroughStore';
@@ -141,6 +140,8 @@ export default function ScanQRScreen() {
       setMatchedOrder(match);
       void queryClient.invalidateQueries({ queryKey: ['today-orders'] });
       void queryClient.invalidateQueries({ queryKey: ['location-orders'] });
+      void queryClient.invalidateQueries({ queryKey: ['business-stats'] });
+      void queryClient.invalidateQueries({ queryKey: ['business-analytics'] });
     } catch (err) {
       alert.showAlert(t('common.error'), getErrorMessage(err));
       setScanned(false);
@@ -170,17 +171,63 @@ export default function ScanQRScreen() {
           verifyResult.pickup_code ?? '',
           verifyResult.buyer_id
         );
-        setMatchedOrder({
-          id: verifyResult.reservation_id ?? '',
-          buyer_id: verifyResult.buyer_id,
-          buyer_name: verifyResult.buyer_name,
-          quantity: verifyResult.quantity,
-          pickup_code: verifyResult.pickup_code,
-          status: verifyResult.status,
-        } as TodayReservationFromAPI);
+        // verifyQR's payload is lean (no basket info). To show the correct
+        // basket name on the success screen, locate the FULL reservation row
+        // (which has basket_name straight from the JOIN) and use it as the
+        // matchedOrder. Mirrors what the manual code-entry path does — and
+        // crucially we match across ALL ['today-orders', locationId] cache
+        // entries, since incoming-orders.tsx scopes the key by location.
+        let fullMatch: TodayReservationFromAPI | undefined;
+        const cachedQueries = queryClient.getQueriesData<TodayReservationFromAPI[]>({ queryKey: ['today-orders'] });
+        for (const [, data] of cachedQueries) {
+          if (Array.isArray(data)) {
+            const m = data.find((o) => String(o.id) === String(verifyResult.reservation_id));
+            if (m) { fullMatch = m; break; }
+          }
+        }
+        if (!fullMatch) {
+          try {
+            const orders = await fetchTodayOrders();
+            fullMatch = orders.find((o) => String(o.id) === String(verifyResult.reservation_id));
+          } catch {}
+        }
+        if (fullMatch) {
+          // The row's top-level basket_name is unreliable (backend returns
+          // the location's default basket regardless of which one was
+          // reserved). The row's basket_id IS correct (FK from when the
+          // reservation was created), so resolve the canonical name via
+          // /api/baskets/:id. Patch it onto matchedOrder so the display
+          // priority chain picks it up.
+          const basketId = (fullMatch as any).basket_id;
+          if (basketId != null) {
+            try {
+              const canonical = await fetchBasketById(String(basketId));
+              if (canonical?.name) {
+                (fullMatch as any).basket_name = canonical.name;
+                (fullMatch as any).basket = {
+                  ...((fullMatch as any).basket ?? {}),
+                  name: canonical.name,
+                };
+              }
+            } catch {}
+          }
+          setMatchedOrder(fullMatch);
+        } else {
+          // Last-resort fallback: synthesize from verifyQR (no basket name).
+          setMatchedOrder({
+            id: verifyResult.reservation_id ?? '',
+            buyer_id: verifyResult.buyer_id,
+            buyer_name: verifyResult.buyer_name,
+            quantity: verifyResult.quantity,
+            pickup_code: verifyResult.pickup_code,
+            status: verifyResult.status,
+          } as TodayReservationFromAPI);
+        }
         setVerified(true);
         void queryClient.invalidateQueries({ queryKey: ['today-orders'] });
         void queryClient.invalidateQueries({ queryKey: ['location-orders'] });
+        void queryClient.invalidateQueries({ queryKey: ['business-stats'] });
+        void queryClient.invalidateQueries({ queryKey: ['business-analytics'] });
       })
       .catch((err) => {
         // verifyQR failed — fall back to manual code entry only if not already processing
@@ -266,12 +313,28 @@ export default function ScanQRScreen() {
           ) : null}
 
           {/* Quantity × basket-name — gives the success screen context
-              instead of a bare customer name. */}
-          {(matchedOrder as any)?.basket_name || matchedOrder?.quantity ? (
-            <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm, marginTop: theme.spacing.xs }}>
-              {matchedOrder?.quantity ?? 1} × {(matchedOrder as any)?.basket_name ?? t('orders.surpriseBag', { defaultValue: 'Panier Surprise' })}
-            </Text>
-          ) : null}
+              instead of a bare customer name. Same priority chain as the
+              customer-side ReservationCard / business-side normalizeOrder:
+              nested basket.name wins over the often-wrong top-level
+              basket_name (which can be the location's default). */}
+          {(() => {
+            const mo: any = matchedOrder;
+            if (!mo) return null;
+            const displayName: string =
+              mo?.basket?.name
+              ?? mo?.basket?.basket_type_name
+              ?? mo?.basket?.type_name
+              ?? mo?.basket?.basket_name
+              ?? mo?.basket_type_name
+              ?? mo?.basket_name
+              ?? t('orders.surpriseBag', { defaultValue: 'Panier Surprise' });
+            const qty = mo?.quantity ?? 1;
+            return (
+              <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm, marginTop: theme.spacing.xs }}>
+                {qty} × {displayName}
+              </Text>
+            );
+          })()}
 
           <View style={[styles.doneButtonWrapper, { marginTop: theme.spacing.xxxl }]}>
             <PrimaryCTAButton onPress={handleClose} title={t('business.scan.done')} />
@@ -554,91 +617,54 @@ export default function ScanQRScreen() {
           button and surrounds it with absorber frames so the user can't
           accidentally tap manual mode / camera flip / verify / etc. — any
           one of those was leaving the demo stranded. */}
-      {isDemoBack && walkthroughCurrentStep?.measureKey === 'scanQrBack' && (() => {
-        const SW = Dimensions.get('window').width;
-        const SH = Dimensions.get('window').height;
-        // Derive the close-X rect from the known header layout. Header has
-        // paddingHorizontal: spacing.xl (20) + paddingTop: spacing.md (12);
-        // the X icon is 24px square. We pad by 8 so the halo sits clear of
-        // the icon strokes themselves.
-        const pad = 8;
-        const iconSize = 24;
-        const rx = insets.left + theme.spacing.xl - pad;
-        const ry = insets.top + theme.spacing.md - pad;
-        const rw = iconSize + pad * 2;
-        const rh = iconSize + pad * 2;
-        const radius = 12;
-        const r = Math.max(0, Math.min(radius, rw / 2, rh / 2));
-        const x2 = rx + rw;
-        const y2 = ry + rh;
-        const cutoutPath = [
-          `M0 0 H${SW} V${SH} H0 Z`,
-          `M${rx + r} ${ry}`,
-          `H${x2 - r}`,
-          `A${r} ${r} 0 0 1 ${x2} ${ry + r}`,
-          `V${y2 - r}`,
-          `A${r} ${r} 0 0 1 ${x2 - r} ${y2}`,
-          `H${rx + r}`,
-          `A${r} ${r} 0 0 1 ${rx} ${y2 - r}`,
-          `V${ry + r}`,
-          `A${r} ${r} 0 0 1 ${rx + r} ${ry}`,
-          'Z',
-        ].join(' ');
-        const absorb = {
-          onStartShouldSetResponder: () => true,
-          onResponderRelease: () => { /* absorb silently */ },
-        } as const;
-        return (
-          <View pointerEvents="box-none" style={{ position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, zIndex: 9999 }}>
-            <View pointerEvents="none" style={StyleSheet.absoluteFillObject}>
-              <Svg width={SW} height={SH} style={StyleSheet.absoluteFillObject} pointerEvents="none">
-                <Path d={cutoutPath} fill="rgba(0,0,0,0.55)" fillRule="evenodd" />
-              </Svg>
-            </View>
-            {/* Halo border on the close button. */}
-            <View pointerEvents="none" style={{ position: 'absolute', left: rx, top: ry, width: rw, height: rh, borderRadius: radius, borderWidth: 3, borderColor: '#e3ff5c' }} />
-            {/* Four absorber frames around the cutout — block all other
-                taps on the scan-qr screen during the demo. */}
-            <View {...absorb} style={{ position: 'absolute', left: 0, right: 0, top: 0, height: ry }} />
-            <View {...absorb} style={{ position: 'absolute', left: 0, right: 0, top: ry + rh, bottom: 0 }} />
-            <View {...absorb} style={{ position: 'absolute', top: ry, height: rh, left: 0, width: rx }} />
-            <View {...absorb} style={{ position: 'absolute', top: ry, height: rh, left: rx + rw, right: 0 }} />
-            {/* Instruction popup — floats below the header (clears both the
-                close X and the camera/keyboard toggle on the top-right). */}
-            <View style={{
-              position: 'absolute',
-              left: 16,
-              right: 16,
-              top: insets.top + theme.spacing.md + iconSize + theme.spacing.md + 8,
-              backgroundColor: '#fff',
-              borderRadius: 20,
-              padding: 18,
-              shadowColor: '#000',
-              shadowOffset: { width: 0, height: 8 },
-              shadowOpacity: 0.18,
-              shadowRadius: 20,
-              elevation: 12,
-            }}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
-                <View style={{ width: 36, height: 36, borderRadius: 18, backgroundColor: '#114b3c12', justifyContent: 'center', alignItems: 'center', marginRight: 10 }}>
-                  <Hand size={18} color="#114b3c" />
-                </View>
-                <Text style={{ color: '#114b3c', fontSize: 15, fontWeight: '700', fontFamily: 'Poppins_700Bold', flex: 1 }}>
-                  {t('walkthrough.biz.scanQrBack.title', { defaultValue: 'Scanner le QR du client' })}
-                </Text>
+      {/* Demo instruction popup — bottom-anchored, fully interactive page
+          behind it. No dim mask, no cutout, no absorber frames; the camera
+          permission button + QR/code mode toggle + camera itself are all
+          tappable. The popup uses `pointerEvents="box-none"` on its wrapper
+          so taps fall through onto the underlying scan UI; only the popup
+          card itself catches its own taps. Suivant + close X (top-left)
+          both advance the walkthrough via the existing unmount cleanup. */}
+      {isDemoBack && walkthroughCurrentStep?.measureKey === 'scanQrBack' && (
+        <View pointerEvents="box-none" style={{ position: 'absolute', left: 16, right: 16, bottom: 24 }}>
+          <View style={{
+            backgroundColor: '#fff',
+            borderRadius: 20,
+            padding: 18,
+            shadowColor: '#000',
+            shadowOffset: { width: 0, height: 8 },
+            shadowOpacity: 0.18,
+            shadowRadius: 20,
+            elevation: 12,
+          }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
+              <View style={{ width: 36, height: 36, borderRadius: 18, backgroundColor: '#114b3c12', justifyContent: 'center', alignItems: 'center', marginRight: 10 }}>
+                <Hand size={18} color="#114b3c" />
               </View>
-              <Text style={{ color: '#666', fontSize: 13, fontFamily: 'Poppins_400Regular', lineHeight: 19, marginBottom: 10 }}>
-                {t('walkthrough.biz.scanQrBack.desc', { defaultValue: "Voici l'écran de scan. En vrai, vous scanneriez le code QR affiché sur le téléphone du client. Appuyez sur le bouton entouré pour revenir et continuer la démo." })}
+              <Text style={{ color: '#114b3c', fontSize: 15, fontWeight: '700', fontFamily: 'Poppins_700Bold', flex: 1 }}>
+                {t('walkthrough.biz.scanQrBack.title', { defaultValue: 'Scanner le QR du client' })}
               </Text>
-              <TouchableOpacity onPress={() => { handleClose(); skipWalkthrough(); }}>
-                <Text style={{ color: theme.colors.muted, fontSize: 13, fontFamily: 'Poppins_500Medium' }}>
-                  {t('walkthrough.exitDemo', { defaultValue: 'Quitter la démo' })}
-                </Text>
-              </TouchableOpacity>
             </View>
+            <Text style={{ color: '#666', fontSize: 13, fontFamily: 'Poppins_400Regular', lineHeight: 19, marginBottom: 10 }}>
+              {t('walkthrough.biz.scanQrBack.desc', { defaultValue: "Voici l'écran de scan. Vous pouvez explorer librement (autoriser la caméra, basculer en saisie de code). Appuyez sur Suivant ou sur le X en haut à gauche pour revenir." })}
+            </Text>
+            {/* Suivant — close the screen (advances the walkthrough via
+                the unmount cleanup at the top of this file). */}
+            <TouchableOpacity
+              onPress={() => { handleClose(); }}
+              style={{ backgroundColor: '#114b3c', borderRadius: 12, paddingVertical: 12, alignItems: 'center', marginTop: 4, marginBottom: 8 }}
+            >
+              <Text style={{ color: '#fff', fontSize: 14, fontFamily: 'Poppins_700Bold', fontWeight: '700' }}>
+                {t('walkthrough.next', { defaultValue: 'Suivant' })}
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => { skipWalkthrough(); handleClose(); }} style={{ alignItems: 'center' }}>
+              <Text style={{ color: theme.colors.muted, fontSize: 13, fontFamily: 'Poppins_500Medium' }}>
+                {t('walkthrough.exitDemo', { defaultValue: 'Quitter la démo' })}
+              </Text>
+            </TouchableOpacity>
           </View>
-        );
-      })()}
+        </View>
+      )}
     </View>
   );
 }

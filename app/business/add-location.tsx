@@ -10,6 +10,8 @@ import { addLocation, fetchMyContext } from '@/src/services/teams';
 import { getErrorMessage } from '@/src/lib/api';
 import { FeatureFlags } from '@/src/lib/featureFlags';
 import { LocationFormFields, type LocationFormValue } from '@/src/components/LocationFormFields';
+import { useBusinessStore } from '@/src/stores/businessStore';
+import { validateBizDayWindow } from '@/src/utils/timezone';
 
 export default function AddLocationScreen() {
   const { t } = useTranslation();
@@ -33,6 +35,20 @@ export default function AddLocationScreen() {
   const mutation = useMutation({
     mutationFn: async () => {
       if (!orgId) throw new Error(t('business.team.noOrganization', { defaultValue: "Aucune organisation trouvée. Veuillez d'abord créer une organisation." }));
+      // Enforce the cross-03:30 / zero-duration rule here too — the team
+      // location form previously accepted (e.g.) 00:00→05:00 because only
+      // create-basket and business-profile checked it. The 03:30 cron
+      // refills inventory, so any window straddling that boundary breaks
+      // both reservation logic and the daily-reinit math.
+      if (form.pickupStart && form.pickupEnd) {
+        const status = validateBizDayWindow(form.pickupStart, form.pickupEnd);
+        if (status === 'zero') {
+          throw new Error(t('business.availability.invalidWindow', { defaultValue: "L'heure de fin doit être différente de l'heure de début." }));
+        }
+        if (status === 'crosses-reset') {
+          throw new Error(t('business.availability.crossReset', { defaultValue: "Le créneau ne peut pas traverser la réinitialisation quotidienne (03:30). Choisissez un début ≥ 03:30, ou une fin ≤ 03:29." }));
+        }
+      }
       return addLocation(orgId, {
         name: form.name.trim() || undefined,
         address: form.address.trim() || undefined,
@@ -45,8 +61,17 @@ export default function AddLocationScreen() {
         ...(form.coords ? { latitude: form.coords.lat, longitude: form.coords.lng } : {}),
       });
     },
-    onSuccess: () => {
+    onSuccess: (newLoc) => {
       void queryClient.invalidateQueries({ queryKey: ['org-details'] });
+      // Auto-select the newly-created location so the user lands on it when
+      // they navigate to Baskets / Orders. Without this the top-left dropdown
+      // stays on whatever was selected before (often null → "Emplacement")
+      // and the first basket the user creates gets attached to the wrong
+      // location.
+      const newId = (newLoc as any)?.id;
+      if (newId != null) {
+        useBusinessStore.getState().setSelectedLocationId(Number(newId));
+      }
       setSuccessMsg(t('business.team.locationAdded', { defaultValue: 'Emplacement ajouté avec succès.' }));
     },
     onError: (err) => {
@@ -54,7 +79,16 @@ export default function AddLocationScreen() {
     },
   });
 
-  const canSubmit = form.name.trim() && (form.address.trim() || form.coords) && form.category;
+  // Pickup window is now mandatory: the backend already defaults to 11:00→14:00
+  // when omitted, which let merchants create a location without consciously
+  // picking hours and then wonder why baskets surfaced at the wrong time.
+  // Forcing both fields here makes the choice deliberate.
+  const canSubmit =
+    !!form.name.trim() &&
+    (!!form.address.trim() || !!form.coords) &&
+    !!form.category &&
+    !!form.pickupStart &&
+    !!form.pickupEnd;
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]}>

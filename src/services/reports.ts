@@ -13,7 +13,22 @@ export interface SubmitReportRequest {
   image_data_url?: string;
 }
 
-export async function submitReport(data: SubmitReportRequest): Promise<void> {
+export interface SubmitReportResponse {
+  message?: string;
+  reference_number?: string;
+  report?: {
+    id: number;
+    reference_number?: string;
+    reason: string;
+    details?: string;
+    status?: string;
+    image_url?: string | null;
+    created_at?: string;
+  };
+}
+
+export async function submitReport(data: SubmitReportRequest): Promise<SubmitReportResponse> {
   console.log('[Reports] Submitting report for location:', data.location_id ?? data.restaurant_id);
-  await apiClient.post('/api/reviews/report', data);
+  const res = await apiClient.post<SubmitReportResponse>('/api/reviews/report', data);
+  return res.data ?? {};
 }

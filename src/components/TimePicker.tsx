@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback, useEffect } from 'react';
+import React, { useState, useRef, useCallback } from 'react';
 import { View, Text, TouchableOpacity, FlatList, Modal } from 'react-native';
 
 const HOURS = Array.from({ length: 24 }, (_, i) => String(i).padStart(2, '0'));
@@ -41,7 +41,6 @@ function WheelColumn({ data, srcLength, initialIndex, onSelect, primaryColor, mu
 }) {
   const flatListRef = useRef<FlatList>(null);
   const [selectedReal, setSelectedReal] = useState(initialIndex);
-  const mounted = useRef(false);
   const isScrolling = useRef(false);
 
   // Start position: middle copy of the data
@@ -67,21 +66,6 @@ function WheelColumn({ data, srcLength, initialIndex, onSelect, primaryColor, mu
     }
   }, [data, srcLength, middleOffset, onSelect]);
 
-  // After mount, scroll to the correct position in the middle copy
-  useEffect(() => {
-    if (!mounted.current) {
-      mounted.current = true;
-      const offset = startIdx * ITEM_HEIGHT;
-      const t1 = setTimeout(() => {
-        flatListRef.current?.scrollToOffset({ offset, animated: false });
-      }, 50);
-      const t2 = setTimeout(() => {
-        flatListRef.current?.scrollToOffset({ offset, animated: false });
-      }, 150);
-      return () => { clearTimeout(t1); clearTimeout(t2); };
-    }
-  }, []);
-
   return (
     <View style={{ height: ITEM_HEIGHT * VISIBLE_ITEMS, width: 70, overflow: 'hidden' }}>
       <FlatList
@@ -92,6 +76,7 @@ function WheelColumn({ data, srcLength, initialIndex, onSelect, primaryColor, mu
         snapToInterval={ITEM_HEIGHT}
         decelerationRate="fast"
         getItemLayout={(_, index) => ({ length: ITEM_HEIGHT, offset: ITEM_HEIGHT * index, index })}
+        initialScrollIndex={startIdx}
         onMomentumScrollEnd={handleScrollEnd}
         contentContainerStyle={{ paddingVertical: ITEM_HEIGHT * 2 }}
         renderItem={({ item, index }) => {

@@ -11,6 +11,7 @@ import { fetchConversations, type Conversation } from '@/src/services/messages';
 import { StatusBar } from 'expo-status-bar';
 import { DelayedLoader } from '@/src/components/DelayedLoader';
 import { orderIdToCode } from '@/src/utils/orderCode';
+import { usePollWhenFocused } from '@/src/hooks/usePollWhenFocused';
 
 export default function MessagesScreen() {
   const { t } = useTranslation();
@@ -19,11 +20,16 @@ export default function MessagesScreen() {
   const { user } = useAuthStore();
   const isBusiness = user?.role === 'business';
 
+  // Focus-gated. While the messages list is on screen, refresh every
+  // 30s; navigating away pauses the poll entirely. /api/messages shares
+  // the writeLimiter's 20 req/min bucket, so keeping this idle while the
+  // user is in a different screen is critical.
+  const conversationsRefetch = usePollWhenFocused(30_000);
   const conversationsQuery = useQuery({
     queryKey: ['conversations'],
     queryFn: fetchConversations,
-    staleTime: 15_000,
-    refetchInterval: 15_000,
+    staleTime: 25_000,
+    refetchInterval: conversationsRefetch,
   });
 
   const conversations = conversationsQuery.data ?? [];

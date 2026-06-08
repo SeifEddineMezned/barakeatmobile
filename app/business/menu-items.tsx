@@ -4,6 +4,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import { X, Trash2, Plus, Camera, ImageIcon, SquareCheck, Square } from 'lucide-react-native';
+import { DeleteIcon8 } from '@/src/components/ui/Icon8';
 import * as ImagePicker from 'expo-image-picker';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -385,7 +386,7 @@ export default function MenuItemsScreen() {
                       hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
                       style={{ marginTop: 6, alignSelf: 'flex-end' }}
                     >
-                      <Trash2 size={16} color={theme.colors.error} />
+                      <DeleteIcon8 size={16} />
                     </TouchableOpacity>
                   </View>
                 </View>

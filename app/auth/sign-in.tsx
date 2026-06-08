@@ -20,21 +20,25 @@ import * as AppleAuthentication from 'expo-apple-authentication';
 
 const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get('window');
 
-// Food emojis that fall from above and settle at fixed positions
-// Food positions: top area + sides only — never behind the center buttons
+// Food emojis arranged on a semi-circle above the centered paper-bag image.
+// Positions are tied to a fixed-size container that wraps both the bag and
+// the food items, so the arc actually surrounds the bag regardless of where
+// the flex-centered group lands on screen. See the BAG_ASSEMBLY_* constants
+// inline below for the local coordinate system.
 const FOOD_ITEMS = [
-  { emoji: '🥐', size: 44, finalX: SCREEN_W * 0.06, finalY: SCREEN_H * 0.04 },
-  { emoji: '🍕', size: 40, finalX: SCREEN_W * 0.75, finalY: SCREEN_H * 0.03 },
-  { emoji: '🧁', size: 36, finalX: SCREEN_W * 0.42, finalY: SCREEN_H * 0.01 },
-  { emoji: '🥗', size: 42, finalX: SCREEN_W * 0.02, finalY: SCREEN_H * 0.16 },
-  { emoji: '🍩', size: 36, finalX: SCREEN_W * 0.84, finalY: SCREEN_H * 0.14 },
-  { emoji: '🥑', size: 32, finalX: SCREEN_W * 0.01, finalY: SCREEN_H * 0.78 },
-  { emoji: '🌮', size: 36, finalX: SCREEN_W * 0.85, finalY: SCREEN_H * 0.80 },
-  { emoji: '🍰', size: 38, finalX: SCREEN_W * 0.40, finalY: SCREEN_H * 0.88 },
+  { emoji: '🥐', size: 44, angle: -160 },
+  { emoji: '🥗', size: 42, angle: -125 },
+  { emoji: '🧁', size: 36, angle:  -90 },
+  { emoji: '🍕', size: 40, angle:  -55 },
+  { emoji: '🍩', size: 36, angle:  -20 },
 ];
 
-// Full "welcome chez" in 3 languages, cycling
-const WELCOME_WORDS = ['أهلاً بكم في', 'Welcome to', 'Bienvenue chez'];
+// Rotating French advantages shown on the sign-in landing screen.
+const WELCOME_WORDS = [
+  'Économisez sur vos repas',
+  'Luttez contre le gaspillage',
+  'Soutenez les commerces locaux',
+];
 // Required by expo-web-browser — must be called at module level
 WebBrowser.maybeCompleteAuthSession();
 
@@ -248,7 +252,13 @@ export default function SignInScreen() {
 
   // ── Apple Sign-In ────────────────────────────────────────────────────────
 
-  const handleAppleSignIn = async () => {
+  // OAuth (Google/Apple) is customer-only on the welcome screen \u2014 merchants
+  // sign in with email. Accept the requested role as an explicit argument so
+  // we never read a stale `role` state value: calling `setRole('customer')`
+  // right before invoking the handler doesn't flush the state update before
+  // the closure reads `role` \u2014 that was the "stuck in commerce mode after
+  // back-out" bug.
+  const handleAppleSignIn = async (requestedRole: UserRole = 'customer') => {
     if (FeatureFlags.IS_PROTOTYPE) {
       setErrorMsg(t('auth.prototypeMode', { defaultValue: 'L\'application est en mode prototype. La connexion n\'est pas disponible. Utilisez le mode d\u00e9mo pour d\u00e9couvrir l\'application.' }));
       return;
@@ -263,7 +273,7 @@ export default function SignInScreen() {
       });
 
       if (!credential.identityToken) {
-        setErrorMsg(t('auth.appleAuthError'));
+        setErrorMsg(t('auth.appleUnavailable'));
         return;
       }
 
@@ -276,12 +286,17 @@ export default function SignInScreen() {
       const backendType = (res as any).user?.type ?? '';
       const mappedRole: UserRole = backendType === 'restaurant' ? 'business' : 'customer';
 
-      // Enforce role match — block cross-role login
-      if (mappedRole !== role) {
+      // Enforce role match — block cross-role login. Merchants hitting Apple
+      // OAuth on the customer flow get a tailored "use email" message.
+      if (mappedRole !== requestedRole) {
         await clearSession();
-        setRoleMismatchMsg(role === 'customer'
-          ? t('auth.notCustomerAccount', { defaultValue: 'Ce compte est enregistré comme commerce. Veuillez passer en mode commerçant.' })
-          : t('auth.notBusinessAccount', { defaultValue: 'Ce compte est enregistré comme client. Veuillez passer en mode client.' }));
+        setRoleMismatchMsg(
+          requestedRole === 'customer' && mappedRole === 'business'
+            ? t('auth.businessMustUseEmail', { defaultValue: 'Les commerçants se connectent uniquement par email.' })
+            : requestedRole === 'customer'
+              ? t('auth.notCustomerAccount', { defaultValue: 'Ce compte est enregistré comme commerce. Veuillez passer en mode commerçant.' })
+              : t('auth.notBusinessAccount', { defaultValue: 'Ce compte est enregistré comme client. Veuillez passer en mode client.' })
+        );
         setLoading(false);
         return;
       }
@@ -306,9 +321,13 @@ export default function SignInScreen() {
       }
     } catch (err: any) {
       if (err.code === 'ERR_REQUEST_CANCELED') return; // user cancelled
-      const msg = getErrorMessage(err);
-      console.log('[SignIn] Apple error:', msg);
-      setErrorMsg(msg);
+      // Any other failure (backend auth/config rejection, network, missing
+      // token) isn't actionable by the user — show a clean, translated
+      // "unavailable" message and steer them to email / Google instead of a
+      // raw backend string like "Token not authorized for this app". The real
+      // cause is still logged for us.
+      console.log('[SignIn] Apple error:', getErrorMessage(err));
+      setErrorMsg(t('auth.appleUnavailable'));
     } finally {
       setAppleLoading(false);
     }
@@ -316,7 +335,7 @@ export default function SignInScreen() {
 
   // ── Google OAuth ─────────────────────────────────────────────────────────
 
-  const handleGoogleSignIn = async () => {
+  const handleGoogleSignIn = async (requestedRole: UserRole = 'customer') => {
     if (FeatureFlags.IS_PROTOTYPE) {
       setErrorMsg(t('auth.prototypeMode', { defaultValue: 'L\'application est en mode prototype. La connexion n\'est pas disponible. Utilisez le mode d\u00e9mo pour d\u00e9couvrir l\'application.' }));
       return;
@@ -361,12 +380,17 @@ export default function SignInScreen() {
       const mappedRole: UserRole =
         backendType === 'restaurant' ? 'business' : 'customer';
 
-      // Enforce role match — block cross-role login
-      if (mappedRole !== role) {
+      // Enforce role match — block cross-role login. Merchants hitting Google
+      // OAuth on the customer flow get a tailored "use email" message.
+      if (mappedRole !== requestedRole) {
         await clearSession();
-        setRoleMismatchMsg(role === 'customer'
-          ? t('auth.notCustomerAccount', { defaultValue: 'Ce compte est enregistré comme commerce. Veuillez passer en mode commerçant.' })
-          : t('auth.notBusinessAccount', { defaultValue: 'Ce compte est enregistré comme client. Veuillez passer en mode client.' }));
+        setRoleMismatchMsg(
+          requestedRole === 'customer' && mappedRole === 'business'
+            ? t('auth.businessMustUseEmail', { defaultValue: 'Les commerçants se connectent uniquement par email.' })
+            : requestedRole === 'customer'
+              ? t('auth.notCustomerAccount', { defaultValue: 'Ce compte est enregistré comme commerce. Veuillez passer en mode commerçant.' })
+              : t('auth.notBusinessAccount', { defaultValue: 'Ce compte est enregistré comme client. Veuillez passer en mode client.' })
+        );
         setGoogleLoading(false);
         return;
       }
@@ -464,41 +488,66 @@ export default function SignInScreen() {
           <View style={[styles.content, { padding: theme.spacing.xxl }]}>
             {step === 'choose' ? (
               <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-                {/* Floating food emojis */}
-                {FOOD_ITEMS.map((item, i) => (
+                {/* Bag + food arc assembly. Fixed dimensions so the food emojis,
+                    positioned in this container's local coordinates, always
+                    surround the bag — the previous screen-space coords drifted
+                    relative to the flex-centered bag and the arc appeared above
+                    instead of around it. Bag sits bottom-anchored in the box;
+                    food emojis curve from -160° to -20° around the bag's center. */}
+                <View style={{ width: 340, height: 280, marginBottom: 8, alignItems: 'center', justifyContent: 'flex-end' }}>
+                  {(() => {
+                    const BAG_CX = 170;       // half of 340
+                    const BAG_CY = 280 - 90;  // bottom-anchored bag (180/2 = 90 up from bottom)
+                    const ARC_R  = 125;
+                    return FOOD_ITEMS.map((item, i) => {
+                      const rad = (item.angle * Math.PI) / 180;
+                      const left = BAG_CX + ARC_R * Math.cos(rad) - item.size / 2;
+                      const top  = BAG_CY + ARC_R * Math.sin(rad) - item.size / 2;
+                      return (
+                        <Animated.Text
+                          key={i}
+                          style={{
+                            position: 'absolute',
+                            left,
+                            top,
+                            fontSize: item.size,
+                            opacity: foodAnims[i].opacity,
+                            transform: [{ translateY: foodAnims[i].y }],
+                          }}
+                        >
+                          {item.emoji}
+                        </Animated.Text>
+                      );
+                    });
+                  })()}
+
+                  {/* Paper bag image */}
+                  <Image
+                    source={require('@/assets/images/barakeat_paper_bag.png')}
+                    style={{ width: 180, height: 180 }}
+                    resizeMode="contain"
+                  />
+                </View>
+
+                {/* Fixed-height wrapper so the rotating advantage text reserves
+                    the same vertical space regardless of how many lines the
+                    current phrase wraps to — keeps the bag from jumping when
+                    the longer "Soutenez les commerces locaux" cycles through. */}
+                <View style={{ height: 56, justifyContent: 'center', paddingHorizontal: 16 }}>
                   <Animated.Text
-                    key={i}
+                    numberOfLines={2}
                     style={{
-                      position: 'absolute',
-                      left: item.finalX,
-                      top: item.finalY,
-                      fontSize: item.size,
-                      opacity: foodAnims[i].opacity,
-                      transform: [{ translateY: foodAnims[i].y }],
+                      opacity: welcomeFade,
+                      color: '#114b3c',
+                      fontSize: 18,
+                      lineHeight: 24,
+                      fontFamily: 'Poppins_400Regular',
+                      textAlign: 'center',
                     }}
                   >
-                    {item.emoji}
+                    {WELCOME_WORDS[welcomeIdx]}
                   </Animated.Text>
-                ))}
-
-                {/* Paper bag image */}
-                <Image
-                  source={require('@/assets/images/barakeat_paper_bag.png')}
-                  style={{ width: 130, height: 130, marginBottom: 24 }}
-                  resizeMode="contain"
-                />
-
-                {/* Animated welcome phrase cycling: Arabic → English → French */}
-                <Animated.Text style={{
-                  opacity: welcomeFade,
-                  color: '#114b3c',
-                  fontSize: 24,
-                  fontFamily: 'Poppins_400Regular',
-                  textAlign: 'center',
-                  minHeight: 36,
-                }}>
-                  {WELCOME_WORDS[welcomeIdx]}
-                </Animated.Text>
+                </View>
 
                 <Text style={{
                   color: '#114b3c',
@@ -508,14 +557,14 @@ export default function SignInScreen() {
                   textAlign: 'center',
                   marginTop: 4,
                 }}>
-                  Barakeat.
+                  Barakeat
                 </Text>
 
                 {/* Sign-in buttons — fade in after food settles */}
                 <Animated.View style={{ opacity: buttonsOpacity, width: '100%', marginTop: 48, gap: 12 }}>
-                  {/* Google */}
+                  {/* Google — always customer on the welcome screen; merchants must use email */}
                   <TouchableOpacity
-                    onPress={() => { setRole('customer'); handleGoogleSignIn(); }}
+                    onPress={() => handleGoogleSignIn('customer')}
                     disabled={googleLoading}
                     activeOpacity={0.8}
                     style={{
@@ -538,7 +587,7 @@ export default function SignInScreen() {
                   {/* Apple — iOS only */}
                   {Platform.OS === 'ios' && (
                     <TouchableOpacity
-                      onPress={() => { setRole('customer'); handleAppleSignIn(); }}
+                      onPress={() => handleAppleSignIn('customer')}
                       disabled={appleLoading}
                       activeOpacity={0.8}
                       style={{
@@ -589,13 +638,6 @@ export default function SignInScreen() {
                       </Text>
                     </Text>
                   </TouchableOpacity>
-                  {FeatureFlags.ENABLE_ADMIN_SIGN_IN_LINK && (
-                  <TouchableOpacity onPress={() => router.push('/admin/sign-in' as never)}>
-                    <Text style={{ color: '#114b3c60', fontSize: 12, fontFamily: 'Poppins_400Regular' }}>
-                      {t('auth.adminLink', { defaultValue: 'Admin Barakeat' })}
-                    </Text>
-                  </TouchableOpacity>
-                  )}
                 </Animated.View>
               </View>
             ) : (
@@ -617,7 +659,7 @@ export default function SignInScreen() {
                   <ChevronLeft size={28} color="#114b3c" />
                 </TouchableOpacity>
                 <Text style={{ color: '#114b3c', fontSize: 34, fontWeight: '700', fontFamily: 'Poppins_700Bold', textAlign: 'center', marginBottom: 2 }}>
-                  Barakeat.
+                  Barakeat
                 </Text>
                 <Text style={{ color: '#114b3c', fontSize: 20, fontFamily: 'Poppins_400Regular', textAlign: 'center', marginBottom: 6 }}>
                   {role === 'customer' ? t('auth.signIn', { defaultValue: 'Se connecter' }) : t('business.auth.businessSignIn', { defaultValue: 'Espace commerce' })}

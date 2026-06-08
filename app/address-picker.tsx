@@ -7,9 +7,12 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { MapPin, Home, Briefcase, Plus, ChevronLeft, Check, Trash2, Edit3, Navigation, AlertTriangle } from 'lucide-react-native';
 import * as Location from 'expo-location';
 import { useTheme } from '@/src/theme/ThemeProvider';
+import { PaperSurface } from '@/src/components/ui/PaperSurface';
+import { EditIcon8, DeleteIcon8 } from '@/src/components/ui/Icon8';
 import { useAddressStore, type SavedAddress } from '@/src/stores/addressStore';
 import { useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
+import { searchAddresses, reverseGeocode } from '@/src/services/geocoding';
 
 let MapView: any = null;
 let Marker: any = null;
@@ -41,6 +44,9 @@ export default function AddressPickerScreen() {
       const coords = { lat: pos.coords.latitude, lng: pos.coords.longitude };
       setPendingRegion(coords);
       mapRef.current?.animateToRegion({ latitude: coords.lat, longitude: coords.lng, latitudeDelta: 0.01, longitudeDelta: 0.01 }, 600);
+      // The map's onRegionChangeComplete will fire after the animation lands
+      // and trigger fetchReverseGeocode automatically — no need to call it
+      // here too.
     } catch {}
   };
   const [labelInput, setLabelInput] = useState('');
@@ -55,6 +61,12 @@ export default function AddressPickerScreen() {
     setStep('list');
     setLabelInput('');
     setEditingAddress(null);
+    setReverseGeocodedName('');
+    // Re-arm auto-fill for the next session. Without this, after the user
+    // typed a custom label once and went back to the list, the next "add
+    // address" session would inherit the no-auto-fill state and never show
+    // the resolved address.
+    labelAutoFilledRef.current = true;
   };
 
   const handleBack = () => {
@@ -73,6 +85,12 @@ export default function AddressPickerScreen() {
     setPendingRegion({ lat: addr.lat, lng: addr.lng });
     setLabelInput(addr.label);
     setStep('edit');
+    // The label was user-supplied last time, so don't overwrite it as the
+    // user pans the map. They can clear the field to opt back into auto.
+    labelAutoFilledRef.current = false;
+    // Pre-fetch the resolved address for the existing pin so the tooltip
+    // under the pin shows what's there.
+    fetchReverseGeocode(addr.lat, addr.lng);
   };
 
   const handleEditConfirm = () => {
@@ -87,7 +105,21 @@ export default function AddressPickerScreen() {
     reset();
   };
 
-  const handleMapConfirm = () => setStep('form');
+  const handleMapConfirm = () => {
+    // If the user typed/picked a label earlier but has since panned the pin
+    // far enough that the label is no longer about the same place, auto-
+    // accept the freshly resolved name so the saved entry matches the pin.
+    // 200 m is roughly the spread of a neighbourhood block — beyond that, a
+    // typed search term is almost certainly stale.
+    const source = labelSourceCoordsRef.current;
+    const STALE_THRESHOLD_M = 200;
+    const isStale = source != null && haversineMeters(source, pendingRegion) > STALE_THRESHOLD_M;
+    if (reverseGeocodedName && (labelInput.trim().length === 0 || isStale)) {
+      setLabelInput(reverseGeocodedName);
+      labelSourceCoordsRef.current = { ...pendingRegion };
+    }
+    setStep('form');
+  };
 
   const handleFormSave = () => {
     const label = labelInput.trim() || t('addressPicker.defaultLabel', { defaultValue: 'Mon adresse' });
@@ -95,7 +127,9 @@ export default function AddressPickerScreen() {
     reset();
   };
 
-  // Search for location by text (Nominatim / OpenStreetMap autocomplete)
+  // Address text search — handled by the shared geocoding module: device
+  // native geocoder first (Apple/Google, far better Tunisian POI coverage),
+  // Nominatim fallback. 400 ms debounce.
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<{ name: string; lat: number; lng: number }[]>([]);
   const searchTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -105,25 +139,56 @@ export default function AddressPickerScreen() {
     if (searchTimeout.current) clearTimeout(searchTimeout.current);
     if (!text.trim()) { setSearchResults([]); return; }
     searchTimeout.current = setTimeout(async () => {
-      try {
-        // Use Nominatim for real place name suggestions
-        const query = encodeURIComponent(text.trim());
-        const resp = await fetch(
-          `https://nominatim.openstreetmap.org/search?q=${query}&format=json&addressdetails=1&limit=5&countrycodes=tn`,
-          { headers: { 'Accept-Language': 'fr' } }
-        );
-        const data = await resp.json();
-        setSearchResults(
-          data.map((place: any) => ({
-            name: place.display_name,
-            lat: parseFloat(place.lat),
-            lng: parseFloat(place.lon),
-          }))
-        );
-      } catch {
-        setSearchResults([]);
-      }
+      const hits = await searchAddresses(text);
+      setSearchResults(hits);
     }, 400);
+  };
+
+  // ── Reverse geocoding on pin move ─────────────────────────────────────
+  // When the user drags the map to a new spot, fetch the address for the
+  // pin coordinates and (a) show it under the pin so they know what they're
+  // pointing at, (b) pre-fill the address-label field in the form step so
+  // the saved address text matches the actual pin position instead of being
+  // an unrelated leftover from a previous search.
+  const [reverseGeocodedName, setReverseGeocodedName] = useState<string>('');
+  const reverseTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // True while the label field still reflects an auto-fill — we replace it
+  // on every successful reverse-geocode. Once the user types into the label
+  // field themselves we stop overwriting so we don't clobber their input.
+  const labelAutoFilledRef = useRef(true);
+  // Coords where the current labelInput was last set from a search hit or
+  // suggestion. Used by the form-step auto-accept logic: if the user pans
+  // far from this point before confirming, the label is stale.
+  const labelSourceCoordsRef = useRef<{ lat: number; lng: number } | null>(null);
+
+  const fetchReverseGeocode = (lat: number, lng: number) => {
+    if (reverseTimeout.current) clearTimeout(reverseTimeout.current);
+    reverseTimeout.current = setTimeout(async () => {
+      const formatted = await reverseGeocode(lat, lng);
+      if (!formatted) return;
+      // Always update the chip — it's the user's only signal that the pin
+      // moved, and gating it on labelAutoFilledRef previously meant typed
+      // labels would freeze the chip.
+      setReverseGeocodedName(formatted);
+      // Only auto-fill the label field if the user hasn't supplied custom
+      // text — otherwise they'd lose what they typed mid-pan.
+      if (labelAutoFilledRef.current) {
+        setLabelInput(formatted);
+      }
+    }, 500);
+  };
+
+  // Approx great-circle distance (m). Used to decide whether the typed label
+  // is "stale" relative to the current pin before saving.
+  const haversineMeters = (a: { lat: number; lng: number }, b: { lat: number; lng: number }) => {
+    const toRad = (d: number) => (d * Math.PI) / 180;
+    const R = 6371000;
+    const dLat = toRad(b.lat - a.lat);
+    const dLng = toRad(b.lng - a.lng);
+    const lat1 = toRad(a.lat);
+    const lat2 = toRad(b.lat);
+    const h = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
+    return 2 * R * Math.asin(Math.sqrt(h));
   };
 
   const title =
@@ -200,7 +265,7 @@ export default function AddressPickerScreen() {
           {/* Saved addresses list */}
           {addresses.length > 0 && (
             <>
-              <Text style={[theme.typography.caption, { color: theme.colors.textSecondary, fontWeight: '600' as const, marginBottom: 8, letterSpacing: 0.5, textTransform: 'uppercase' as const }]}>
+              <Text style={[theme.typography.caption, { color: theme.colors.textSecondary, fontWeight: '600' as const, marginBottom: 8, letterSpacing: 0.5, textTransform: 'none' as const }]}>
                 {t('addressPicker.savedAddresses')}
               </Text>
               {addresses.map((addr) => {
@@ -236,14 +301,14 @@ export default function AddressPickerScreen() {
                       hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                       style={{ marginLeft: 10 }}
                     >
-                      <Edit3 size={16} color={theme.colors.primary} />
+                      <EditIcon8 size={16} />
                     </TouchableOpacity>
                     <TouchableOpacity
                       onPress={() => setAddressPendingDelete(addr)}
                       hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                       style={{ marginLeft: 10 }}
                     >
-                      <Trash2 size={16} color={theme.colors.muted} />
+                      <DeleteIcon8 size={16} />
                     </TouchableOpacity>
                   </TouchableOpacity>
                 );
@@ -275,6 +340,13 @@ export default function AddressPickerScreen() {
                       mapRef.current?.animateToRegion({ latitude: r.lat, longitude: r.lng, latitudeDelta: 0.005, longitudeDelta: 0.005 }, 400);
                       setSearchQuery('');
                       setSearchResults([]);
+                      // Use the suggestion text as the resolved name and
+                      // record the coords so handleMapConfirm can detect a
+                      // pan-drift later. The onRegionChangeComplete then
+                      // refines it with a cleaner road/suburb tuple.
+                      setReverseGeocodedName(r.name);
+                      if (labelAutoFilledRef.current) setLabelInput(r.name);
+                      labelSourceCoordsRef.current = { lat: r.lat, lng: r.lng };
                     }}
                     style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 14, borderTopWidth: i > 0 ? 1 : 0, borderTopColor: theme.colors.divider }}
                   >
@@ -298,6 +370,7 @@ export default function AddressPickerScreen() {
                 }}
                 onRegionChangeComplete={(region: any) => {
                   setPendingRegion({ lat: region.latitude, lng: region.longitude });
+                  fetchReverseGeocode(region.latitude, region.longitude);
                 }}
               />
             ) : (
@@ -322,6 +395,18 @@ export default function AddressPickerScreen() {
                 {t('addressPicker.dragToMove', { defaultValue: 'Move the map to position the pin' })}
               </Text>
             </View>
+            {/* Resolved address — what the pin currently points at, fetched
+                via reverse geocode ~500 ms after the pin settles. Display
+                only; the Confirm button below carries this name into the
+                form step (handleMapConfirm auto-accepts it). */}
+            {reverseGeocodedName ? (
+              <View style={[styles.resolvedAddress, { backgroundColor: 'rgba(255,255,255,0.95)' }]}>
+                <MapPin size={14} color={theme.colors.primary} />
+                <Text style={[theme.typography.caption, { color: theme.colors.textPrimary, marginLeft: 6, flex: 1 }]} numberOfLines={2}>
+                  {reverseGeocodedName}
+                </Text>
+              </View>
+            ) : null}
           </View>
 
           <View style={[styles.mapFooter, { backgroundColor: theme.colors.bg, gap: 10 }]}>
@@ -364,6 +449,13 @@ export default function AddressPickerScreen() {
                       mapRef.current?.animateToRegion({ latitude: r.lat, longitude: r.lng, latitudeDelta: 0.005, longitudeDelta: 0.005 }, 400);
                       setSearchQuery('');
                       setSearchResults([]);
+                      // Use the suggestion text as the resolved name and
+                      // record the coords so handleMapConfirm can detect a
+                      // pan-drift later. The onRegionChangeComplete then
+                      // refines it with a cleaner road/suburb tuple.
+                      setReverseGeocodedName(r.name);
+                      if (labelAutoFilledRef.current) setLabelInput(r.name);
+                      labelSourceCoordsRef.current = { lat: r.lat, lng: r.lng };
                     }}
                     style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 14, borderTopWidth: i > 0 ? 1 : 0, borderTopColor: theme.colors.divider }}
                   >
@@ -387,6 +479,7 @@ export default function AddressPickerScreen() {
                 }}
                 onRegionChangeComplete={(region: any) => {
                   setPendingRegion({ lat: region.latitude, lng: region.longitude });
+                  fetchReverseGeocode(region.latitude, region.longitude);
                 }}
               />
             ) : (
@@ -406,20 +499,31 @@ export default function AddressPickerScreen() {
 
             {/* Editing label */}
             <View style={[styles.tooltip, { backgroundColor: 'rgba(0,0,0,0.75)' }]}>
-              <Edit3 size={14} color="#fff" />
+              <EditIcon8 size={14} tintColor="#fff" />
               <Text style={[theme.typography.caption, { color: '#fff', marginLeft: 6 }]}>
                 {t('addressPicker.editLocation')}
               </Text>
             </View>
+            {reverseGeocodedName ? (
+              <View style={[styles.resolvedAddress, { backgroundColor: 'rgba(255,255,255,0.95)' }]}>
+                <MapPin size={14} color={theme.colors.primary} />
+                <Text style={[theme.typography.caption, { color: theme.colors.textPrimary, marginLeft: 6, flex: 1 }]} numberOfLines={2}>
+                  {reverseGeocodedName}
+                </Text>
+              </View>
+            ) : null}
           </View>
 
           <View style={[styles.mapFooter, { backgroundColor: theme.colors.bg, gap: 10 }]}>
             {/* Editable label — lets the user rename "Maman" → "Travail" etc. */}
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, paddingHorizontal: 14, paddingVertical: 10, borderWidth: 1, borderColor: theme.colors.divider }}>
-              <Edit3 size={14} color={theme.colors.primary} />
+              <EditIcon8 size={14} />
               <TextInput
                 value={labelInput}
-                onChangeText={setLabelInput}
+                onChangeText={(v) => {
+                  labelAutoFilledRef.current = false;
+                  setLabelInput(v);
+                }}
                 placeholder={editingAddress.label}
                 placeholderTextColor={theme.colors.muted}
                 style={{ flex: 1, color: theme.colors.textPrimary, ...theme.typography.bodySm }}
@@ -446,6 +550,48 @@ export default function AddressPickerScreen() {
       {/* ── Step: Label Form ──────────────────────────────── */}
       {step === 'form' && (
         <View style={{ flex: 1, paddingHorizontal: 20, paddingTop: 16 }}>
+          {/* Detected address suggestion — shown when reverse-geocode found a
+              name AND the user hasn't already overridden the label. One tap
+              accepts the detected text as the saved label, so users don't
+              have to retype what the pin already resolved to. They can still
+              ignore this and use a quick label or type a custom name below. */}
+          {reverseGeocodedName && reverseGeocodedName !== labelInput ? (
+            <TouchableOpacity
+              onPress={() => {
+                labelAutoFilledRef.current = false;
+                setLabelInput(reverseGeocodedName);
+              }}
+              activeOpacity={0.8}
+              style={{
+                flexDirection: 'row',
+                alignItems: 'center',
+                gap: 10,
+                backgroundColor: theme.colors.primary + '0F',
+                borderColor: theme.colors.primary + '44',
+                borderWidth: 1,
+                borderRadius: theme.radii.r12,
+                paddingHorizontal: 12,
+                paddingVertical: 10,
+                marginBottom: 12,
+              }}
+            >
+              <MapPin size={16} color={theme.colors.primary} />
+              <View style={{ flex: 1 }}>
+                <Text style={{ color: theme.colors.muted, fontSize: 10, fontFamily: 'Poppins_500Medium', letterSpacing: 0.5, textTransform: 'none' as const }}>
+                  {t('addressPicker.detectedLabel', { defaultValue: 'Adresse détectée' })}
+                </Text>
+                <Text style={[theme.typography.bodySm, { color: theme.colors.textPrimary, marginTop: 1 }]} numberOfLines={2}>
+                  {reverseGeocodedName}
+                </Text>
+              </View>
+              <View style={{ backgroundColor: theme.colors.primary, paddingHorizontal: 10, paddingVertical: 6, borderRadius: theme.radii.pill }}>
+                <Text style={{ color: '#fff', fontSize: 11, fontFamily: 'Poppins_600SemiBold' }}>
+                  {t('addressPicker.useDetected', { defaultValue: 'Utiliser' })}
+                </Text>
+              </View>
+            </TouchableOpacity>
+          ) : null}
+
           {/* Quick label chips */}
           <View style={{ flexDirection: 'row', gap: 10, marginBottom: 20 }}>
             {QUICK_LABELS.map((ql) => {
@@ -455,7 +601,10 @@ export default function AddressPickerScreen() {
               return (
                 <TouchableOpacity
                   key={ql}
-                  onPress={() => setLabelInput(qlLabel)}
+                  onPress={() => {
+                    labelAutoFilledRef.current = false;
+                    setLabelInput(qlLabel);
+                  }}
                   style={[
                     styles.quickChip,
                     {
@@ -491,7 +640,10 @@ export default function AddressPickerScreen() {
             placeholder={t('addressPicker.customNamePlaceholder', { defaultValue: 'Ou entrez un nom personnalisé...' })}
             placeholderTextColor={theme.colors.muted}
             value={labelInput}
-            onChangeText={setLabelInput}
+            onChangeText={(v) => {
+              labelAutoFilledRef.current = false;
+              setLabelInput(v);
+            }}
           />
 
           <TouchableOpacity
@@ -512,9 +664,9 @@ export default function AddressPickerScreen() {
         onRequestClose={() => setAddressPendingDelete(null)}
       >
         <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 24 }}>
-          <View style={{ backgroundColor: theme.colors.surface, borderRadius: 20, padding: 24, width: '100%', maxWidth: 340, alignItems: 'center' }}>
-            <View style={{ backgroundColor: theme.colors.error + '15', width: 56, height: 56, borderRadius: 28, justifyContent: 'center', alignItems: 'center', marginBottom: 16 }}>
-              <AlertTriangle size={28} color={theme.colors.error} />
+          <PaperSurface radius={20} style={{ padding: 24, width: '100%', maxWidth: 340, alignItems: 'center' }}>
+            <View style={{ backgroundColor: theme.colors.surfaceMuted, width: 56, height: 56, borderRadius: 28, justifyContent: 'center', alignItems: 'center', marginBottom: 16 }}>
+              <Trash2 size={26} color={theme.colors.textSecondary} />
             </View>
             <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3, textAlign: 'center', marginBottom: 8 }}>
               {t('addressPicker.deleteConfirmTitle', { defaultValue: 'Supprimer cette adresse ?' })}
@@ -524,7 +676,7 @@ export default function AddressPickerScreen() {
                 <Text style={{ fontWeight: '700' }}>{addressPendingDelete.label}</Text>
               </Text>
             )}
-            <Text style={{ color: theme.colors.error, ...theme.typography.bodySm, textAlign: 'center', marginBottom: 24, fontWeight: '600', lineHeight: 20 }}>
+            <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm, textAlign: 'center', marginBottom: 24, lineHeight: 20 }}>
               {t('addressPicker.deleteIrreversible', { defaultValue: 'Cette action est irréversible.' })}
             </Text>
             <View style={{ flexDirection: 'row', gap: 10, width: '100%' }}>
@@ -549,7 +701,7 @@ export default function AddressPickerScreen() {
                 </Text>
               </TouchableOpacity>
             </View>
-          </View>
+          </PaperSurface>
         </View>
       </Modal>
     </SafeAreaView>
@@ -614,6 +766,20 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 8,
     borderRadius: 20,
+  },
+  // Resolved-address chip — pinned just above the bottom action area so it
+  // doesn't overlap the centered pin. Light background for readability over
+  // map imagery.
+  resolvedAddress: {
+    position: 'absolute',
+    bottom: 16,
+    left: 16,
+    right: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 12,
   },
   mapFooter: {
     padding: 20,

@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TextInput, Image, Alert,
-  TouchableOpacity, KeyboardAvoidingView, Platform, ActivityIndicator, Modal, Animated,
+  TouchableOpacity, KeyboardAvoidingView, Platform, ActivityIndicator, Modal,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -16,14 +16,17 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   createBasketJSON, updateBasket as updateBasketAPI,
   fetchMyBaskets, fetchMyProfile, fetchMyMenuItems,
+  duplicateBasketToLocations,
   type MenuItemFromAPI,
 } from '@/src/services/business';
 import { getErrorMessage, apiClient } from '@/src/lib/api';
 import { FeatureFlags } from '@/src/lib/featureFlags';
 import { useCustomAlert } from '@/src/components/CustomAlert';
-import { fetchMyContext } from '@/src/services/teams';
+import { fetchMyContext, fetchOrganizationDetails, type OrgDetailsFromAPI } from '@/src/services/teams';
+import { validateBizDayWindow } from '@/src/utils/timezone';
 import { effectiveDailyReinit } from '@/src/utils/dailyReinit';
 import { useWalkthroughStore } from '@/src/stores/walkthroughStore';
+import { DEMO_BASKET_PHOTOS } from '@/src/lib/demoData';
 import { SubScreenWalkthroughOverlay } from '@/src/components/SubScreenWalkthroughOverlay';
 
 export default function CreateBasketScreen() {
@@ -36,11 +39,15 @@ export default function CreateBasketScreen() {
   const selectedLocationId = useBusinessStore((s) => s.selectedLocationId);
   const queryClient = useQueryClient();
 
-  // ── Fetch profile for default pickup times
+  // ── Fetch profile for default pickup times. refetchOnMount: 'always'
+  // guarantees the form sees the location's CURRENT opening hours every time
+  // it opens — without it, a cached profile from before a recent hours edit
+  // would leak into the "use business hours" toggle and show stale defaults.
   const profileQuery = useQuery({
     queryKey: ['my-profile', selectedLocationId],
     queryFn: () => fetchMyProfile(selectedLocationId),
     staleTime: 60_000,
+    refetchOnMount: 'always',
   });
 
   // ── Fetch live baskets to populate edit fields
@@ -59,6 +66,24 @@ export default function CreateBasketScreen() {
   const canCreateBasket = isAdmin || hasPerm('create_delete_baskets');
   const canEditBasket = isAdmin || hasPerm('edit_basket_info');
   const hasPermission = editId ? canEditBasket : canCreateBasket;
+  // Org-admin = admin/owner with NO location scope. Location-admins
+  // only manage their own location and shouldn't be able to push a
+  // basket into a sibling location, so they don't see the toggle.
+  const isOrgAdmin = isAdmin && !ctxQuery.data?.location_id;
+  const orgId = ctxQuery.data?.organization_id;
+  const orgDetailsQuery = useQuery({
+    queryKey: ['org-details', orgId],
+    queryFn: () => fetchOrganizationDetails(orgId!),
+    enabled: !!orgId && isOrgAdmin,
+    staleTime: 60_000,
+  });
+  const orgLocations = (orgDetailsQuery.data as OrgDetailsFromAPI | undefined)?.locations ?? [];
+  // "Use for all locations" — surfaces in BOTH create and edit modes so
+  // an org-admin can flip it after the fact. Hidden when there's only
+  // a single location to replicate to (would be a no-op) or when the
+  // user isn't an org-admin.
+  const [useForAllLocations, setUseForAllLocations] = useState(false);
+  const showAllLocationsToggle = isOrgAdmin && orgLocations.length > 1;
 
   // Find the basket to edit — prefer live API data, fall back to store
   const apiBasket = editId
@@ -170,13 +195,20 @@ export default function CreateBasketScreen() {
   // Custom pickup time toggle — if OFF, basket uses location's default pickup times
   const locationDefaultStart = profileQuery.data?.pickup_start_time?.substring(0, 5) ?? '18:00';
   const locationDefaultEnd = profileQuery.data?.pickup_end_time?.substring(0, 5) ?? '19:00';
-  const [useCustomPickupTime, setUseCustomPickupTime] = useState(() => {
-    if (!isEditing) return false;
-    // If editing, detect whether basket has different times than location default
-    const bStart = apiBasket?.pickup_start_time?.substring(0, 5);
-    const bEnd = apiBasket?.pickup_end_time?.substring(0, 5);
-    if (!bStart || !bEnd) return false;
-    return bStart !== locationDefaultStart || bEnd !== locationDefaultEnd;
+  // Inverted from the old `useCustomPickupTime`: when true, the basket
+  // inherits the location's hours and the custom pickers are hidden; when
+  // false, the user is editing a custom window and the pickers are shown.
+  //
+  // Canonical "inheriting" signal: the server's pickup_start_time /
+  // pickup_end_time columns are NULL. We deliberately do NOT compare basket
+  // times against the location defaults — a basket with explicit values that
+  // happen to match the location defaults is still a custom override, and
+  // must round-trip as "custom" so the user sees the checkbox unchecked
+  // after a save. (Bug seen previously: save with custom == defaults →
+  // reopen form → checkbox shown checked.)
+  const [useBusinessHours, setUseBusinessHours] = useState(() => {
+    if (!isEditing) return true;
+    return !apiBasket?.pickup_start_time || !apiBasket?.pickup_end_time;
   });
 
   const [priceError, setPriceError] = useState('');
@@ -185,12 +217,20 @@ export default function CreateBasketScreen() {
   const [origPriceError, setOrigPriceError] = useState('');
   const [sellingPriceError, setSellingPriceError] = useState('');
   const [aiLoading, setAiLoading] = useState(false);
-  const [basketImageUri, setBasketImageUri] = useState<string | null>(null);
+  // Mirror the same `apiBasket ?? storeBasket` fallback the other field
+  // states use, so the photo shows immediately in edit mode even before the
+  // baskets query resolves. Without the storeBasket fallback the input
+  // flashed empty on slow connections.
+  const [basketImageUri, setBasketImageUri] = useState<string | null>(
+    apiBasket?.image_url ?? (storeBasket as any)?.imageUrl ?? null
+  );
 
-  // Load existing basket image when editing
+  // Hydrate from whichever source resolves first / freshest.
   useEffect(() => {
-    if (isEditing && apiBasket?.image_url) setBasketImageUri(apiBasket.image_url);
-  }, [isEditing, apiBasket?.image_url]);
+    if (!isEditing) return;
+    const next = apiBasket?.image_url ?? (storeBasket as any)?.imageUrl;
+    if (next) setBasketImageUri(next);
+  }, [isEditing, apiBasket?.image_url, (storeBasket as any)?.imageUrl]);
 
   // ── Walkthrough demo mode ──────────────────────────────────────────────
   const demoBasketActive = useWalkthroughStore((s) => s.demoBasketActive);
@@ -208,6 +248,10 @@ export default function CreateBasketScreen() {
     setOriginalPrice('12');
     setSellingPrice('5');
     setQuantity(5);
+    // Prefill the same demo "surprise basket" photo so the form preview matches
+    // the injected demo card. The demo save short-circuits (no upload), so this
+    // is purely visual.
+    setBasketImageUri(DEMO_BASKET_PHOTOS[0]);
   }, [demoBasketActive, isEditing, t]);
 
   // Measure the pickup-time card, daily-reset card, and confirm button so
@@ -223,11 +267,14 @@ export default function CreateBasketScreen() {
         // produce 0.5-1px misalignment between the SVG cutout path (drawn
         // via floating-point coordinates) and the border View ring, which
         // the user perceives as the halo not hugging the element.
+        // Give the pickup-time card halo a touch more breathing room (slightly
+        // bigger than flush) per design request; other form steps stay flush.
+        const pad = key === 'formPickupTime' ? 8 : 0;
         if (w > 0 && h > 0) setMeasuredRect(key, {
-          x: Math.round(x),
-          y: Math.round(y),
-          w: Math.round(w),
-          h: Math.round(h),
+          x: Math.round(x - pad),
+          y: Math.round(y - pad),
+          w: Math.round(w + pad * 2),
+          h: Math.round(h + pad * 2),
         });
       });
     });
@@ -338,23 +385,6 @@ export default function CreateBasketScreen() {
     );
   };
 
-  // Animated flash for time-out-of-range warning
-  const timeWarningFlash = useRef(new Animated.Value(0)).current;
-  const [timeWarningVisible, setTimeWarningVisible] = useState(false);
-  const flashTimeWarning = () => {
-    setTimeWarningVisible(true);
-    timeWarningFlash.setValue(1);
-    Animated.sequence([
-      Animated.timing(timeWarningFlash, { toValue: 0, duration: 300, useNativeDriver: false }),
-      Animated.timing(timeWarningFlash, { toValue: 1, duration: 300, useNativeDriver: false }),
-      Animated.timing(timeWarningFlash, { toValue: 0, duration: 300, useNativeDriver: false }),
-      Animated.timing(timeWarningFlash, { toValue: 0.6, duration: 200, useNativeDriver: false }),
-    ]).start(() => {
-      // Keep it visible in red for 3 seconds then fade
-      setTimeout(() => setTimeWarningVisible(false), 3000);
-    });
-  };
-
   const handleAISuggest = async () => {
     setAiLoading(true);
     try {
@@ -384,6 +414,22 @@ export default function CreateBasketScreen() {
     }
   }, [profileQuery.data, isEditing]);
 
+  // While "use business hours" is selected (i.e. custom is OFF), keep the
+  // displayed pickup window in lockstep with the location's current hours.
+  // Covers two cases the old toggle handler missed:
+  //   1. Profile hadn't finished loading at toggle time → would have applied
+  //      the hardcoded 18:00-19:00 fallback. The effect re-runs once data
+  //      arrives and snaps to the real hours.
+  //   2. Location hours change while the form is mounted (rare but possible
+  //      via another tab / invalidation) → effect re-syncs.
+  React.useEffect(() => {
+    if (!useBusinessHours) return;
+    const s = profileQuery.data?.pickup_start_time?.substring(0, 5);
+    const e = profileQuery.data?.pickup_end_time?.substring(0, 5);
+    if (s && s !== pickupStart) setPickupStart(s);
+    if (e && e !== pickupEnd) setPickupEnd(e);
+  }, [useBusinessHours, profileQuery.data?.pickup_start_time, profileQuery.data?.pickup_end_time]);
+
   React.useEffect(() => {
     if (isEditing && apiBasket) {
       setName(apiBasket.name);
@@ -399,11 +445,17 @@ export default function CreateBasketScreen() {
       if (Number.isFinite(initQty) && initQty > 0) setQuantity(initQty);
       if (apiBasket.pickup_start_time) setPickupStart(apiBasket.pickup_start_time.substring(0, 5));
       if (apiBasket.pickup_end_time) setPickupEnd(apiBasket.pickup_end_time.substring(0, 5));
+      // Re-sync the "use business hours" checkbox from the canonical NULL
+      // signal on the server columns. Necessary because the useState
+      // initializer above runs once at mount; if the basket query was still
+      // resolving then, apiBasket was undefined and the checkbox defaulted
+      // to true. This effect corrects it once apiBasket actually arrives.
+      setUseBusinessHours(!apiBasket.pickup_start_time || !apiBasket.pickup_end_time);
       const mpc = (apiBasket as any).max_per_customer;
       if (mpc != null) setMaxPerCustomer(mpc);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [apiBasket?.id]);
+  }, [apiBasket?.id, apiBasket?.pickup_start_time, apiBasket?.pickup_end_time]);
 
   // Populate daily reinit schedule from API basket when editing
   React.useEffect(() => {
@@ -442,42 +494,77 @@ export default function CreateBasketScreen() {
     hhmm.includes(':') && hhmm.split(':').length === 2 ? `${hhmm}:00` : hhmm;
 
   // ── Mutations
-  // Location hours for clamping basket pickup times
-  const locationStartTime = profileQuery.data?.pickup_start_time?.substring(0, 5) ?? '00:00';
-  const locationEndTime = profileQuery.data?.pickup_end_time?.substring(0, 5) ?? '23:00';
 
   const validatePickupTime = (start: string, end: string): { valid: boolean; error?: string; start: string; end: string } => {
-    const toMin = (t: string) => { const [h, m] = t.split(':').map(Number); return (h || 0) * 60 + (m || 0); };
-    const lsMin = toMin(locationStartTime);
-    const leMin = toMin(locationEndTime);
-    const sMin = toMin(start);
-    const eMin = toMin(end);
-    // Handle overnight location hours (e.g., 07:00-02:59)
-    const overnight = leMin < lsMin;
-    const sInRange = overnight ? (sMin >= lsMin || sMin <= leMin) : (sMin >= lsMin && sMin <= leMin);
-    const eInRange = overnight ? (eMin >= lsMin || eMin <= leMin) : (eMin >= lsMin && eMin <= leMin);
-    if (!sInRange || !eInRange) {
-      return { valid: false, error: t('business.baskets.timeOutOfRange', { start: locationStartTime, end: locationEndTime, defaultValue: `Pickup time must be within location hours (${locationStartTime} - ${locationEndTime})` }), start, end };
+    // Bounds-against-location-hours check intentionally removed: a basket's
+    // custom pickup window may legitimately fall outside the shop's regular
+    // hours (e.g. a 21:00 close-out grab even though the shop "closes" at
+    // 20:00). The merchant explicitly chose the window — trust them.
+    //
+    // Two hard rules though, shared with the location-hours editors via
+    // `validateBizDayWindow` so all three surfaces stay in lockstep:
+    //   - zero-duration windows are rejected
+    //   - windows that straddle the 03:30 daily reset cron are rejected
+    //     (the cron resets every basket's stock, so a window that
+    //     includes 03:30 would refill mid-window — incoherent).
+    const status = validateBizDayWindow(start, end);
+    if (status === 'zero') {
+      return { valid: false, error: t('business.baskets.endBeforeStart', { defaultValue: 'End time must be after start time' }), start, end };
     }
-    // For overnight basket ranges: end < start is valid (e.g., 22:00-01:00)
-    // For same-day: end must be after start
-    if (!overnight && eMin <= sMin) {
-      // Check if the basket itself spans midnight
-      const basketOvernight = eMin < sMin;
-      if (!basketOvernight) {
-        return { valid: false, error: t('business.baskets.endBeforeStart', { defaultValue: 'End time must be after start time' }), start, end };
-      }
+    if (status === 'crosses-reset') {
+      return {
+        valid: false,
+        error: t('business.availability.crossReset', {
+          defaultValue: "Le créneau ne peut pas traverser la réinitialisation quotidienne (03:30). Choisissez un début ≥ 03:30, ou une fin ≤ 03:29.",
+        }),
+        start,
+        end,
+      };
     }
     return { valid: true, start, end };
   };
 
   const createMutation = useMutation({
-    mutationFn: () => {
-      const effectiveStart = useCustomPickupTime ? pickupStart : locationDefaultStart;
-      const effectiveEnd = useCustomPickupTime ? pickupEnd : locationDefaultEnd;
+    mutationFn: async () => {
+      const effectiveStart = useBusinessHours ? locationDefaultStart : pickupStart;
+      const effectiveEnd = useBusinessHours ? locationDefaultEnd : pickupEnd;
       const result = validatePickupTime(effectiveStart, effectiveEnd);
       if (!result.valid) {
         return Promise.reject(new Error(result.error));
+      }
+      // When the user picked a photo for a new basket, we need multipart —
+      // the JSON endpoint can't carry the file. Mirror the edit-mode branch
+      // a few lines below. Without this branch the photo state was silently
+      // dropped on create.
+      const isNewImage = !!basketImageUri && !basketImageUri.startsWith('http');
+      // Inheritance contract: if the user left "use business hours" checked,
+      // do NOT bake the location's CURRENT pickup times into the basket.
+      // Leave the basket's columns NULL so future location updates propagate
+      // (backend COALESCEs on read).
+      const sendStart = useBusinessHours ? null : toTimeField(result.start);
+      const sendEnd = useBusinessHours ? null : toTimeField(result.end);
+      if (isNewImage) {
+        const formData = new FormData();
+        formData.append('name', name.trim());
+        if (description.trim()) formData.append('description', description.trim());
+        if (originalPrice) formData.append('original_price', String(parseFloat(originalPrice)));
+        formData.append('selling_price', String(parseFloat(sellingPrice)));
+        formData.append('quantity', String(quantity));
+        // Multipart can't carry a real null. Append nothing → backend sees
+        // undefined → basket column stays NULL (= inherit). Send the value
+        // only when the user opted into a custom time.
+        if (sendStart) formData.append('pickup_start_time', sendStart);
+        if (sendEnd) formData.append('pickup_end_time', sendEnd);
+        if (selectedMenuItemIds.length > 0) formData.append('menu_item_ids', JSON.stringify(selectedMenuItemIds));
+        formData.append('show_menu_items', String(!!showMenuItems));
+        if (!useDefaultPickupInstructions && pickupInstructions.trim()) {
+          formData.append('pickup_instructions', pickupInstructions.trim());
+        }
+        if (selectedLocationId) formData.append('location_id', String(Number(selectedLocationId)));
+        const filename = basketImageUri!.split('/').pop() ?? 'basket.jpg';
+        formData.append('image', { uri: basketImageUri, name: filename, type: 'image/jpeg' } as any);
+        const { createBasket } = await import('@/src/services/business');
+        return createBasket(formData);
       }
       return createBasketJSON({
         name: name.trim(),
@@ -485,15 +572,43 @@ export default function CreateBasketScreen() {
         original_price: originalPrice ? parseFloat(originalPrice) : undefined,
         selling_price: parseFloat(sellingPrice),
         quantity,
-        pickup_start_time: toTimeField(result.start),
-        pickup_end_time: toTimeField(result.end),
+        // JSON path: pass the field through with the actual value or omit /
+        // pass undefined. createBasketJSON's type signature requires string,
+        // so when sendStart is null we omit the field (column will be NULL
+        // by default since it's a new row).
+        ...(sendStart ? { pickup_start_time: sendStart } : {}),
+        ...(sendEnd ? { pickup_end_time: sendEnd } : {}),
         menu_item_ids: selectedMenuItemIds.length > 0 ? selectedMenuItemIds : undefined,
         show_menu_items: showMenuItems,
         pickup_instructions: useDefaultPickupInstructions ? undefined : pickupInstructions.trim() || undefined,
         location_id: selectedLocationId ? Number(selectedLocationId) : undefined,
-      });
+      } as any);
     },
-    onSuccess: () => {
+    onSuccess: async (created: any) => {
+      // "Use for all locations" — after the canonical basket is created at
+      // the user's currently-selected location, replicate it into every
+      // other org location via the existing /duplicate endpoint. The
+      // duplicates are independent rows (per-location edits won't bleed),
+      // which matches the user's mental model of "one basket per shop".
+      if (showAllLocationsToggle && useForAllLocations && created?.id) {
+        const targetIds = orgLocations
+          .map((l: any) => Number(l.id))
+          .filter((id: number) => Number.isFinite(id) && id !== Number(selectedLocationId));
+        if (targetIds.length > 0) {
+          try {
+            await duplicateBasketToLocations(created.id, targetIds);
+          } catch (err: any) {
+            // Don't block the success path — surface a warning so the admin
+            // knows replication didn't fully complete. The canonical basket
+            // at their current location still got created cleanly.
+            console.log('[CreateBasket] duplicate-to-all failed:', err?.message);
+            alert.showAlert(
+              t('common.warning', { defaultValue: 'Avertissement' }),
+              t('business.createBasket.replicateFailed', { defaultValue: 'Panier créé mais la copie vers les autres emplacements a échoué.' })
+            );
+          }
+        }
+      }
       void queryClient.invalidateQueries({ queryKey: ['my-baskets'] });
       void queryClient.invalidateQueries({ queryKey: ['my-profile'] });
       void queryClient.invalidateQueries({ queryKey: ['locations'] });
@@ -510,8 +625,8 @@ export default function CreateBasketScreen() {
 
   const updateMutation = useMutation({
     mutationFn: async () => {
-      const effectiveStart = useCustomPickupTime ? pickupStart : locationDefaultStart;
-      const effectiveEnd = useCustomPickupTime ? pickupEnd : locationDefaultEnd;
+      const effectiveStart = useBusinessHours ? locationDefaultStart : pickupStart;
+      const effectiveEnd = useBusinessHours ? locationDefaultEnd : pickupEnd;
       const result = validatePickupTime(effectiveStart, effectiveEnd);
       if (!result.valid) {
         return Promise.reject(new Error(result.error));
@@ -520,6 +635,13 @@ export default function CreateBasketScreen() {
       // not the current live inventory. We only send quantity on first
       // creation so today's live count isn't clobbered during edits.
       const isNewImage = basketImageUri && !basketImageUri.startsWith('http');
+      // Inheritance: when the user has "use business hours" checked, leave
+      // the basket's per-row pickup columns NULL so the customer-facing read
+      // COALESCEs back to the location. We send the empty-string sentinel
+      // through multipart (backend treats '' / null / 'null' as clear) and
+      // an explicit `null` on JSON.
+      const sendStart = useBusinessHours ? null : toTimeField(result.start);
+      const sendEnd = useBusinessHours ? null : toTimeField(result.end);
       if (isNewImage) {
         const formData = new FormData();
         formData.append('name', name.trim());
@@ -528,9 +650,12 @@ export default function CreateBasketScreen() {
         formData.append('selling_price', String(parseFloat(sellingPrice)));
         if (!isEditing) formData.append('quantity', String(quantity));
         formData.append('daily_reinitialization_quantity', String(quantity));
-        formData.append('pickup_start_time', toTimeField(result.start));
-        formData.append('pickup_end_time', toTimeField(result.end));
+        // Empty string signals "clear" to the backend's clearOrKeep helper.
+        formData.append('pickup_start_time', sendStart ?? '');
+        formData.append('pickup_end_time', sendEnd ?? '');
         if (selectedMenuItemIds.length) formData.append('menu_item_ids', JSON.stringify(selectedMenuItemIds));
+        // Pickup instructions: same inherit contract via the existing clear handler.
+        formData.append('pickup_instructions', useDefaultPickupInstructions ? '' : (pickupInstructions.trim() || ''));
         // Per-day schedule: always send when editing so per-day changes land
         // even during an image update, and so toggling back to "same all days"
         // explicitly clears the schedule column (null string → NULL on server).
@@ -554,14 +679,39 @@ export default function CreateBasketScreen() {
         // clear the column otherwise. Omitted on first creation so the
         // default NULL sticks for newly-created baskets.
         ...(isEditing ? { daily_reinit_schedule: sameAllDays ? null : JSON.stringify(daySchedule) } : {}),
-        pickup_start_time: toTimeField(result.start),
-        pickup_end_time: toTimeField(result.end),
+        // null clears (inherits from location); a value overrides.
+        pickup_start_time: sendStart,
+        pickup_end_time: sendEnd,
         menu_item_ids: selectedMenuItemIds,
         show_menu_items: showMenuItems,
-        pickup_instructions: useDefaultPickupInstructions ? undefined : pickupInstructions.trim() || undefined,
+        // null clears; non-empty string overrides. Sending null instead of
+        // undefined lets the user explicitly switch back to "inherit" after
+        // having set a custom value previously.
+        pickup_instructions: useDefaultPickupInstructions ? null : pickupInstructions.trim() || null,
       });
     },
-    onSuccess: () => {
+    onSuccess: async () => {
+      // Edit-mode "use for all locations" — same intent as on create,
+      // but here the source basket already exists. We duplicate the
+      // freshly-saved basket into every OTHER org location. The user's
+      // current location keeps the row they just edited; siblings get
+      // a clean copy.
+      if (showAllLocationsToggle && useForAllLocations && editId) {
+        const targetIds = orgLocations
+          .map((l: any) => Number(l.id))
+          .filter((id: number) => Number.isFinite(id) && id !== Number(selectedLocationId));
+        if (targetIds.length > 0) {
+          try {
+            await duplicateBasketToLocations(editId, targetIds);
+          } catch (err: any) {
+            console.log('[CreateBasket] edit-mode replicate failed:', err?.message);
+            alert.showAlert(
+              t('common.warning', { defaultValue: 'Avertissement' }),
+              t('business.createBasket.replicateFailed', { defaultValue: 'Panier créé mais la copie vers les autres emplacements a échoué.' })
+            );
+          }
+        }
+      }
       void queryClient.invalidateQueries({ queryKey: ['my-baskets'] });
       void queryClient.invalidateQueries({ queryKey: ['my-profile'] });
       void queryClient.invalidateQueries({ queryKey: ['locations'] });
@@ -616,7 +766,7 @@ export default function CreateBasketScreen() {
       }
     };
     // Warn if custom time is enabled but matches location defaults
-    if (useCustomPickupTime && pickupStart === locationDefaultStart && pickupEnd === locationDefaultEnd) {
+    if (!useBusinessHours && pickupStart === locationDefaultStart && pickupEnd === locationDefaultEnd) {
       alert.showAlert(
         t('business.createBasket.sameAsLocationHours', { defaultValue: 'Horaires identiques' }),
         t('business.createBasket.sameAsLocationHoursDesc', { defaultValue: `Vous avez activé un créneau personnalisé avec les mêmes horaires que le commerce (${locationDefaultStart} - ${locationDefaultEnd}). Êtes-vous sûr ?` }),
@@ -690,7 +840,7 @@ export default function CreateBasketScreen() {
               </View>
             )}
             {basketImageUri && (
-              <View style={{ position: 'absolute', bottom: 10, right: 10, backgroundColor: 'rgba(0,0,0,0.6)', borderRadius: 20, width: 36, height: 36, justifyContent: 'center', alignItems: 'center' }}>
+              <View style={{ position: 'absolute', top: 10, right: 10, backgroundColor: 'rgba(0,0,0,0.6)', borderRadius: 20, width: 36, height: 36, justifyContent: 'center', alignItems: 'center' }}>
                 <Camera size={16} color="#fff" />
               </View>
             )}
@@ -849,7 +999,7 @@ export default function CreateBasketScreen() {
               style={{ flexDirection: 'row', alignItems: 'center' }}
             >
               <TouchableOpacity
-                onPress={() => setQuantity(Math.max(1, quantity - 1))}
+                onPress={() => setQuantity(Math.max(0, quantity - 1))}
                 style={{ backgroundColor: theme.colors.surface, borderRadius: 10, width: 42, height: 42, justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: theme.colors.divider }}
               >
                 <Minus size={16} color={theme.colors.textPrimary} />
@@ -862,7 +1012,7 @@ export default function CreateBasketScreen() {
                   borderWidth: 1, borderColor: theme.colors.divider,
                 }]}
                 value={String(quantity)}
-                onChangeText={(v) => { const n = parseInt(v); if (!isNaN(n) && n >= 1) setQuantity(n); }}
+                onChangeText={(v) => { const n = parseInt(v); if (!isNaN(n) && n >= 0) setQuantity(n); }}
                 keyboardType="number-pad"
               />
               <TouchableOpacity
@@ -1008,47 +1158,66 @@ export default function CreateBasketScreen() {
             >
               <TouchableOpacity
                 onPress={() => {
-                  const next = !useCustomPickupTime;
-                  setUseCustomPickupTime(next);
-                  if (!next) {
-                    // Reset to location defaults
+                  const next = !useBusinessHours;
+                  setUseBusinessHours(next);
+                  if (next) {
+                    // Snapping back to the location's hours when the user
+                    // re-checks "use location hours" so the displayed default
+                    // line under the checkbox shows fresh values.
                     setPickupStart(locationDefaultStart);
                     setPickupEnd(locationDefaultEnd);
                   }
                 }}
-                style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: useCustomPickupTime ? theme.spacing.md : 0 }}
+                style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: useBusinessHours ? 0 : theme.spacing.md }}
               >
-                {useCustomPickupTime ? (
+                {useBusinessHours ? (
                   <SquareCheck size={20} color={theme.colors.primary} />
                 ) : (
                   <Square size={20} color={theme.colors.muted} />
                 )}
                 <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, flex: 1 }}>
-                  {t('business.createBasket.useCustomPickupTime', { defaultValue: 'Utiliser un créneau personnalisé' })}
+                  {t('business.createBasket.useBusinessHours', { defaultValue: 'Utiliser les horaires du commerce' })}
                 </Text>
               </TouchableOpacity>
             </View>
-            {!useCustomPickupTime && (
+            {useBusinessHours && (
               <Text style={{ color: theme.colors.muted, ...theme.typography.caption, marginTop: 4 }}>
                 {t('business.createBasket.usingLocationDefault', { defaultValue: 'Créneau par défaut du commerce' })}: {locationDefaultStart} - {locationDefaultEnd}
               </Text>
             )}
 
-            {/* Pickup time pickers — only when custom is ON */}
-            {useCustomPickupTime && (
+            {/* Daily-reset notice — visible in BOTH inherited and custom
+                hours branches. The merchant needs to know that 03:30 is
+                when their basket stock refills back to the daily reinit
+                quantity; it's the rationale for the cross-reset rule
+                below AND the answer to "why is my basket suddenly full
+                again at 3am?". */}
+            <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 6, marginTop: 8 }}>
+              <Clock size={11} color={theme.colors.muted} style={{ marginTop: 2 }} />
+              <Text style={{ color: theme.colors.muted, ...theme.typography.caption, flex: 1, lineHeight: 15 }}>
+                {t('business.createBasket.dailyResetNotice', {
+                  time: '03:30',
+                  defaultValue: 'Les paniers sont réinitialisés à leur quantité quotidienne chaque jour à {{time}} (heure tunisienne).',
+                })}
+              </Text>
+            </View>
+
+            {/* Pickup time pickers — only when the checkbox is UNchecked
+                (i.e. user has opted out of inheriting the location's hours). */}
+            {!useBusinessHours && (
             <>
-            <Animated.Text style={{
-              ...theme.typography.caption,
-              marginBottom: 6,
-              color: timeWarningVisible
-                ? timeWarningFlash.interpolate({ inputRange: [0, 1], outputRange: [theme.colors.error, theme.colors.error] })
-                : theme.colors.muted,
-              fontWeight: timeWarningVisible ? '700' : '400',
-            }}>
-              {timeWarningVisible
-                ? t('business.baskets.timeOutOfRangeShort', { defaultValue: `Doit être dans les horaires du commerce (${locationDefaultStart} - ${locationDefaultEnd})` })
-                : `${t('business.baskets.withinHours', { defaultValue: 'Doit être dans les horaires du commerce' })} (${locationDefaultStart} - ${locationDefaultEnd})`}
-            </Animated.Text>
+            <Text style={{ ...theme.typography.caption, marginBottom: 6, color: theme.colors.muted, marginTop: theme.spacing.md }}>
+              {t('business.baskets.shopHoursReference', { defaultValue: 'Horaires du commerce' })}: {locationDefaultStart} - {locationDefaultEnd}
+            </Text>
+            {/* Cross-reset hint — same copy as the location-hours editors. */}
+            <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 6, marginBottom: 8 }}>
+              <Clock size={11} color={theme.colors.muted} style={{ marginTop: 2 }} />
+              <Text style={{ color: theme.colors.muted, ...theme.typography.caption, flex: 1, lineHeight: 15 }}>
+                {t('business.availability.crossResetHint', {
+                  defaultValue: 'Le créneau ne doit pas traverser 03:30 (réinitialisation quotidienne). Commencez ≥ 03:30 ou terminez ≤ 03:29.',
+                })}
+              </Text>
+            </View>
             <View style={styles.row}>
               {/* Start */}
               <View style={[styles.halfField, { marginRight: theme.spacing.md }]}>
@@ -1057,16 +1226,7 @@ export default function CreateBasketScreen() {
                 </Text>
                 <TimePicker
                   value={pickupStart}
-                  onChange={(val) => {
-                    const toMin = (t: string) => { const [h, m] = t.split(':').map(Number); return (h || 0) * 60 + (m || 0); };
-                    const locS = toMin(locationStartTime);
-                    const locE = toMin(locationEndTime);
-                    const v = toMin(val);
-                    const overnight = locE < locS;
-                    const inRange = overnight ? (v >= locS || v <= locE) : (v >= locS && v <= locE);
-                    if (!inRange) { flashTimeWarning(); return; }
-                    setPickupStart(val);
-                  }}
+                  onChange={setPickupStart}
                   primaryColor={theme.colors.primary}
                   textColor={theme.colors.textPrimary}
                   bgColor={theme.colors.surface}
@@ -1080,16 +1240,7 @@ export default function CreateBasketScreen() {
                 </Text>
                 <TimePicker
                   value={pickupEnd}
-                  onChange={(val) => {
-                    const toMin = (t: string) => { const [h, m] = t.split(':').map(Number); return (h || 0) * 60 + (m || 0); };
-                    const locS = toMin(locationStartTime);
-                    const locE = toMin(locationEndTime);
-                    const v = toMin(val);
-                    const overnight = locE < locS;
-                    const inRange = overnight ? (v >= locS || v <= locE) : (v >= locS && v <= locE);
-                    if (!inRange) { flashTimeWarning(); return; }
-                    setPickupEnd(val);
-                  }}
+                  onChange={setPickupEnd}
                   primaryColor={theme.colors.primary}
                   textColor={theme.colors.textPrimary}
                   bgColor={theme.colors.surface}
@@ -1276,9 +1427,45 @@ export default function CreateBasketScreen() {
               </>
             )}
           </View>}
+
+          {/* "Use for all locations" — surfaces for any admin/owner.
+              Rendered as a TOP-LEVEL section (not nested under the
+              feature-flagged menu-items block) so its visibility is
+              independent of ENABLE_MENU_ITEMS. Wrapped in a bordered
+              card so it reads as a distinct section, but with NO
+              extra horizontal margin (the ScrollView's padding is the
+              only outer offset) and the inner checkbox row keeps the
+              same row/gap rhythm as the other checkboxes above. */}
+          {showAllLocationsToggle && (
+            <>
+              {/* Divider — marks this toggle as a distinct section while
+                  keeping the checkbox row at the SAME left edge as every other
+                  form field (no card padding inset). */}
+              <View style={{ height: 1, backgroundColor: theme.colors.divider, marginVertical: theme.spacing.lg }} />
+              <TouchableOpacity
+                onPress={() => setUseForAllLocations((v) => !v)}
+                style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}
+              >
+                {useForAllLocations ? (
+                  <SquareCheck size={20} color={theme.colors.primary} />
+                ) : (
+                  <Square size={20} color={theme.colors.muted} />
+                )}
+                <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, flex: 1, fontFamily: 'Poppins_600SemiBold' }}>
+                  {t('business.createBasket.useForAllLocations', { defaultValue: 'Disponible dans tous les emplacements' })}
+                </Text>
+              </TouchableOpacity>
+              <Text style={{ color: theme.colors.muted, ...theme.typography.caption, marginTop: 4, marginLeft: 30 }}>
+                {t('business.createBasket.useForAllLocationsHint', {
+                  count: orgLocations.length,
+                  defaultValue: `Crée une copie de ce panier dans chacun des ${orgLocations.length} emplacements de l'organisation.`,
+                })}
+              </Text>
+            </>
+          )}
         </ScrollView>
 
-        <View style={[styles.footer, { backgroundColor: theme.colors.bg, paddingHorizontal: theme.spacing.xl, paddingTop: theme.spacing.lg, paddingBottom: theme.spacing.xxl, borderTopWidth: 1, borderTopColor: theme.colors.divider }]}>
+        <View style={[styles.footer, { backgroundColor: theme.colors.bg, paddingHorizontal: theme.spacing.xl, paddingTop: theme.spacing.lg, paddingBottom: theme.spacing.md, borderTopWidth: 1, borderTopColor: theme.colors.divider }]}>
           {/* Full-width + flat (no shadow). Earlier the centered + shadowed
               version made the user perceive a "padding under the button"
               because the elevation/shadow tail extended ~9 px past the

@@ -1,5 +1,29 @@
 import { apiClient } from '@/src/lib/api';
 
+// ─────────────────────────────────────────────────────────────────────────────
+// BACKEND TODO — include review aggregates on /api/locations
+//
+// The search-tab home page renders a card per location. Each card shows a
+// star rating + count. Today, the locations response does NOT include those
+// aggregates, so the home page falls back to fetching every review in the
+// app via /api/reviews and grouping locally — that endpoint gets slower
+// (and rate-limit-prone) as the review table grows, which is why users see
+// "N/A" on the cards for several seconds at app start before the global
+// fetch resolves.
+//
+// Fix on the backend: when serialising a location for the /api/locations
+// list response, include:
+//   avg_rating:    AVG(reviews.rating) WHERE reviews.location_id = location.id
+//                  (or NULL when there are no reviews for that location)
+//   review_count:  COUNT(*) WHERE reviews.location_id = location.id
+//
+// Mobile is already wired to read both fields (see LocationFromAPI below
+// and normalizeLocationToBasket in src/utils/normalizeRestaurant.ts). The
+// moment the backend ships them the cards will render ratings instantly
+// on first paint with zero additional requests — and we can then remove
+// the slow /api/reviews fallback in app/(tabs)/index.tsx entirely.
+// ─────────────────────────────────────────────────────────────────────────────
+
 export interface RestaurantFromAPI {
   id: number;
   user_id?: number;
@@ -66,6 +90,14 @@ export interface LocationFromAPI {
   basket_count?: number;
   total_basket_quantity?: number;
   min_basket_price?: number | null;
+  /** Aggregate review rating (AVG of all reviews where location_id = this.id).
+   *  REQUIRED for the search list to show ratings without a separate
+   *  /api/reviews fetch. If omitted, the home page falls back to the slow
+   *  global reviews aggregation (which trips rate limits as data grows).
+   *  Backend dev: add this column to the /api/locations list response. */
+  avg_rating?: number | string | null;
+  /** Number of reviews for this location. Same backend caveat as avg_rating. */
+  review_count?: number | null;
   created_at?: string;
   updated_at?: string;
   /** description comes from organizations table — shared across all locations of the same business */

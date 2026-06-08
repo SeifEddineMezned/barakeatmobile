@@ -100,7 +100,7 @@ export function LocationPickerModal({ visible, onClose }: Props) {
               {/* Saved addresses list */}
               {addresses.length > 0 && (
                 <>
-                  <Text style={[theme.typography.caption, { color: theme.colors.textSecondary, fontWeight: '600' as const, marginBottom: 8, letterSpacing: 0.5, textTransform: 'uppercase' as const }]}>
+                  <Text style={[theme.typography.caption, { color: theme.colors.textSecondary, fontWeight: '600' as const, marginBottom: 8, letterSpacing: 0.5, textTransform: 'none' as const }]}>
                     {t('address.saved', { defaultValue: 'Saved addresses' })}
                   </Text>
                   {addresses.filter(a => !searchText.trim() || a.label.toLowerCase().includes(searchText.toLowerCase())).map((addr) => {

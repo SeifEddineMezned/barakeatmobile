@@ -1,11 +1,11 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Modal, Dimensions, Image, Animated as RNAnimated, PanResponder } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Modal, Dimensions, Image, Animated as RNAnimated, PanResponder, Platform } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import { TrendingUp, ShoppingBag, Banknote, Clock, Leaf, Star, X, Package, Store, Settings, Bell, ChevronDown, Check, Building2, MapPin } from 'lucide-react-native';
 import { NoLocationCTA } from '@/src/components/NoLocationCTA';
 import { useQuery } from '@tanstack/react-query';
-import { useRouter } from 'expo-router';
+import { useRouter, useFocusEffect } from 'expo-router';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { StatusBar } from 'expo-status-bar';
 import { useAuthStore } from '@/src/stores/authStore';
@@ -15,12 +15,19 @@ import { fetchStats, fetchTodayOrders, fetchAnalytics, fetchMyProfile, fetchMyBa
 import { fetchMyContext, fetchOrganizationDetails } from '@/src/services/teams';
 import { apiClient } from '@/src/lib/api';
 import { orderIdToCode } from '@/src/utils/orderCode';
+import { formatLocationName } from '@/src/utils/formatLocation';
 import { LineChart } from '@/src/components/LineChart';
 import { DelayedLoader } from '@/src/components/DelayedLoader';
 import { LinearGradient } from 'expo-linear-gradient';
-import * as Haptics from 'expo-haptics';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
+// React Navigation's bottom-tabs header applies `marginHorizontal: 5` to its
+// content row on iOS when the frame width is ≥ 414 (the IPAD_MINI_MEDIUM_WIDTH
+// constant in @react-navigation/elements Header.tsx — also triggers on iPhone
+// Pro Max 430pt widths). To keep the dashboard's custom floating header
+// pixel-aligned with the nav-header version used by every other business tab,
+// we shift the floating header inward by the same 5px on those screens.
+const NAV_LARGE_MARGIN = Platform.OS === 'ios' && SCREEN_WIDTH >= 414 ? 5 : 0;
 
 function AnimatedNumber({ value, suffix, duration = 800 }: { value: number; suffix?: string; duration?: number }) {
   const animVal = React.useRef(new RNAnimated.Value(0)).current;
@@ -220,6 +227,23 @@ export default function BusinessDashboard() {
     retry: 1,
   });
 
+  // Force a fresh stats fetch every time the dashboard regains focus.
+  // The pickup-confirm flow in incoming-orders does invalidate
+  // ['business-stats'] / ['business-analytics'] right after the
+  // confirmPickup call, but on some backends the stats aggregation
+  // lags the reservation status update by a beat — so the immediate
+  // refetch can land back with the OLD revenue and stick. Refetching
+  // on focus closes that gap reliably: by the time the user has
+  // tapped to come back to the dashboard, the backend has caught up.
+  // Same treatment for cancel / order-side flows that affect revenue.
+  useFocusEffect(
+    useCallback(() => {
+      void statsQuery.refetch();
+      void analyticsQuery.refetch();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [selectedLocationId])
+  );
+
   const todayQuery = useQuery({
     queryKey: ['today-orders', selectedLocationId],
     queryFn: () => fetchTodayOrders(selectedLocationId),
@@ -333,18 +357,33 @@ export default function BusinessDashboard() {
   const [showRatingModal, setShowRatingModal] = useState(false);
   const [showAllComments, setShowAllComments] = useState(false);
   const ratingSlideY = useRef(new RNAnimated.Value(400)).current;
+  // Velocity-projected, follow-finger dismiss. Same model as the shared
+  // useSwipeToDismiss hook (just inlined here because this sheet has a
+  // custom slide-in/out animation tied to ratingSlideY that we want to
+  // share with the PanResponder).
   const ratingPanResponder = useRef(
     PanResponder.create({
-      onStartShouldSetPanResponder: () => false,
-      onMoveShouldSetPanResponder: (_, g) => g.dy > 8,
-      onPanResponderMove: (_, g) => { if (g.dy > 0) ratingSlideY.setValue(g.dy); },
+      onStartShouldSetPanResponder: () => true,
+      onStartShouldSetPanResponderCapture: () => true,
+      onMoveShouldSetPanResponder: (_, g) => Math.abs(g.dy) > 4 && Math.abs(g.dy) > Math.abs(g.dx),
+      onMoveShouldSetPanResponderCapture: (_, g) => Math.abs(g.dy) > 4 && Math.abs(g.dy) > Math.abs(g.dx),
+      onPanResponderTerminationRequest: () => false,
+      onPanResponderMove: (_, g) => {
+        if (g.dy >= 0) ratingSlideY.setValue(g.dy);
+        else ratingSlideY.setValue(g.dy / 3);
+      },
       onPanResponderRelease: (_, g) => {
-        if (g.dy > 80 || g.vy > 0.5) {
-          RNAnimated.timing(ratingSlideY, { toValue: 400, duration: 200, useNativeDriver: true }).start(() => setShowRatingModal(false));
+        const projection = g.dy + g.vy * 60;
+        if (projection > 80 || g.vy > 0.6) {
+          const duration = Math.max(120, Math.min(280, 220 - g.vy * 50));
+          RNAnimated.timing(ratingSlideY, { toValue: 800, duration, useNativeDriver: true }).start(({ finished }) => {
+            if (finished) setShowRatingModal(false);
+          });
         } else {
-          RNAnimated.spring(ratingSlideY, { toValue: 0, friction: 8, useNativeDriver: true }).start();
+          RNAnimated.spring(ratingSlideY, { toValue: 0, friction: 10, tension: 80, useNativeDriver: true }).start();
         }
       },
+      onPanResponderTerminate: () => ratingSlideY.setValue(0),
     })
   ).current;
   useEffect(() => {
@@ -406,19 +445,26 @@ export default function BusinessDashboard() {
     && !!orgId
     && !orgDetailsQuery.isLoading
     && orgLocations.length === 0;
-  // The switcher is tappable for org admins (who can jump to any location +
-  // "Tous les emplacements") and for anyone with 2+ memberships. Single-
-  // location members still see their location name as static text.
-  const canSwitchDashLocation = isAdmin || myDashLocationIds.length > 1;
+  // The switcher is tappable when there's an actual choice to make:
+  // an org-admin in an org with 2+ locations (can jump to any one +
+  // "Tous les emplacements"), or a member with 2+ assigned locations.
+  // Single-location orgs / single-location members get the name as
+  // static text with no chevron — opening a 1-row dropdown is noise.
+  const canSwitchDashLocation =
+    (isAdmin && orgLocations.length > 1) || myDashLocationIds.length > 1;
   const dashPerms = teamContextQuery.data?.permissions ?? {};
   const hasDashPerm = (key: string) => { const v = (dashPerms as any)[key]; return v === true || v === 'true' || v === 'write'; };
   const canViewHistory = isAdmin || hasDashPerm('view_history');
   // Org name is the source of truth for the hero greeting + switcher fallback.
   const orgName = teamContextQuery.data?.organization_name ?? orgDetailsQuery.data?.organization?.name ?? '';
+  // Match the shared layout's switcher pill ([_layout.tsx:266-275]) — bare
+  // location name only, no "Org -" prefix. The "All locations" admin branch
+  // still falls back to org name, which the layout does too.
   const selectedLocationName = hasNoLocation
     ? t('business.locationSwitcher.noLocationYet')
     : selectedLocationId
-      ? (orgLocations.find((l) => l.id === selectedLocationId)?.name ?? `${t('business.location')} ${selectedLocationId}`)
+      ? (orgLocations.find((l) => l.id === Number(selectedLocationId))?.name
+          ?? `${t('business.location')} ${selectedLocationId}`)
       : (isAdmin
           ? (orgLocations.length > 0
               ? (orgName || t('business.allLocations'))
@@ -428,7 +474,6 @@ export default function BusinessDashboard() {
   const reviews = reviewsQuery.data ?? { service: 0, quantite: 0, qualite: 0, variete: 0 };
 
   const handleRatingPress = useCallback(() => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setShowRatingModal(true);
   }, []);
 
@@ -449,12 +494,22 @@ export default function BusinessDashboard() {
       {/* Cover photo is always dark/coloured — keep status bar icons white */}
       <StatusBar style="light" />
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 100 }}>
-        {/* Floating header - overlays the cover image */}
+        {/* Floating header - overlays the cover image. Height + top mirror the
+            other tabs' React Navigation header content area (insets.top, 52px
+            tall, vertically centered) so the location pill sits at the exact
+            same screen position when switching between dashboard and the other
+            business tabs. */}
         <View style={{
           position: 'absolute',
-          top: insets.top + 8,
-          left: 16,
-          right: 16,
+          top: insets.top,
+          height: 52,
+          // The +NAV_LARGE_MARGIN keeps the floating header's contents in lock
+          // step with the nav-header version on the other business tabs when
+          // running on iPad / iPhone Pro Max widths (see the constant above).
+          // Without this, the location pill jumps 5px sideways when switching
+          // from another tab onto the dashboard on those screens.
+          left: 16 + NAV_LARGE_MARGIN,
+          right: 16 + NAV_LARGE_MARGIN,
           zIndex: 10,
           flexDirection: 'row',
           justifyContent: 'space-between',
@@ -501,10 +556,20 @@ export default function BusinessDashboard() {
           )}
 
           {/* Settings + Notifications pills */}
+          {/*
+            paddingHorizontal: 16 (not 10) is deliberate: on every other business
+            tab the nav header places Bell at `screen_right - 32` (phone) /
+            `- 37` (iPad) — from `headerRightContainerStyle.paddingRight: 16`
+            plus Bell's `marginRight: 16`. Matching that here requires
+            16 of inset between the pill's right edge and the Bell icon, so the
+            two surfaces land on the exact same screen x-coordinate. The
+            symmetric horizontal padding (also 16 on the left) keeps the icons
+            visually centered inside the pill.
+          */}
           <View style={{
             backgroundColor: theme.colors.surface,
             borderRadius: 20,
-            paddingHorizontal: 10,
+            paddingHorizontal: 16,
             paddingVertical: 8,
             flexDirection: 'row',
             alignItems: 'center',
@@ -512,10 +577,10 @@ export default function BusinessDashboard() {
             ...theme.shadows.shadowMd,
           }}>
             <TouchableOpacity onPress={() => router.push('/settings' as never)}>
-              <Settings size={18} color={theme.colors.textPrimary} />
+              <Settings size={20} color={theme.colors.textPrimary} />
             </TouchableOpacity>
             <TouchableOpacity onPress={() => router.push('/notifications' as never)}>
-              <Bell size={18} color={theme.colors.textPrimary} />
+              <Bell size={20} color={theme.colors.textPrimary} />
               {unreadCount > 0 && (
                 <View style={{
                   position: 'absolute',
@@ -628,7 +693,7 @@ export default function BusinessDashboard() {
             }}
           >
             {/* Label */}
-            <Text style={{ color: 'rgba(255,255,255,0.5)', fontSize: 10, fontFamily: 'Poppins_400Regular', letterSpacing: 0.8, textTransform: 'uppercase', marginBottom: 14 }}>
+            <Text style={{ color: 'rgba(255,255,255,0.5)', fontSize: 10, fontFamily: 'Poppins_400Regular', letterSpacing: 0.8, textTransform: 'none', marginBottom: 14 }}>
               {t('business.dashboard.daySummary')} ({(() => {
                 // Derive the day from the server's weekly data (last entry = server "today")
                 const lastDay = weeklySeries.length > 0 ? weeklySeries[weeklySeries.length - 1] : null;
@@ -746,14 +811,14 @@ export default function BusinessDashboard() {
           <View>
             <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 14 }}>
               <View style={{ width: 3, height: 16, backgroundColor: theme.colors.primary, borderRadius: 2, marginRight: 8 }} />
-              <Text style={{ color: theme.colors.textPrimary, fontSize: 13, fontFamily: 'Poppins_600SemiBold', letterSpacing: 0.3, textTransform: 'uppercase' as const }}>
+              <Text style={{ color: theme.colors.textPrimary, fontSize: 13, fontFamily: 'Poppins_600SemiBold', letterSpacing: 0.3, textTransform: 'none' as const }}>
                 {t('business.dashboard.performance')}
               </Text>
             </View>
             <View style={styles.statsRow}>
               <StatMiniCard icon={Banknote} value={`${stats.monthlyRevenue}`} suffix="TND" label="Revenus ce mois" color={theme.colors.secondaryDark} theme={theme} />
               <View style={{ width: 10 }} />
-              <StatMiniCard icon={ShoppingBag} value={stats.monthlyBaskets} label="Paniers vendus ce mois" color={theme.colors.accentFresh} theme={theme} />
+              <StatMiniCard icon={ShoppingBag} value={stats.monthlyBaskets} label={stats.monthlyBaskets > 1 ? 'Paniers vendus ce mois' : 'Panier vendu ce mois'} color={theme.colors.accentFresh} theme={theme} />
             </View>
           </View>
         </View>
@@ -768,7 +833,7 @@ export default function BusinessDashboard() {
           <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
             <View style={{ flexDirection: 'row', alignItems: 'center' }}>
               <View style={{ width: 3, height: 16, backgroundColor: theme.colors.primary, borderRadius: 2, marginRight: 8 }} />
-              <Text style={{ color: theme.colors.textPrimary, fontSize: 13, fontFamily: 'Poppins_600SemiBold', letterSpacing: 0.3, textTransform: 'uppercase' as const }}>
+              <Text style={{ color: theme.colors.textPrimary, fontSize: 13, fontFamily: 'Poppins_600SemiBold', letterSpacing: 0.3, textTransform: 'none' as const }}>
                 {'Ventes cette semaine'}
               </Text>
             </View>
@@ -831,14 +896,14 @@ export default function BusinessDashboard() {
           <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
             <View style={{ flexDirection: 'row', alignItems: 'center' }}>
               <View style={{ width: 3, height: 16, backgroundColor: theme.colors.secondaryDark, borderRadius: 2, marginRight: 8 }} />
-              <Text style={{ color: theme.colors.textPrimary, fontSize: 13, fontFamily: 'Poppins_600SemiBold', letterSpacing: 0.3, textTransform: 'uppercase' as const }}>
+              <Text style={{ color: theme.colors.textPrimary, fontSize: 13, fontFamily: 'Poppins_600SemiBold', letterSpacing: 0.3, textTransform: 'none' as const }}>
                 {'Performance mensuelle'}
               </Text>
             </View>
             {stats.monthlyBaskets > 0 && (
               <View style={{ backgroundColor: theme.colors.accentFresh + '15', borderRadius: 20, paddingHorizontal: 10, paddingVertical: 4 }}>
                 <Text style={{ color: theme.colors.accentFresh, fontSize: 11, fontFamily: 'Poppins_600SemiBold' }}>
-                  {`${stats.monthlyBaskets} paniers`}
+                  {`${stats.monthlyBaskets} ${stats.monthlyBaskets > 1 ? 'paniers' : 'panier'}`}
                 </Text>
               </View>
             )}
@@ -902,18 +967,24 @@ export default function BusinessDashboard() {
           <View style={{ marginTop: theme.spacing.xl }}>
             <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: theme.spacing.xl, marginBottom: 12 }}>
               <View style={{ width: 3, height: 16, backgroundColor: theme.colors.primary, borderRadius: 2, marginRight: 8 }} />
-              <Text style={{ color: theme.colors.textPrimary, fontSize: 13, fontFamily: 'Poppins_600SemiBold', letterSpacing: 0.3, textTransform: 'uppercase' as const }}>
+              <Text style={{ color: theme.colors.textPrimary, fontSize: 13, fontFamily: 'Poppins_600SemiBold', letterSpacing: 0.3, textTransform: 'none' as const }}>
                 {t('business.dashboard.baskets', { defaultValue: 'Paniers' })}
               </Text>
               <Text style={{ color: theme.colors.muted, fontSize: 12, fontFamily: 'Poppins_400Regular', marginLeft: 8 }}>
                 {dashBaskets.length}
               </Text>
             </View>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: theme.spacing.xl, gap: 12 }}>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: theme.spacing.xl, paddingVertical: 8, gap: 12 }}>
               {dashBaskets.map((basket: BusinessBasketFromAPI) => {
-                const locName = orgLocations.find((l: any) => l.id === basket.location_id)?.name;
-                const pickupStart = basket.pickup_start_time?.substring(0, 5) ?? '';
-                const pickupEnd = basket.pickup_end_time?.substring(0, 5) ?? '';
+                const loc = orgLocations.find((l: any) => Number(l.id) === Number(basket.location_id));
+                const bareLocName = loc?.name;
+                const locName = formatLocationName(orgName, bareLocName);
+                // Fall back to the location's pickup window when the basket
+                // inherits "horaires du commerce" (server-side these basket
+                // columns are NULL). Without the fallback the time chip was
+                // hidden for inheriting baskets.
+                const pickupStart = ((basket.pickup_start_time ?? (loc as any)?.pickup_start_time) ?? '').substring(0, 5);
+                const pickupEnd   = ((basket.pickup_end_time   ?? (loc as any)?.pickup_end_time)   ?? '').substring(0, 5);
                 return (
                   <TouchableOpacity
                     key={basket.id}
@@ -970,10 +1041,18 @@ export default function BusinessDashboard() {
             RNAnimated.timing(ratingSlideY, { toValue: 400, duration: 200, useNativeDriver: true }).start(() => setShowRatingModal(false));
           }} />
           <RNAnimated.View
-            {...ratingPanResponder.panHandlers}
-            style={[styles.modalContent, { backgroundColor: theme.colors.surface, borderTopLeftRadius: 28, borderTopRightRadius: 28, padding: theme.spacing.xl, ...theme.shadows.shadowLg, transform: [{ translateY: ratingSlideY }] }]}
+            style={[styles.modalContent, { backgroundColor: theme.colors.surface, borderTopLeftRadius: 28, borderTopRightRadius: 28, paddingHorizontal: theme.spacing.xl, paddingBottom: theme.spacing.xl, ...theme.shadows.shadowLg, transform: [{ translateY: ratingSlideY }] }]}
           >
-            <View style={[styles.modalHandle, { backgroundColor: theme.colors.divider, alignSelf: 'center', marginBottom: theme.spacing.lg }]} />
+            {/* Swipe zone — the top strip hosts the handle pill AND
+                the gesture, so the inner reviews ScrollView keeps
+                scrolling normally and the swipe-to-close only fires
+                from this top area. */}
+            <View
+              {...ratingPanResponder.panHandlers}
+              style={{ paddingTop: 10, paddingBottom: 14, alignItems: 'center' }}
+            >
+              <View style={[styles.modalHandle, { backgroundColor: theme.colors.divider }]} />
+            </View>
             <ScrollView showsVerticalScrollIndicator={false} bounces={false} contentContainerStyle={{ paddingBottom: 20 }}>
               <View style={styles.modalHeader}>
                 <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h2 }]}>
@@ -1006,49 +1085,71 @@ export default function BusinessDashboard() {
                   <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3, marginBottom: theme.spacing.md }}>
                     {t('business.dashboard.recentComments', { defaultValue: 'Commentaires récents' })}
                   </Text>
-                  {(showAllComments ? (reviews as any).reviews : (reviews as any).reviews.slice(0, 3)).filter((r: any) => r.comment).map((r: any, i: number) => (
-                    <View key={r.id ?? i} style={{ backgroundColor: theme.colors.bg, borderRadius: 14, padding: 14, marginBottom: 10 }}>
-                      <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
-                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3 }}>
-                          {[1,2,3,4,5].map(s => (
-                            <Star key={s} size={12} color="#f59e0b" fill={s <= Math.round(Number(r.rating ?? r.rating_service ?? 0)) ? '#f59e0b' : 'transparent'} />
-                          ))}
-                        </View>
-                        <Text style={{ color: theme.colors.muted, ...theme.typography.caption, marginLeft: 8 }}>
-                          {r.buyer_name ?? r.customer_name ?? t('business.orders.customer')}
-                        </Text>
-                        {r.reservation_id && (
+                  {(reviews as any).reviews.filter((r: any) => r.comment).length === 0 ? (
+                    // Reviews exist but none of them carry a written comment —
+                    // the section header would otherwise sit above an empty
+                    // space. Render an explicit placeholder so the surface
+                    // reads as "no comments yet" rather than "broken modal".
+                    <Text style={{ color: theme.colors.muted, ...theme.typography.bodySm, fontStyle: 'italic', textAlign: 'center', paddingVertical: theme.spacing.lg }}>
+                      {t('business.dashboard.noComments', { defaultValue: 'Aucun commentaire' })}
+                    </Text>
+                  ) : (
+                    <>
+                      {(showAllComments ? (reviews as any).reviews : (reviews as any).reviews.slice(0, 3)).filter((r: any) => r.comment).map((r: any, i: number) => {
+                        // The entire review row is tappable when it has a
+                        // reservation_id — that's the user's expectation, not just
+                        // the small order-code chip. Tap → set target → deep-link
+                        // expands the matching order in incoming-orders.
+                        const goToOrder = r.reservation_id ? () => {
+                          setShowRatingModal(false);
+                          setShowAllComments(false);
+                          useBusinessStore.getState().setTargetOrder(String(r.reservation_id), selectedLocationId);
+                          router.push('/(business)/incoming-orders' as never);
+                        } : undefined;
+                        return (
                           <TouchableOpacity
-                            onPress={() => {
-                              setShowRatingModal(false);
-                              setShowAllComments(false);
-                              useBusinessStore.getState().setTargetOrder(String(r.reservation_id), selectedLocationId);
-                              router.push('/(business)/incoming-orders' as never);
-                            }}
-                            style={{ marginLeft: 6, backgroundColor: theme.colors.primary + '12', borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2 }}
+                            key={r.id ?? i}
+                            onPress={goToOrder}
+                            activeOpacity={goToOrder ? 0.7 : 1}
+                            disabled={!goToOrder}
+                            style={{ backgroundColor: theme.colors.bg, borderRadius: 14, padding: 14, marginBottom: 10 }}
                           >
-                            <Text style={{ color: theme.colors.primary, fontSize: 10, fontWeight: '700' }}>
-                              {orderIdToCode(r.reservation_id)}
+                            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
+                              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3 }}>
+                                {[1,2,3,4,5].map(s => (
+                                  <Star key={s} size={12} color="#f59e0b" fill={s <= Math.round(Number(r.rating ?? r.rating_service ?? 0)) ? '#f59e0b' : 'transparent'} />
+                                ))}
+                              </View>
+                              <Text style={{ color: theme.colors.muted, ...theme.typography.caption, marginLeft: 8 }}>
+                                {r.buyer_name ?? r.customer_name ?? t('business.orders.customer')}
+                              </Text>
+                              {r.reservation_id && (
+                                <View style={{ marginLeft: 6, backgroundColor: theme.colors.primary + '12', borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2 }}>
+                                  <Text style={{ color: theme.colors.primary, fontSize: 10, fontWeight: '700' }}>
+                                    {orderIdToCode(r.reservation_id)}
+                                  </Text>
+                                </View>
+                              )}
+                              {r.created_at && (
+                                <Text style={{ color: theme.colors.muted, ...theme.typography.caption, marginLeft: 'auto' }}>
+                                  {new Date(r.created_at).toLocaleDateString('fr-FR')}
+                                </Text>
+                              )}
+                            </View>
+                            <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontStyle: 'italic', lineHeight: 19 }}>
+                              « {r.comment} »
                             </Text>
                           </TouchableOpacity>
-                        )}
-                        {r.created_at && (
-                          <Text style={{ color: theme.colors.muted, ...theme.typography.caption, marginLeft: 'auto' }}>
-                            {new Date(r.created_at).toLocaleDateString('fr-FR')}
+                        );
+                      })}
+                      {(reviews as any).reviews.filter((r: any) => r.comment).length > 3 && (
+                        <TouchableOpacity onPress={() => setShowAllComments(v => !v)} style={{ alignItems: 'center', marginTop: 8 }}>
+                          <Text style={{ color: theme.colors.primary, ...theme.typography.bodySm, fontWeight: '600' }}>
+                            {showAllComments ? t('common.seeLess', { defaultValue: 'Voir moins' }) : t('common.seeMore', { defaultValue: 'Voir plus' })}
                           </Text>
-                        )}
-                      </View>
-                      <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontStyle: 'italic', lineHeight: 19 }}>
-                        « {r.comment} »
-                      </Text>
-                    </View>
-                  ))}
-                  {(reviews as any).reviews.filter((r: any) => r.comment).length > 3 && (
-                    <TouchableOpacity onPress={() => setShowAllComments(v => !v)} style={{ alignItems: 'center', marginTop: 8 }}>
-                      <Text style={{ color: theme.colors.primary, ...theme.typography.bodySm, fontWeight: '600' }}>
-                        {showAllComments ? t('common.seeLess', { defaultValue: 'Voir moins' }) : t('common.seeMore', { defaultValue: 'Voir plus' })}
-                      </Text>
-                    </TouchableOpacity>
+                        </TouchableOpacity>
+                      )}
+                    </>
                   )}
                 </View>
               )}
@@ -1084,8 +1185,14 @@ export default function BusinessDashboard() {
             onStartShouldSetResponder={() => true}
           >
             <ScrollView showsVerticalScrollIndicator={false} style={{ maxHeight: 420 }}>
-              {/* "All locations" option — admin only */}
-              {isAdmin && (
+              {/* "All locations" option — shown whenever the user actually
+                  sees 2+ locations (admin or multi-location member). Hidden
+                  when only one location is visible since "Tous" is then a
+                  no-op. Mirrors the layout switcher's item exactly: same
+                  truncation + ellipsis behaviour so the dashboard dropdown
+                  looks identical to the one shown on my-baskets /
+                  incoming-orders / business-profile. */}
+              {orgLocations.filter((loc) => isAdmin || myDashLocationIds.includes(Number(loc.id))).length > 1 && (
                 <TouchableOpacity
                   onPress={() => handleLocationSwitch(null)}
                   style={{
@@ -1099,14 +1206,18 @@ export default function BusinessDashboard() {
                   activeOpacity={0.7}
                 >
                   <Store size={18} color={selectedLocationId === null ? theme.colors.primary : theme.colors.textSecondary} />
-                  <Text style={{
-                    flex: 1,
-                    marginLeft: 10,
-                    color: selectedLocationId === null ? theme.colors.primary : theme.colors.textPrimary,
-                    fontSize: 14,
-                    fontWeight: selectedLocationId === null ? '700' : '500',
-                    fontFamily: selectedLocationId === null ? 'Poppins_700Bold' : 'Poppins_500Medium',
-                  }}>
+                  <Text
+                    numberOfLines={1}
+                    ellipsizeMode="tail"
+                    style={{
+                      flex: 1,
+                      marginLeft: 10,
+                      color: selectedLocationId === null ? theme.colors.primary : theme.colors.textPrimary,
+                      fontSize: 14,
+                      fontWeight: selectedLocationId === null ? '700' : '500',
+                      fontFamily: selectedLocationId === null ? 'Poppins_700Bold' : 'Poppins_500Medium',
+                    }}
+                  >
                     {t('business.allLocations', { defaultValue: 'Tous les emplacements' })}
                   </Text>
                   {selectedLocationId === null && <Check size={18} color={theme.colors.primary} />}
@@ -1116,7 +1227,7 @@ export default function BusinessDashboard() {
               {/* Individual locations — org admins see every location;
                   everyone else only sees the ones they actually belong to. */}
               {orgLocations.filter((loc) => isAdmin || myDashLocationIds.includes(Number(loc.id))).map((loc) => {
-                const isSelected = selectedLocationId === loc.id;
+                const isSelected = Number(selectedLocationId) === Number(loc.id);
                 return (
                   <TouchableOpacity
                     key={loc.id}
@@ -1133,16 +1244,20 @@ export default function BusinessDashboard() {
                   >
                     <Building2 size={18} color={isSelected ? theme.colors.primary : theme.colors.textSecondary} />
                     <View style={{ flex: 1, marginLeft: 10 }}>
-                      <Text style={{
-                        color: isSelected ? theme.colors.primary : theme.colors.textPrimary,
-                        fontSize: 14,
-                        fontWeight: isSelected ? '700' : '500',
-                        fontFamily: isSelected ? 'Poppins_700Bold' : 'Poppins_500Medium',
-                      }}>
-                        {loc.name ?? `Location ${loc.id}`}
+                      <Text
+                        numberOfLines={1}
+                        ellipsizeMode="tail"
+                        style={{
+                          color: isSelected ? theme.colors.primary : theme.colors.textPrimary,
+                          fontSize: 14,
+                          fontWeight: isSelected ? '700' : '500',
+                          fontFamily: isSelected ? 'Poppins_700Bold' : 'Poppins_500Medium',
+                        }}
+                      >
+                        {loc.name ?? t('business.unnamedLocation', { defaultValue: 'Unnamed location' })}
                       </Text>
                       {loc.address ? (
-                        <Text style={{ color: theme.colors.textSecondary, fontSize: 11, fontFamily: 'Poppins_400Regular', marginTop: 2 }} numberOfLines={1}>
+                        <Text style={{ color: theme.colors.textSecondary, fontSize: 11, fontFamily: 'Poppins_400Regular', marginTop: 2 }} numberOfLines={1} ellipsizeMode="tail">
                           {loc.address}
                         </Text>
                       ) : null}

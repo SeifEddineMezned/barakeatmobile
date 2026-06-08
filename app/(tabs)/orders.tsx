@@ -2,8 +2,10 @@ import React, { useState, useMemo, useCallback, useEffect, useRef } from 'react'
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Animated, Dimensions, Modal } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
-import { useRouter } from 'expo-router';
+import { useRouter, useFocusEffect } from 'expo-router';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { usePollWhenFocused } from '@/src/hooks/usePollWhenFocused';
+import { useSwipeToDismiss } from '@/src/hooks/useSwipeToDismiss';
 import { RefreshCw, ShoppingBag, AlertTriangle, Clock, XCircle, Zap } from 'lucide-react-native';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { isPickupExpiredInTz, getNowInBusinessTz, getBusinessDayDateStr, toBizDayMinutes } from '@/src/utils/timezone';
@@ -13,7 +15,11 @@ import { fetchConversationUnreads } from '@/src/services/messages';
 import { fetchGamificationStats } from '@/src/services/gamification';
 import { calcMoneySaved, calcCO2Saved, calcLevelProgress } from '@/src/lib/impactCalculations';
 import { ReservationCard } from '@/src/components/ReservationCard';
+import { PaperSurface } from '@/src/components/ui/PaperSurface';
 import { DelayedLoader } from '@/src/components/DelayedLoader';
+import { useWalkthroughStore } from '@/src/stores/walkthroughStore';
+import { useOrdersStore } from '@/src/stores/ordersStore';
+import { buildDemoOrder, DEMO_ORDER_ID } from '@/src/lib/demoData';
 
 function PickupCountdown({ startTime, endTime, theme, t }: { startTime: string; endTime: string; theme: any; t: any }) {
   const [tick, setTick] = useState(0);
@@ -260,22 +266,69 @@ export default function OrdersScreen() {
     paymentMethod?: 'cash' | 'card' | 'credits';
   } | null>(null);
 
+  // ── Cancel sheet animation ────────────────────────────────────────────────
+  // The sheet uses a CUSTOM (animationType="none") entrance so the dark
+  // backdrop fades in FIRST and stays put, then the sheet slides up — instead
+  // of the native "slide" which drags the backdrop up together with the sheet.
+  // It's also drag-to-dismiss from the handle (useSwipeToDismiss).
+  const CANCEL_SHEET_OFFSCREEN = 800;
+  const cancelBackdropOpacity = useRef(new Animated.Value(0)).current;
+  const cancelSheetY = useRef(new Animated.Value(CANCEL_SHEET_OFFSCREEN)).current;
+  // Drag-dismiss: the hook slides its own translateY out, then calls this — we
+  // just fade the backdrop out and unmount.
+  const handleCancelDragDismiss = useCallback(() => {
+    Animated.timing(cancelBackdropOpacity, { toValue: 0, duration: 150, useNativeDriver: true })
+      .start(({ finished }) => { if (finished) setCancelWarning(null); });
+  }, [cancelBackdropOpacity]);
+  const cancelSwipe = useSwipeToDismiss(handleCancelDragDismiss);
+  // Animated-out close for the buttons / backdrop / back press: slide the sheet
+  // down and fade the backdrop, THEN clear the state.
+  const closeCancelSheet = useCallback(() => {
+    Animated.parallel([
+      Animated.timing(cancelBackdropOpacity, { toValue: 0, duration: 180, useNativeDriver: true }),
+      Animated.timing(cancelSheetY, { toValue: CANCEL_SHEET_OFFSCREEN, duration: 220, useNativeDriver: true }),
+    ]).start(({ finished }) => { if (finished) setCancelWarning(null); });
+  }, [cancelBackdropOpacity, cancelSheetY]);
+  // Entrance: fade the backdrop in, THEN spring the sheet up (decoupled).
+  useEffect(() => {
+    if (!cancelWarning) return;
+    cancelBackdropOpacity.setValue(0);
+    cancelSheetY.setValue(CANCEL_SHEET_OFFSCREEN);
+    cancelSwipe.translateY.setValue(0);
+    const anim = Animated.sequence([
+      Animated.timing(cancelBackdropOpacity, { toValue: 1, duration: 200, useNativeDriver: true }),
+      Animated.spring(cancelSheetY, { toValue: 0, friction: 12, tension: 70, useNativeDriver: true }),
+    ]);
+    anim.start();
+    return () => anim.stop();
+  }, [cancelWarning, cancelBackdropOpacity, cancelSheetY, cancelSwipe.translateY]);
+
+  // Reservations polling pauses when the user is on another tab — drop
+  // `refetchOnMount: 'always'` (it was double-firing alongside the
+  // interval and forcing a refetch on every tab swap, the worst-case
+  // case for the rate limiter). The 30s staleTime floor on the global
+  // QueryClient already covers freshness on quick tab returns.
+  const reservationsRefetch = usePollWhenFocused(20_000);
   const reservationsQuery = useQuery({
     queryKey: ['reservations'],
     queryFn: fetchMyReservations,
     enabled: isAuthenticated && isBuyer,
-    staleTime: 10_000,
-    refetchInterval: 15_000,
-    refetchOnMount: 'always',
+    staleTime: 15_000,
+    refetchInterval: reservationsRefetch,
+    refetchOnReconnect: true,
     retry: 2,
   });
 
+  // Conversation unreads: 10s → 30s + focus-gated. /api/messages shares
+  // the writeLimiter's 20 req/min budget; 6 req/min from this single
+  // poll alone was filling a third of it.
+  const msgUnreadsRefetch = usePollWhenFocused(30_000);
   const msgUnreadsQuery = useQuery({
     queryKey: ['conversation-unreads'],
     queryFn: fetchConversationUnreads,
     enabled: isAuthenticated,
-    staleTime: 5_000,
-    refetchInterval: 10_000,
+    staleTime: 20_000,
+    refetchInterval: msgUnreadsRefetch,
   });
   const msgUnreads = msgUnreadsQuery.data ?? {};
 
@@ -283,7 +336,11 @@ export default function OrdersScreen() {
     queryKey: ['gamification-stats'],
     queryFn: fetchGamificationStats,
     enabled: isAuthenticated,
-    staleTime: 60_000,
+    // Consistent with (tabs)/_layout (5 min) — was 60s here, 10s in
+    // profile/impact: when two staleTime windows on the same key
+    // expire at different ticks, you get a double-fetch on the
+    // boundary. Single floor across consumers fixes that.
+    staleTime: 5 * 60_000,
   });
 
   const hideMutation = useMutation({
@@ -293,7 +350,80 @@ export default function OrdersScreen() {
     },
   });
 
-  const reservations = reservationsQuery.data ?? [];
+  // Demo-order injection: when the customer walkthrough completes the fake
+  // reservation, `reserve.tsx` flips `demoOrderActive=true` and routes here.
+  // We prepend a synthetic confirmed reservation so the orders tab shows a
+  // realistic card the walkthrough can highlight. Mirrors the business-side
+  // injection in `app/(business)/incoming-orders.tsx:270-304`.
+  const demoOrderActive = useWalkthroughStore((s) => s.demoOrderActive);
+  const demoLocationName = t('walkthrough.customer.demoLocationName', { defaultValue: 'Chez Joe (démo)' });
+  const demoBasketName = t('walkthrough.customer.demoBasketName', { defaultValue: 'Panier Surprise' });
+  const demoOrder = useMemo(
+    () => buildDemoOrder({ basketName: demoBasketName, locationName: demoLocationName }),
+    [demoBasketName, demoLocationName],
+  );
+
+  const realReservations = reservationsQuery.data ?? [];
+  const reservations = useMemo(
+    () => demoOrderActive
+      ? [demoOrder, ...realReservations.filter((r) => String(r.id) !== DEMO_ORDER_ID)]
+      : realReservations,
+    [demoOrderActive, demoOrder, realReservations],
+  );
+
+  // Auto-scroll on the orders tab when the walkthrough reaches the
+  // `customerPickupCode` step. After the user taps the demo order card to
+  // expand it, the pickup-code block sits below the fold — without
+  // scrolling, the spotlight lands on an off-screen target and the user
+  // sees nothing. We scroll the page down by ~280 px to bring the dark
+  // pickup-code box into the visible viewport. The card's onLayout
+  // republishes its rect after the scroll settles, so the halo follows.
+  const ordersScrollRef = useRef<ScrollView>(null);
+
+  // After a cancellation, the cancel screen sets a one-shot flag (see
+  // ordersStore). This tab keeps its scroll position across navigation, so on
+  // return the list would show the old offset while the cancelled card is now
+  // gone — leaving a stale position that visibly snapped to the top on the
+  // first touch. Consuming the flag on focus and scrolling to top up-front
+  // makes the return clean.
+  useFocusEffect(
+    useCallback(() => {
+      if (useOrdersStore.getState().consumeScrollReset()) {
+        // requestAnimationFrame so the scroll lands after the focus re-render.
+        requestAnimationFrame(() => ordersScrollRef.current?.scrollTo({ y: 0, animated: false }));
+      }
+    }, [])
+  );
+
+  const walkthroughMeasureKey = useWalkthroughStore((s) => s.currentStep?.measureKey);
+  // When the demo enters the orders tab (customerOrderCard step), reset
+  // scroll to the top so the injected demo card lands at a predictable
+  // position. Tab screens preserve scroll across navigation — without this
+  // the halo would land wherever the user left the list scrolled. We do
+  // NOT null-clear the rect here: the demo card's onLayout in
+  // ReservationCard republishes the rect whenever the card lays out
+  // (incl. expand toggle), and a null clear with no immediate re-publish
+  // would strand the overlay in its dim-only branch.
+  useEffect(() => {
+    if (walkthroughMeasureKey !== 'customerOrderCard') return;
+    ordersScrollRef.current?.scrollTo({ y: 0, animated: false });
+  }, [walkthroughMeasureKey]);
+  useEffect(() => {
+    if (walkthroughMeasureKey !== 'customerPickupCode') return;
+    // No null-clear here: the pickup-code onLayout in ReservationCard now
+    // SKIPS publication while the walkthrough is at customerOrderCard /
+    // customerPickupCode (see ReservationCard.tsx), and the 500 ms
+    // step-driven re-measure in ReservationCard is the authoritative
+    // post-scroll publisher. Clearing here was redundant and risked the
+    // dim-mask-only stall the user reported.
+    //
+    // Wait a frame so the demo card's expand animation has settled before
+    // we scroll; otherwise the layout's still mid-transition.
+    const t = setTimeout(() => {
+      ordersScrollRef.current?.scrollTo({ y: 280, animated: true });
+    }, 120);
+    return () => clearTimeout(t);
+  }, [walkthroughMeasureKey]);
 
   // Helper: check if reservation's pickup time has ended (business timezone aware).
   // Uses BUSINESS-DAY date comparison (not calendar date) so overnight pickup
@@ -525,6 +655,7 @@ export default function OrdersScreen() {
     <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]} edges={['top']}>
 
       <ScrollView
+        ref={ordersScrollRef}
         style={styles.content}
         contentContainerStyle={[{ padding: theme.spacing.xl, paddingTop: 50, paddingBottom: 100 }]}
         onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: ordersScrollY } } }], { useNativeDriver: false })}
@@ -533,9 +664,15 @@ export default function OrdersScreen() {
         <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: theme.spacing.sm }}>
           <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h1 }]}>{t('orders.title')}</Text>
         </View>
-        {reservationsQuery.isLoading ? (
+        {reservationsQuery.isLoading && !reservationsQuery.data ? (
+          // Only show the loader on a true cold fetch (no cached data).
+          // Background refetches with cached data fall through to the content
+          // branch so the user keeps seeing their orders during network blips.
           <DelayedLoader />
-        ) : reservationsQuery.isError ? (
+        ) : reservationsQuery.isError && !reservationsQuery.data ? (
+          // Same rule for errors: a failed refetch when we already have data
+          // must NOT replace the screen — keep showing what was there and let
+          // the next interval tick / pull-to-refresh recover silently.
           <View style={styles.centerState}>
             <Text style={[{ color: theme.colors.error, ...theme.typography.body, textAlign: 'center' as const, marginBottom: 16 }]}>
               {t('common.errorOccurred')}
@@ -733,14 +870,25 @@ export default function OrdersScreen() {
       <Modal
         visible={!!cancelWarning}
         transparent
-        animationType="fade"
-        onRequestClose={() => setCancelWarning(null)}
+        animationType="none"
+        onRequestClose={closeCancelSheet}
       >
-        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 20 }}>
-          <View style={{ backgroundColor: theme.colors.surface, borderRadius: 20, width: '100%', maxWidth: 380, overflow: 'hidden', padding: 4 }}>
-            <View style={{ alignItems: 'center', paddingTop: 24, paddingHorizontal: 20 }}>
-              <View style={{ backgroundColor: theme.colors.error + '15', width: 56, height: 56, borderRadius: 28, justifyContent: 'center', alignItems: 'center', marginBottom: 16 }}>
-                <AlertTriangle size={28} color={theme.colors.error} />
+        {/* Backdrop fades IN PLACE (opacity only) — decoupled from the sheet so
+            it doesn't slide up with it. Tapping it dismisses. */}
+        <Animated.View style={{ flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.5)', opacity: cancelBackdropOpacity }}>
+          <TouchableOpacity activeOpacity={1} onPress={closeCancelSheet} style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }} />
+          {/* Sheet slides up (entrance) and tracks the finger (drag-dismiss).
+              The two translateY transforms stack additively. */}
+          <Animated.View style={{ transform: [{ translateY: cancelSheetY }, { translateY: cancelSwipe.translateY }] }}>
+          <PaperSurface radius={24} shadow="lg" style={{ width: '100%', borderBottomLeftRadius: 0, borderBottomRightRadius: 0, paddingTop: 10, paddingBottom: insets.bottom + 20 }}>
+            {/* Drag handle — swipe down here to dismiss. Extra padding gives a
+                comfortable grab zone around the pill. */}
+            <View {...cancelSwipe.panHandlers} style={{ alignItems: 'center', paddingTop: 4, paddingBottom: 14 }}>
+              <View style={{ width: 40, height: 5, borderRadius: 3, backgroundColor: theme.colors.divider }} />
+            </View>
+            <View style={{ alignItems: 'center', paddingHorizontal: 20 }}>
+              <View style={{ backgroundColor: theme.colors.surfaceMuted, width: 56, height: 56, borderRadius: 28, justifyContent: 'center', alignItems: 'center', marginBottom: 16 }}>
+                <AlertTriangle size={28} color={theme.colors.warning} />
               </View>
               <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3, fontWeight: '700' as const, textAlign: 'center', marginBottom: 4 }}>
                 {t('orders.cancelConfirmTitle', { defaultValue: 'Annuler cette commande ?' })}
@@ -753,8 +901,8 @@ export default function OrdersScreen() {
             </View>
 
             <View style={{ paddingHorizontal: 20, paddingBottom: 24 }}>
-              <View style={{ backgroundColor: theme.colors.error + '10', borderRadius: 14, padding: 16, gap: 10, marginBottom: 20 }}>
-                <Text style={{ color: theme.colors.error, ...theme.typography.bodySm, fontWeight: '700' as const }}>
+              <View style={{ backgroundColor: theme.colors.surfaceMuted, borderRadius: 14, padding: 16, gap: 10, marginBottom: 20, borderWidth: 1, borderColor: theme.colors.border }}>
+                <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '700' as const }}>
                   {t('orders.cancelConsequences', { defaultValue: 'Si vous annulez :' })}
                 </Text>
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
@@ -800,13 +948,13 @@ export default function OrdersScreen() {
                 ) : null}
               </View>
 
-              <Text style={{ color: theme.colors.error, ...theme.typography.bodySm, fontWeight: '700', textAlign: 'center', marginBottom: 16, lineHeight: 20 }}>
+              <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm, textAlign: 'center', marginBottom: 16, lineHeight: 20 }}>
                 {t('orders.cancelIrreversible', { defaultValue: 'Cette action est irréversible et ne peut pas être annulée.' })}
               </Text>
 
               <View style={{ flexDirection: 'row', gap: 10 }}>
                 <TouchableOpacity
-                  onPress={() => setCancelWarning(null)}
+                  onPress={closeCancelSheet}
                   style={{ flex: 1, backgroundColor: theme.colors.primary, borderRadius: 14, paddingVertical: 14, paddingHorizontal: 10, alignItems: 'center', justifyContent: 'center' }}
                 >
                   <Text style={{ color: '#fff', fontSize: 13, fontWeight: '700', textAlign: 'center' }} numberOfLines={1} adjustsFontSizeToFit>
@@ -823,8 +971,9 @@ export default function OrdersScreen() {
                 </TouchableOpacity>
               </View>
             </View>
-          </View>
-        </View>
+          </PaperSurface>
+          </Animated.View>
+        </Animated.View>
       </Modal>
 
       {/* Error modal */}

@@ -1,12 +1,15 @@
 import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Modal, TextInput, Switch, ActivityIndicator, Animated, Image } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
-import { useRouter } from 'expo-router';
-import { X, UserPlus, Trash2, Shield, Users, MapPin, Crown, ShieldCheck, Key, Plus, ChevronDown, ChevronUp, ChevronLeft, List, Network, Mail, MoreVertical, Building2, MessageCircle, Edit3 } from 'lucide-react-native';
+import { useRouter, useFocusEffect } from 'expo-router';
+import { X, UserPlus, Trash2, Shield, Users, MapPin, Crown, ShieldCheck, Key, Plus, ChevronDown, ChevronUp, ChevronLeft, List, Network, Mail, MoreVertical, Building2, MessageCircle, Edit3, AlertTriangle } from 'lucide-react-native';
 import { TeamRoleChangeModal } from '@/src/components/TeamRoleChangeModal';
 import { TeamLocationsManagerModal } from '@/src/components/TeamLocationsManagerModal';
 import { TeamRemoveMemberDialog } from '@/src/components/TeamRemoveMemberDialog';
+import { ActionMenuCard, ActionMenuItem, ActionMenuDivider } from '@/src/components/ui/ActionMenu';
+import { PaperSurface } from '@/src/components/ui/PaperSurface';
+import { PermissionIcon8, RoleIcon8, EditIcon8, DeleteIcon8 } from '@/src/components/ui/Icon8';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import {
@@ -22,21 +25,18 @@ import {
 } from '@/src/services/teams';
 import { getErrorMessage } from '@/src/lib/api';
 import { FeatureFlags } from '@/src/lib/featureFlags';
+import { LOCATION_CATEGORIES } from '@/src/lib/locationCategories';
 import { useAuthStore } from '@/src/stores/authStore';
 import { DelayedLoader } from '@/src/components/DelayedLoader';
 import { StatusDot } from '@/src/components/StatusDot';
 import { FilterChip } from '@/src/components/FilterChip';
 import { useCustomAlert } from '@/src/components/CustomAlert';
 import { useWalkthroughStore } from '@/src/stores/walkthroughStore';
+import { useSwipeToDismiss } from '@/src/hooks/useSwipeToDismiss';
 import { SubScreenWalkthroughOverlay } from '@/src/components/SubScreenWalkthroughOverlay';
+import { formatLocationName } from '@/src/utils/formatLocation';
 
 type PermissionKey = 'confirm_pickup' | 'edit_quantities' | 'edit_basket_info' | 'create_delete_baskets' | 'view_history' | 'messaging' | 'cancel_order';
-
-// Backend stores permission values as strings: 'write', 'read', 'none'
-function permStringToBool(val: string | boolean | undefined): boolean {
-  if (typeof val === 'boolean') return val;
-  return val === 'write' || val === 'read';
-}
 
 function permBoolToString(val: boolean): string {
   return val ? 'write' : 'none';
@@ -122,7 +122,20 @@ function OrgChartView({
   });
 
   const [memberPreview, setMemberPreview] = useState<any | null>(null);
+  const memberSwipe = useSwipeToDismiss(() => setMemberPreview(null));
   const levelAnim = useRef(new Animated.Value(1)).current;
+
+  // Current account holder — used to suffix the user's own member row with
+  // "(Vous)" so the admin can spot themselves at a glance.
+  const currentUserId = useAuthStore((s) => s.user?.id);
+  const isMe = (m: any) => {
+    if (currentUserId == null) return false;
+    const ids = [m?.user_id, m?.userId, m?.id, m?.membership_user_id]
+      .filter((v) => v != null)
+      .map((v) => String(v));
+    return ids.includes(String(currentUserId));
+  };
+  const youSuffix = t('common.youSuffix', { defaultValue: '(You)' });
 
   const doLevelTransition = (next: LevelState) => {
     Animated.timing(levelAnim, { toValue: 0, duration: 180, useNativeDriver: true }).start(() => {
@@ -370,12 +383,19 @@ function OrgChartView({
             activeOpacity={1}
             onPress={() => setMemberPreview(null)}
           >
-            <View
+            <Animated.View
               onStartShouldSetResponder={() => true}
-              style={{ backgroundColor: '#fff', borderTopLeftRadius: 28, borderTopRightRadius: 28, padding: 24 }}
+              style={{ backgroundColor: '#fff', borderTopLeftRadius: 28, borderTopRightRadius: 28, paddingHorizontal: 24, paddingBottom: 24, transform: [{ translateY: memberSwipe.translateY }] }}
             >
-              {/* Handle */}
-              <View style={{ width: 40, height: 4, borderRadius: 2, backgroundColor: '#e0e0e0', alignSelf: 'center', marginBottom: 20 }} />
+              {/* Swipe zone — full-width strip hosts the handle pill
+                  AND the PanResponder, so the user can grab anywhere
+                  across the top of the sheet to start the swipe-down. */}
+              <View
+                {...memberSwipe.panHandlers}
+                style={{ paddingTop: 10, paddingBottom: 16, alignItems: 'center', marginHorizontal: -24 }}
+              >
+                <View style={{ width: 40, height: 5, borderRadius: 3, backgroundColor: '#e0e0e0' }} />
+              </View>
 
               {/* Avatar + name */}
               <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 16 }}>
@@ -392,6 +412,7 @@ function OrgChartView({
                 <View style={{ flex: 1 }}>
                   <Text style={{ color: '#1a1a1a', fontSize: 16, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
                     {memberPreview.name ?? memberPreview.user_name ?? 'Unknown'}
+                    {isMe(memberPreview) ? <Text style={{ color: theme.colors.primary, fontWeight: '700' }}> {youSuffix}</Text> : null}
                   </Text>
                   <Text style={{ color: '#777', fontSize: 13, fontFamily: 'Poppins_400Regular', marginTop: 2 }}>
                     {memberPreview.role === 'owner' ? t('business.team.owner') : memberPreview.role === 'admin' ? t('business.team.admin') : t('business.team.member')}
@@ -451,7 +472,7 @@ function OrgChartView({
               </View>
 
               <View style={{ height: 24 }} />
-            </View>
+            </Animated.View>
           </TouchableOpacity>
         ) : null}
       </Modal>
@@ -462,9 +483,22 @@ function OrgChartView({
 export default function TeamScreen() {
   const { t } = useTranslation();
   const theme = useTheme();
+  const insets = useSafeAreaInsets();
   const router = useRouter();
   const queryClient = useQueryClient();
   const alert = useCustomAlert();
+
+  // Current account holder — used to suffix the user's own member row with
+  // "(Vous)" so the admin can spot themselves at a glance in the team list.
+  const currentUserId = useAuthStore((s) => s.user?.id);
+  const isMe = (m: any) => {
+    if (currentUserId == null) return false;
+    const ids = [m?.user_id, m?.userId, m?.id, m?.membership_user_id]
+      .filter((v) => v != null)
+      .map((v) => String(v));
+    return ids.includes(String(currentUserId));
+  };
+  const youSuffix = t('common.youSuffix', { defaultValue: '(You)' });
 
   // Walkthrough — publish rects for the team-tour halos. The pushed-screen
   // SubScreenWalkthroughOverlay (mounted at the bottom of this screen) reads
@@ -512,6 +546,13 @@ export default function TeamScreen() {
   useEffect(() => {
     const k = teamWalkthroughCurrentStep?.measureKey;
     if (k !== 'teamOrgCard' && k !== 'teamLocationsSection' && k !== 'teamAddLocationBtn' && k !== 'teamAddMemberBtn' && k !== 'teamMembersSection') return;
+    // Clear the previous (pre-scroll) rect for THIS key immediately so the
+    // overlay shows dim-only until we re-measure AFTER the scroll settles.
+    // Without this the onLayout-published rect (captured at the page's initial
+    // scroll offset) trips the overlay's fast-path and the halo flashes at the
+    // wrong spot, then snaps once the post-scroll re-measure lands — the team
+    // "halos jump around while scrolling" jitter.
+    setMeasuredRect(k, null);
     const timers: ReturnType<typeof setTimeout>[] = [];
     const scrollToSection = (sectionKey: string) => {
       const y = teamSectionYRef.current[sectionKey];
@@ -537,11 +578,10 @@ export default function TeamScreen() {
       timers.push(setTimeout(remeasure, 450));
     }
     return () => { timers.forEach(clearTimeout); };
-  }, [teamWalkthroughCurrentStep?.measureKey, measureTeamRect]);
+  }, [teamWalkthroughCurrentStep?.measureKey, measureTeamRect, setMeasuredRect]);
 
   const [viewMode, setViewMode] = useState<'list' | 'chart'>('list');
   const [showAddMemberModal, setShowAddMemberModal] = useState(false);
-  const [showPermissionsModal, setShowPermissionsModal] = useState<string | null>(null);
   const [selectedLocation, setSelectedLocation] = useState<number | null>(null);
   // Add-member form state (backend requires name, email, password)
   const [newMemberName, setNewMemberName] = useState('');
@@ -562,7 +602,6 @@ export default function TeamScreen() {
   const [newLocationName, setNewLocationName] = useState('');
   const [newLocationAddress, setNewLocationAddress] = useState('');
   const [newLocationCategory, setNewLocationCategory] = useState('');
-  const LOCATION_CATEGORIES = ['bakery', 'restaurant', 'grocery', 'cafe', 'pastry', 'supermarket'] as const;
 
   const [memberMenuId, setMemberMenuId] = useState<string | null>(null);
   // Role / location modal targets — keyed by user_id since the modals now
@@ -606,10 +645,24 @@ export default function TeamScreen() {
     staleTime: 60_000,
   });
 
+  // Refetch the org/members whenever this screen regains focus. Role/location
+  // changes made on the member-detail sub-screen (and its modals) should be
+  // reflected the moment the user navigates back here, even if a cache
+  // invalidation was missed. Cheap — this screen isn't opened in a hot loop.
+  useFocusEffect(
+    useCallback(() => {
+      if (hasOrg) void orgDetailsQuery.refetch();
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [hasOrg, orgId])
+  );
+
   const orgDetails: OrgDetailsFromAPI | undefined = orgDetailsQuery.data;
   const org = orgDetails?.organization;
   const members = orgDetails?.members ?? [];
   const locations = orgDetails?.locations ?? [];
+  // Used by formatLocationName(...) wherever this screen renders a location.
+  // Falls back to context's organization_name if orgDetails hasn't loaded.
+  const orgName = org?.name ?? contextQuery.data?.organization_name ?? '';
 
   const generatePassword = () => {
     return Math.random().toString(36).slice(-8);
@@ -647,7 +700,7 @@ export default function TeamScreen() {
       alert.showAlert(t('common.success'), t('business.team.orgCreated', { defaultValue: 'Organization created!' }));
     },
     onError: (err: any) => {
-      alert.showAlert(t('common.error'), err?.message ?? t('common.errorOccurred'));
+      alert.showAlert(t('common.error'), getErrorMessage(err));
     },
   });
 
@@ -688,7 +741,7 @@ export default function TeamScreen() {
       );
     },
     onError: (err: any) => {
-      alert.showAlert(t('common.error'), err?.message ?? t('common.errorOccurred'));
+      alert.showAlert(t('common.error'), getErrorMessage(err));
     },
   });
 
@@ -701,7 +754,7 @@ export default function TeamScreen() {
       void queryClient.invalidateQueries({ queryKey: ['org-details'] });
     },
     onError: (err: any) => {
-      alert.showAlert(t('common.error'), err?.message ?? t('common.errorOccurred'));
+      alert.showAlert(t('common.error'), getErrorMessage(err));
     },
   });
 
@@ -714,7 +767,7 @@ export default function TeamScreen() {
       void queryClient.invalidateQueries({ queryKey: ['org-details'] });
     },
     onError: (err: any) => {
-      alert.showAlert(t('common.error'), err?.message ?? t('common.errorOccurred'));
+      alert.showAlert(t('common.error'), getErrorMessage(err));
     },
   });
 
@@ -739,7 +792,7 @@ export default function TeamScreen() {
       );
     },
     onError: (err: any) => {
-      alert.showAlert(t('common.error'), err?.message ?? t('common.errorOccurred'));
+      alert.showAlert(t('common.error'), getErrorMessage(err));
     },
   });
 
@@ -751,10 +804,19 @@ export default function TeamScreen() {
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['org-details'] });
+      void queryClient.invalidateQueries({ queryKey: ['my-baskets'] });
+      void queryClient.invalidateQueries({ queryKey: ['my-profile'] });
       if (selectedLocation) setSelectedLocation(null);
     },
     onError: (err: any) => {
-      alert.showAlert(t('common.error'), err?.message ?? t('common.errorOccurred'));
+      // The server's raw `err.message` may be English ("Failed to remove
+      // location"); surface the translated equivalent instead. The console
+      // log inside the API client still captures the raw text for debugging.
+      console.error('[Team] Delete location failed:', err?.status, err?.message);
+      alert.showAlert(
+        t('common.error'),
+        t('business.team.deleteLocationFailed', { defaultValue: "Impossible de masquer l'emplacement. Veuillez réessayer." }),
+      );
     },
   });
 
@@ -788,62 +850,20 @@ export default function TeamScreen() {
     updateMemberMutation.mutate({ memberId, role: newRole });
   }, [updateMemberMutation]);
 
-  const handleOpenPermissions = useCallback((memberId: string, currentPermissions?: Record<string, any>) => {
-    setPermissionsState({
-      confirm_pickup: permStringToBool(currentPermissions?.confirm_pickup),
-      edit_quantities: permStringToBool(currentPermissions?.edit_quantities),
-      edit_basket_info: permStringToBool(currentPermissions?.edit_basket_info),
-      create_delete_baskets: permStringToBool(currentPermissions?.create_delete_baskets),
-      view_history: permStringToBool(currentPermissions?.view_history),
-      messaging: permStringToBool(currentPermissions?.messaging),
-      cancel_order: permStringToBool(currentPermissions?.cancel_order),
-    });
-    setShowPermissionsModal(memberId);
-  }, []);
-
-  // The member currently targeted by the permissions modal. Used to lock the
-  // toggles when the target is an org admin (admin + no location_id) — admins
-  // always have every permission at runtime, so editing is meaningless.
-  const permissionsModalMember = useMemo(() => {
-    if (!showPermissionsModal) return null;
-    return members.find((m: any) => String(m.membership_id) === showPermissionsModal) ?? null;
-  }, [showPermissionsModal, members]);
-  const permissionsModalIsOrgAdmin = !!permissionsModalMember && permissionsModalMember.role === 'admin' && !permissionsModalMember.location_id;
-
-  const handleSavePermissions = useCallback(() => {
-    if (!showPermissionsModal) return;
-    const member = members.find((m: any) => String(m.membership_id) === showPermissionsModal);
-    // Admin permissions are implicit — skip the save to avoid overwriting a
-    // future role demotion with a stale all-true payload.
-    if (member && member.role === 'admin' && !member.location_id) {
-      setShowPermissionsModal(null);
-      return;
-    }
-    const permsPayload: Record<string, string> = {
-      confirm_pickup: permBoolToString(permissionsState.confirm_pickup),
-      edit_quantities: permBoolToString(permissionsState.edit_quantities),
-      edit_basket_info: permBoolToString(permissionsState.edit_basket_info),
-      create_delete_baskets: permBoolToString(permissionsState.create_delete_baskets),
-      view_history: permBoolToString(permissionsState.view_history),
-      messaging: permBoolToString(permissionsState.messaging),
-      cancel_order: permBoolToString(permissionsState.cancel_order),
-    };
-    // Permissions are a per-USER concept in the UI — fan the payload out to
-    // every membership the user holds in this org so siblings stay in sync.
-    const siblings = members.filter((m: any) => String(m.user_id) === String(member?.user_id));
-    const targets = siblings.length > 0 ? siblings : [{ membership_id: showPermissionsModal, role: member?.role ?? 'member' }];
-    for (const m of targets) {
-      updateMemberMutation.mutate({
-        memberId: String(m.membership_id),
-        role: m.role ?? 'member',
-        permissions: permsPayload,
-      });
-    }
-    // Immediate refresh
-    void queryClient.invalidateQueries({ queryKey: ['my-context'] });
-    void queryClient.invalidateQueries({ queryKey: ['my-context'] });
-    setShowPermissionsModal(null);
-  }, [showPermissionsModal, permissionsState, updateMemberMutation, members, queryClient]);
+  const openPermissionsScreen = useCallback(
+    (membershipId: string, memberName: string, memberRole: string) => {
+      router.push({
+        pathname: '/business/permissions/[membershipId]',
+        params: {
+          membershipId,
+          orgId: orgId != null ? String(orgId) : '',
+          memberName,
+          memberRole,
+        },
+      } as never);
+    },
+    [router, orgId],
+  );
 
   // Role → StatusDot tone mapping. Owner is success-green (top-of-hierarchy),
   // admin uses the brand primary info tone, members stay neutral. Replaces
@@ -923,6 +943,20 @@ export default function TeamScreen() {
     }
     return byUser;
   };
+  // Users who are org-level (owner OR admin with no location_id) anywhere
+  // across the full members list. Used to suppress org admins from the
+  // location-filtered Members section even when a residual per-location row
+  // for the same user exists in the data.
+  const orgAdminUserIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const m of members as any[]) {
+      if (m.role === 'owner' || (m.role === 'admin' && !m.location_id)) {
+        ids.add(String(m.user_id));
+      }
+    }
+    return ids;
+  }, [members]);
+
   const { orgPeople, teamPeople } = useMemo(() => {
     // Org admins come from the unfiltered scoped list so they stay visible
     // regardless of which specific location is selected.
@@ -933,11 +967,30 @@ export default function TeamScreen() {
     // Team members come from the location-filtered list.
     const teams: GroupedUser[] = [];
     for (const g of groupMembers(displayedMembers).values()) {
-      if (!g.isOrgLevel) teams.push(g);
+      if (g.isOrgLevel) continue;
+      // Cross-user guard: if this user is an org admin via ANY row in the
+      // full members list, never show them in the Members section — even
+      // when a residual per-location row passes the location filter.
+      if (orgAdminUserIds.has(String(g.primary.user_id))) continue;
+      teams.push(g);
     }
     return { orgPeople: orgs, teamPeople: teams };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scopedMembers, displayedMembers, locations]);
+  }, [scopedMembers, displayedMembers, locations, orgAdminUserIds]);
+
+  // Orphan members: non-org-admin users who have NO row with a real
+  // location_id. Surfaced in a dedicated warning section so admins can spot
+  // and fix the bad data via "Assigner un emplacement".
+  const orphanPeople = useMemo(() => {
+    const out: GroupedUser[] = [];
+    for (const g of groupMembers(scopedMembers).values()) {
+      if (g.isOrgLevel) continue;
+      if (orgAdminUserIds.has(String(g.primary.user_id))) continue;
+      if (g.locations.length === 0) out.push(g);
+    }
+    return out;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scopedMembers, orgAdminUserIds, locations]);
 
   const handleAddMemberFromLocation = () => {
     // Location admin always adds members into their one location; org admin
@@ -1124,11 +1177,11 @@ export default function TeamScreen() {
                   </View>
                 )}
                 <View style={{ flex: 1, marginLeft: 14 }}>
-                  {/* Location admins see THEIR location's name here — the org
-                      name / category aren't relevant to their scoped view. */}
+                  {/* Location admins see "Org - Location" here for their
+                      scoped view; org admins see just the org name. */}
                   <Text style={{ color: '#fff', ...theme.typography.h2 }}>
                     {isLocationAdminOnly
-                      ? (locations.find((l: any) => l.id === myLocationId)?.name ?? contextQuery.data?.location_name ?? '--')
+                      ? formatLocationName(orgName, locations.find((l: any) => l.id === myLocationId)?.name ?? contextQuery.data?.location_name, '--')
                       : (org?.name ?? '--')}
                   </Text>
                   {!isLocationAdminOnly && org?.category ? (
@@ -1230,6 +1283,7 @@ export default function TeamScreen() {
                         <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
                           <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '600' as const }}>
                             {memberName || memberEmail}
+                            {isMe(member) ? <Text style={{ color: theme.colors.primary, fontWeight: '700' }}> {youSuffix}</Text> : null}
                           </Text>
                           <StatusDot tone={roleChip.tone} label={roleChip.label} />
                         </View>
@@ -1256,51 +1310,32 @@ export default function TeamScreen() {
                       // instead of a hard border, neutral icons throughout
                       // (the menu is utility — no brand color), and the
                       // destructive row sits behind a subtle divider.
-                      <View style={{
-                        marginTop: 10, marginLeft: 56, marginRight: 4,
-                        backgroundColor: theme.colors.surface,
-                        borderRadius: theme.radii.r14,
-                        ...theme.shadows.shadowMd,
-                        overflow: 'hidden',
-                      }}>
-                        <TouchableOpacity
-                          onPress={() => { setMemberMenuId(null); handleOpenPermissions(memberId, member.permissions); }}
-                          style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14 }}
-                        >
-                          <Shield size={16} color={theme.colors.textSecondary} />
-                          <Text style={{ color: theme.colors.textPrimary, ...theme.typography.body, marginLeft: 12, fontWeight: '500' }}>
-                            {t('business.profile.permissions')}
-                          </Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity
+                      <ActionMenuCard style={{ marginTop: 10, marginBottom: 10, alignSelf: 'stretch' }}>
+                        <ActionMenuItem
+                          icon={<PermissionIcon8 size={16} />}
+                          label={t('business.profile.permissions')}
+                          onPress={() => { setMemberMenuId(null); openPermissionsScreen(memberId, memberName, member.role); }}
+                        />
+                        <ActionMenuDivider />
+                        <ActionMenuItem
+                          icon={<RoleIcon8 size={16} />}
+                          label={t('business.team.changeRole', { defaultValue: 'Changer le rôle' })}
                           onPress={() => { setMemberMenuId(null); setRoleModalTarget({ userId: member.user_id }); }}
-                          style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14 }}
-                        >
-                          <ShieldCheck size={16} color={theme.colors.textSecondary} />
-                          <Text style={{ color: theme.colors.textPrimary, ...theme.typography.body, marginLeft: 12, fontWeight: '500' }}>
-                            {t('business.team.changeRole', { defaultValue: 'Changer le rôle' })}
-                          </Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity
+                        />
+                        <ActionMenuDivider />
+                        <ActionMenuItem
+                          icon={<Mail size={16} color={theme.colors.textSecondary} />}
+                          label={t('business.team.sendEmail', { defaultValue: 'Envoyer un email' })}
                           onPress={() => { setMemberMenuId(null); setEmailTarget({ memberId, memberName: memberName ?? '' }); }}
-                          style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14 }}
-                        >
-                          <Mail size={16} color={theme.colors.textSecondary} />
-                          <Text style={{ color: theme.colors.textPrimary, ...theme.typography.body, marginLeft: 12, fontWeight: '500' }}>
-                            {t('business.team.sendEmail', { defaultValue: 'Envoyer un email' })}
-                          </Text>
-                        </TouchableOpacity>
-                        <View style={{ height: 1, backgroundColor: theme.colors.divider, marginHorizontal: 12 }} />
-                        <TouchableOpacity
+                        />
+                        <ActionMenuDivider />
+                        <ActionMenuItem
+                          destructive
+                          icon={<DeleteIcon8 size={16} />}
+                          label={t('business.profile.removeMember')}
                           onPress={() => { setMemberMenuId(null); handleRemoveMember(member.user_id, memberName); }}
-                          style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14 }}
-                        >
-                          <Trash2 size={16} color={theme.colors.textSecondary} />
-                          <Text style={{ color: theme.colors.error, ...theme.typography.body, marginLeft: 12, fontWeight: '600' }}>
-                            {t('business.profile.removeMember')}
-                          </Text>
-                        </TouchableOpacity>
-                      </View>
+                        />
+                      </ActionMenuCard>
                     )}
                   </TouchableOpacity>
                 );
@@ -1493,35 +1528,20 @@ export default function TeamScreen() {
 
                 {/* Inline dropdown — mirrors the member menu pattern */}
                 {locationMenuId === loc.id && isOrgAdmin && (
-                  <View style={{
-                    marginTop: 10,
-                    marginHorizontal: theme.spacing.lg,
-                    marginBottom: 10,
-                    backgroundColor: theme.colors.surface,
-                    borderRadius: theme.radii.r14,
-                    ...theme.shadows.shadowMd,
-                    overflow: 'hidden',
-                  }}>
-                    <TouchableOpacity
+                  <ActionMenuCard style={{ marginTop: 10, marginHorizontal: theme.spacing.lg, marginBottom: 10 }}>
+                    <ActionMenuItem
+                      icon={<EditIcon8 size={16} />}
+                      label={t('business.team.editLocation', { defaultValue: "Modifier l'emplacement" })}
                       onPress={() => handleEditLocation(loc.id)}
-                      style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14 }}
-                    >
-                      <Edit3 size={16} color={theme.colors.textSecondary} />
-                      <Text style={{ color: theme.colors.textPrimary, ...theme.typography.body, marginLeft: 12, fontWeight: '500' }}>
-                        {t('business.team.editLocation', { defaultValue: "Modifier l'emplacement" })}
-                      </Text>
-                    </TouchableOpacity>
-                    <View style={{ height: 1, backgroundColor: theme.colors.divider, marginHorizontal: 12 }} />
-                    <TouchableOpacity
+                    />
+                    <ActionMenuDivider />
+                    <ActionMenuItem
+                      destructive
+                      icon={<DeleteIcon8 size={16} />}
+                      label={t('business.team.deleteLocation', { defaultValue: "Supprimer l'emplacement" })}
                       onPress={() => handleRequestDeleteLocation(loc.id, loc.name ?? loc.address ?? 'Location')}
-                      style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14 }}
-                    >
-                      <Trash2 size={16} color={theme.colors.textSecondary} />
-                      <Text style={{ color: theme.colors.error, ...theme.typography.body, marginLeft: 12, fontWeight: '600' }}>
-                        {t('business.team.deleteLocation', { defaultValue: "Supprimer l'emplacement" })}
-                      </Text>
-                    </TouchableOpacity>
-                  </View>
+                    />
+                  </ActionMenuCard>
                 )}
                 </View>
               ))}
@@ -1560,10 +1580,13 @@ export default function TeamScreen() {
                     would be misleading. */}
                 {(() => {
                   if (isLocationAdminOnly) return null;
-                  const selectedLocName = selectedLocation
+                  const selectedLocBare = selectedLocation
                     ? ((locations.find((l: any) => l.id === selectedLocation) as any)?.name
                         ?? (locations.find((l: any) => l.id === selectedLocation) as any)?.address
                         ?? '')
+                    : null;
+                  const selectedLocName = selectedLocBare
+                    ? formatLocationName(orgName, selectedLocBare)
                     : null;
                   const label = selectedLocName
                     ? t('business.team.membersAtLocation', { location: selectedLocName, defaultValue: selectedLocName })
@@ -1671,25 +1694,26 @@ export default function TeamScreen() {
               const memberName = member.name ?? member.user_name ?? member.email?.split('@')[0] ?? '';
               const memberEmail = member.email ?? member.user_email ?? '';
               const isOwner = memberRole === 'owner';
-              // "Admin" is a per-location privilege here (org admins live in the
-              // dedicated org section). Showing Admin on "Voir tout" reads like
-              // "org admin" which is misleading — so we only surface it when the
-              // user is admin of the currently-selected location.
-              const isAdminOfSelected = selectedLocation != null
-                && group.all.some((m: any) => m.location_id === selectedLocation && m.role === 'admin');
-              const displayedRole = isOwner
-                ? 'owner'
-                : isAdminOfSelected
-                  ? 'admin'
-                  : 'member';
-              const roleChip = getRoleTone(displayedRole);
+              // A location admin is role='admin' on any of this user's
+              // memberships (org admins are already pulled into the dedicated
+              // org section, so an "admin" here is always a LOCATION admin).
+              // Show it regardless of the selected-location filter — otherwise a
+              // member just promoted to "admin of location" keeps showing
+              // "Membre" on the all-locations view and the change looks like it
+              // never applied. Labelled distinctly from the org "Admin" so it's
+              // not mistaken for an org-wide admin.
+              const isLocationAdmin = !isOwner && group.all.some((m: any) => m.role === 'admin');
+              const displayedRole = isOwner ? 'owner' : isLocationAdmin ? 'admin' : 'member';
+              const roleChip = isLocationAdmin
+                ? { tone: 'info' as const, label: t('business.team.roleLocationAdmin', { defaultValue: "Admin de l'emplacement" }) }
+                : getRoleTone(displayedRole);
               const initials = getInitials(memberName);
 
               return (
                 <TouchableOpacity
                   key={userIdKey}
                   activeOpacity={0.7}
-                  onPress={() => router.push({ pathname: '/business/member-detail', params: { memberId, memberUserId: String(member.user_id ?? ''), memberName, memberEmail, memberRole, locationName: group.locations[0]?.name ?? '' } } as never)}
+                  onPress={() => router.push({ pathname: '/business/member-detail', params: { memberId, memberUserId: String(member.user_id ?? ''), memberName, memberEmail, memberRole, locationName: formatLocationName(orgName, group.locations[0]?.name) } } as never)}
                   style={{
                     paddingHorizontal: theme.spacing.lg,
                     paddingVertical: theme.spacing.lg,
@@ -1712,6 +1736,7 @@ export default function TeamScreen() {
                       <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
                         <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '600' as const }}>
                           {memberName || memberEmail}
+                          {isMe(member) ? <Text style={{ color: theme.colors.primary, fontWeight: '700' }}> {youSuffix}</Text> : null}
                         </Text>
                         <StatusDot tone={roleChip.tone} label={roleChip.label} />
                       </View>
@@ -1735,7 +1760,7 @@ export default function TeamScreen() {
                             >
                               <MapPin size={10} color="#114b3c" />
                               <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, marginLeft: 3 }}>
-                                {loc.name}
+                                {formatLocationName(orgName, loc.name)}
                               </Text>
                             </View>
                           ))}
@@ -1767,60 +1792,38 @@ export default function TeamScreen() {
                   </View>
 
                   {memberMenuId === userIdKey && !isOwner && canAccessTeam && (
-                    <View style={{
-                      marginTop: 10, marginLeft: 56, marginRight: 4,
-                      backgroundColor: theme.colors.surface,
-                      borderRadius: theme.radii.r14,
-                      ...theme.shadows.shadowMd,
-                      overflow: 'hidden',
-                    }}>
-                      <TouchableOpacity
-                        onPress={() => { setMemberMenuId(null); handleOpenPermissions(memberId, member.permissions); }}
-                        style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14 }}
-                      >
-                        <Shield size={16} color={theme.colors.textSecondary} />
-                        <Text style={{ color: theme.colors.textPrimary, ...theme.typography.body, marginLeft: 12, fontWeight: '500' }}>
-                          {t('business.profile.permissions')}
-                        </Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity
+                    <ActionMenuCard style={{ marginTop: 10, marginBottom: 10, alignSelf: 'stretch' }}>
+                      <ActionMenuItem
+                        icon={<PermissionIcon8 size={16} />}
+                        label={t('business.profile.permissions')}
+                        onPress={() => { setMemberMenuId(null); openPermissionsScreen(memberId, memberName, member.role); }}
+                      />
+                      <ActionMenuDivider />
+                      <ActionMenuItem
+                        icon={<RoleIcon8 size={16} />}
+                        label={t('business.team.changeRole', { defaultValue: 'Changer le rôle' })}
                         onPress={() => { setMemberMenuId(null); setRoleModalTarget({ userId: member.user_id }); }}
-                        style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14 }}
-                      >
-                        <ShieldCheck size={16} color={theme.colors.textSecondary} />
-                        <Text style={{ color: theme.colors.textPrimary, ...theme.typography.body, marginLeft: 12, fontWeight: '500' }}>
-                          {t('business.team.changeRole', { defaultValue: 'Changer le rôle' })}
-                        </Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity
+                      />
+                      <ActionMenuDivider />
+                      <ActionMenuItem
+                        icon={<MapPin size={16} color={theme.colors.textSecondary} />}
+                        label={t('business.team.manageLocations', { defaultValue: 'Gérer les emplacements' })}
                         onPress={() => { setMemberMenuId(null); setLocationModalTarget({ userId: member.user_id }); }}
-                        style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14 }}
-                      >
-                        <MapPin size={16} color={theme.colors.textSecondary} />
-                        <Text style={{ color: theme.colors.textPrimary, ...theme.typography.body, marginLeft: 12, fontWeight: '500' }}>
-                          {t('business.team.manageLocations', { defaultValue: 'Gérer les emplacements' })}
-                        </Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity
+                      />
+                      <ActionMenuDivider />
+                      <ActionMenuItem
+                        icon={<Mail size={16} color={theme.colors.textSecondary} />}
+                        label={t('business.team.sendEmail', { defaultValue: 'Envoyer un email' })}
                         onPress={() => { setMemberMenuId(null); setEmailTarget({ memberId, memberName: memberName ?? '' }); }}
-                        style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14 }}
-                      >
-                        <Mail size={16} color={theme.colors.textSecondary} />
-                        <Text style={{ color: theme.colors.textPrimary, ...theme.typography.body, marginLeft: 12, fontWeight: '500' }}>
-                          {t('business.team.sendEmail', { defaultValue: 'Envoyer un email' })}
-                        </Text>
-                      </TouchableOpacity>
-                      <View style={{ height: 1, backgroundColor: theme.colors.divider, marginHorizontal: 12 }} />
-                      <TouchableOpacity
+                      />
+                      <ActionMenuDivider />
+                      <ActionMenuItem
+                        destructive
+                        icon={<DeleteIcon8 size={16} />}
+                        label={t('business.profile.removeMember')}
                         onPress={() => { setMemberMenuId(null); handleRemoveMember(member.user_id, memberName); }}
-                        style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14 }}
-                      >
-                        <Trash2 size={16} color={theme.colors.textSecondary} />
-                        <Text style={{ color: theme.colors.error, ...theme.typography.body, marginLeft: 12, fontWeight: '600' }}>
-                          {t('business.profile.removeMember')}
-                        </Text>
-                      </TouchableOpacity>
-                    </View>
+                      />
+                    </ActionMenuCard>
                   )}
                 </TouchableOpacity>
               );
@@ -1844,6 +1847,99 @@ export default function TeamScreen() {
               </TouchableOpacity>
             )}
           </View>
+
+          {/* Orphan Members Section — non-org-admins with no assigned location.
+              Bad data that the add-member UI normally blocks, but historical
+              rows may have slipped through. One-tap fix via Assigner. */}
+          {orphanPeople.length > 0 && canAccessTeam && (
+            <View
+              style={[{
+                backgroundColor: theme.colors.surface,
+                borderRadius: theme.radii.r16,
+                marginTop: theme.spacing.lg,
+                borderWidth: 1,
+                borderColor: theme.colors.warning + '60',
+                ...theme.shadows.shadowSm,
+              }]}
+            >
+              <View style={[{
+                flexDirection: 'row',
+                alignItems: 'center',
+                gap: 8,
+                padding: theme.spacing.lg,
+                paddingBottom: theme.spacing.sm,
+              }]}>
+                <AlertTriangle size={18} color={theme.colors.warning} />
+                <View style={{ flex: 1 }}>
+                  <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3 }]}>
+                    {t('business.team.orphanMembersTitle', { defaultValue: 'Membres sans emplacement' })} ({orphanPeople.length})
+                  </Text>
+                  <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, marginTop: 2 }}>
+                    {t('business.team.orphanMembersNote', { defaultValue: "Aucun emplacement assigné. Assignez-en un pour qu'ils apparaissent dans les filtres d'emplacement." })}
+                  </Text>
+                </View>
+              </View>
+
+              {orphanPeople.map((group) => {
+                const member = group.primary;
+                const userIdKey = String(member.user_id ?? member.membership_id);
+                const memberName = member.name ?? member.user_name ?? member.email?.split('@')[0] ?? '';
+                const memberEmail = member.email ?? member.user_email ?? '';
+                const initials = getInitials(memberName);
+                return (
+                  <View
+                    key={userIdKey}
+                    style={{
+                      paddingHorizontal: theme.spacing.lg,
+                      paddingVertical: theme.spacing.lg,
+                      borderTopWidth: 1,
+                      borderTopColor: theme.colors.divider,
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                    }}
+                  >
+                    <View style={{
+                      backgroundColor: '#114b3c18',
+                      borderRadius: 22, width: 44, height: 44,
+                      justifyContent: 'center', alignItems: 'center', flexShrink: 0,
+                    }}>
+                      <Text style={{ color: '#114b3c', fontSize: 16, fontWeight: '700', lineHeight: 20 }}>
+                        {initials}
+                      </Text>
+                    </View>
+                    <View style={{ flex: 1, marginLeft: 12 }}>
+                      <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '600' }}>
+                        {memberName || memberEmail}
+                        {isMe(member) ? <Text style={{ color: theme.colors.primary, fontWeight: '700' }}> {youSuffix}</Text> : null}
+                      </Text>
+                      {memberEmail && memberName ? (
+                        <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, marginTop: 2 }}>
+                          {memberEmail}
+                        </Text>
+                      ) : null}
+                    </View>
+                    <TouchableOpacity
+                      onPress={() => setLocationModalTarget({ userId: member.user_id })}
+                      style={{
+                        backgroundColor: theme.colors.primary,
+                        borderRadius: theme.radii.r12,
+                        paddingHorizontal: 12,
+                        paddingVertical: 8,
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        gap: 6,
+                      }}
+                    >
+                      <MapPin size={14} color="#fff" />
+                      <Text style={{ color: '#fff', ...theme.typography.caption, fontWeight: '700' }}>
+                        {t('business.team.assignLocationCta', { defaultValue: 'Assigner' })}
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+                );
+              })}
+            </View>
+          )}
 
           <View style={{ height: 40 }} />
         </ScrollView>
@@ -2091,78 +2187,6 @@ export default function TeamScreen() {
       </Modal>
 
       {/* ── Permissions Modal ─────────────────────────────────────────────── */}
-      <Modal visible={showPermissionsModal !== null} transparent animationType="fade" onRequestClose={() => setShowPermissionsModal(null)}>
-        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setShowPermissionsModal(null)}>
-          <View
-            style={[styles.modalContent, { backgroundColor: theme.colors.surface, borderRadius: theme.radii.r24, padding: theme.spacing.xl, ...theme.shadows.shadowLg }]}
-            onStartShouldSetResponder={() => true}
-          >
-            <View style={styles.modalHeader}>
-              <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3 }]}>
-                {t('business.profile.permissions')}
-              </Text>
-              <TouchableOpacity onPress={() => setShowPermissionsModal(null)}>
-                <X size={20} color={theme.colors.textSecondary} />
-              </TouchableOpacity>
-            </View>
-
-            <View style={{ marginTop: theme.spacing.md }}>
-              {permissionsModalIsOrgAdmin && (
-                <View style={{ backgroundColor: theme.colors.primary + '12', borderRadius: theme.radii.r12, padding: 12, marginBottom: 8, flexDirection: 'row', alignItems: 'flex-start', gap: 8 }}>
-                  <ShieldCheck size={16} color={theme.colors.primary} style={{ marginTop: 1 }} />
-                  <Text style={{ color: theme.colors.textSecondary, fontSize: 12, lineHeight: 17, flex: 1 }}>
-                    {t('business.team.orgAdminLockedNote', { defaultValue: "Admin de l'organisation — toutes les permissions sont activées par défaut et ne peuvent pas être modifiées." })}
-                  </Text>
-                </View>
-              )}
-              {permissionLabels.map(({ key, label, desc }) => {
-                const displayValue = permissionsModalIsOrgAdmin ? true : permissionsState[key];
-                return (
-                  <View
-                    key={key}
-                    style={{
-                      paddingVertical: theme.spacing.md,
-                      borderBottomWidth: 1,
-                      borderBottomColor: theme.colors.divider,
-                      opacity: permissionsModalIsOrgAdmin ? 0.55 : 1,
-                    }}
-                  >
-                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '600', flex: 1, marginRight: 12 }}>
-                        {label}
-                      </Text>
-                      <Switch
-                        value={displayValue}
-                        onValueChange={(val) => { if (!permissionsModalIsOrgAdmin) setPermissionsState((prev) => ({ ...prev, [key]: val })); }}
-                        disabled={permissionsModalIsOrgAdmin}
-                        trackColor={{ false: theme.colors.divider, true: theme.colors.primary + '50' }}
-                        thumbColor={displayValue ? theme.colors.primary : theme.colors.muted}
-                      />
-                    </View>
-                    <Text style={{ color: displayValue ? theme.colors.textSecondary : theme.colors.muted, fontSize: 11, lineHeight: 15, marginTop: 3 }}>
-                      {desc}
-                    </Text>
-                  </View>
-                );
-              })}
-            </View>
-
-            <TouchableOpacity
-              onPress={handleSavePermissions}
-              style={[{ backgroundColor: theme.colors.primary, borderRadius: theme.radii.r12, padding: theme.spacing.lg, marginTop: theme.spacing.xl }]}
-            >
-              {updateMemberMutation.isPending ? (
-                <ActivityIndicator color="#fff" />
-              ) : (
-                <Text style={[{ color: '#fff', ...theme.typography.button, textAlign: 'center' as const }]}>
-                  {t('common.done')}
-                </Text>
-              )}
-            </TouchableOpacity>
-          </View>
-        </TouchableOpacity>
-      </Modal>
-
       {/* ── Add Location Modal ────────────────────────────────────────────── */}
       <Modal visible={showAddLocationModal} transparent animationType="fade" onRequestClose={() => setShowAddLocationModal(false)}>
         <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setShowAddLocationModal(false)}>
@@ -2183,19 +2207,19 @@ export default function TeamScreen() {
               {t('business.team.addLocationDesc', { defaultValue: 'Ajoutez un nouvel emplacement pour votre organisation. Les informations seront vérifiées par notre équipe.' })}
             </Text>
 
-            <Text style={{ color: '#114b3c', ...theme.typography.caption, fontWeight: '600', marginTop: theme.spacing.lg, marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.5 }}>
+            <Text style={{ color: '#114b3c', ...theme.typography.caption, fontWeight: '600', marginTop: theme.spacing.lg, marginBottom: 6, textTransform: 'none', letterSpacing: 0.5 }}>
               {t('business.team.locationName', { defaultValue: 'Nom' })} *
             </Text>
             <TextInput
               style={[styles.modalInput, { backgroundColor: theme.colors.bg, borderRadius: theme.radii.r12, color: theme.colors.textPrimary, ...theme.typography.body, borderWidth: 1, borderColor: theme.colors.divider }]}
               value={newLocationName}
               onChangeText={setNewLocationName}
-              placeholder={t('business.team.locationNamePlaceholder', { defaultValue: 'Ex: Succursale Centre-Ville' })}
+              placeholder={t('business.team.locationNamePlaceholder', { defaultValue: 'Ex: La Goulette' })}
               placeholderTextColor={theme.colors.muted}
               autoCapitalize="words"
             />
 
-            <Text style={{ color: '#114b3c', ...theme.typography.caption, fontWeight: '600', marginTop: theme.spacing.lg, marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.5 }}>
+            <Text style={{ color: '#114b3c', ...theme.typography.caption, fontWeight: '600', marginTop: theme.spacing.lg, marginBottom: 6, textTransform: 'none', letterSpacing: 0.5 }}>
               {t('business.team.locationAddress', { defaultValue: 'Adresse' })} *
             </Text>
             <TextInput
@@ -2206,7 +2230,7 @@ export default function TeamScreen() {
               placeholderTextColor={theme.colors.muted}
             />
 
-            <Text style={{ color: '#114b3c', ...theme.typography.caption, fontWeight: '600', marginTop: theme.spacing.lg, marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.5 }}>
+            <Text style={{ color: '#114b3c', ...theme.typography.caption, fontWeight: '600', marginTop: theme.spacing.lg, marginBottom: 6, textTransform: 'none', letterSpacing: 0.5 }}>
               {t('business.profile.category', { defaultValue: 'Catégorie' })}
             </Text>
             {/* Dropdown-style category selector */}
@@ -2287,6 +2311,10 @@ export default function TeamScreen() {
       {(() => {
         const target = roleModalTarget;
         const userMems = target ? members.filter((m: any) => String(m.user_id) === String(target.userId)) : [];
+        const primary = userMems[0];
+        const perms = primary?.permissions
+          ? (typeof primary.permissions === 'string' ? JSON.parse(primary.permissions) : primary.permissions)
+          : {};
         return (
           <TeamRoleChangeModal
             visible={!!target}
@@ -2294,6 +2322,10 @@ export default function TeamScreen() {
             orgId={orgId}
             userId={target?.userId}
             memberships={userMems}
+            locations={locations}
+            currentEmail={primary?.email ?? (primary as any)?.user_email ?? ''}
+            currentName={primary?.name ?? (primary as any)?.user_name ?? ''}
+            currentPermissions={perms as Record<string, string>}
           />
         );
       })()}
@@ -2322,17 +2354,21 @@ export default function TeamScreen() {
       })()}
 
       {/* ── Delete Location Confirmation ────────────────────────────────────── */}
-      <Modal visible={!!deleteLocationTarget} transparent animationType="fade" onRequestClose={() => setDeleteLocationTarget(null)}>
-        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', alignItems: 'center', padding: 24 }}>
-          <View style={{ backgroundColor: theme.colors.surface, borderRadius: 20, padding: 24, width: '100%', maxWidth: 340, alignItems: 'center', ...theme.shadows.shadowLg }}>
-            <View style={{ backgroundColor: theme.colors.error + '15', width: 56, height: 56, borderRadius: 28, justifyContent: 'center', alignItems: 'center', marginBottom: 16 }}>
-              <Trash2 size={26} color={theme.colors.error} />
+      <Modal visible={!!deleteLocationTarget} transparent animationType="slide" onRequestClose={() => setDeleteLocationTarget(null)}>
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'flex-end' }}>
+          <PaperSurface radius={24} shadow="lg" style={{ width: '100%', borderBottomLeftRadius: 0, borderBottomRightRadius: 0, paddingTop: 10, paddingHorizontal: 24, paddingBottom: insets.bottom + 20, alignItems: 'center' }}>
+            <View style={{ width: 40, height: 5, borderRadius: 3, backgroundColor: theme.colors.divider, marginBottom: 16 }} />
+            <View style={{ backgroundColor: theme.colors.surfaceMuted, width: 56, height: 56, borderRadius: 28, justifyContent: 'center', alignItems: 'center', marginBottom: 16 }}>
+              <Trash2 size={26} color={theme.colors.textSecondary} />
             </View>
             <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3, textAlign: 'center', marginBottom: 8 }}>
               {t('business.team.deleteLocation', { defaultValue: "Supprimer l'emplacement" })}
             </Text>
-            <Text style={{ color: theme.colors.textSecondary, ...theme.typography.body, textAlign: 'center', lineHeight: 22, marginBottom: 24 }}>
+            <Text style={{ color: theme.colors.textSecondary, ...theme.typography.body, textAlign: 'center', lineHeight: 22, marginBottom: 12 }}>
               {t('business.team.deleteLocationConfirm', { defaultValue: 'Êtes-vous sûr de vouloir supprimer' })} <Text style={{ fontWeight: '700' }}>{deleteLocationTarget?.name}</Text> ?
+            </Text>
+            <Text style={{ color: theme.colors.muted, ...theme.typography.caption, textAlign: 'center', lineHeight: 18, marginBottom: 24 }}>
+              {t('business.team.deleteLocationNote', { defaultValue: "L'emplacement et ses paniers seront masqués. Les commandes passées et les conversations clients restent accessibles à des fins d'historique." })}
             </Text>
             <View style={{ flexDirection: 'row', gap: 10, width: '100%' }}>
               <TouchableOpacity
@@ -2352,7 +2388,7 @@ export default function TeamScreen() {
                 </Text>
               </TouchableOpacity>
             </View>
-          </View>
+          </PaperSurface>
         </View>
       </Modal>
 
@@ -2434,7 +2470,7 @@ export default function TeamScreen() {
                 <X size={20} color={theme.colors.textSecondary} />
               </TouchableOpacity>
             </View>
-            <Text style={{ color: '#114b3c', fontSize: 13, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 }}>
+            <Text style={{ color: '#114b3c', fontSize: 13, fontWeight: '700', textTransform: 'none', letterSpacing: 0.5, marginBottom: 6 }}>
               {t('business.team.emailSubject', { defaultValue: 'Sujet' })}
             </Text>
             <TextInput
@@ -2444,7 +2480,7 @@ export default function TeamScreen() {
               placeholder={t('business.team.emailSubjectPlaceholder', { defaultValue: 'Sujet de l\'email...' })}
               placeholderTextColor={theme.colors.muted}
             />
-            <Text style={{ color: '#114b3c', fontSize: 13, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 }}>
+            <Text style={{ color: '#114b3c', fontSize: 13, fontWeight: '700', textTransform: 'none', letterSpacing: 0.5, marginBottom: 6 }}>
               {t('business.team.emailBody', { defaultValue: 'Message' })}
             </Text>
             <TextInput
@@ -2466,7 +2502,7 @@ export default function TeamScreen() {
                   setEmailSubject('');
                   setEmailBody('');
                 } catch (err: any) {
-                  alert.showAlert(t('common.error'), err?.message ?? t('common.errorOccurred'));
+                  alert.showAlert(t('common.error'), getErrorMessage(err));
                 }
                 setEmailSending(false);
               }}

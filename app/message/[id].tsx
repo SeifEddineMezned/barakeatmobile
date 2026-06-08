@@ -11,8 +11,10 @@ import { fetchMessages, sendMessage, updateConversationStatus, createConversatio
 import { StatusBar } from 'expo-status-bar';
 import { DelayedLoader } from '@/src/components/DelayedLoader';
 import { useCustomAlert } from '@/src/components/CustomAlert';
+import { PaperSurface } from '@/src/components/ui/PaperSurface';
 import { useWalkthroughStore } from '@/src/stores/walkthroughStore';
 import { Hand } from 'lucide-react-native';
+import { usePollWhenFocused } from '@/src/hooks/usePollWhenFocused';
 
 export default function ChatScreen() {
   const params = useLocalSearchParams<{ id: string; reservationId?: string; buyerId?: string; locationId?: string; demo?: string }>();
@@ -67,12 +69,17 @@ export default function ChatScreen() {
 
   const conversationId = resolvedConvId;
 
+  // Live-chat poll, focus-gated. Was the second-biggest source of
+  // /api/messages traffic at 6 req/min per open chat. 15s gives the
+  // chat a near-live feel; pausing on screen exit + the 30s global
+  // staleTime keep returning users from re-firing on every revisit.
+  const messagesRefetch = usePollWhenFocused(15_000);
   const messagesQuery = useQuery({
     queryKey: ['messages', conversationId],
     queryFn: () => fetchMessages(conversationId!),
     enabled: !isDemo && !!conversationId,
-    staleTime: 5_000,
-    refetchInterval: 10_000,
+    staleTime: 10_000,
+    refetchInterval: messagesRefetch,
   });
 
   const conversation = messagesQuery.data?.conversation;
@@ -218,13 +225,13 @@ export default function ChatScreen() {
 
       {/* Business menu dropdown */}
       {showMenu && isMyBusiness && (
-        <View style={{ position: 'absolute', top: 60, right: 16, zIndex: 100, backgroundColor: theme.colors.surface, borderRadius: 12, borderWidth: 1, borderColor: theme.colors.divider, overflow: 'hidden', elevation: 5 }}>
+        <PaperSurface radius={12} shadow="md" style={{ position: 'absolute', top: 60, right: 16, zIndex: 100, minWidth: 180 }}>
           {conversation?.status === 'open' && (
             <>
               <TouchableOpacity onPress={() => handleStatusChange('closed')} style={{ padding: 14, borderBottomWidth: 1, borderBottomColor: theme.colors.divider }}>
                 <Text style={{ color: theme.colors.textPrimary, fontSize: 14 }}>{t('messages.closeConversation', { defaultValue: 'Fermer la conversation' })}</Text>
               </TouchableOpacity>
-              <TouchableOpacity onPress={() => handleStatusChange('blocked')} style={{ padding: 14 }}>
+              <TouchableOpacity onPress={() => handleStatusChange('blocked')} style={{ padding: 14, backgroundColor: theme.colors.surfaceMuted }}>
                 <Text style={{ color: theme.colors.error, fontSize: 14 }}>{t('messages.blockBuyer', { defaultValue: 'Bloquer le client' })}</Text>
               </TouchableOpacity>
             </>
@@ -234,7 +241,7 @@ export default function ChatScreen() {
               <Text style={{ color: theme.colors.primary, fontSize: 14 }}>{t('messages.reopenConversation', { defaultValue: 'Rouvrir la conversation' })}</Text>
             </TouchableOpacity>
           )}
-        </View>
+        </PaperSurface>
       )}
 
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 0}>
@@ -320,7 +327,21 @@ export default function ChatScreen() {
             <Text style={{ color: '#666', fontSize: 13, fontFamily: 'Poppins_400Regular', lineHeight: 19, marginBottom: 10 }}>
               {t('walkthrough.biz.chatBack.desc', { defaultValue: 'Voici la conversation avec le client. Appuyez sur la flèche de retour en haut à gauche pour revenir aux commandes et continuer la démo.' })}
             </Text>
-            <TouchableOpacity onPress={() => useWalkthroughStore.getState().skipWalkthrough()}>
+            {/* Suivant — alternative path to advance the walkthrough besides
+                tapping the haloed back arrow at the top of the header.
+                Behaves identically: advances the step + navigates back. */}
+            <TouchableOpacity
+              onPress={() => {
+                useWalkthroughStore.getState().nextStep(999);
+                router.back();
+              }}
+              style={{ backgroundColor: '#114b3c', borderRadius: 12, paddingVertical: 12, alignItems: 'center', marginTop: 4, marginBottom: 8 }}
+            >
+              <Text style={{ color: '#fff', fontSize: 14, fontFamily: 'Poppins_700Bold', fontWeight: '700' }}>
+                {t('walkthrough.next', { defaultValue: 'Suivant' })}
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => useWalkthroughStore.getState().skipWalkthrough()} style={{ alignItems: 'center' }}>
               <Text style={{ color: theme.colors.muted, fontSize: 13, fontFamily: 'Poppins_500Medium' }}>
                 {t('walkthrough.exitDemo', { defaultValue: 'Quitter la démo' })}
               </Text>

@@ -6,6 +6,7 @@ import * as Location from 'expo-location';
 import { useTranslation } from 'react-i18next';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { TimePicker } from '@/src/components/TimePicker';
+import { searchAddresses, reverseGeocode } from '@/src/services/geocoding';
 
 let MapView: any = null;
 if (Platform.OS !== 'web') {
@@ -13,11 +14,12 @@ if (Platform.OS !== 'web') {
   MapView = maps.default;
 }
 
-// Shared between add-location and edit-location so both forms track the same
-// category list without drifting. If this ever needs to live elsewhere we can
-// promote it to a dedicated file — inlined for now to keep the change surface
-// small.
-export const LOCATION_CATEGORIES = ['bakery', 'restaurant', 'grocery', 'cafe', 'supermarket'] as const;
+// Re-exported from the single canonical source so both legacy import sites
+// (this file's existing consumers + the admin "Gestion d'équipe" form) keep
+// working without churn while drawing from the same list. Update the list at
+// src/lib/locationCategories.ts.
+import { LOCATION_CATEGORIES } from '@/src/lib/locationCategories';
+export { LOCATION_CATEGORIES };
 
 export interface LocationFormValue {
   name: string;
@@ -32,10 +34,9 @@ export interface LocationFormValue {
 }
 
 interface AddressSuggestion {
-  place_id: number;
-  display_name: string;
-  lat: string;
-  lon: string;
+  name: string;
+  lat: number;
+  lng: number;
 }
 
 interface Props {
@@ -76,52 +77,95 @@ export function LocationFormFields({ value, onChange }: Props) {
   const fetchSuggestions = useCallback(async (query: string) => {
     if (query.length < 2) { setSuggestions([]); return; }
     setSearching(true);
-    try {
-      const params = new URLSearchParams({
-        format: 'json',
-        q: query,
-        limit: '8',
-        addressdetails: '1',
-        viewbox: '7.5,30.2,11.6,37.5',
-        bounded: '0',
-        'accept-language': 'fr',
-      });
-      const resp = await fetch(`https://nominatim.openstreetmap.org/search?${params}`);
-      const data: AddressSuggestion[] = await resp.json();
-      setSuggestions(data);
-    } catch {
-      setSuggestions([]);
-    }
+    // Shared geocoding module: device-native geocoder first (Apple/Google
+    // — much better Tunisian POI coverage than free Nominatim) with a
+    // Nominatim fallback if native returns nothing.
+    const hits = await searchAddresses(query);
+    setSuggestions(hits);
     setSearching(false);
   }, []);
 
+  // Reverse geocoding: refresh the resolved-address chip every time the map
+  // settles on a new spot. Debounced 500 ms; in-memory dedup lives in the
+  // shared geocoding module so we don't double-fetch identical coords.
+  const [reverseGeocodedName, setReverseGeocodedName] = useState('');
+  const reverseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // True while the search field is still showing an auto-fill. Once the user
+  // edits the field manually we stop overwriting so their text sticks.
+  const searchAutoFilledRef = useRef(true);
+
+  const fetchReverseGeocode = useCallback((lat: number, lng: number) => {
+    if (reverseTimer.current) clearTimeout(reverseTimer.current);
+    reverseTimer.current = setTimeout(async () => {
+      const formatted = await reverseGeocode(lat, lng);
+      if (!formatted) return;
+      // Always refresh the chip — this is the user's visual confirmation
+      // that the pin moved. Previously this was gated on
+      // `searchAutoFilledRef.current`, which froze the chip on Android once
+      // the user typed in the search field (root cause of the Android
+      // "name doesn't change when pin moves" bug).
+      setReverseGeocodedName(formatted);
+      if (searchAutoFilledRef.current) setAddressSearch(formatted);
+    }, 500);
+  }, []);
+
   const handleSearchChange = useCallback((text: string) => {
+    // User typed → stop overwriting from auto-fill. If they fully clear the
+    // field, opt them back IN to auto-fill so panning the map populates the
+    // resolved address again.
+    searchAutoFilledRef.current = text.length === 0;
     setAddressSearch(text);
     if (searchTimer.current) clearTimeout(searchTimer.current);
     searchTimer.current = setTimeout(() => fetchSuggestions(text), 300);
   }, [fetchSuggestions]);
 
   const handleSelectSuggestion = useCallback((item: AddressSuggestion) => {
-    const lat = parseFloat(item.lat);
-    const lng = parseFloat(item.lon);
-    setAddressSearch(item.display_name);
+    // Treat selecting a suggestion as a deliberate choice — the search field
+    // now reflects exactly what the user picked; the upcoming reverse-geocode
+    // (after the map animates) shouldn't clobber it. The user can pan away
+    // later to opt back into auto-fill by clearing the field.
+    searchAutoFilledRef.current = false;
+    setAddressSearch(item.name);
+    setReverseGeocodedName(item.name);
     setSuggestions([]);
-    setPendingRegion({ lat, lng });
+    setPendingRegion({ lat: item.lat, lng: item.lng });
     mapRef.current?.animateToRegion({
-      latitude: lat, longitude: lng, latitudeDelta: 0.005, longitudeDelta: 0.005,
+      latitude: item.lat, longitude: item.lng, latitudeDelta: 0.005, longitudeDelta: 0.005,
     }, 600);
   }, []);
 
   const openMap = () => {
-    setAddressSearch(value.address ?? '');
+    // When the user enters the picker with an existing address (edit-location),
+    // treat the existing text as user-chosen so reverse-geocoding doesn't
+    // overwrite it as they explore the map.
+    const existing = value.address ?? '';
+    setAddressSearch(existing);
+    searchAutoFilledRef.current = existing.length === 0;
+    setReverseGeocodedName(existing);
     setStep('map');
+    // If we have coords already, prime the resolved-address chip with the
+    // refined reverse-geocode for that point.
+    if (value.coords) fetchReverseGeocode(value.coords.lat, value.coords.lng);
   };
 
-  const confirmMap = () => {
-    onChange({
-      coords: pendingRegion,
-      address: addressSearch.trim() || `${pendingRegion.lat.toFixed(5)}, ${pendingRegion.lng.toFixed(5)}`,
-    });
+  const confirmMap = async () => {
+    // Priority order for the saved address text:
+    //   1. The reverse-geocoded chip text shown under the pin RIGHT NOW —
+    //      this always matches the actual pin position.
+    //   2. If no reverse-geocode has come back yet (user confirmed before
+    //      the 500 ms debounce + network round-trip), do a one-shot
+    //      synchronous fetch through the shared module so we benefit from
+    //      the native geocoder there too.
+    //   3. Whatever's in the search field (typed query or last suggestion).
+    //   4. Raw coords as a last resort.
+    let resolved = reverseGeocodedName.trim();
+    if (!resolved) {
+      resolved = (await reverseGeocode(pendingRegion.lat, pendingRegion.lng)).trim();
+    }
+    const finalAddress = resolved
+      || addressSearch.trim()
+      || `${pendingRegion.lat.toFixed(5)}, ${pendingRegion.lng.toFixed(5)}`;
+    onChange({ coords: pendingRegion, address: finalAddress });
     setStep('form');
   };
 
@@ -160,13 +204,13 @@ export function LocationFormFields({ value, onChange }: Props) {
             >
               {suggestions.map((item, idx) => (
                 <TouchableOpacity
-                  key={item.place_id}
+                  key={`${item.lat},${item.lng},${idx}`}
                   onPress={() => handleSelectSuggestion(item)}
                   style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 12, borderTopWidth: idx > 0 ? 1 : 0, borderTopColor: theme.colors.divider }}
                 >
                   <MapPin size={14} color="#114b3c" style={{ marginRight: 10, flexShrink: 0 }} />
                   <Text style={{ color: theme.colors.textPrimary, fontSize: 13, flex: 1, lineHeight: 18 }} numberOfLines={2}>
-                    {item.display_name}
+                    {item.name}
                   </Text>
                 </TouchableOpacity>
               ))}
@@ -185,8 +229,16 @@ export function LocationFormFields({ value, onChange }: Props) {
                 latitudeDelta: 0.01,
                 longitudeDelta: 0.01,
               }}
+              // Trailing edge only — `onRegionChangeComplete` fires reliably
+              // on both iOS and Android once the gesture ends, which is all
+              // we need to refresh the chip. The previous `onRegionChange`
+              // pair + 10 m dedup cache combined to suppress the trailing
+              // fetch on Android (the dedup cell was set during the first
+              // mid-gesture coord and matched the final one), which is what
+              // froze the chip when panning to a different spot.
               onRegionChangeComplete={(region: any) => {
                 setPendingRegion({ lat: region.latitude, lng: region.longitude });
+                fetchReverseGeocode(region.latitude, region.longitude);
               }}
             />
           ) : (
@@ -211,6 +263,18 @@ export function LocationFormFields({ value, onChange }: Props) {
               {t('addressPicker.dragToMove', { defaultValue: 'Déplacez la carte pour positionner le repère' })}
             </Text>
           </View>
+          {/* Resolved address — what the pin currently points at. Fetched
+              via reverse geocoding ~500 ms after the pin settles so the user
+              can verify the position before confirming. Solves the prior
+              "uses the last searched name even if pin is elsewhere" bug. */}
+          {reverseGeocodedName ? (
+            <View style={[styles.resolvedAddress, { backgroundColor: 'rgba(255,255,255,0.95)' }]}>
+              <MapPin size={14} color="#114b3c" />
+              <Text style={{ color: theme.colors.textPrimary, fontSize: 12, marginLeft: 6, flex: 1 }} numberOfLines={2}>
+                {reverseGeocodedName}
+              </Text>
+            </View>
+          ) : null}
         </View>
 
         <View style={{ backgroundColor: theme.colors.bg, paddingHorizontal: 20, paddingTop: 20, paddingBottom: 20 + insets.bottom, gap: 10 }}>
@@ -222,6 +286,12 @@ export function LocationFormFields({ value, onChange }: Props) {
                 const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
                 const newRegion = { lat: pos.coords.latitude, lng: pos.coords.longitude };
                 setPendingRegion(newRegion);
+                // Opt back in to auto-fill — the user explicitly asked for
+                // their current location, so the search field should reflect
+                // the resolved address, not whatever they typed before.
+                searchAutoFilledRef.current = true;
+                setAddressSearch('');
+                fetchReverseGeocode(newRegion.lat, newRegion.lng);
                 mapRef.current?.animateToRegion({
                   latitude: newRegion.lat, longitude: newRegion.lng, latitudeDelta: 0.005, longitudeDelta: 0.005,
                 }, 600);
@@ -256,7 +326,7 @@ export function LocationFormFields({ value, onChange }: Props) {
         style={input(theme)}
         value={value.name}
         onChangeText={(v) => onChange({ name: v })}
-        placeholder={t('business.team.locationNamePlaceholder', { defaultValue: 'Ex : Succursale Centre-ville' })}
+        placeholder={t('business.team.locationNamePlaceholder', { defaultValue: 'Ex : La Goulette' })}
         placeholderTextColor={theme.colors.muted}
         autoCapitalize="words"
       />
@@ -324,8 +394,13 @@ export function LocationFormFields({ value, onChange }: Props) {
         })}
       </View>
 
-      {/* Pickup times */}
-      <Text style={[label(theme), { marginTop: 20 }]}>{t('business.availability.pickupStart', { defaultValue: 'Début du retrait' })}</Text>
+      {/* Pickup times — required. Both fields gate the submit button in the
+          parent screens (add-location, edit-location) so the user can't
+          save a location without a deliberate pickup window. */}
+      <Text style={[label(theme), { marginTop: 20 }]}>
+        {t('business.availability.pickupStart', { defaultValue: 'Début du retrait' })}{' '}
+        <Text style={{ color: theme.colors.error }}>*</Text>
+      </Text>
       <TimePicker
         value={value.pickupStart}
         onChange={(v) => onChange({ pickupStart: v })}
@@ -335,7 +410,10 @@ export function LocationFormFields({ value, onChange }: Props) {
         mutedColor={theme.colors.muted}
       />
       <View style={{ height: 12 }} />
-      <Text style={label(theme)}>{t('business.availability.pickupEnd', { defaultValue: 'Fin du retrait' })}</Text>
+      <Text style={label(theme)}>
+        {t('business.availability.pickupEnd', { defaultValue: 'Fin du retrait' })}{' '}
+        <Text style={{ color: theme.colors.error }}>*</Text>
+      </Text>
       <TimePicker
         value={value.pickupEnd}
         onChange={(v) => onChange({ pickupEnd: v })}
@@ -344,6 +422,15 @@ export function LocationFormFields({ value, onChange }: Props) {
         bgColor={theme.colors.surface}
         mutedColor={theme.colors.muted}
       />
+      {/* Cross-03:30 rule hint — shown upfront so the merchant doesn't
+          configure a window that the submit handler will reject. Mirrors
+          the same hint already present in the business-profile hours
+          sheet and the create-basket form. */}
+      <Text style={{ color: theme.colors.muted, fontSize: 11, marginTop: 6, lineHeight: 15 }}>
+        {t('business.availability.crossResetHint', {
+          defaultValue: 'Le créneau ne doit pas traverser 03:30 (réinitialisation quotidienne). Commencez ≥ 03:30 ou terminez ≤ 03:29.',
+        })}
+      </Text>
 
       {/* Pickup instructions */}
       <Text style={[label(theme), { marginTop: 20 }]}>
@@ -367,7 +454,7 @@ const label = (theme: any) => ({
   color: theme.colors.primary,
   fontSize: 13,
   fontWeight: '700' as const,
-  textTransform: 'uppercase' as const,
+  textTransform: 'none' as const,
   letterSpacing: 0.5,
   marginBottom: 6,
 });
@@ -395,8 +482,15 @@ const styles = StyleSheet.create({
   pinDot: { width: 16, height: 16, borderRadius: 8 },
   pinStem: { width: 3, height: 20, marginTop: -2 },
   tooltip: {
-    position: 'absolute', bottom: 20, alignSelf: 'center',
+    position: 'absolute', top: 16, alignSelf: 'center',
     flexDirection: 'row', alignItems: 'center',
     paddingHorizontal: 14, paddingVertical: 8, borderRadius: 20,
+  },
+  // Resolved-address chip — pinned just above the bottom action bar so it
+  // doesn't overlap the centered pin or the "Drag" hint.
+  resolvedAddress: {
+    position: 'absolute', bottom: 16, left: 16, right: 16,
+    flexDirection: 'row', alignItems: 'center',
+    paddingHorizontal: 14, paddingVertical: 10, borderRadius: 12,
   },
 });

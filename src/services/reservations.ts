@@ -75,13 +75,24 @@ export interface ReservationFromAPI {
 
 export async function createReservation(data: CreateReservationRequest): Promise<ReservationFromAPI> {
   console.log('[Reservations] Creating reservation for location:', data.location_id ?? data.restaurant_id, 'qty:', data.quantity);
+  // Per-request 60s timeout override. The default apiClient timeout (15s) was
+  // tripping on slow backends — the reservation endpoint does its business-
+  // member notification fanout + badge queries inline (see backend
+  // routes/reservations.js POST '/'), which can push the response past 15s
+  // when an org has several members or the push-notif provider is sluggish.
+  // The transaction commits server-side, so a client-side timeout produced
+  // a misleading "no internet" error while the order had actually gone
+  // through. 60s is generous enough to cover real-world fanout without
+  // hiding a genuinely-stuck request forever. The companion recovery path
+  // in reserve.tsx (onError → fetchMyReservations → match check) catches
+  // the rare case where the timeout still fires.
   const res = await apiClient.post<ReservationFromAPI | { reservation: ReservationFromAPI } | { data: ReservationFromAPI }>('/api/reservations', {
     location_id: data.location_id,
     restaurant_id: data.restaurant_id,
     basket_id: data.basket_id,
     quantity: data.quantity,
     payment_method: data.payment_method,
-  });
+  }, { timeout: 60_000 });
   const resData = res.data;
   let reservation: ReservationFromAPI;
   if (resData && typeof resData === 'object' && 'reservation' in resData) {

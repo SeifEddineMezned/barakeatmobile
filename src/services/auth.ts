@@ -10,7 +10,8 @@ export interface RegisterRequest {
   name: string;
   email: string;
   password: string;
-  phone: string;        // required by backend for buyer accounts
+  phone?: string;       // optional — customers no longer provide a phone number
+  gender?: 'male' | 'female' | null; // optional — customer gender step (skippable)
   type: 'buyer' | 'restaurant'; // backend uses `type`, NOT `role`
 }
 

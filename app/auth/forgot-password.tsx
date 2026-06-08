@@ -156,7 +156,7 @@ export default function ForgotPasswordScreen() {
                 </Text>
                 <View style={[styles.inputContainer, { marginBottom: theme.spacing.xxl }]}>
                   <Text style={[styles.label, { color: theme.colors.textPrimary, ...theme.typography.bodySm }]}>
-                    {t('auth.email')}
+                    {t('auth.email')}<Text style={{ color: theme.colors.error }}> *</Text>
                   </Text>
                   <TextInput
                     style={[styles.input, { backgroundColor: theme.colors.surface, borderColor: theme.colors.divider, borderRadius: theme.radii.r12, color: theme.colors.textPrimary, ...theme.typography.body, ...theme.shadows.shadowSm }]}
@@ -186,7 +186,7 @@ export default function ForgotPasswordScreen() {
                 </Text>
                 <View style={[styles.inputContainer, { marginBottom: theme.spacing.xxl }]}>
                   <Text style={[styles.label, { color: theme.colors.textPrimary, ...theme.typography.bodySm }]}>
-                    {t('auth.otpCode')}
+                    {t('auth.otpCode')}<Text style={{ color: theme.colors.error }}> *</Text>
                   </Text>
                   <TextInput
                     style={[styles.input, styles.otpInput, { backgroundColor: theme.colors.surface, borderColor: theme.colors.divider, borderRadius: theme.radii.r12, color: theme.colors.textPrimary, ...theme.typography.h2, ...theme.shadows.shadowSm }]}
@@ -231,7 +231,7 @@ export default function ForgotPasswordScreen() {
                 </View>
                 <View style={[styles.inputContainer, { marginBottom: theme.spacing.xl }]}>
                   <Text style={[styles.label, { color: theme.colors.textPrimary, ...theme.typography.bodySm }]}>
-                    {t('auth.newPassword')}
+                    {t('auth.newPassword')}<Text style={{ color: theme.colors.error }}> *</Text>
                   </Text>
                   <PasswordInput
                     containerStyle={{ backgroundColor: theme.colors.surface }}
@@ -244,7 +244,7 @@ export default function ForgotPasswordScreen() {
                 </View>
                 <View style={[styles.inputContainer, { marginBottom: theme.spacing.xxl }]}>
                   <Text style={[styles.label, { color: theme.colors.textPrimary, ...theme.typography.bodySm }]}>
-                    {t('auth.confirmNewPassword')}
+                    {t('auth.confirmNewPassword')}<Text style={{ color: theme.colors.error }}> *</Text>
                   </Text>
                   <PasswordInput
                     containerStyle={{ backgroundColor: theme.colors.surface }}

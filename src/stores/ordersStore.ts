@@ -12,6 +12,13 @@ interface OrdersState {
   markReservationReported: (reservationId: string) => void;
   isReservationReported: (reservationId: string) => boolean;
   hydrate: () => Promise<void>;
+  // One-shot signal set after a cancellation. The orders list (a tab screen
+  // that keeps its scroll across navigation) consumes it on focus to reset to
+  // the top — the cancelled card is removed, which otherwise leaves the
+  // ScrollView at a now-invalid offset that visibly snaps on the first touch.
+  scrollResetPending: boolean;
+  requestScrollReset: () => void;
+  consumeScrollReset: () => boolean;
 }
 
 function persist(ids: string[]) {
@@ -29,6 +36,13 @@ export const useOrdersStore = create<OrdersState>((set, get) => ({
     }),
   isReservationReported: (reservationId: string) =>
     get().reportedReservationIds.includes(reservationId),
+  scrollResetPending: false,
+  requestScrollReset: () => set({ scrollResetPending: true }),
+  consumeScrollReset: () => {
+    if (!get().scrollResetPending) return false;
+    set({ scrollResetPending: false });
+    return true;
+  },
   hydrate: async () => {
     try {
       const raw = await AsyncStorage.getItem(STORAGE_KEY);

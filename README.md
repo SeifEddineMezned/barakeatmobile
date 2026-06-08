@@ -14,6 +14,6 @@ u need to use my expo account i sent u the credentials on msngr so we have the s
 npx eas login (use the cred i sent)
 npx eas init
 npx expo export --platform all
-npx eas update --branch preview --message "update 17"
+npx eas update --branch preview --message "update 21"
 ```
-n = number of the update we currently at 11
+n = number of the update we currently at 11.

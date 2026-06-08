@@ -148,10 +148,11 @@ export default function FavoritesScreen() {
   const selectedAddr = addresses.find((a) => a.id === selectedId);
   const [activeTab, setActiveTab] = useState<'favorites' | 'starred'>('favorites');
 
+  // Shares ['locations'] cache with home + map. 5-min staleTime.
   const locationsQuery = useQuery({
     queryKey: ['locations'],
     queryFn: fetchLocations,
-    staleTime: 60_000,
+    staleTime: 5 * 60_000,
   });
 
   const basketsQuery = useQuery({
@@ -182,7 +183,13 @@ export default function FavoritesScreen() {
   const starredBaskets = useMemo(() => {
     if (!starredBasketTypeIds.length) return [];
     const fromAPI = (basketsQuery.data ?? [])
-      .map((b) => normalizeRawBasketToBasket(b as any))
+      .map((b: any) => normalizeRawBasketToBasket(b as any, undefined, {
+        // Inherit location hours when the basket row is NULL (matches
+        // backend convention; otherwise the normaliser would slap on the
+        // hardcoded 18:00/19:00 default and show wrong pickup times).
+        start: b?.location?.pickup_start_time ?? b?.location_pickup_start_time ?? b?.restaurant?.pickup_start_time ?? null,
+        end: b?.location?.pickup_end_time ?? b?.location_pickup_end_time ?? b?.restaurant?.pickup_end_time ?? null,
+      }))
       .filter((b) => starredBasketTypeIds.includes(b.id))
       .map(addDistance);
     if (fromAPI.length > 0) return fromAPI;

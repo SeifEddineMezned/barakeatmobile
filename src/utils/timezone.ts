@@ -73,11 +73,12 @@ export function toBizDayMinutes(clockMinutes: number): number {
 /**
  * Check if the pickup window has expired.
  *
- * Simply compares current time vs end time, but in "business day" space
- * so that after-midnight end times (e.g., 01:30) are treated as later
- * than evening times (e.g., 23:00).
- *
- * Pickup end times up to 03:30 AM are allowed.
+ * Compares current time vs end time in "business day" space so that
+ * after-midnight end times (e.g., 01:30) are treated as later than
+ * evening times (e.g., 23:00). This relies on the caller-side
+ * validation (`validateBizDayWindow`) to reject any window that
+ * straddles the 03:30 reset — without that guarantee the biz-day
+ * comparison can produce nonsensical results.
  *
  * @param pickupEnd - End time as "HH:MM"
  * @param timezone - IANA timezone string (default: Africa/Tunis)
@@ -122,6 +123,8 @@ export function getBusinessDayDateStr(date: Date, timezone?: string): string {
 
 /**
  * Check if the pickup window is currently open (between start and end).
+ * Mirrors `isPickupExpiredInTz` — relies on `validateBizDayWindow` to
+ * keep saved windows inside a single biz day.
  */
 export function isPickupWindowOpenInTz(
   pickupStart: string | undefined | null,
@@ -134,4 +137,30 @@ export function isPickupWindowOpenInTz(
   const now = getNowInBusinessTz(timezone);
   const nowMinutes = now.hours * 60 + now.minutes;
   return toBizDayMinutes(nowMinutes) <= toBizDayMinutes(endMinutes);
+}
+
+/**
+ * Validate a pickup window so it (a) has non-zero duration and (b) fits
+ * inside ONE business day (03:30 → 03:29 next morning) — i.e. it does
+ * not straddle the daily reset at 03:30.
+ *
+ * Returns one of three statuses so the caller can render the matching
+ * translated message:
+ *   - `ok`        : valid
+ *   - `zero`      : start === end
+ *   - `crosses-reset` : the window includes the 03:30 boundary
+ *
+ * The biz-day math is symmetric: a window fits one biz day iff
+ *   toBizDayMinutes(end) > toBizDayMinutes(start)
+ * Anything that crosses 03:30 produces `eBiz <= sBiz`.
+ */
+export type PickupWindowError = 'ok' | 'zero' | 'crosses-reset';
+
+export function validateBizDayWindow(startStr: string, endStr: string): PickupWindowError {
+  const s = timeToMinutes(startStr);
+  const e = timeToMinutes(endStr);
+  if (s < 0 || e < 0) return 'zero'; // treat unparseable as zero — same UX
+  if (s === e) return 'zero';
+  if (toBizDayMinutes(e) <= toBizDayMinutes(s)) return 'crosses-reset';
+  return 'ok';
 }

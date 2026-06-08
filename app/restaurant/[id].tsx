@@ -14,6 +14,7 @@ import {
   Linking,
   Animated,
   Keyboard,
+  PanResponder,
 } from 'react-native';
 import type { NativeSyntheticEvent, TextLayoutEventData } from 'react-native';
 import { useLocalSearchParams, useRouter, useFocusEffect } from 'expo-router';
@@ -22,8 +23,10 @@ import { ChevronLeft, MapPin, ShoppingBag, Clock, Star, Tag, Flag, X, ChevronRig
 import { isPickupExpiredInTz } from '@/src/utils/timezone';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { useTranslation } from 'react-i18next';
+import { getErrorMessage } from '@/src/lib/api';
 import { StatusBar } from 'expo-status-bar';
 import { fetchLocationById } from '@/src/services/restaurants';
+import { useSwipeToDismiss } from '@/src/hooks/useSwipeToDismiss';
 import { fetchBasketsByLocation } from '@/src/services/baskets';
 import { fetchReviewsByRestaurant, ReviewFromAPI } from '@/src/services/reviews';
 import { fetchMyReservations } from '@/src/services/reservations';
@@ -32,6 +35,20 @@ import { normalizeRawBasketToBasket, mapCategory } from '@/src/utils/normalizeRe
 import { DelayedLoader } from '@/src/components/DelayedLoader';
 import * as ImagePicker from 'expo-image-picker';
 import { submitReport as submitReportApi } from '@/src/services/reports';
+import { useWalkthroughStore } from '@/src/stores/walkthroughStore';
+import { SubScreenWalkthroughOverlay } from '@/src/components/SubScreenWalkthroughOverlay';
+import {
+  DEMO_LOCATION_ID,
+  DEMO_BASKET_ID,
+  DEMO_LOCATION_ADDRESS,
+  DEMO_LOCATION_CATEGORY,
+  DEMO_LATITUDE,
+  DEMO_LONGITUDE,
+  DEMO_COVER_URL,
+  DEMO_LOGO_URL,
+  buildDemoRawBaskets,
+  getDemoPickupWindow,
+} from '@/src/lib/demoData';
 
 const DESC_COLLAPSED_LINES = 3;
 
@@ -143,9 +160,12 @@ export default function RestaurantScreen() {
   const [descNeedsSeeMore, setDescNeedsSeeMore] = useState(false);
   const [ratingsPopupVisible, setRatingsPopupVisible] = useState(false);
   const [ratingsExpanded, setRatingsExpanded] = useState(false);
-  const ratingsStartY = useRef(0);
   const screenHeight = Dimensions.get('window').height;
   const ratingsHeight = useRef(new Animated.Value(screenHeight * 0.55)).current;
+  // Separate translateY for the dismiss gesture — keeps the height
+  // animation (which controls expand/collapse) decoupled from the
+  // slide-down animation that closes the sheet.
+  const ratingsTranslateY = useRef(new Animated.Value(0)).current;
 
   const expandRatings = useCallback(() => {
     setRatingsExpanded(true);
@@ -162,6 +182,75 @@ export default function RestaurantScreen() {
       return false;
     });
   }, [ratingsHeight, screenHeight]);
+
+  // Reset the dismiss slide whenever the popup is re-opened so a previous
+  // mid-drag value can't leave it pre-translated.
+  useEffect(() => {
+    if (ratingsPopupVisible) ratingsTranslateY.setValue(0);
+  }, [ratingsPopupVisible, ratingsTranslateY]);
+
+  // Dynamic dismiss + expand gesture. Drags follow the finger 1:1
+  // going down; going up while collapsed pre-pulls the height toward
+  // the expanded size (rubber-band-style preview). On release we
+  // velocity-project and snap to expanded / collapsed / closed based
+  // on intent — same model as src/hooks/useSwipeToDismiss.
+  const expandedRef = useRef(false);
+  expandedRef.current = ratingsExpanded;
+  const ratingsPanResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onStartShouldSetPanResponderCapture: () => true,
+      onMoveShouldSetPanResponder: (_, g) => Math.abs(g.dy) > 4 && Math.abs(g.dy) > Math.abs(g.dx),
+      onMoveShouldSetPanResponderCapture: (_, g) => Math.abs(g.dy) > 4 && Math.abs(g.dy) > Math.abs(g.dx),
+      onPanResponderTerminationRequest: () => false,
+      onPanResponderMove: (_, g) => {
+        if (g.dy >= 0) {
+          // Drag DOWN — slide the popup down following the finger.
+          ratingsTranslateY.setValue(g.dy);
+        } else if (!expandedRef.current) {
+          // Drag UP from collapsed — pull the popup taller, capped.
+          const next = Math.min(screenHeight * 0.92, screenHeight * 0.55 + Math.abs(g.dy));
+          ratingsHeight.setValue(next);
+        } else {
+          // Drag UP from already expanded — light rubber-band.
+          ratingsTranslateY.setValue(g.dy / 3);
+        }
+      },
+      onPanResponderRelease: (_, g) => {
+        const projection = g.dy + g.vy * 60;
+        // Pick an outcome ordered by clarity of intent:
+        if (projection > 80 || g.vy > 0.6) {
+          // Close.
+          const duration = Math.max(120, Math.min(280, 220 - g.vy * 50));
+          Animated.timing(ratingsTranslateY, { toValue: 800, duration, useNativeDriver: false }).start(({ finished }) => {
+            if (!finished) return;
+            setRatingsPopupVisible(false);
+            setRatingsExpanded(false);
+            ratingsTranslateY.setValue(0);
+            ratingsHeight.setValue(screenHeight * 0.55);
+          });
+        } else if (!expandedRef.current && g.dy < -40) {
+          // Confirmed upward swipe — expand.
+          Animated.spring(ratingsTranslateY, { toValue: 0, friction: 10, tension: 80, useNativeDriver: false }).start();
+          expandRatings();
+        } else {
+          // Spring back to whatever resting size the sheet is in.
+          Animated.parallel([
+            Animated.spring(ratingsTranslateY, { toValue: 0, friction: 10, tension: 80, useNativeDriver: false }),
+            Animated.spring(ratingsHeight, {
+              toValue: expandedRef.current ? screenHeight * 0.92 : screenHeight * 0.55,
+              friction: 10,
+              tension: 60,
+              useNativeDriver: false,
+            }),
+          ]).start();
+        }
+      },
+      onPanResponderTerminate: () => {
+        ratingsTranslateY.setValue(0);
+      },
+    })
+  ).current;
 
   // Report modal state — local only, no API
   const [reportVisible, setReportVisible] = useState(false);
@@ -197,18 +286,66 @@ export default function RestaurantScreen() {
     { key: 'other', label: t('report.reasons.other', { defaultValue: 'Other' }) },
   ];
 
+  // Demo short-circuit: when the URL points at the synthetic 'demo' location
+  // we never want to hit the backend (no such location exists), regardless
+  // of the walkthrough's `demoCustomerActive` flag. Tying the short-circuit
+  // to the URL alone makes the demo robust against any race where the flag
+  // lags behind the navigation: the user could land here via the demo
+  // card on Discover even if the flag was momentarily false, and the page
+  // would otherwise try to fetch a real location with id='demo' and render
+  // empty / error state.
+  useWalkthroughStore((s) => s.demoCustomerActive); // subscribe for re-render when the flag flips
+  const isDemoLocation = String(id) === DEMO_LOCATION_ID;
+
+  // Redundant step-advance + currentStep publish: the engine's pathname
+  // listener in (tabs)/_layout sometimes lags when that layout is rendered
+  // as a backgrounded Stack screen (React Navigation can freeze offscreen
+  // screens), so step 1 doesn't always advance, and even when it does, the
+  // engine's [step] effect (which publishes `currentStep`) fires too late
+  // for the SubScreenWalkthroughOverlay to render — user sees a brief
+  // flash with no overlay, sometimes nothing at all until they tap. We
+  // drive BOTH the step increment AND the currentStep publish from this
+  // page on mount so the overlay has everything it needs immediately.
+  React.useEffect(() => {
+    if (!isDemoLocation) return;
+    const state = useWalkthroughStore.getState();
+    // Clear the stale rect from any previous demo run BEFORE the page lays
+    // out. The SubScreenWalkthroughOverlay's fast-path would otherwise pick
+    // up the old rect (e.g. from a previous run at a different scroll
+    // offset) and paint the halo there until the basket card's onLayout
+    // republishes a few frames later — exactly the "wrong halo first, then
+    // corrects itself" flash the user sees on /restaurant/demo. With the
+    // rect cleared, the overlay falls through to its dim-mask-only branch
+    // until the FRESH onLayout publishes, so the halo only ever appears at
+    // the correct position.
+    state.setMeasuredRect('restaurantSurpriseBasket', null);
+    if (state.currentStep?.measureKey !== 'firstBasketCard') return;
+    state.nextStep(Number.MAX_SAFE_INTEGER);
+    state.setCurrentStep({
+      measureKey: 'restaurantSurpriseBasket',
+      titleKey: 'walkthrough.customer.restaurantBasket.title',
+      descKey: 'walkthrough.customer.restaurantBasket.desc',
+      tooltipPosition: 'bottom',
+      isLast: false,
+      stepIndex: 2,
+      totalSteps: 20,
+      requireTap: true,
+      target: { top: 360, left: 16, width: Dimensions.get('window').width - 32, height: 110, radius: 16 },
+    });
+  }, [isDemoLocation]);
+
   // Fetch location data (replaces restaurant)
   const locationQuery = useQuery({
     queryKey: ['location', id],
     queryFn: () => fetchLocationById(String(id)),
-    enabled: !!id,
+    enabled: !!id && !isDemoLocation,
   });
 
   // Fetch baskets belonging to this location
   const basketsQuery = useQuery({
     queryKey: ['baskets-by-location', id],
     queryFn: () => fetchBasketsByLocation(String(id)),
-    enabled: !!id,
+    enabled: !!id && !isDemoLocation,
     staleTime: 0,
     refetchOnMount: 'always',
     retry: 1,
@@ -217,10 +354,10 @@ export default function RestaurantScreen() {
   // Refetch on focus so quantities stay fresh after navigating back from a basket
   useFocusEffect(
     useCallback(() => {
-      if (!id) return;
+      if (!id || isDemoLocation) return;
       basketsQuery.refetch();
       locationQuery.refetch();
-    }, [id, basketsQuery, locationQuery])
+    }, [id, basketsQuery, locationQuery, isDemoLocation])
   );
 
   // Gate the "signaler ce commerce" affordance behind having ordered from this location.
@@ -229,6 +366,7 @@ export default function RestaurantScreen() {
     queryKey: ['reservations'],
     queryFn: fetchMyReservations,
     staleTime: 60_000,
+    enabled: !isDemoLocation,
   });
   const hasOrderedHere = (reservationsQuery.data ?? []).some(
     (r) => Number(r.restaurant_id) === Number(id) || Number((r as any).restaurant?.id) === Number(id),
@@ -248,15 +386,58 @@ export default function RestaurantScreen() {
     ? favoriteBasketIds.includes(String(id)) || favoriteMerchantIds.includes(String(id))
     : false;
 
-  const restaurant = locationQuery.data;
+  // Demo fixture data — short-circuits the location + basket queries while
+  // the customer walkthrough is on the /restaurant/demo step. Now serves THREE
+  // baskets (basket #1 is the walkthrough target; #2 and #3 are decorative
+  // additional options so the demo location resembles a real one) plus cover
+  // photo + merchant logo so the page no longer renders as a placeholder.
+  const demoLocationName = t('walkthrough.customer.demoLocationName', { defaultValue: 'Chez Joe (démo)' });
+  // Dynamic pickup window — anchored to the current clock so the demo
+  // location is never marked closed/expired no matter what time the user
+  // explores the demo.
+  const demoPickup = isDemoLocation ? getDemoPickupWindow() : null;
+  const demoLocation: any = isDemoLocation
+    ? {
+        id: DEMO_LOCATION_ID,
+        name: demoLocationName,
+        display_name: demoLocationName,
+        address: DEMO_LOCATION_ADDRESS,
+        category: DEMO_LOCATION_CATEGORY,
+        pickup_start_time: demoPickup!.start,
+        pickup_end_time: demoPickup!.end,
+        latitude: DEMO_LATITUDE,
+        longitude: DEMO_LONGITUDE,
+        cover_image_url: DEMO_COVER_URL,
+        image_url: DEMO_LOGO_URL,
+        avg_rating: 4.8,
+        description: t('walkthrough.customer.demoBasketDesc', { defaultValue: 'Démonstration — aucune commande réelle n\'est créée.' }),
+      }
+    : null;
 
-  const rawBaskets = basketsQuery.data ?? [];
-  const baskets = rawBaskets.map((b) => normalizeRawBasketToBasket(b as any, restaurant?.name));
+  const restaurant = isDemoLocation ? demoLocation : locationQuery.data;
+
+  const rawBaskets = isDemoLocation ? buildDemoRawBaskets({ restaurantName: demoLocationName }) : (basketsQuery.data ?? []);
+  const baskets = rawBaskets.map((b: any) =>
+    normalizeRawBasketToBasket(b as any, restaurant?.name, {
+      // Pass the location's hours so baskets with NULL pickup times
+      // inherit them (matches the backend's NULL-means-inherit convention).
+      start: (restaurant as any)?.pickup_start_time,
+      end: (restaurant as any)?.pickup_end_time,
+    }),
+  );
+  // True when the location has at least one basket AND every basket is
+  // either sold out or past its pickup window. Used to surface a single
+  // "fully unavailable" banner on the header instead of relying on the
+  // user to scan each basket card — and to keep the location-level expiry
+  // signal consistent with the per-basket expiry badges below.
+  const locationFullyExpired = baskets.length > 0 && baskets.every((b) =>
+    (b.quantityLeft ?? 0) <= 0 || isPickupExpiredInTz(b.pickupWindow?.end),
+  );
 
   const reviewsQuery = useQuery({
     queryKey: ['restaurant-reviews', id],
     queryFn: () => fetchReviewsByRestaurant(String(id)),
-    enabled: !!id,
+    enabled: !!id && !isDemoLocation,
   });
   const reviews = reviewsQuery.data ?? [];
 
@@ -273,7 +454,7 @@ export default function RestaurantScreen() {
 
   const reviewCount = reviews.length;
 
-  const isLoading = locationQuery.isLoading;
+  const isLoading = !isDemoLocation && locationQuery.isLoading;
 
   const description =
     (restaurant as any)?.bag_description?.trim() || restaurant?.description?.trim() || null;
@@ -293,6 +474,9 @@ export default function RestaurantScreen() {
   const closeReport = () => {
     setReportVisible(false);
   };
+
+  // Swipe-down dismiss for the report sheet.
+  const reportSwipe = useSwipeToDismiss(closeReport);
 
   const assetToDataUrl = (asset: ImagePicker.ImagePickerAsset): string | null => {
     if (!asset.base64) return null;
@@ -316,19 +500,28 @@ export default function RestaurantScreen() {
   };
 
   const submitReport = async () => {
+    // Description is now required: a bare reason chip with no detail
+    // makes the report useless on the support team's side. Block the
+    // submit early if it's empty so the disabled CTA isn't the only
+    // signal — the user sees an inline error too.
+    const detailsTrimmed = report.comment.trim();
     if (!report.reason || report.submitting) return;
+    if (!detailsTrimmed) {
+      setReport((prev) => ({ ...prev, error: t('report.detailsRequired', { defaultValue: 'Please add a description of the problem.' }) }));
+      return;
+    }
     if (!id) return;
     setReport((prev) => ({ ...prev, submitting: true, error: null }));
     try {
       await submitReportApi({
         location_id: Number(id),
         reason: REPORT_REASON_API_MAP[report.reason],
-        details: report.comment.trim() || undefined,
+        details: detailsTrimmed,
         image_data_url: report.imageDataUrl || undefined,
       });
       setReport((prev) => ({ ...prev, submitted: true, submitting: false }));
     } catch (err: any) {
-      const msg = err?.response?.data?.error || err?.message || 'Submission failed';
+      const msg = getErrorMessage(err, t('report.error', { defaultValue: 'Submission failed' }));
       setReport((prev) => ({ ...prev, submitting: false, error: msg }));
     }
   };
@@ -341,6 +534,7 @@ export default function RestaurantScreen() {
         <TouchableOpacity
           style={[styles.backBtn, { backgroundColor: 'rgba(255,255,255,0.9)', position: 'absolute', top: 52, left: 16 }]}
           onPress={() => router.back()}
+          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
         >
           <ChevronLeft size={22} color={theme.colors.textPrimary} />
         </TouchableOpacity>
@@ -368,6 +562,7 @@ export default function RestaurantScreen() {
           <TouchableOpacity
             style={[styles.backBtn, { backgroundColor: 'rgba(255,255,255,0.9)', ...theme.shadows.shadowMd }]}
             onPress={() => router.back()}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
           >
             <ChevronLeft size={22} color={theme.colors.textPrimary} />
           </TouchableOpacity>
@@ -386,6 +581,7 @@ export default function RestaurantScreen() {
               },
             ]}
             onPress={() => { if (id) toggleBasketFavorite(String(id)); }}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
             accessibilityLabel={isFavorited
               ? t('favorites.removeFromFavorites', { defaultValue: 'Retirer des favoris' })
               : t('favorites.addToFavorites', { defaultValue: 'Ajouter aux favoris' })}
@@ -441,6 +637,14 @@ export default function RestaurantScreen() {
               <Tag size={12} color={theme.colors.textSecondary} />
               <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, marginLeft: 4 }]}>
                 {t(`home.categories.${mapCategory(restaurant.category)}`, { defaultValue: restaurant.category })}
+              </Text>
+            </View>
+          ) : null}
+          {locationFullyExpired ? (
+            <View style={{ marginTop: 8, alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', backgroundColor: '#88888822', borderRadius: theme.radii.pill, paddingHorizontal: 10, paddingVertical: 4, gap: 4 }}>
+              <TimerOff size={11} color="#666" />
+              <Text style={{ color: '#555', fontSize: 11, fontWeight: '600', fontFamily: 'Poppins_600SemiBold' }}>
+                {t('basket.allUnavailable', { defaultValue: 'Tous les paniers sont indisponibles' })}
               </Text>
             </View>
           ) : null}
@@ -526,11 +730,17 @@ export default function RestaurantScreen() {
               const soldOut = basket.quantityLeft <= 0;
               const pickupExpired = !soldOut && isPickupExpiredInTz(basket.pickupWindow?.end);
               const unavailable = soldOut || pickupExpired;
+              const isDemoBasketCard = isDemoLocation && String(basket.id) === DEMO_BASKET_ID;
 
               return (
               <TouchableOpacity
                 key={basket.id}
                 onPress={() => router.push(`/basket/${basket.id}` as never)}
+                onLayout={isDemoBasketCard ? (e) => {
+                  (e.target as any)?.measureInWindow?.((x: number, y: number, w: number, h: number) => {
+                    if (w > 0 && h > 0) useWalkthroughStore.getState().setMeasuredRect('restaurantSurpriseBasket', { x, y, w, h });
+                  });
+                } : undefined}
                 style={[
                   styles.basketCard,
                   {
@@ -572,7 +782,18 @@ export default function RestaurantScreen() {
                     {(() => {
                       const locStart = restaurant?.pickup_start_time?.substring(0, 5) ?? '';
                       const locEnd = restaurant?.pickup_end_time?.substring(0, 5) ?? '';
-                      const isCustom = basket.pickupWindow.start && (basket.pickupWindow.start !== locStart || basket.pickupWindow.end !== locEnd);
+                      const bStart = basket.pickupWindow?.start ?? '';
+                      const bEnd = basket.pickupWindow?.end ?? '';
+                      // Treat empty / "00:00" as "uses commerce hours" — the
+                      // backend stores NULL columns to signal inheritance, but
+                      // legacy/stale rows may carry sentinel zeros. Don't
+                      // surface a "personnalisé" badge for those.
+                      const isPlaceholder = (v: string) => !v || v === '00:00' || v === '00:00:00';
+                      const isCustom = (
+                        !isPlaceholder(bStart) && !isPlaceholder(bEnd) &&
+                        !isPlaceholder(locStart) && !isPlaceholder(locEnd) &&
+                        (bStart !== locStart || bEnd !== locEnd)
+                      );
                       if (!isCustom) return null;
                       return (
                         <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: '#e3ff5c22', borderRadius: 8, paddingHorizontal: 6, paddingVertical: 2 }}>
@@ -637,22 +858,22 @@ export default function RestaurantScreen() {
             onPress={collapseOrCloseRatings}
           />
           <Animated.View
-            onTouchStart={(e) => { ratingsStartY.current = e.nativeEvent.pageY; }}
-            onTouchEnd={(e) => {
-              const dy = e.nativeEvent.pageY - ratingsStartY.current;
-              if (dy < -30 && !ratingsExpanded) expandRatings();
-              else if (dy > 30) collapseOrCloseRatings();
-            }}
             style={{
               position: 'absolute', bottom: 0, left: 0, right: 0,
               height: ratingsHeight,
               backgroundColor: theme.colors.surface,
               borderTopLeftRadius: 26, borderTopRightRadius: 26,
+              transform: [{ translateY: ratingsTranslateY }],
               ...theme.shadows.shadowLg,
             }}
           >
-            {/* Handle bar */}
-            <View style={{ paddingVertical: 14, alignItems: 'center' }}>
+            {/* Top swipe zone — hosts the handle pill AND the gesture
+                so the inner ScrollView keeps scrolling normally. Swipe
+                down to close, swipe up (while collapsed) to expand. */}
+            <View
+              {...ratingsPanResponder.panHandlers}
+              style={{ paddingVertical: 14, alignItems: 'center' }}
+            >
               <View style={[styles.sheetHandle, { backgroundColor: theme.colors.divider }]} />
             </View>
 
@@ -807,18 +1028,26 @@ export default function RestaurantScreen() {
               marginBottom = keyboard height pushes the whole sheet above the keyboard.
               KeyboardAvoidingView inside a <Modal> is unreliable on Android, so we
               track the keyboard height explicitly and offset the sheet here. */}
-          <View
+          <Animated.View
             style={[
               styles.reportSheet,
               {
                 backgroundColor: theme.colors.surface,
                 ...theme.shadows.shadowLg,
                 marginBottom: reportKbHeight,
+                transform: [{ translateY: reportSwipe.translateY }],
               },
             ]}
           >
-            {/* Grab handle */}
-            <View style={[styles.sheetHandle, { backgroundColor: theme.colors.divider }]} />
+            {/* Top swipe zone — handle pill + PanResponder so the inner
+                report form (TextInput, reason chips) keeps normal tap
+                behaviour while the swipe-down only fires from here. */}
+            <View
+              {...reportSwipe.panHandlers}
+              style={{ paddingTop: 10, paddingBottom: 14, alignItems: 'center' }}
+            >
+              <View style={[styles.sheetHandle, { backgroundColor: theme.colors.divider }]} />
+            </View>
 
             {/* ── Header ── */}
             <View style={styles.sheetHeader}>
@@ -977,6 +1206,7 @@ export default function RestaurantScreen() {
                     ]}
                   >
                     {t('report.detailsLabel').toUpperCase()}
+                    <Text style={{ color: theme.colors.error }}> *</Text>
                   </Text>
                   <TextInput
                     style={[
@@ -1073,16 +1303,16 @@ export default function RestaurantScreen() {
                 >
                   <TouchableOpacity
                     onPress={submitReport}
-                    disabled={!report.reason || !!report.submitting}
-                    activeOpacity={report.reason && !report.submitting ? 0.82 : 1}
+                    disabled={!report.reason || !report.comment.trim() || !!report.submitting}
+                    activeOpacity={report.reason && report.comment.trim() && !report.submitting ? 0.82 : 1}
                     style={[
                       styles.submitBtn,
                       {
-                        backgroundColor: report.reason
+                        backgroundColor: report.reason && report.comment.trim()
                           ? theme.colors.primary
                           : theme.colors.divider,
                         borderRadius: 14,
-                        opacity: report.reason && !report.submitting ? 1 : 0.6,
+                        opacity: report.reason && report.comment.trim() && !report.submitting ? 1 : 0.6,
                       },
                     ]}
                   >
@@ -1091,7 +1321,7 @@ export default function RestaurantScreen() {
                     ) : (
                       <Text
                         style={{
-                          color: report.reason ? '#fff' : theme.colors.muted,
+                          color: report.reason && report.comment.trim() ? '#fff' : theme.colors.muted,
                           fontSize: 15,
                           fontWeight: '600',
                           textAlign: 'center',
@@ -1105,9 +1335,13 @@ export default function RestaurantScreen() {
                 </View>
               </>
             )}
-          </View>
+          </Animated.View>
         </View>
       </Modal>
+      {/* Customer demo walkthrough overlay — paints the spotlight on the
+          demo surprise basket so the walkthrough's restaurantSurpriseBasket
+          step is visible above this pushed Stack screen. */}
+      <SubScreenWalkthroughOverlay keys={['restaurantSurpriseBasket']} />
     </View>
   );
 }
@@ -1259,7 +1493,7 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     letterSpacing: 0.8,
     marginBottom: 12,
-    textTransform: 'uppercase',
+    textTransform: 'none',
   },
   reasonRow: {
     flexDirection: 'row',

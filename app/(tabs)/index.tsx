@@ -13,15 +13,19 @@ import { useFavoritesStore } from '@/src/stores/favoritesStore';
 import { useAuthStore } from '@/src/stores/authStore';
 import { MapFallback } from '@/src/components/MapFallback';
 import { fetchLocations } from '@/src/services/restaurants';
-import { fetchReviewsByRestaurant } from '@/src/services/reviews';
+import { fetchReviewMap } from '@/src/services/reviews';
+import { useReviewMapStore } from '@/src/stores/reviewMapStore';
 import { normalizeLocationToBasket } from '@/src/utils/normalizeRestaurant';
 import { useHeroStore } from '@/src/stores/heroStore';
 import { useAddressStore } from '@/src/stores/addressStore';
 import { useNotificationStore } from '@/src/stores/notificationStore';
 import { useWalkthroughStore } from '@/src/stores/walkthroughStore';
+import { buildDemoListingBasket, DEMO_LOCATION_ID } from '@/src/lib/demoData';
 import { fetchHeroSlides, type HeroSlide } from '@/src/services/heroSlides';
 import { isPickupExpiredInTz } from '@/src/utils/timezone';
 import { StatusBar } from 'expo-status-bar';
+import { useSwipeToDismiss } from '@/src/hooks/useSwipeToDismiss';
+import { sharedScrollY, HERO_HEIGHT as SHARED_HERO_HEIGHT } from '@/src/lib/topBarScroll';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
 
@@ -49,6 +53,7 @@ export default function HomeScreen() {
   const { user } = useAuthStore();
   const [refreshing, setRefreshing] = useState(false);
   const [showRadiusModal, setShowRadiusModal] = useState(false);
+  const radiusSwipe = useSwipeToDismiss(() => setShowRadiusModal(false));
   const [radius, setRadius] = useState(5);
   const [carouselPage, setCarouselPage] = useState(0);
   const carouselRef = useRef<ScrollView>(null);
@@ -62,132 +67,211 @@ export default function HomeScreen() {
     void hydrateAddresses();
   }, [hydrateAddresses]);
 
-  // Hero slide-up/slide-down animation
-  const heroHeight = useRef(new Animated.Value(1)).current; // 1 = visible, 0 = hidden
+  // Review-aggregate map: hydrated from AsyncStorage AND prefetched live at
+  // app boot in the root layout (see app/_layout.tsx). By the time this tab
+  // mounts the store already holds the previous session's cached map, so
+  // rating chips paint INSTANTLY on first frame — no "N/A → loads later"
+  // flash. The live useQuery below overrides as soon as the fresh response
+  // lands, and persists back to the store for the next cold-start.
+  const cachedReviewMap = useReviewMapStore((s) => s.map);
+  const setReviewMap = useReviewMapStore((s) => s.setMap);
+
+  // Hero/carousel scroll-away. The hero is the first item inside a single
+  // vertical ScrollView; native scroll moves it out of view 1:1 with the
+  // finger. Opacity, container bg, and the heroVisible flag are all derived
+  // from scrollY — no JS spring, no layout-height animation, so the gesture
+  // can't be raced (which was the iOS jitter and the Samsung rapid-refresh
+  // cause).
+  // HERO_HEIGHT + scrollY are shared via the topBarScroll singleton so the
+  // floating map button in (tabs)/_layout.tsx can read the SAME scroll
+  // progress and crossfade its colour in lock-step with the in-page
+  // Settings / Bell icons. See src/lib/topBarScroll.ts for the rationale.
+  const HERO_HEIGHT = SHARED_HERO_HEIGHT;
+  const scrollY = sharedScrollY;
   const [heroVisible, setHeroVisible] = useState(true);
+  const heroVisibleRef = useRef(true);
   const setHeroVisibleGlobal = useHeroStore((s) => s.setHeroVisible);
 
-  const HERO_HEIGHT = 160;
-
-  // Track the raw animated value for drag
-  const heroRawRef = useRef(1);
-  const dragStartRef = useRef(1);
-  const scrollOffsetRef = useRef(0);
-
   useEffect(() => {
-    const listenerId = heroHeight.addListener(({ value }) => { heroRawRef.current = value; });
-    return () => heroHeight.removeListener(listenerId);
-  }, [heroHeight]);
+    const id = scrollY.addListener(({ value }) => {
+      const visible = value < HERO_HEIGHT * 0.5;
+      if (visible !== heroVisibleRef.current) {
+        heroVisibleRef.current = visible;
+        setHeroVisible(visible);
+        setHeroVisibleGlobal(visible);
+      }
+    });
+    return () => scrollY.removeListener(id);
+  }, [scrollY, setHeroVisibleGlobal]);
 
-  const snapHero = useCallback((visible: boolean) => {
-    // Smoother, slightly slower expand/collapse. Higher friction damps the
-    // bounce; lower tension stretches the animation so it doesn't snap.
-    Animated.spring(heroHeight, {
-      toValue: visible ? 1 : 0,
-      useNativeDriver: false,
-      friction: 18,
-      tension: 22,
-    }).start();
-    setHeroVisible(visible);
-    setHeroVisibleGlobal(visible);
-  }, [heroHeight, setHeroVisibleGlobal]);
+  // Snap the hero back to the top after a flow that re-enters the search feed
+  // at the top (placing or cancelling an order). `scrollY` (sharedScrollY) is
+  // JS-driven and only updated by onScroll; after that round-trip the native
+  // list is at the top but scrollY is stale at its last collapsed value, so
+  // heroOpacity/containerBg paint the hero all white until the user scrolls.
+  // The reserve/cancel flows set a one-shot flag (heroStore.requestScrollReset)
+  // and we consume it on focus (below) — so this NEVER fires on ordinary tab
+  // switches and does NO data refetch.
+  const resetHeroScroll = useCallback(() => {
+    mainScrollRef.current?.scrollTo({ y: 0, animated: false });
+    scrollY.setValue(0);
+    heroVisibleRef.current = true;
+    setHeroVisible(true);
+    setHeroVisibleGlobal(true);
+  }, [scrollY, setHeroVisibleGlobal]);
 
-  // Hero collapse is now driven directly by the inner ScrollView's offset.
-  // When the list scrolls down past a tiny threshold, the hero snaps closed;
-  // when the list returns to the top (onScrollEndDrag at offset 0), it snaps
-  // open. This unifies iOS & Android and fixes the Samsung bug where a custom
-  // gesture captured the pan so the list stopped scrolling. Pull-to-refresh
-  // uses RefreshControl — native, cross-platform, and plays nicely with scroll.
-  const snapHeroRef = useRef(snapHero);
-  snapHeroRef.current = snapHero;
-
-  const animatedHeroHeight = heroHeight.interpolate({
-    inputRange: [0, 1],
-    outputRange: [0, HERO_HEIGHT],
+  const heroOpacity = scrollY.interpolate({
+    inputRange: [0, HERO_HEIGHT * 0.6, HERO_HEIGHT],
+    outputRange: [1, 0, 0],
+    extrapolate: 'clamp',
   });
 
-  const animatedHeroOpacity = heroHeight.interpolate({
-    inputRange: [0, 0.5, 1],
-    outputRange: [0, 0, 1],
+  // Container bg slides from green → light as the hero scrolls away
+  const containerBg = scrollY.interpolate({
+    inputRange: [0, HERO_HEIGHT],
+    outputRange: ['#114b3c', theme.colors.bg],
+    extrapolate: 'clamp',
   });
 
-  // Container bg slides from green → light as hero collapses
-  const containerBg = heroHeight.interpolate({
-    inputRange: [0, 1],
-    outputRange: [theme.colors.bg, '#114b3c'],
+  // 0 → 1 progress along the hero collapse, used to crossfade every top-bar
+  // icon + dropdown pill colour alongside the container bg. lucide icons
+  // take a `color` STRING prop (not Animated.Value), so each icon position
+  // is rendered as two stacked copies — one at the over-hero colour, one
+  // at the over-white colour — gated by `opacity: colorProgress` /
+  // `colorProgressInv`. The Map button in (tabs)/_layout.tsx reads from
+  // the SAME `sharedScrollY` (this file's `scrollY`) so its colour eases
+  // on the same timeline.
+  const colorProgress = scrollY.interpolate({
+    inputRange: [0, HERO_HEIGHT],
+    outputRange: [0, 1],
+    extrapolate: 'clamp',
+  });
+  const colorProgressInv = Animated.subtract(1, colorProgress);
+  // Dropdown pill's bg morphs from the translucent-white over-hero variant
+  // to the surface colour over the light section.
+  const dropdownPillBg = scrollY.interpolate({
+    inputRange: [0, HERO_HEIGHT],
+    outputRange: ['rgba(255,255,255,0.15)', theme.colors.surface],
+    extrapolate: 'clamp',
   });
 
-  // Fetch locations (the only source of truth for food spots)
+  // Locations rarely change mid-session. With the multi-tenant payload
+  // growth in mind (more locations = bigger response), pay the cost
+  // less often: 5-min staleTime + no background interval (we invalidate
+  // on writes from the reservation / business flows). Opt back into
+  // `refetchOnReconnect` since a stale list on the home feed after a
+  // network blip is visible to the user. Dropped `refetchOnMount:
+  // 'always'` — the global staleTime now handles freshness on entry.
   const locationsQuery = useQuery({
     queryKey: ['locations'],
     queryFn: fetchLocations,
-    staleTime: 30_000,
-    refetchInterval: 60_000,
-    refetchOnMount: 'always',
+    staleTime: 5 * 60_000,
+    refetchOnReconnect: true,
     retry: 2,
   });
 
-  // Fetch reviews per location
-  const locationIds = locationsQuery.data?.map((l) => l.id) ?? [];
+  // Reviews are fetched per-location via /api/reviews/restaurant/:id with
+  // concurrency capped to 3 inside fetchReviewMap (the platform-wide
+  // /api/reviews endpoint 404s). The sorted-id signature in the query key
+  // means the cache invalidates only when the location set actually changes.
+  //
+  // Cadence is aligned with locationsQuery (staleTime 30s, refetchInterval
+  // 60s, refetchOnMount: 'always') so ratings stay in sync with the rest of
+  // the card data. The query is prefetched at app boot from the root layout
+  // using the same key, so by the time this hook runs the cache is usually
+  // already populated.
+  // Only fan out /api/reviews/restaurant/:id for locations whose rating the
+  // backend did NOT already embed as `avg_rating`. With the bulk aggregate
+  // now shipped on /api/locations, this list is normally empty → the query
+  // below is disabled and fires ZERO review requests. It only does real work
+  // against an older backend that hasn't rolled out avg_rating yet.
+  const locationIdsSig = useMemo(() => {
+    const ids = (locationsQuery.data ?? [])
+      .filter((l) => l.avg_rating == null)
+      .map((l) => Number(l.id))
+      .filter((n) => !Number.isNaN(n));
+    ids.sort((a, b) => a - b);
+    return ids.join(',');
+  }, [locationsQuery.data]);
   const reviewsQuery = useQuery({
-    queryKey: ['review-map', locationIds],
-    queryFn: async () => {
-      if (!locationIds.length) return {} as Record<string, { avg: number; count: number }>;
-      const results = await Promise.allSettled(
-        locationIds.map((id) => fetchReviewsByRestaurant(id))
-      );
-      const map: Record<string, { avg: number; count: number }> = {};
-      locationIds.forEach((id, i) => {
-        const r = results[i];
-        if (r.status === 'fulfilled' && r.value.length > 0) {
-          const catAvgs = r.value.map((rev) => {
-            const cats = [
-              Number(rev.rating_service) || 0,
-              Number(rev.rating_quality) || 0,
-              Number(rev.rating_quantity) || 0,
-              Number(rev.rating_variety) || 0,
-            ].filter((v) => v > 0);
-            if (cats.length > 0) return cats.reduce((a, b) => a + b, 0) / cats.length;
-            return Number(rev.rating) || 0;
-          }).filter((v) => v > 0);
-          if (catAvgs.length > 0) {
-            map[String(id)] = {
-              avg: catAvgs.reduce((a, b) => a + b, 0) / catAvgs.length,
-              count: r.value.length,
-            };
-          }
-        }
-      });
-      return map;
+    queryKey: ['review-map', locationIdsSig],
+    queryFn: () => fetchReviewMap(locationIdsSig ? locationIdsSig.split(',') : []),
+    enabled: locationIdsSig.length > 0,
+    staleTime: 5 * 60_000,
+    // Reviews live in the /api/reviews writeLimiter bucket (20 req/min);
+    // each fetch makes one request per location. With many locations
+    // this used to flood the bucket. Now: fetched once per session and
+    // refreshed on demand (invalidated when a new review lands).
+    retry: (failureCount, error: any) => {
+      if (error?.status === 429 || error?.response?.status === 429) return false;
+      return failureCount < 2;
     },
-    enabled: locationIds.length > 0,
-    staleTime: 120_000,
-    retry: 0,
+    retryDelay: (attempt) => Math.min(1000 * 2 ** attempt, 4000),
   });
 
   // Refetch when the home tab regains focus (tabs stay mounted across navigation,
   // so refetchOnMount isn't enough — the business could edit a basket, switch
   // back to home, and see stale data otherwise).
+  //
+  // Also re-sync the global `heroVisible` from the current scrollY. The
+  // global is shared with the tab layout's map-button color logic and can
+  // drift stale when the user navigates between tabs rapidly or the index
+  // remounts (e.g. after deep navigation). Without this sync, the icon
+  // could read yellow over a fully-white bg (or dark-green over a
+  // green hero) until the user touches the scroll view.
   useFocusEffect(
     useCallback(() => {
       locationsQuery.refetch();
-    }, [locationsQuery])
+      // Consume a pending hero-scroll reset (set after placing/cancelling an
+      // order). This is the fix for the "hero is white after I order and come
+      // back to search" case: snap the list + shared scroll value to the top.
+      if (useHeroStore.getState().consumeScrollReset()) {
+        resetHeroScroll();
+      } else {
+        const currentScroll = (scrollY as any)._value ?? 0;
+        const shouldBeVisible = currentScroll < HERO_HEIGHT * 0.5;
+        heroVisibleRef.current = shouldBeVisible;
+        setHeroVisible(shouldBeVisible);
+        setHeroVisibleGlobal(shouldBeVisible);
+      }
+    }, [locationsQuery, scrollY, setHeroVisibleGlobal, resetHeroScroll])
   );
 
-  // Build card data: one card per location
+  // Build card data: one card per location.
+  // Rating source priority:
+  //   1. `loc.avg_rating` / `loc.review_count` from the locations response
+  //      (fast path — set by normalizeLocationToBasket already)
+  //   2. Client-computed average from /api/reviews as a fallback when (1)
+  //      is missing (bridge while the backend rolls out aggregate columns;
+  //      see services/restaurants.ts LocationFromAPI for the contract).
+  // Once the backend ships avg_rating/review_count on /api/locations, the
+  // reviewsQuery fallback below becomes a no-op and the global review
+  // fetch can be removed entirely.
+  // Mirror every fresh live response into the persistent store so the next
+  // cold-start has up-to-date ratings before the network resolves.
+  useEffect(() => {
+    if (reviewsQuery.data && Object.keys(reviewsQuery.data).length > 0) {
+      setReviewMap(reviewsQuery.data);
+    }
+  }, [reviewsQuery.data, setReviewMap]);
+
   const baskets = useMemo(() => {
     const locations = locationsQuery.data ?? [];
-    const rmap = reviewsQuery.data ?? {};
+    // Prefer fresh live data; fall back to AsyncStorage-cached map so cards
+    // render ratings on first paint instead of flashing N/A.
+    const rmap = reviewsQuery.data ?? cachedReviewMap ?? {};
     return locations.map((loc) => {
       const basket = normalizeLocationToBasket(loc);
-      const summary = rmap[String(loc.id)];
-      if (summary) {
-        basket.merchantRating = summary.avg;
-        basket.reviewCount = summary.count;
+      if (basket.merchantRating == null) {
+        const summary = rmap[String(loc.id)];
+        if (summary) {
+          basket.merchantRating = summary.avg;
+          basket.reviewCount = summary.count;
+        }
       }
       return basket;
     });
-  }, [locationsQuery.data, reviewsQuery.data]);
+  }, [locationsQuery.data, reviewsQuery.data, cachedReviewMap]);
 
   const availableCategories = useMemo(() => {
     const cats = new Set<string>();
@@ -259,6 +343,106 @@ export default function HomeScreen() {
     return result;
   }, [baskets, activeCategory, searchQuery, selectedAddress]);
 
+  // During the customer demo, inject the synthetic "Café Démo" basket at
+  // the top of the list so the walkthrough's firstBasketCard step lands on
+  // a card whose merchantId === 'demo' (and so tapping it routes to
+  // /restaurant/demo where the demo flow takes over). Filter out any other
+  // accidental id collision so we never render two cards with id='demo'.
+  const demoCustomerActive = useWalkthroughStore((s) => s.demoCustomerActive);
+
+  // Reset Home's scroll position when the walkthrough advances to one of the
+  // steps that targets a home-tab element. Tab screens preserve scroll
+  // position across navigation, so without this the demo would replay step
+  // halos at the user's pre-demo scroll offset (e.g. the first-basket card
+  // off-screen, the map/notif buttons covered by the collapsed hero).
+  //
+  // CRITICAL: never call `setMeasuredRect(key, null)` here. The list-wrapper
+  // onLayout only fires on actual layout changes, NOT on scroll — so a null
+  // clear with no guaranteed re-publish leaves the layout overlay stuck on
+  // its "dim mask only" branch (no halo, no tooltip), which is exactly the
+  // "faded screen after pickup-code" symptom users hit. Instead we scroll
+  // first, then re-measure the first-card wrapper ref directly so the
+  // post-scroll window y is republished as the source of truth.
+  const mainScrollRef = useRef<ScrollView>(null);
+  const firstCardWrapperRef = useRef<View>(null);
+  const walkthroughMeasureKey = useWalkthroughStore((s) => s.currentStep?.measureKey);
+  // Walkthrough step index — used as the entry-point trigger so we can
+  // scroll the search page back to top THE MOMENT the demo starts (not
+  // only when the first homeKeys step arrives). Without this, a user who
+  // starts the demo while scrolled down sees step 0's halo (the Discover
+  // tab pill) painted over a scrolled-away hero, and the header re-sync
+  // (heroVisible, mapBtnAnim) races the first halo measurement.
+  const walkthroughStep = useWalkthroughStore((s) => s.step);
+  useEffect(() => {
+    // Run the home reset as soon as the demo ARMS — `demoCustomerActive`
+    // flips true under the welcome cover (settings sets it before showing the
+    // cover), a beat BEFORE `step` becomes 0. The home tab is REUSED across
+    // the settings round-trip (not remounted), so it keeps whatever scroll
+    // offset the user left it at. Previously we only reset at `step === 0`,
+    // which fires the instant the cover unmounts — so the scroll-to-top + hero
+    // reset happened in full view of the just-shown dim mask. THAT was the
+    // "refresh flicker right after tapping Démarrer la démo". Doing it while
+    // the cover still hides the screen makes the demo's first frame land on an
+    // already-settled home. The `step === 0` branch stays as a safety net for
+    // any path that reaches step 0 without the cover.
+    if (!demoCustomerActive && walkthroughStep !== 0) return;
+    // Reset hero scroll AND the heroVisible flag so the layout's
+    // map-button colour + position math reads "we're at the top" on the
+    // very first halo paint.
+    mainScrollRef.current?.scrollTo({ y: 0, animated: false });
+    heroVisibleRef.current = true;
+    setHeroVisible(true);
+    setHeroVisibleGlobal(true);
+  }, [demoCustomerActive, walkthroughStep, setHeroVisibleGlobal]);
+  useEffect(() => {
+    const homeKeys = new Set([
+      'firstBasketCard',
+      'favoriteHeart',
+      'notifBell',
+      'mapButton',
+    ]);
+    if (!walkthroughMeasureKey || !homeKeys.has(walkthroughMeasureKey)) return;
+    mainScrollRef.current?.scrollTo({ y: 0, animated: false });
+    // For list-positioned elements (first card + the favorite heart
+    // derived from it), republish a fresh rect after the scroll settles.
+    // The header elements (notifBell, mapButton) sit in fixed-position
+    // chrome whose window y doesn't change with scroll, so their existing
+    // onLayout-published rect remains valid — no re-measure needed.
+    if (walkthroughMeasureKey === 'firstBasketCard' || walkthroughMeasureKey === 'favoriteHeart') {
+      // Re-measure on the next frame. The previous `setTimeout(150)` was
+      // there to "let the scroll settle", but the scrollTo above runs with
+      // animated: false (synchronous), so the layout is correct by the
+      // next paint — the 150 ms only added a visible gap where the overlay
+      // showed a featureless dim mask while it waited for the rect to be
+      // re-published. requestAnimationFrame fires after the next layout
+      // pass without any artificial wait.
+      const raf = requestAnimationFrame(() => {
+        firstCardWrapperRef.current?.measureInWindow((x, y, w, h) => {
+          if (w <= 0 || h <= 0) return;
+          const set = useWalkthroughStore.getState().setMeasuredRect;
+          set('firstBasketCard', { x, y, w, h });
+          // Same derivation as the onLayout publisher at the wrapper below.
+          set('favoriteHeart', { x: x + w - 44, y: y + 8, w: 34, h: 34 });
+        });
+      });
+      return () => cancelAnimationFrame(raf);
+    }
+  }, [walkthroughMeasureKey]);
+  const demoListingBasket = useMemo(
+    () => buildDemoListingBasket({
+      merchantName: t('walkthrough.customer.demoLocationName', { defaultValue: 'Chez Joe (démo)' }),
+      name: t('walkthrough.customer.demoBasketName', { defaultValue: 'Panier Surprise' }),
+      description: t('walkthrough.customer.demoBasketDesc', { defaultValue: 'Démonstration — aucune commande réelle n\'est créée.' }),
+    }),
+    [t],
+  );
+  const listBaskets = useMemo(
+    () => (demoCustomerActive
+      ? [demoListingBasket, ...filteredBaskets.filter((b) => b.id !== DEMO_LOCATION_ID)]
+      : filteredBaskets),
+    [demoCustomerActive, demoListingBasket, filteredBaskets],
+  );
+
   // Location suggestions: when searching, show locations that match by name/address
   // even if they don't have matching baskets — lets user navigate to the location page
   const locationSuggestions = useMemo(() => {
@@ -310,7 +494,13 @@ export default function HomeScreen() {
     setActiveCategory(cat);
   }, []);
 
+  // Defensive 2-second guard so /api/locations can't get hammered to 429 even
+  // if the user mashes pull-to-refresh.
+  const lastRefreshAtRef = useRef(0);
   const handleRefresh = useCallback(async () => {
+    const now = Date.now();
+    if (now - lastRefreshAtRef.current < 2000) return;
+    lastRefreshAtRef.current = now;
     setRefreshing(true);
     await Promise.allSettled([
       locationsQuery.refetch(),
@@ -322,21 +512,18 @@ export default function HomeScreen() {
   const firstName = user?.firstName ?? user?.name?.split(' ')[0] ?? '';
   const userGender = (user as any)?.gender ?? null; // 'male', 'female', or null
 
-  // Fetch dynamic hero slides from API
+  // Hero slides are admin-curated and near-static. 15s was overkill —
+  // bumped to 15 min so a quick tab swap doesn't refetch and a long
+  // session doesn't keep pulling. The focus-refetch below is also
+  // dropped (it was firing every home-tab focus, which is constant
+  // for a typical user). Admin edits propagate on next cold start or
+  // when the cache GCs after 24h.
   const heroSlidesQuery = useQuery({
     queryKey: ['hero-slides'],
     queryFn: fetchHeroSlides,
-    staleTime: 15_000, // 15s — hero slides are admin-edited, keep fresh
+    staleTime: 15 * 60_000,
   });
   const dynamicSlides = heroSlidesQuery.data ?? [];
-
-  // Refetch hero slides when the home tab regains focus — ensures admin edits
-  // in /admin show up on already-installed apps the next time the user re-opens.
-  useFocusEffect(
-    useCallback(() => {
-      heroSlidesQuery.refetch();
-    }, [heroSlidesQuery])
-  );
 
   // Total pages = 1 (welcome) + dynamic slides
   const totalCarouselPages = 1 + dynamicSlides.length;
@@ -379,24 +566,57 @@ export default function HomeScreen() {
           accessibilityRole="button"
           accessibilityLabel={selectedAddress?.label ?? t('home.chooseLocation')}
           accessibilityHint={t('home.chooseLocation', { defaultValue: 'Choose location' })}
-          style={{
-            flexDirection: 'row',
-            alignItems: 'center',
-            gap: 5,
-            height: 34,
-            backgroundColor: heroVisible ? 'rgba(255,255,255,0.15)' : theme.colors.surface,
-            borderRadius: 17,
-            paddingHorizontal: 12,
-          }}
+          // Nudge the chip down so its text optical centre lines up with the
+          // 20 px Settings / Bell icons on the right side (which sit at the
+          // geometric centre of their 34×34 wrappers).
+          style={{ marginTop: 4 }}
         >
-          <MapPin size={13} color={heroVisible ? '#e3ff5c' : theme.colors.primary} />
-          <Text
-            style={{ color: heroVisible ? '#fff' : theme.colors.textPrimary, fontSize: 13, fontWeight: '600', fontFamily: 'Poppins_600SemiBold', maxWidth: 130 }}
-            numberOfLines={1}
+          {/* Animated wrapper — pill bg crossfades with the container bg as
+              the hero collapses. Inner content is rendered as two stacked
+              copies per glyph so each colour eases through opacity, since
+              the lucide colour prop can't take an Animated.Value. */}
+          <Animated.View
+            style={{
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: 5,
+              height: 34,
+              backgroundColor: dropdownPillBg,
+              borderRadius: 17,
+              paddingHorizontal: 12,
+            }}
           >
-            {selectedAddress?.label ?? t('home.chooseLocation')}
-          </Text>
-          <ChevronDown size={13} color={heroVisible ? 'rgba(255,255,255,0.7)' : theme.colors.textSecondary} />
+            <View style={{ width: 13, height: 13 }}>
+              <Animated.View style={{ position: 'absolute', opacity: colorProgressInv }}>
+                <MapPin size={13} color="#e3ff5c" />
+              </Animated.View>
+              <Animated.View style={{ position: 'absolute', opacity: colorProgress }}>
+                <MapPin size={13} color={theme.colors.primary} />
+              </Animated.View>
+            </View>
+            <View style={{ maxWidth: 130 }}>
+              <Animated.Text
+                style={{ color: '#fff', fontSize: 13, fontWeight: '600', fontFamily: 'Poppins_600SemiBold', opacity: colorProgressInv }}
+                numberOfLines={1}
+              >
+                {selectedAddress?.label ?? t('home.chooseLocation')}
+              </Animated.Text>
+              <Animated.Text
+                style={{ position: 'absolute', color: theme.colors.textPrimary, fontSize: 13, fontWeight: '600', fontFamily: 'Poppins_600SemiBold', opacity: colorProgress }}
+                numberOfLines={1}
+              >
+                {selectedAddress?.label ?? t('home.chooseLocation')}
+              </Animated.Text>
+            </View>
+            <View style={{ width: 13, height: 13 }}>
+              <Animated.View style={{ position: 'absolute', opacity: colorProgressInv }}>
+                <ChevronDown size={13} color="rgba(255,255,255,0.7)" />
+              </Animated.View>
+              <Animated.View style={{ position: 'absolute', opacity: colorProgress }}>
+                <ChevronDown size={13} color={theme.colors.textSecondary} />
+              </Animated.View>
+            </View>
+          </Animated.View>
         </TouchableOpacity>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, height: 34 }}>
           {/* Spacer — the map button is rendered by the tab layout overlay so it can animate between tabs */}
@@ -410,20 +630,57 @@ export default function HomeScreen() {
             accessibilityLabel={t('settings.title', { defaultValue: 'Settings' })}
             accessibilityRole="button"
             style={{ width: 34, height: 34, justifyContent: 'center', alignItems: 'center' }}
+            // Small L/R because bell sits ~10 px to the right; full T/B since
+            // the row has nothing above or below to overlap.
+            hitSlop={{ top: 10, bottom: 10, left: 4, right: 4 }}
           >
-            <Settings size={20} color={heroVisible ? '#e3ff5c' : theme.colors.textPrimary} />
+            {/* Crossfade between neon (over hero) and textPrimary (over white)
+                so the icon colour eases alongside the container bg instead of
+                snapping at the heroVisible threshold. */}
+            <View style={{ width: 20, height: 20 }}>
+              <Animated.View style={{ position: 'absolute', opacity: colorProgressInv }}>
+                <Settings size={20} color="#e3ff5c" />
+              </Animated.View>
+              <Animated.View style={{ position: 'absolute', opacity: colorProgress }}>
+                <Settings size={20} color={theme.colors.textPrimary} />
+              </Animated.View>
+            </View>
           </TouchableOpacity>
           <TouchableOpacity
             onPress={() => router.push('/notifications' as never)}
             accessibilityLabel={t('notifications.title', { defaultValue: 'Notifications' })}
             accessibilityRole="button"
             style={{ width: 34, height: 34, justifyContent: 'center', alignItems: 'center' }}
+            hitSlop={{ top: 10, bottom: 10, left: 4, right: 4 }}
+            // Publish THIS bell's measurement to the walkthrough store. On
+            // the search tab this is the VISIBLE bell (the layout's bell at
+            // top: insets.top + 7 has opacity 0 here), so anchoring the
+            // halo to this wrapper is what makes the halo actually wrap
+            // around what the user sees. The layout's bell also publishes
+            // (via its own onLayout) — the most-recent setMeasuredRect
+            // wins, so when the search tab is active and renders, this
+            // measurement takes precedence.
+            //
+            // Symmetric +4 expansion: 34×34 wrapper → 42×42 halo centred
+            // on the wrapper (which is centred on the icon).
+            onLayout={(e) => {
+              (e.target as any)?.measureInWindow?.((x: number, y: number, w: number, h: number) => {
+                if (w > 0 && h > 0) useWalkthroughStore.getState().setMeasuredRect('notifBell', { x: x - 4, y: y - 4, w: w + 8, h: h + 8 });
+              });
+            }}
           >
             {/* Anchor for the badge — sized to the icon so the badge sits
                 just above/right of the bell glyph the same way it did before
                 the 34x34 touch target was added. */}
             <View>
-              <Bell size={20} color={heroVisible ? '#e3ff5c' : theme.colors.textPrimary} />
+              <View style={{ width: 20, height: 20 }}>
+                <Animated.View style={{ position: 'absolute', opacity: colorProgressInv }}>
+                  <Bell size={20} color="#e3ff5c" />
+                </Animated.View>
+                <Animated.View style={{ position: 'absolute', opacity: colorProgress }}>
+                  <Bell size={20} color={theme.colors.textPrimary} />
+                </Animated.View>
+              </View>
               {unreadCount > 0 && (
                 <View style={{
                   position: 'absolute',
@@ -447,210 +704,242 @@ export default function HomeScreen() {
         </View>
       </View>
 
-      {/* Hero body — text, image, dots — slides away on scroll up */}
-      <Animated.View style={{ height: animatedHeroHeight, opacity: animatedHeroOpacity, overflow: 'hidden', paddingHorizontal: 20 }}>
-        <ScrollView
-          ref={carouselRef}
-          horizontal
-          pagingEnabled
-          showsHorizontalScrollIndicator={false}
-          nestedScrollEnabled
-          onMomentumScrollEnd={(e) => {
-            const page = Math.round(e.nativeEvent.contentOffset.x / carouselWidth);
-            setCarouselPage(page);
-          }}
-          style={{ width: carouselWidth }}
-        >
-          {/* Page 1: Welcome — always present */}
-          <View style={{ width: carouselWidth, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-            <View style={{ flex: 1 }}>
-              <Text style={{
-                color: 'rgba(255,255,255,0.7)',
-                fontSize: 14,
-                fontFamily: 'Poppins_400Regular',
-              }}>
-                {t('home.welcomeBack')}
-              </Text>
-              <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 2, gap: 6 }}>
+      {/* Single vertical ScrollView. The hero is the first item — native scroll
+          moves it out of view 1:1 with the finger. The search bar wrapper is
+          the sticky header (stickyHeaderIndices={[1]}). RefreshControl only
+          fires on a true pull-down at offset 0, so the Samsung rapid-fire
+          refresh (caused by the old JS layout-height spring shifting content
+          under the finger) can no longer trigger. */}
+      <Animated.ScrollView
+        ref={mainScrollRef as any}
+        style={{ flex: 1 }}
+        contentContainerStyle={{ paddingBottom: 120, flexGrow: 1 }}
+        showsVerticalScrollIndicator={false}
+        scrollEventThrottle={16}
+        stickyHeaderIndices={[1]}
+        keyboardShouldPersistTaps="handled"
+        onScroll={Animated.event(
+          [{ nativeEvent: { contentOffset: { y: scrollY } } }],
+          { useNativeDriver: false },
+        )}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={() => { void handleRefresh(); }}
+            tintColor={theme.colors.primary}
+            colors={[theme.colors.primary]}
+          />
+        }
+      >
+        {/* [0] Hero — carousel + dots. Fixed height; fades and scrolls away. */}
+        <Animated.View style={{ height: HERO_HEIGHT, opacity: heroOpacity, overflow: 'hidden', paddingHorizontal: 20 }}>
+          <ScrollView
+            ref={carouselRef}
+            horizontal
+            pagingEnabled
+            showsHorizontalScrollIndicator={false}
+            nestedScrollEnabled
+            onMomentumScrollEnd={(e) => {
+              const page = Math.round(e.nativeEvent.contentOffset.x / carouselWidth);
+              setCarouselPage(page);
+            }}
+            style={{ width: carouselWidth }}
+          >
+            {/* Page 1: Welcome — always present */}
+            <View style={{ width: carouselWidth, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+              <View style={{ flex: 1 }}>
                 <Text style={{
-                  color: '#fff',
-                  fontSize: 24,
-                  fontWeight: '700',
-                  fontFamily: 'Poppins_700Bold',
+                  color: 'rgba(255,255,255,0.7)',
+                  fontSize: 14,
+                  fontFamily: 'Poppins_400Regular',
                 }}>
-                  {firstName || t('home.search')}
+                  {t('home.welcomeBack')}
                 </Text>
-                <Hand size={24} color="rgba(255,255,255,0.9)" />
-              </View>
-            </View>
-            {/* Hero image — gender-based */}
-            <Image
-              source={userGender === 'female'
-                ? require('@/assets/images/woman_holding_basket-removebg-preview.png')
-                : require('@/assets/images/man_holding_basket-removebg-preview.png')}
-              style={{ width: HERO_HEIGHT * 0.68, height: HERO_HEIGHT * 0.92, marginLeft: 4 }}
-              resizeMode="contain"
-              accessibilityLabel={t('home.heroImage', { defaultValue: 'Person holding a food basket' })}
-            />
-          </View>
-          {/* Dynamic slides from API */}
-          {dynamicSlides.map((slide: HeroSlide) => {
-            const imgW = slide.image_size ?? HERO_HEIGHT * 0.5;
-            const imgH = Math.round(imgW * 1.36);
-            const alignMap: Record<string, 'flex-start' | 'center' | 'flex-end'> = { top: 'flex-start', center: 'center', bottom: 'flex-end' };
-            const textJustify = alignMap[slide.text_align_v ?? 'center'] ?? 'center';
-            const titleSize = slide.title_font_size ?? 18;
-            const subtitleOp = slide.subtitle_opacity ?? 0.7;
-            const imgOp = slide.image_opacity ?? 1;
-            const offsetY = slide.text_offset_y ?? 0;
-            return (
-            <View key={slide.id} style={{ width: carouselWidth, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-              <View style={{ flex: 1, justifyContent: textJustify, transform: [{ translateY: offsetY }] }}>
-                {slide.subtitle ? (
+                <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 2, gap: 6 }}>
                   <Text style={{
-                    color: `rgba(255,255,255,${subtitleOp})`,
-                    fontSize: 12,
-                    fontFamily: 'Poppins_400Regular',
+                    color: '#fff',
+                    fontSize: 24,
+                    fontWeight: '700',
+                    fontFamily: 'Poppins_700Bold',
                   }}>
-                    {slide.subtitle}
+                    {firstName || t('home.search')}
                   </Text>
-                ) : null}
-                <Text style={{
-                  color: slide.text_color ?? '#fff',
-                  fontSize: titleSize,
-                  fontWeight: '700',
-                  fontFamily: 'Poppins_700Bold',
-                  marginTop: 4,
-                }}>
-                  {slide.title}
-                </Text>
+                  <Hand size={24} color="rgba(255,255,255,0.9)" />
+                </View>
               </View>
-              {slide.image_url ? (
-                <Image
-                  source={{ uri: slide.image_url }}
-                  style={{ width: imgW, height: imgH, marginLeft: 8, opacity: imgOp }}
-                  resizeMode="contain"
-                />
-              ) : (
-                <Image
-                  source={userGender === 'female'
-                    ? require('@/assets/images/woman_holding_basket-removebg-preview.png')
-                    : require('@/assets/images/man_holding_basket-removebg-preview.png')}
-                  style={{ width: imgW, height: imgH, marginLeft: 8, opacity: imgOp }}
-                  resizeMode="contain"
-                />
-              )}
+              {/* Hero image — gender-based */}
+              <Image
+                source={userGender === 'female'
+                  ? require('@/assets/images/woman_holding_basket-removebg-preview.png')
+                  : require('@/assets/images/man_holding_basket-removebg-preview.png')}
+                style={{ width: HERO_HEIGHT * 0.68, height: HERO_HEIGHT * 0.92, marginLeft: 4 }}
+                resizeMode="contain"
+                accessibilityLabel={t('home.heroImage', { defaultValue: 'Person holding a food basket' })}
+              />
             </View>
-            );
-          })}
-        </ScrollView>
+            {/* Dynamic slides from API */}
+            {dynamicSlides.map((slide: HeroSlide) => {
+              const imgW = slide.image_size ?? HERO_HEIGHT * 0.5;
+              const imgH = Math.round(imgW * 1.36);
+              const alignMap: Record<string, 'flex-start' | 'center' | 'flex-end'> = { top: 'flex-start', center: 'center', bottom: 'flex-end' };
+              const textJustify = alignMap[slide.text_align_v ?? 'center'] ?? 'center';
+              const titleSize = slide.title_font_size ?? 18;
+              const subtitleOp = slide.subtitle_opacity ?? 0.7;
+              const imgOp = slide.image_opacity ?? 1;
+              const offsetY = slide.text_offset_y ?? 0;
+              return (
+              <View key={slide.id} style={{ width: carouselWidth, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                <View style={{ flex: 1, justifyContent: textJustify, transform: [{ translateY: offsetY }] }}>
+                  {slide.subtitle ? (
+                    <Text style={{
+                      color: `rgba(255,255,255,${subtitleOp})`,
+                      fontSize: 12,
+                      fontFamily: 'Poppins_400Regular',
+                    }}>
+                      {slide.subtitle}
+                    </Text>
+                  ) : null}
+                  <Text style={{
+                    color: slide.text_color ?? '#fff',
+                    fontSize: titleSize,
+                    fontWeight: '700',
+                    fontFamily: 'Poppins_700Bold',
+                    marginTop: 4,
+                  }}>
+                    {slide.title}
+                  </Text>
+                </View>
+                {slide.image_url ? (
+                  <Image
+                    source={{ uri: slide.image_url }}
+                    style={{ width: imgW, height: imgH, marginLeft: 8, opacity: imgOp }}
+                    resizeMode="contain"
+                  />
+                ) : (
+                  <Image
+                    source={userGender === 'female'
+                      ? require('@/assets/images/woman_holding_basket-removebg-preview.png')
+                      : require('@/assets/images/man_holding_basket-removebg-preview.png')}
+                    style={{ width: imgW, height: imgH, marginLeft: 8, opacity: imgOp }}
+                    resizeMode="contain"
+                  />
+                )}
+              </View>
+              );
+            })}
+          </ScrollView>
 
-        {/* Dot indicators */}
-        <View style={{ flexDirection: 'row', justifyContent: 'center', marginTop: 6, marginBottom: 24 }}>
-          {Array.from({ length: totalCarouselPages }, (_, i) => (
-            <View
-              key={i}
-              style={{
-                width: carouselPage === i ? 20 : 6,
-                height: 6,
-                borderRadius: 3,
-                backgroundColor: carouselPage === i ? '#e3ff5c' : 'rgba(255,255,255,0.3)',
-                marginHorizontal: 3,
-              }}
-            />
-          ))}
-        </View>
-      </Animated.View>
+          {/* Dot indicators */}
+          <View style={{ flexDirection: 'row', justifyContent: 'center', marginTop: 6, marginBottom: 24 }}>
+            {Array.from({ length: totalCarouselPages }, (_, i) => (
+              <View
+                key={i}
+                style={{
+                  width: carouselPage === i ? 20 : 6,
+                  height: 6,
+                  borderRadius: 3,
+                  backgroundColor: carouselPage === i ? '#e3ff5c' : 'rgba(255,255,255,0.3)',
+                  marginHorizontal: 3,
+                }}
+              />
+            ))}
+          </View>
+        </Animated.View>
 
-      {/* Content section with curved top — hero collapse is driven by the
-          ScrollView below, so no gesture wrapper is needed. */}
-      <View
-        style={{
-          flex: 1,
+        {/* [1] STICKY: rounded white card top + drag handle + search bar.
+            Pins under the top bar once the hero scrolls past it.
+            Corner-crack mitigation: this sheet's background colour
+            (`theme.colors.bg`, #fcfcfa) is intentionally one shade off
+            from individual card surfaces (`theme.colors.surface`,
+            #FFFFFF). When a card scrolled past the sticky sheet, its
+            brighter-white edge used to peek out of the corner triangles
+            (area outside the curve but inside the bounding rect). The
+            actual fix is two-pronged below:
+              1. `overflow: 'hidden'` here clips children to the rounded
+                 shape so they can't extend past the curve.
+              2. The card list (`[2]` below) uses `paddingHorizontal: 28+`
+                 so individual cards never reach into the horizontal
+                 zone where the corner triangles live (28 = the radius).
+            Together, the only thing that ever shows in the corner
+            triangles is the cards-container bg, which is the same
+            colour as this sheet — so the curve transition stays clean
+            in every scroll position. */}
+        <View style={{
           backgroundColor: theme.colors.bg,
           borderTopLeftRadius: 28,
           borderTopRightRadius: 28,
-          paddingTop: 0,
-          marginTop: -10,
-        }}
-      >
-        {/* Drag handle (visual indicator) */}
-        <View style={{ alignItems: 'center', paddingTop: 6, paddingBottom: 6 }}>
-          <View style={{
-            width: 44,
-            height: 5,
-            borderRadius: 3,
-            backgroundColor: theme.colors.muted + '40',
-          }} />
-        </View>
+          marginTop: -16,
+          overflow: 'hidden',
+        }}>
+          {/* Drag handle (visual indicator) */}
+          <View style={{ alignItems: 'center', paddingTop: 6, paddingBottom: 6 }}>
+            <View style={{
+              width: 44,
+              height: 5,
+              borderRadius: 3,
+              backgroundColor: theme.colors.muted + '40',
+            }} />
+          </View>
 
-        <View style={{ paddingHorizontal: theme.spacing.xl }}>
-          <View
-            style={[
-              styles.searchBar,
-              {
-                backgroundColor: theme.colors.surface,
-                borderRadius: theme.radii.r12,
-                ...theme.shadows.shadowSm,
-                height: 44,
-                alignItems: 'center',
-              },
-            ]}
-          >
-            <Search size={18} color={theme.colors.muted} />
-            <TextInput
+          <View style={{ paddingHorizontal: theme.spacing.xl, paddingBottom: 6 }}>
+            <View
               style={[
-                styles.searchInput,
-                { color: theme.colors.textPrimary, fontFamily: 'Poppins_400Regular', fontSize: 14, flex: 1, textAlign: 'left' },
+                styles.searchBar,
+                {
+                  backgroundColor: theme.colors.surface,
+                  borderRadius: theme.radii.r12,
+                  ...theme.shadows.shadowSm,
+                  height: 44,
+                  alignItems: 'center',
+                },
               ]}
-              placeholder={t('home.searchPlaceholder')}
-              placeholderTextColor={theme.colors.muted}
-              value={searchQuery}
-              onChangeText={handleSearchChange}
-              returnKeyType="search"
-              textAlignVertical="center"
-              accessibilityLabel={t('home.searchPlaceholder')}
-              accessibilityRole="search"
-            />
-            {searchQuery.length > 0 && (
-              <TouchableOpacity onPress={() => setSearchQuery('')} style={{ padding: 4 }} accessibilityLabel={t('common.clear', { defaultValue: 'Clear search' })} accessibilityRole="button">
-                <X size={16} color={theme.colors.muted} />
-              </TouchableOpacity>
-            )}
+            >
+              <Search size={18} color={theme.colors.muted} />
+              <TextInput
+                style={[
+                  styles.searchInput,
+                  { color: theme.colors.textPrimary, fontFamily: 'Poppins_400Regular', fontSize: 14, flex: 1, textAlign: 'left' },
+                ]}
+                placeholder={t('home.searchPlaceholder')}
+                placeholderTextColor={theme.colors.muted}
+                value={searchQuery}
+                onChangeText={handleSearchChange}
+                returnKeyType="search"
+                textAlignVertical="center"
+                accessibilityLabel={t('home.searchPlaceholder')}
+                accessibilityRole="search"
+              />
+              {searchQuery.length > 0 && (
+                <TouchableOpacity
+                  onPress={() => setSearchQuery('')}
+                  style={{ padding: 4 }}
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                  accessibilityLabel={t('common.clear', { defaultValue: 'Clear search' })}
+                  accessibilityRole="button"
+                >
+                  <X size={16} color={theme.colors.muted} />
+                </TouchableOpacity>
+              )}
+            </View>
           </View>
         </View>
 
-        {/* Scrollable content — Fix 2: paddingBottom accounts for floating tab bar + safe area.
-            The scroll offset drives the hero collapse: crossing ~4px closes it,
-            returning to 0 on release opens it. onScrollEndDrag handles the
-            overscroll case where velocity is positive but offset is clamped to 0. */}
-        <ScrollView
-          style={styles.scrollView}
-          contentContainerStyle={{ paddingHorizontal: theme.spacing.xl, paddingTop: theme.spacing.lg, paddingBottom: 120 }}
-          showsVerticalScrollIndicator={false}
-          scrollEventThrottle={16}
-          nestedScrollEnabled={true}
-          refreshControl={
-            <RefreshControl
-              refreshing={refreshing}
-              onRefresh={() => { void handleRefresh(); }}
-              tintColor={theme.colors.primary}
-              colors={[theme.colors.primary]}
-            />
-          }
-          onScroll={(e) => {
-            const y = e.nativeEvent.contentOffset.y;
-            scrollOffsetRef.current = y;
-            // Collapse as soon as the user scrolls past the top. Expand only
-            // when they return all the way to offset 0.
-            if (y > 4 && heroRawRef.current > 0.5) snapHeroRef.current(false);
-            else if (y <= 0 && heroRawRef.current < 0.5) snapHeroRef.current(true);
-          }}
-          onScrollEndDrag={(e) => {
-            if (e.nativeEvent.contentOffset.y <= 0) snapHeroRef.current(true);
-          }}
-        >
-          {/* Fix 2: categories section — explicit height + paddingVertical to prevent Android bottom cut */}
+        {/* [2] Categories + cards — white bg continues seamlessly from sticky.
+            flexGrow:1 so the white bg fills the remaining viewport when the
+            list is short (error/empty states), otherwise the dark-green
+            container bg at scrollY=0 shows through below the card.
+            Keep paddingHorizontal at theme.spacing.xl to match the
+            search bar — the user explicitly preferred the tighter
+            horizontal spacing here. The corner-triangle "crack" the
+            previous bump was guarding against is handled by the sticky
+            sheet's `overflow: 'hidden'` alone in practice.
+            `marginTop: -1` overlaps the sticky sheet's bottom edge by one
+            pixel. Both surfaces use the same cream bg so the overlap is
+            invisible, but it closes the subpixel gap that some Android
+            devices were exposing — the root container's dark-green tint
+            was bleeding through there as a thin horizontal line between
+            the search bar and the category pills. */}
+        <View style={{ backgroundColor: theme.colors.bg, paddingHorizontal: theme.spacing.xl, paddingTop: theme.spacing.sm, marginTop: -1, flexGrow: 1 }}>
           <View style={[styles.categoriesSection, { marginBottom: theme.spacing.lg }]}>
             <ScrollView
               horizontal
@@ -672,11 +961,12 @@ export default function HomeScreen() {
                       styles.categoryPill,
                       {
                         backgroundColor: isActive ? theme.colors.primary : theme.colors.surface,
-                        borderRadius: theme.radii.pill,
+                        borderRadius: 8,
+                        borderWidth: 1,
+                        borderColor: isActive ? theme.colors.primary : theme.colors.divider,
                         marginRight: theme.spacing.sm,
                         paddingHorizontal: theme.spacing.lg,
                         paddingVertical: 8,
-                        ...(isActive ? {} : theme.shadows.shadowSm),
                       },
                     ]}
                   >
@@ -696,7 +986,7 @@ export default function HomeScreen() {
               })}
             </ScrollView>
           </View>
-          {locationsQuery.isLoading ? (
+          {locationsQuery.isLoading && !demoCustomerActive ? (
             <>
               {[0, 1, 2, 3].map((i) => (
                 <View key={i} style={{ marginBottom: 16, backgroundColor: theme.colors.surface, borderRadius: 16, overflow: 'hidden', padding: 12 }}>
@@ -706,7 +996,11 @@ export default function HomeScreen() {
                 </View>
               ))}
             </>
-          ) : locationsQuery.isError ? (
+          ) : locationsQuery.isError && !locationsQuery.data && !demoCustomerActive ? (
+            // Only blank the list on first-load failure. If a background
+            // refetch fails after we already had data, keep showing the
+            // cached cards — React Query will try again on the next interval
+            // tick, focus event, or pull-to-refresh.
             <View style={styles.centerState}>
               <Text style={[{ color: theme.colors.error, ...theme.typography.body, textAlign: 'center' as const, marginBottom: 16 }]}>
                 {t('common.errorOccurred')}
@@ -723,7 +1017,7 @@ export default function HomeScreen() {
                 </Text>
               </TouchableOpacity>
             </View>
-          ) : filteredBaskets.length === 0 && locationSuggestions.length === 0 ? (
+          ) : listBaskets.length === 0 && locationSuggestions.length === 0 ? (
             <View style={styles.emptyState}>
               <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.body, textAlign: 'center' as const, marginTop: 40, paddingHorizontal: 20 }]}>
                 {t('home.emptyState.noBaskets')}
@@ -731,7 +1025,7 @@ export default function HomeScreen() {
             </View>
           ) : (
             <>
-              {filteredBaskets.map((basket, idx) => {
+              {listBaskets.map((basket, idx) => {
                 const isFirst = idx === 0;
                 const card = (
                   <BasketCard
@@ -749,6 +1043,7 @@ export default function HomeScreen() {
                 return (
                   <View
                     key={basket.id}
+                    ref={firstCardWrapperRef}
                     onLayout={(e) => {
                       (e.target as any)?.measureInWindow?.((x: number, y: number, w: number, h: number) => {
                         if (w <= 0 || h <= 0) return;
@@ -849,13 +1144,24 @@ export default function HomeScreen() {
               )}
             </>
           )}
-        </ScrollView>
-      </View>
+        </View>
+      </Animated.ScrollView>
 
       <Modal visible={showRadiusModal} transparent animationType="slide" onRequestClose={() => setShowRadiusModal(false)}>
         <View style={styles.radiusModalOverlay}>
-          <View style={[styles.radiusModalContent, { backgroundColor: theme.colors.surface, borderTopLeftRadius: 28, borderTopRightRadius: 28, ...theme.shadows.shadowLg }]}>
-            <View style={[styles.modalHandle, { backgroundColor: theme.colors.divider }]} />
+          <Animated.View
+            style={[styles.radiusModalContent, { backgroundColor: theme.colors.surface, borderTopLeftRadius: 28, borderTopRightRadius: 28, transform: [{ translateY: radiusSwipe.translateY }], ...theme.shadows.shadowLg }]}
+          >
+            {/* Swipe zone — full-width strip at the top hosts the
+                handle AND the gesture. Crucial here because the MapView
+                below would otherwise capture vertical drags as map pan,
+                stealing the swipe-down before it could close the sheet. */}
+            <View
+              {...radiusSwipe.panHandlers}
+              style={{ paddingTop: 10, paddingBottom: 12, alignItems: 'center' }}
+            >
+              <View style={{ width: 40, height: 5, borderRadius: 3, backgroundColor: theme.colors.divider }} />
+            </View>
 
             <View style={[styles.radiusModalHeader, { paddingHorizontal: theme.spacing.xl, paddingTop: theme.spacing.lg }]}>
               <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h2, flex: 1 }]}>
@@ -962,7 +1268,7 @@ export default function HomeScreen() {
                 {t('home.chooseLocation')}
               </Text>
             </TouchableOpacity>
-          </View>
+          </Animated.View>
         </View>
       </Modal>
 

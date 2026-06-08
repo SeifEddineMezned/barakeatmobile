@@ -1,5 +1,6 @@
 import { create } from 'zustand';
-import { combine } from 'zustand/middleware';
+import { combine, persist, createJSONStorage } from 'zustand/middleware';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Basket, Order, BusinessStats, BusinessProfile, TeamMember, TeamPermission } from '@/src/types';
 
 const initialStats: BusinessStats = {
@@ -153,7 +154,8 @@ const DEFAULT_PERMISSIONS: Record<string, TeamPermission> = {
 export { DEFAULT_PERMISSIONS };
 
 export const useBusinessStore = create(
-  combine(
+  persist(
+    combine(
     {
       // Profile starts null — populated only after the partner picks a real
       // location and we hydrate from /api/teams/.../profile. Hard-coded
@@ -164,7 +166,16 @@ export const useBusinessStore = create(
       orders: defaultOrders as Order[],
       stats: initialStats as BusinessStats,
       team: defaultTeam as TeamMember[],
+      // Persisted across cold-starts (see partialize below). On first launch
+      // it's null and the (business)/_layout auto-pick effect snaps it to the
+      // user's first available location. On returning launches it survives so
+      // the partner doesn't have to re-pick which point-de-vente they were on.
       selectedLocationId: null as number | string | null,
+      // True once the auto-pick effect has applied an initial default. Lets
+      // us distinguish "first run, never picked anything" (null because
+      // unset → default to the first available location) from "user
+      // explicitly chose Tous les emplacements" (null by choice → honor it).
+      locationDefaultApplied: false,
       targetOrderId: null as string | null,
       targetOrderLocationId: null as number | string | null,
       targetOrderTs: 0,
@@ -172,7 +183,9 @@ export const useBusinessStore = create(
       targetBasketTs: 0,
     },
     (set) => ({
-      setSelectedLocationId: (id: number | string | null) => set({ selectedLocationId: id }),
+      setSelectedLocationId: (id: number | string | null) =>
+        set({ selectedLocationId: id, locationDefaultApplied: true }),
+      markLocationDefaultApplied: () => set({ locationDefaultApplied: true }),
       setTargetOrderId: (id: string | null) => set({ targetOrderId: id }),
       setTargetOrder: (orderId: string | null, locationId?: number | string | null) =>
         set({ targetOrderId: orderId, targetOrderLocationId: locationId ?? null, targetOrderTs: Date.now() }),
@@ -253,5 +266,17 @@ export const useBusinessStore = create(
           ),
         })),
     })
-  )
+  ),
+    {
+      name: 'business-store',
+      storage: createJSONStorage(() => AsyncStorage),
+      // ONLY persist the location selection — the mock baskets / orders /
+      // team / target* fields are ephemeral session state and rehydrating
+      // them across sessions would mask real backend updates.
+      partialize: (state) => ({
+        selectedLocationId: state.selectedLocationId,
+        locationDefaultApplied: state.locationDefaultApplied,
+      }),
+    },
+  ),
 );

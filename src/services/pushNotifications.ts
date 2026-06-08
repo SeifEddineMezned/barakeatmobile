@@ -1,12 +1,21 @@
-import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
 import Constants from 'expo-constants';
 import { apiClient } from '@/src/lib/api';
 
-// Expo Go does not support push notifications from SDK 53+
+// Expo Go does not support push notifications from SDK 53+ on Android.
+// Importantly: we LAZY-LOAD `expo-notifications` inside each function below
+// rather than at module scope. SDK 53 Expo Go on Android logs a noisy
+// "Android Push notifications was removed from Expo Go" warning as soon as
+// certain exports are touched, even just by an `import * as Notifications`.
+// Keeping the require() behind the isExpoGo gate keeps that console quiet.
 const isExpoGo = Constants.appOwnership === 'expo';
 
-if (!isExpoGo) {
+// The notification handler is set lazily on first use — see callers below.
+// In Expo Go it never runs.
+let handlerSet = false;
+function ensureHandler(): void {
+  if (isExpoGo || handlerSet) return;
+  const Notifications = require('expo-notifications');
   Notifications.setNotificationHandler({
     handleNotification: async () => ({
       shouldShowAlert: true,
@@ -14,6 +23,7 @@ if (!isExpoGo) {
       shouldSetBadge: false,
     }),
   });
+  handlerSet = true;
 }
 
 export async function registerForPushNotifications(): Promise<string | null> {
@@ -21,6 +31,8 @@ export async function registerForPushNotifications(): Promise<string | null> {
     console.log('[Push] Skipping push registration in Expo Go');
     return null;
   }
+  ensureHandler();
+  const Notifications = require('expo-notifications');
 
   try {
     const { status: existingStatus } = await Notifications.getPermissionsAsync();
@@ -63,6 +75,18 @@ export async function registerForPushNotifications(): Promise<string | null> {
   }
 }
 
+// Clears this device's Expo push token on the backend so the server stops
+// delivering OS-level (phone) push notifications. Called when the user turns the
+// push toggle OFF. In-app notifications are NOT affected — they are polled from
+// the notifications feed and never depend on the push token.
+export async function unregisterPushNotifications(): Promise<void> {
+  try {
+    await apiClient.delete('/api/auth/push-token');
+  } catch {
+    console.log('[Push] Failed to clear token on backend');
+  }
+}
+
 export async function scheduleLocalNotification(
   title: string,
   body: string,
@@ -72,6 +96,8 @@ export async function scheduleLocalNotification(
     console.log('[Push] Skipping local notification in Expo Go');
     return null;
   }
+  ensureHandler();
+  const Notifications = require('expo-notifications');
 
   try {
     const id = await Notifications.scheduleNotificationAsync({
@@ -87,5 +113,6 @@ export async function scheduleLocalNotification(
 
 export async function cancelAllScheduledNotifications(): Promise<void> {
   if (isExpoGo) return;
+  const Notifications = require('expo-notifications');
   await Notifications.cancelAllScheduledNotificationsAsync();
 }

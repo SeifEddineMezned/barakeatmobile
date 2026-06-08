@@ -1,9 +1,12 @@
 import React, { useState, useMemo } from 'react';
 import { View, Text, Modal, TouchableOpacity, ActivityIndicator } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Trash2 } from 'lucide-react-native';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
+import { getErrorMessage } from '@/src/lib/api';
 import { useTheme } from '@/src/theme/ThemeProvider';
+import { PaperSurface } from '@/src/components/ui/PaperSurface';
 import { removeMember, type OrgMemberFromAPI, type OrgLocationFromAPI } from '@/src/services/teams';
 
 interface Props {
@@ -43,6 +46,7 @@ export function TeamRemoveMemberDialog({
 }: Props) {
   const { t } = useTranslation();
   const theme = useTheme();
+  const insets = useSafeAreaInsets();
   const queryClient = useQueryClient();
   const [loading, setLoading] = useState(false);
   const [mode, setMode] = useState<'scoped' | 'all'>('scoped');
@@ -97,7 +101,7 @@ export function TeamRemoveMemberDialog({
       onClose();
       onRemoved?.();
     } catch (err: any) {
-      setError(err?.message ?? t('business.team.removeMemberFailed', { defaultValue: 'Échec du retrait du membre' }));
+      setError(getErrorMessage(err, t('business.team.removeMemberFailed', { defaultValue: 'Échec du retrait du membre' })));
       setLoading(false);
     }
   };
@@ -119,11 +123,12 @@ export function TeamRemoveMemberDialog({
   }
 
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', alignItems: 'center', padding: 24 }}>
-        <View style={{ backgroundColor: theme.colors.surface, borderRadius: 20, padding: 24, width: '100%', maxWidth: 360, alignItems: 'center', ...theme.shadows.shadowLg }}>
-          <View style={{ backgroundColor: theme.colors.error + '15', width: 56, height: 56, borderRadius: 28, justifyContent: 'center', alignItems: 'center', marginBottom: 16 }}>
-            <Trash2 size={26} color={theme.colors.error} />
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+      <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'flex-end' }}>
+        <PaperSurface radius={24} shadow="lg" style={{ width: '100%', borderBottomLeftRadius: 0, borderBottomRightRadius: 0, paddingTop: 10, paddingHorizontal: 24, paddingBottom: insets.bottom + 20, alignItems: 'center' }}>
+          <View style={{ width: 40, height: 5, borderRadius: 3, backgroundColor: theme.colors.divider, marginBottom: 16 }} />
+          <View style={{ backgroundColor: theme.colors.surfaceMuted, width: 56, height: 56, borderRadius: 28, justifyContent: 'center', alignItems: 'center', marginBottom: 16 }}>
+            <Trash2 size={26} color={theme.colors.textSecondary} />
           </View>
           <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3, textAlign: 'center', marginBottom: 10 }}>
             {t('business.profile.removeMember', { defaultValue: 'Retirer le membre' })}
@@ -133,8 +138,8 @@ export function TeamRemoveMemberDialog({
           </Text>
 
           {willDeleteAccount && (
-            <View style={{ backgroundColor: theme.colors.error + '10', borderRadius: 12, padding: 10, width: '100%', marginBottom: 14 }}>
-              <Text style={{ color: theme.colors.error, fontSize: 11, fontWeight: '700', textAlign: 'center' }}>
+            <View style={{ backgroundColor: theme.colors.warning + '14', borderRadius: 12, padding: 12, width: '100%', marginBottom: 14, borderWidth: 1, borderColor: theme.colors.warning + '40' }}>
+              <Text style={{ color: '#9a6b15', fontSize: 12, fontWeight: '600', textAlign: 'center' }}>
                 {t('business.team.accountWillBeDeletedWarn', { defaultValue: 'Son compte business sera entièrement supprimé.' })}
               </Text>
             </View>
@@ -180,7 +185,7 @@ export function TeamRemoveMemberDialog({
               )}
             </TouchableOpacity>
           </View>
-        </View>
+        </PaperSurface>
       </View>
     </Modal>
   );

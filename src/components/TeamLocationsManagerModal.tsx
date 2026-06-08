@@ -3,6 +3,7 @@ import { View, Text, Modal, TouchableOpacity, ScrollView, ActivityIndicator, Ale
 import { X, MapPin } from 'lucide-react-native';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
+import { getErrorMessage } from '@/src/lib/api';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { addMember, removeMember, type OrgMemberFromAPI, type OrgLocationFromAPI } from '@/src/services/teams';
 
@@ -115,7 +116,7 @@ export function TeamLocationsManagerModal({
       await queryClient.refetchQueries({ queryKey: ['my-context'] });
       onClose();
     } catch (err: any) {
-      setError(err?.message ?? t('business.team.updateFailed', { defaultValue: 'Échec de la mise à jour' }));
+      setError(getErrorMessage(err, t('business.team.updateFailed', { defaultValue: 'Échec de la mise à jour' })));
     }
     setSaving(false);
   };
@@ -150,7 +151,7 @@ export function TeamLocationsManagerModal({
             <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3 }}>
               {t('business.team.manageLocations', { defaultValue: 'Gérer les emplacements' })}
             </Text>
-            <TouchableOpacity onPress={onClose}>
+            <TouchableOpacity onPress={onClose} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
               <X size={20} color={theme.colors.textSecondary} />
             </TouchableOpacity>
           </View>

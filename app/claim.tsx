@@ -6,7 +6,8 @@ import { useTranslation } from 'react-i18next';
 import { ChevronLeft, CheckCircle, Copy, AlertTriangle, Camera, X } from 'lucide-react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { useTheme } from '@/src/theme/ThemeProvider';
-import { submitClaim } from '@/src/services/claims';
+import { useCustomAlert } from '@/src/components/CustomAlert';
+import { submitReport } from '@/src/services/reports';
 import { getErrorMessage } from '@/src/lib/api';
 import { StatusBar } from 'expo-status-bar';
 import { useOrdersStore } from '@/src/stores/ordersStore';
@@ -20,14 +21,20 @@ const REASONS = [
 ];
 
 export default function ClaimScreen() {
-  const { reservationId, locationName } = useLocalSearchParams<{ reservationId?: string; locationName?: string }>();
+  const { reservationId, locationName, basketName } = useLocalSearchParams<{ reservationId?: string; locationName?: string; basketName?: string }>();
   const { t } = useTranslation();
   const theme = useTheme();
   const router = useRouter();
+  const customAlert = useCustomAlert();
 
   const [reason, setReason] = useState<string | null>(null);
   const [description, setDescription] = useState('');
+  // Photo state holds two things: the local preview URI (for display in the
+  // form) and the base64 data URL that gets posted to the backend. The
+  // unified /api/reviews/report path expects `image_data_url`, NOT a file
+  // upload — so we capture the photo with base64:true and keep both forms.
   const [photoUri, setPhotoUri] = useState<string | null>(null);
+  const [photoDataUrl, setPhotoDataUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [refNumber, setRefNumber] = useState('');
@@ -49,16 +56,26 @@ export default function ClaimScreen() {
 
   const handleSubmit = async () => {
     if (!reason) return;
+    const descTrimmed = description.trim();
+    // Description is now mandatory — admin triage was getting reason-only
+    // claims with no actionable detail. The button below is also gated on
+    // descTrimmed, but we keep the explicit error path so a user who taps
+    // Submit before typing sees a clear message instead of silent no-op.
+    if (!descTrimmed) {
+      setError(t('claims.descriptionRequired', { defaultValue: 'Veuillez décrire le problème.' }));
+      return;
+    }
     setLoading(true);
     setError('');
     try {
-      const result = await submitClaim({
+      const result = await submitReport({
         reservation_id: reservationId ? Number(reservationId) : undefined,
         reason,
-        description: description.trim() || undefined,
-        photoUri,
+        details: descTrimmed,
+        image_data_url: photoDataUrl || undefined,
       });
-      setRefNumber(result.reference_number);
+      const ref = result.reference_number || result.report?.reference_number || '';
+      setRefNumber(ref);
       setSubmitted(true);
       // Remember this reservation was reported so the order card hides its
       // Report/Review buttons on next render.
@@ -70,37 +87,54 @@ export default function ClaimScreen() {
     }
   };
 
+  // Convert an ImagePicker asset to (uri, dataUrl). The backend wants a
+  // base64 data URL, but we still keep the local URI for the preview <Image>.
+  const captureAsset = (asset: ImagePicker.ImagePickerAsset) => {
+    setPhotoUri(asset.uri);
+    if (asset.base64) {
+      const mime = asset.mimeType || 'image/jpeg';
+      setPhotoDataUrl(`data:${mime};base64,${asset.base64}`);
+    } else {
+      setPhotoDataUrl(null);
+    }
+  };
+
+  const launchCamera = async () => {
+    const { status } = await ImagePicker.requestCameraPermissionsAsync();
+    if (status !== 'granted') {
+      setError(t('common.cameraPermRequired', { defaultValue: "L'accès à la caméra est requis." }));
+      return;
+    }
+    const result = await ImagePicker.launchCameraAsync({ allowsEditing: true, quality: 0.7, base64: true });
+    if (!result.canceled && result.assets?.[0]) captureAsset(result.assets[0]);
+  };
+
+  const launchLibrary = async () => {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') {
+      setError(t('common.photoPermRequired', { defaultValue: "L'accès à la galerie photo est requis." }));
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: 'images', allowsEditing: true, quality: 0.7, base64: true });
+    if (!result.canceled && result.assets?.[0]) captureAsset(result.assets[0]);
+  };
+
   const pickPhoto = () => {
-    Alert.alert(
-      t('claims.addPhotoOptional', { defaultValue: 'Ajouter une photo (optionnel)' }),
+    // Migrated off the native Alert.alert ActionSheet — it rendered as the
+    // generic grey OS popup which broke brand feel and didn't match the
+    // leave-a-review screen's photo picker. Now uses the same Barakeat
+    // sheet-layout CustomAlert as review.tsx so both customer photo flows
+    // (review + claim/report) share one popup with the green primary
+    // buttons instead of the OS-grey defaults.
+    customAlert.showAlert(
+      t('common.addPhoto', { defaultValue: 'Ajouter une photo' }),
       undefined,
       [
-        {
-          text: t('common.takePhoto', { defaultValue: 'Prendre une photo' }),
-          onPress: async () => {
-            const { status } = await ImagePicker.requestCameraPermissionsAsync();
-            if (status !== 'granted') {
-              setError(t('common.cameraPermRequired', { defaultValue: "L'accès à la caméra est requis." }));
-              return;
-            }
-            const result = await ImagePicker.launchCameraAsync({ allowsEditing: true, quality: 0.7 });
-            if (!result.canceled && result.assets?.[0]) setPhotoUri(result.assets[0].uri);
-          },
-        },
-        {
-          text: t('common.chooseFromGallery', { defaultValue: 'Choisir depuis la galerie' }),
-          onPress: async () => {
-            const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-            if (status !== 'granted') {
-              setError(t('common.photoPermRequired', { defaultValue: "L'accès à la galerie photo est requis." }));
-              return;
-            }
-            const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: 'images', allowsEditing: true, quality: 0.7 });
-            if (!result.canceled && result.assets?.[0]) setPhotoUri(result.assets[0].uri);
-          },
-        },
+        { text: t('common.takePhoto', { defaultValue: 'Prendre une photo' }), onPress: launchCamera },
+        { text: t('common.chooseFromGallery', { defaultValue: 'Choisir depuis la galerie' }), onPress: launchLibrary },
         { text: t('common.cancel', { defaultValue: 'Annuler' }), style: 'cancel' },
-      ]
+      ],
+      { layout: 'sheet' },
     );
   };
 
@@ -164,13 +198,21 @@ export default function ClaimScreen() {
         contentContainerStyle={{ padding: 20, paddingBottom: 40 + kbHeight }}
       >
         {locationName ? (
-          <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm, marginBottom: 20 }}>
-            {t('claims.regarding', { defaultValue: 'Concernant :' })} {locationName}
-          </Text>
+          <View style={{ marginBottom: 20 }}>
+            <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm }}>
+              {t('claims.regarding', { defaultValue: 'Concernant :' })} {locationName}
+            </Text>
+            {basketName ? (
+              <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm, marginTop: 2 }}>
+                {t('claims.basket', { defaultValue: 'Panier :' })} {basketName}
+              </Text>
+            ) : null}
+          </View>
         ) : null}
 
         <Text style={{ color: theme.colors.textPrimary, ...theme.typography.body, fontWeight: '600', marginBottom: 12 }}>
           {t('claims.selectReason', { defaultValue: 'Raison de la réclamation' })}
+          <Text style={{ color: theme.colors.error }}> *</Text>
         </Text>
 
         {REASONS.map((r) => (
@@ -194,7 +236,8 @@ export default function ClaimScreen() {
         ))}
 
         <Text style={{ color: theme.colors.textPrimary, ...theme.typography.body, fontWeight: '600', marginTop: 20, marginBottom: 8 }}>
-          {t('claims.description', { defaultValue: 'Description (optionnel)' })}
+          {t('claims.description', { defaultValue: 'Description' })}
+          <Text style={{ color: theme.colors.error }}> *</Text>
         </Text>
         <TextInput
           value={description}
@@ -214,6 +257,9 @@ export default function ClaimScreen() {
         />
 
         <Text style={{ color: theme.colors.textPrimary, ...theme.typography.body, fontWeight: '600', marginTop: 20, marginBottom: 8 }}>
+          {/* Photo input is optional on both customer photo surfaces (review
+              and report). Subtitle mirrors the review screen exactly so the
+              two pages read as siblings. */}
           {t('claims.addPhotoOptional', { defaultValue: 'Ajouter une photo (optionnel)' })}
         </Text>
         {photoUri ? (
@@ -224,7 +270,7 @@ export default function ClaimScreen() {
               resizeMode="cover"
             />
             <TouchableOpacity
-              onPress={() => setPhotoUri(null)}
+              onPress={() => { setPhotoUri(null); setPhotoDataUrl(null); }}
               hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
               style={{
                 position: 'absolute', top: 8, right: 8,
@@ -249,21 +295,39 @@ export default function ClaimScreen() {
             </TouchableOpacity>
           </View>
         ) : (
+          // Identical styling to the review screen's photo button — dark
+          // green pill with the lime icon + lime label — so both customer
+          // photo-input flows share one visual language.
           <TouchableOpacity
             onPress={pickPhoto}
             style={{
               flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-              gap: 10, paddingVertical: 16, borderRadius: 12, borderWidth: 1,
-              borderColor: theme.colors.divider,
-              backgroundColor: theme.colors.surfaceMuted,
+              gap: 10,
+              backgroundColor: '#114b3c',
+              borderRadius: theme.radii.r16,
+              paddingVertical: 16,
+              paddingHorizontal: 16,
+              ...theme.shadows.shadowSm,
             }}
           >
-            <Camera size={20} color={theme.colors.primary} />
-            <Text style={{ color: theme.colors.primary, ...theme.typography.body, fontWeight: '600' }}>
-              {t('claims.insertOrTakePhoto', { defaultValue: 'Insérer ou prendre une photo' })}
+            <Camera size={20} color="#e3ff5c" />
+            <Text style={{ color: '#e3ff5c', ...theme.typography.body, fontWeight: '600' }}>
+              {t('common.insertOrTakePhoto', { defaultValue: 'Insérer ou prendre une photo' })}
             </Text>
           </TouchableOpacity>
         )}
+        {/* Consent note — disclosed up front so a customer attaching a photo
+            knows it'll be seen by Barakeat support and may be shared with
+            the merchant while investigating. Styling matches the marketing-
+            use disclosure on the leave-a-review screen exactly (color, font
+            size, line-height, top margin, side padding) so both customer
+            photo flows carry the same visual disclosure block. */}
+        <Text style={{ color: theme.colors.muted, fontSize: 11, lineHeight: 16, marginTop: 8, paddingHorizontal: 4 }}>
+          {t('claims.photoWarning', {
+            defaultValue:
+              "En ajoutant une photo, vous acceptez que Barakeat la consulte pour traiter votre réclamation, qu'elle puisse être partagée avec le commerce concerné dans le cadre de l'enquête, et qu'elle soit conservée comme pièce justificative.",
+          })}
+        </Text>
 
         {error ? (
           <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 12, gap: 6 }}>
@@ -274,10 +338,10 @@ export default function ClaimScreen() {
 
         <TouchableOpacity
           onPress={handleSubmit}
-          disabled={!reason || loading}
+          disabled={!reason || !description.trim() || loading}
           style={{
             backgroundColor: theme.colors.primary, borderRadius: 14, paddingVertical: 16,
-            alignItems: 'center', marginTop: 24, opacity: !reason || loading ? 0.5 : 1,
+            alignItems: 'center', marginTop: 24, opacity: !reason || !description.trim() || loading ? 0.5 : 1,
           }}
         >
           {loading ? (

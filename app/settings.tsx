@@ -1,24 +1,29 @@
 import React, { useCallback, useEffect, useState, useRef } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Switch, Alert, Modal, TextInput, Linking, Animated, PanResponder, KeyboardAvoidingView, Platform } from 'react-native';
-import { PasswordInput } from '@/src/components/PasswordInput';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Switch, Alert, Modal, TextInput, Linking, Animated, PanResponder, KeyboardAvoidingView, Platform, findNodeHandle, UIManager, Image } from 'react-native';
+import { DEMO_COVER_URL, DEMO_LOGO_URL, DEMO_BASKET_PHOTOS } from '@/src/lib/demoData';
+import { PaperSurface } from '@/src/components/ui/PaperSurface';
+import { ModalCard } from '@/src/components/ui/ModalCard';
+import { AppTextInput } from '@/src/components/ui/AppTextInput';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
+import { getErrorMessage } from '@/src/lib/api';
 import { useRouter } from 'expo-router';
 import {
   ArrowLeft, Globe, Bell as BellIcon, Shield, HelpCircle, Info, LogOut,
-  ChevronRight, Lock, FileText, Headphones, X, Trash2, Camera, MapPin, Image, AlertTriangle, Mail, ExternalLink, Hand,
+  ChevronRight, Lock, FileText, Headphones, X, Trash2, Camera, MapPin, Image as ImageIcon, AlertTriangle, Mail, ExternalLink, Hand,
 } from 'lucide-react-native';
-import { Dimensions } from 'react-native';
+import { Dimensions, useWindowDimensions } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
 import { useTheme } from '@/src/theme/ThemeProvider';
+import { useOverlayOriginOffset } from '@/src/components/useOverlayOriginOffset';
 import { StatusBar } from 'expo-status-bar';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAuthStore } from '@/src/stores/authStore';
 import { useSplashStore } from '@/src/stores/splashStore';
 import { useWalkthroughStore } from '@/src/stores/walkthroughStore';
 import { logout, deleteAccount as deleteAccountApi } from '@/src/services/auth';
-import { updatePassword, fetchUserProfile } from '@/src/services/profile';
+import { updatePassword, requestEmailChange, verifyEmailChange, fetchUserProfile } from '@/src/services/profile';
 import { fetchMyContext } from '@/src/services/teams';
 import i18n from '@/src/i18n';
 import Constants from 'expo-constants';
@@ -62,6 +67,7 @@ export default function SettingsScreen() {
   const { t } = useTranslation();
   const theme = useTheme();
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const { user } = useAuthStore();
   const signOut = useAuthStore((s) => s.signOut);
   const triggerSplash = useSplashStore((s) => s.triggerSplash);
@@ -90,6 +96,34 @@ export default function SettingsScreen() {
   const [confirmPw, setConfirmPw] = useState('');
   const [pwLoading, setPwLoading] = useState(false);
 
+  // Change email modal — current-password gated, same UX pattern as password
+  // change. We surface the user's current email above the input as read-only
+  // context so they know what they're replacing.
+  const [showEmailModal, setShowEmailModal] = useState(false);
+  const [emCurrentPw, setEmCurrentPw] = useState('');
+  const [emNewEmail, setEmNewEmail] = useState('');
+  const [emLoading, setEmLoading] = useState(false);
+  const [emError, setEmError] = useState('');
+  const [emSuccess, setEmSuccess] = useState(false);
+  // Two-step email change: 'request' (password + new email → send code) then
+  // 'verify' (enter the 6-digit code sent to the new address).
+  const [emStep, setEmStep] = useState<'request' | 'verify'>('request');
+  const [emOtp, setEmOtp] = useState('');
+  const [emPendingEmail, setEmPendingEmail] = useState('');
+
+  const resetEmailModal = () => {
+    setShowEmailModal(false);
+    setEmStep('request');
+    setEmCurrentPw('');
+    setEmNewEmail('');
+    setEmOtp('');
+    setEmPendingEmail('');
+    setEmError('');
+    setEmSuccess(false);
+    setEmLoading(false);
+  };
+  const setUser = useAuthStore((s) => s.setUser);
+
   // Notification preferences
   const [notifPrefs, setNotifPrefs] = useState<NotifPrefs>(DEFAULT_NOTIF_PREFS);
 
@@ -106,20 +140,79 @@ export default function SettingsScreen() {
   const skipWalkthrough = useWalkthroughStore((s) => s.skipWalkthrough);
   const demoRowRef = useRef<View>(null);
   const [demoRect, setDemoRect] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
+  // Outer ScrollView ref + tracked Y of the demo row so we can scrollTo when
+  // the walkthrough lands on this screen. The row lives below the fold, so
+  // without scrolling the measureInWindow call returns 0×0 and the overlay
+  // would render only the dim mask (no halo) + popup off-screen.
+  const settingsScrollRef = useRef<ScrollView | null>(null);
   const measureDemoRow = useCallback(() => {
+    // Skip publishes while the walkthrough's settings overlay is active —
+    // the post-scroll retry loop in the showSettingsOverlay effect below
+    // owns the rect lifecycle. An onLayout-driven publish here fires the
+    // moment the demo row mounts, BEFORE the scroll has happened, so the
+    // halo renders briefly at the pre-scroll y and the user sees the
+    // "wrong halo, then corrected" jitter. The effect's setDemoRect(null)
+    // at t=0 races this onLayout and loses on most devices because the
+    // onLayout callback often fires after effects on initial mount.
+    // Read the LIVE flag from the store rather than the closed-over hook
+    // value because this callback has [] deps and the hook value would
+    // be stale for the entire component lifetime.
+    if (useWalkthroughStore.getState().showSettingsOverlay) return;
     requestAnimationFrame(() => {
       demoRowRef.current?.measureInWindow((x, y, w, h) => {
         if (w > 0 && h > 0) setDemoRect({ x, y, w, h });
       });
     });
   }, []);
-  // Re-measure when the overlay is (re-)requested; the row's layout may have
-  // finalized after the first paint.
+  // When the overlay is requested: scroll the demo row into view first, then
+  // re-measure (with retries) once the scroll animation has landed. The
+  // "Mode démo" row sits below the fold; without scrolling, measureInWindow
+  // returns 0×0 and the overlay degenerates to a full dim + an offscreen
+  // popup. measureLayout against the ScrollView's node handle gives the
+  // row's Y in content-coordinate space, which is what scrollTo wants.
   useEffect(() => {
-    if (showSettingsOverlay) {
-      const id = setTimeout(measureDemoRow, 150);
-      return () => clearTimeout(id);
-    }
+    if (!showSettingsOverlay) return;
+    setDemoRect(null);
+    const timers: ReturnType<typeof setTimeout>[] = [];
+    timers.push(setTimeout(() => {
+      const scrollNode = settingsScrollRef.current ? findNodeHandle(settingsScrollRef.current as any) : null;
+      // `demoRowRef` points at a TouchableOpacity (a JS wrapper) — calling
+      // its instance `.measureLayout` directly logs
+      //   "Warning: ref.measureLayout must be called with a ref to a native component"
+      // because the wrapper isn't a native node. Resolve to the underlying
+      // native handle with findNodeHandle and use the static
+      // UIManager.measureLayout, which accepts handles and is the supported
+      // path for ref-to-wrapper -> measure-relative-to-another-view.
+      const rowNode = demoRowRef.current ? findNodeHandle(demoRowRef.current as any) : null;
+      if (scrollNode != null && rowNode != null) {
+        UIManager.measureLayout(
+          rowNode,
+          scrollNode,
+          () => { /* silent fallback — re-measure below still runs */ },
+          (_x: number, y: number) => {
+            settingsScrollRef.current?.scrollTo({ y: Math.max(0, y - 80), animated: true });
+          },
+        );
+      }
+      // Retry measureInWindow up to 8× at 100 ms intervals — handles the
+      // initial 0×0 race + lets the scroll animation settle before locking
+      // the halo position. The initial delay of 600 ms covers the full
+      // ~300 ms scrollTo animation plus a buffer; previously at 350 ms the
+      // first valid measurement could land mid-scroll, freezing the halo
+      // at a transient y for the rest of the step until the user moved.
+      const tryMeasure = (attempt: number) => {
+        if (attempt > 8) return;
+        demoRowRef.current?.measureInWindow((x, y, w, h) => {
+          if (w > 0 && h > 0) {
+            setDemoRect({ x, y, w, h });
+          } else {
+            timers.push(setTimeout(() => tryMeasure(attempt + 1), 100));
+          }
+        });
+      };
+      timers.push(setTimeout(() => tryMeasure(0), 600));
+    }, 100));
+    return () => { timers.forEach((id) => clearTimeout(id)); };
   }, [showSettingsOverlay, measureDemoRow]);
 
   // Load notification preferences from AsyncStorage
@@ -189,22 +282,49 @@ export default function SettingsScreen() {
     console.log('[Settings] Language changed to:', langCode);
   }, []);
 
-  const handleDemoRoleSwitch = useCallback(() => {
-    // Replay the interactive walkthrough overlay (cutout tour) — NOT the
-    // /onboarding marketing carousel. The user reaches this entry-point
-    // explicitly, so we reset the persisted "completed" flag and start the
-    // tour from step 0 BEFORE navigating. Starting the walkthrough first
-    // means that when the dashboard mounts a frame later, the overlay
-    // reads step=0 on its first render and paints the highlight
-    // immediately — no perceptible "plain dashboard" flash in between.
-    const { resetWalkthroughCompletion, startWalkthrough } = useWalkthroughStore.getState();
+  const handleDemoRoleSwitch = useCallback(async () => {
+    // Customer-side flow now goes through a full-screen "Welcome to the
+    // Barakeat demo" cover rendered on top of the (tabs) home screen.
+    // The cover gives the home tab time to mount and lay out, lets demo
+    // image prefetch settle, and lets the user explicitly tap "Start
+    // demo" — the walkthrough only fires when EVERYTHING is ready, so
+    // there are no jittery settling frames at start. The business demo
+    // (existing behaviour, no welcome cover) still starts immediately.
+    const { resetWalkthroughCompletion, startWalkthrough, setShowDemoWelcome, setDemoCustomerActive } = useWalkthroughStore.getState();
     resetWalkthroughCompletion();
-    startWalkthrough();
-    // The customer overlay lives in (tabs) and the business one in
-    // (business) — both are reachable from settings.
     const isBiz = user?.role === 'business' || (user as any)?.type === 'restaurant';
+    if (isBiz) {
+      try { router.replace('/(business)/dashboard' as never); } catch {}
+      requestAnimationFrame(() => startWalkthrough());
+      return;
+    }
+    // Customer flow — THREE things happen at the same render tick so the
+    // /(tabs)/ home tab loads UNDER the cover with the demo card already
+    // injected. When the user later taps "Start demo" the cover unmounts
+    // and the home tab is already in its demo state — no flash of the
+    // "real" search page sliding out to make way for the demo card.
+    //   1. setDemoCustomerActive(true) — flips the demo-listing flag on
+    //      so the home tab's render injects the Chez Joe card at the
+    //      top of its list FROM THE FIRST FRAME it mounts.
+    //   2. setShowDemoWelcome(true) — the cover at the root nav level
+    //      paints over the screen instantly.
+    //   3. router.replace('/(tabs)/') — /settings pops, /(tabs)/ mounts
+    //      underneath the cover with demoCustomerActive=true already in
+    //      the store. The home tab's query loads, layout measures, the
+    //      demo card sits at the top of the list — all invisible behind
+    //      the cover.
+    setDemoCustomerActive(true);
+    setShowDemoWelcome(true);
+    try { router.replace('/(tabs)/' as never); } catch {}
+    // Image prefetch — also runs in the background during the cover
+    // display so the basket image is cached by the time step 2 renders.
     try {
-      router.replace(isBiz ? '/(business)/dashboard' : '/(tabs)/' as never);
+      const all = [DEMO_COVER_URL, DEMO_LOGO_URL, ...DEMO_BASKET_PHOTOS]
+        .filter((u): u is string => typeof u === 'string' && !!u);
+      void Promise.race([
+        Promise.all(all.map((uri) => Image.prefetch(uri).catch(() => undefined))),
+        new Promise((resolve) => setTimeout(resolve, 1500)),
+      ]);
     } catch {}
   }, [router, user]);
 
@@ -219,38 +339,49 @@ export default function SettingsScreen() {
   const [sheetState, setSheetState] = useState<'half' | 'full'>('half');
   useEffect(() => { sheetStateRef.current = sheetState; }, [sheetState]);
 
+  // 3-state sheet (closed / half / full) with the same dynamic gesture
+  // model as src/hooks/useSwipeToDismiss — follow-finger drag, velocity
+  // projection on release, low start threshold so the sheet feels alive
+  // immediately. The state machine layers on top:
+  //   full + projected-down  → drop to half
+  //   half + projected-down  → close
+  //   half + projected-up    → expand to full
   const sheetPan = useRef(PanResponder.create({
     onStartShouldSetPanResponder: () => true,
-    onMoveShouldSetPanResponder: (_, g) => Math.abs(g.dy) > 8,
+    onStartShouldSetPanResponderCapture: () => true,
+    onMoveShouldSetPanResponder: (_, g) => Math.abs(g.dy) > 4 && Math.abs(g.dy) > Math.abs(g.dx),
+    onMoveShouldSetPanResponderCapture: (_, g) => Math.abs(g.dy) > 4 && Math.abs(g.dy) > Math.abs(g.dx),
+    onPanResponderTerminationRequest: () => false,
     onPanResponderMove: (_, g) => {
-      if (g.dy > 0) sheetY.setValue(g.dy);
+      if (g.dy >= 0) sheetY.setValue(g.dy);
+      else sheetY.setValue(g.dy / 3); // rubber-band when overshooting up
     },
     onPanResponderRelease: (_, g) => {
       const state = sheetStateRef.current;
-      if (g.dy > 80 || g.vy > 0.5) {
-        // Swipe down
+      const projection = g.dy + g.vy * 60;
+      if (projection > 80 || g.vy > 0.6) {
         if (state === 'full') {
-          // Full → half (just change state, snap back)
+          // Full → half: snap back to 0 (no close), drop state.
           sheetStateRef.current = 'half';
           setSheetState('half');
-          Animated.spring(sheetY, { toValue: 0, friction: 8, useNativeDriver: true }).start();
+          Animated.spring(sheetY, { toValue: 0, friction: 10, tension: 80, useNativeDriver: true }).start();
         } else {
-          // Half → close (slide off)
-          Animated.timing(sheetY, { toValue: 600, duration: 200, useNativeDriver: true }).start(() => {
+          const duration = Math.max(120, Math.min(280, 220 - g.vy * 50));
+          Animated.timing(sheetY, { toValue: 800, duration, useNativeDriver: true }).start(({ finished }) => {
+            if (!finished) return;
             setShowFaqModal(false); setShowLegalModal(null); sheetY.setValue(0);
             sheetStateRef.current = 'half'; setSheetState('half');
           });
         }
-      } else if (g.dy < -50) {
-        // Swipe up → expand (just change state)
+      } else if (g.dy < -40 && state !== 'full') {
         sheetStateRef.current = 'full';
         setSheetState('full');
-        Animated.spring(sheetY, { toValue: 0, friction: 8, useNativeDriver: true }).start();
+        Animated.spring(sheetY, { toValue: 0, friction: 10, tension: 80, useNativeDriver: true }).start();
       } else {
-        // Snap back
-        Animated.spring(sheetY, { toValue: 0, friction: 8, useNativeDriver: true }).start();
+        Animated.spring(sheetY, { toValue: 0, friction: 10, tension: 80, useNativeDriver: true }).start();
       }
     },
+    onPanResponderTerminate: () => sheetY.setValue(0),
   })).current;
   const closeSheet = useCallback(() => {
     Animated.timing(sheetY, { toValue: 600, duration: 200, useNativeDriver: true }).start(() => {
@@ -295,9 +426,78 @@ export default function SettingsScreen() {
       setPwSuccess(true);
       setTimeout(() => { setShowPasswordModal(false); setCurrentPw(''); setNewPw(''); setConfirmPw(''); setPwSuccess(false); }, 1500);
     } catch (err: any) {
-      setPwError(err?.message ?? t('common.errorOccurred'));
+      setPwError(getErrorMessage(err));
     } finally {
       setPwLoading(false);
+    }
+  };
+
+  // Step 1 — validate password + new email, then send a verification code to
+  // the new address. The email is NOT changed until the code is confirmed.
+  const handleSendEmailCode = async () => {
+    setEmError('');
+    setEmSuccess(false);
+    if (!emCurrentPw || !emNewEmail) {
+      setEmError(t('auth.fillAllFields'));
+      return;
+    }
+    const trimmed = emNewEmail.trim().toLowerCase();
+    // Length-then-shape validation. 254 is the RFC 5321 cap (also our DB cap)
+    // and the regex enforces only-ASCII local/domain chars plus a 2+ letter
+    // TLD, blocking the most common garbage like "a@b.c" or "foo@bar".
+    if (trimmed.length > 254 || !/^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/.test(trimmed)) {
+      setEmError(t('errors.invalidEmail', { defaultValue: "Format d'email invalide." }));
+      return;
+    }
+    if (user?.email && trimmed === user.email.toLowerCase()) {
+      setEmError(t('errors.sameEmail', { defaultValue: 'Le nouvel email doit être différent.' }));
+      return;
+    }
+    setEmLoading(true);
+    try {
+      const { pendingEmail } = await requestEmailChange(emCurrentPw, trimmed);
+      setEmPendingEmail(pendingEmail);
+      setEmOtp('');
+      setEmStep('verify');
+    } catch (err: any) {
+      const status = err?.response?.status ?? err?.status;
+      if (status === 409) {
+        setEmError(t('errors.emailExists', { defaultValue: 'Cet email est déjà utilisé.' }));
+      } else if (status === 401) {
+        setEmError(t('profile.wrongCurrentPassword', { defaultValue: 'Mot de passe actuel incorrect.' }));
+      } else {
+        setEmError(getErrorMessage(err));
+      }
+    } finally {
+      setEmLoading(false);
+    }
+  };
+
+  // Step 2 — confirm the 6-digit code sent to the new address and apply it.
+  const handleVerifyEmailCode = async () => {
+    setEmError('');
+    const code = emOtp.trim();
+    if (code.length < 6) {
+      setEmError(t('errors.invalidOtp', { defaultValue: 'Code invalide.' }));
+      return;
+    }
+    setEmLoading(true);
+    try {
+      const { email } = await verifyEmailChange(emPendingEmail, code);
+      if (user) setUser({ ...user, email });
+      setEmSuccess(true);
+      setTimeout(resetEmailModal, 1500);
+    } catch (err: any) {
+      const status = err?.response?.status ?? err?.status;
+      if (status === 409) {
+        setEmError(t('errors.emailExists', { defaultValue: 'Cet email est déjà utilisé.' }));
+      } else if (status === 401) {
+        setEmError(t('errors.invalidOtp', { defaultValue: 'Code invalide ou expiré.' }));
+      } else {
+        setEmError(getErrorMessage(err));
+      }
+    } finally {
+      setEmLoading(false);
     }
   };
 
@@ -351,11 +551,9 @@ export default function SettingsScreen() {
         ...(hasConfirmPickup ? [{ key: 'newOrders' as keyof NotifPrefs, labelKey: 'settings.newOrders', descKey: 'settings.newOrdersDesc' }] : []),
         ...(hasConfirmPickup ? [{ key: 'basketPickedUp' as keyof NotifPrefs, labelKey: 'settings.basketPickedUp', descKey: 'settings.basketPickedUpDesc' }] : []),
         { key: 'cancellations' as keyof NotifPrefs, labelKey: 'settings.cancellations', descKey: 'settings.cancellationsDesc' },
-        { key: 'suggestions', labelKey: 'settings.suggestions', descKey: 'settings.suggestionsDesc' },
       ]
     : [
         // Customer items
-        { key: 'orderConfirmed', labelKey: 'settings.orderConfirmed', descKey: 'settings.orderConfirmedDesc' },
         { key: 'pickupReminder', labelKey: 'settings.pickupReminder', descKey: 'settings.pickupReminderDesc' },
         { key: 'favoritesUpdates', labelKey: 'settings.favoritesUpdates', descKey: 'settings.favoritesUpdatesDesc' },
         { key: 'suggestions', labelKey: 'settings.suggestions', descKey: 'settings.suggestionsDesc' },
@@ -365,21 +563,26 @@ export default function SettingsScreen() {
   const PERMISSION_ITEMS = [
     { labelKey: 'settings.camera', status: cameraStatus, icon: Camera },
     { labelKey: 'settings.location', status: locationStatus, icon: MapPin },
-    { labelKey: 'settings.photoLibrary', status: photoLibraryStatus, icon: Image },
+    { labelKey: 'settings.photoLibrary', status: photoLibraryStatus, icon: ImageIcon },
   ];
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]} edges={['top']}>
       <StatusBar style="dark" />
       <View style={[styles.header, { paddingHorizontal: theme.spacing.xl, paddingVertical: theme.spacing.md }]}>
-        <TouchableOpacity onPress={() => router.back()} accessibilityLabel={t('common.goBack', { defaultValue: 'Go back' })} accessibilityRole="button">
+        <TouchableOpacity
+          onPress={() => router.back()}
+          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          accessibilityLabel={t('common.goBack', { defaultValue: 'Go back' })}
+          accessibilityRole="button"
+        >
           <ArrowLeft size={24} color={theme.colors.textPrimary} />
         </TouchableOpacity>
         <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h2, marginLeft: theme.spacing.lg }]}>
           {t('settings.title')}
         </Text>
       </View>
-      <ScrollView contentContainerStyle={{ padding: theme.spacing.xl }} showsVerticalScrollIndicator={false}>
+      <ScrollView ref={settingsScrollRef} contentContainerStyle={{ padding: theme.spacing.xl }} showsVerticalScrollIndicator={false}>
         {/* User identity card */}
         {user && (
           <View style={[{ backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, ...theme.shadows.shadowSm, marginBottom: theme.spacing.xl, padding: theme.spacing.lg, flexDirection: 'row', alignItems: 'center' }]}>
@@ -404,6 +607,39 @@ export default function SettingsScreen() {
                   {user.email}
                 </Text>
               ) : null}
+              {/* Role line — only for business users. We surface the team
+                  scope here so a member glancing at their settings knows what
+                  level of access they have. Format:
+                    org-admin       → "Admin de {org}"
+                    location-admin  → "Admin de {org} - {location}"
+                    member          → "Membre de {org} - {location}" */}
+              {isBusiness && bizCtx.data?.role ? (() => {
+                const orgLabel = bizCtx.data?.organization_name ?? '';
+                const locLabel = (bizCtx.data?.location_name ?? '').trim();
+                const role = bizCtx.data?.role;
+                const hasLocation = !!bizCtx.data?.location_id;
+                const isOrgScopedAdmin = (role === 'admin' || role === 'owner') && !hasLocation;
+                const isLocAdmin = role === 'admin' && hasLocation;
+                // When the backend hasn't returned a location_name (legacy
+                // `/organizations` payload, soft-deleted location, race
+                // condition), the templated keys would render "Membre de Org
+                // - " with a dangling separator. Switch to a no-location
+                // variant so the label reads cleanly as "Membre de {Org}".
+                const display = isOrgScopedAdmin
+                  ? t('business.settings.roleDisplay.orgAdmin', { org: orgLabel, defaultValue: `Admin de ${orgLabel}` })
+                  : isLocAdmin && locLabel
+                    ? t('business.settings.roleDisplay.locationAdmin', { org: orgLabel, location: locLabel, defaultValue: `Admin de ${orgLabel} - ${locLabel}` })
+                    : isLocAdmin
+                      ? t('business.settings.roleDisplay.locationAdminNoLocation', { org: orgLabel, defaultValue: `Admin de ${orgLabel}` })
+                      : locLabel
+                        ? t('business.settings.roleDisplay.member', { org: orgLabel, location: locLabel, defaultValue: `Membre de ${orgLabel} - ${locLabel}` })
+                        : t('business.settings.roleDisplay.memberNoLocation', { org: orgLabel, defaultValue: `Membre de ${orgLabel}` });
+                return (
+                  <Text style={{ color: theme.colors.primary, ...theme.typography.caption, marginTop: 4, fontFamily: 'Poppins_600SemiBold' }} numberOfLines={2}>
+                    {display}
+                  </Text>
+                );
+              })() : null}
             </View>
           </View>
         )}
@@ -458,6 +694,12 @@ export default function SettingsScreen() {
                   ]
                 );
               }
+            } else {
+              // Push turned OFF — clear the token on the backend so the server
+              // stops delivering OS-level notifications to this phone. In-app
+              // notifications/popups keep working (they don't use the token).
+              const { unregisterPushNotifications } = require('@/src/services/pushNotifications');
+              void unregisterPushNotifications();
             }
           }} trackColor={{ false: theme.colors.divider, true: theme.colors.primary + '50' }} thumbColor={notifications ? theme.colors.primary : theme.colors.muted} accessibilityLabel={t('settings.pushNotifications')} accessibilityRole="switch" />
         </View>
@@ -558,6 +800,21 @@ export default function SettingsScreen() {
         <View style={[{ backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, ...theme.shadows.shadowSm, marginBottom: theme.spacing.xl }]}>
           <TouchableOpacity
             style={[styles.menuItem, { padding: theme.spacing.lg, borderBottomWidth: 1, borderBottomColor: theme.colors.divider }]}
+            onPress={() => setShowEmailModal(true)}
+            accessibilityLabel={t('profile.changeEmail', { defaultValue: "Changer l'email" })}
+            accessibilityRole="button"
+          >
+            <View style={styles.menuItemLeft}>
+              <Mail size={20} color={theme.colors.textSecondary} />
+              <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.body, marginLeft: 12 }]}>
+                {t('profile.changeEmail', { defaultValue: "Changer l'email" })}
+              </Text>
+            </View>
+            <ChevronRight size={18} color={theme.colors.muted} />
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.menuItem, { padding: theme.spacing.lg }]}
             onPress={() => setShowPasswordModal(true)}
             accessibilityLabel={t('profile.changePassword')}
             accessibilityRole="button"
@@ -569,25 +826,6 @@ export default function SettingsScreen() {
               </Text>
             </View>
             <ChevronRight size={18} color={theme.colors.muted} />
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            ref={demoRowRef as any}
-            onLayout={measureDemoRow}
-            style={[styles.menuItem, { padding: theme.spacing.lg }]}
-            onPress={handleDemoRoleSwitch}
-            accessibilityLabel={t('profile.demoMode')}
-            accessibilityRole="button"
-          >
-            <View style={styles.menuItemLeft}>
-              <Shield size={20} color={theme.colors.textSecondary} />
-              <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.body, marginLeft: 12 }]}>
-                {t('profile.demoMode')}
-              </Text>
-            </View>
-            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-              <ChevronRight size={18} color={theme.colors.muted} />
-            </View>
           </TouchableOpacity>
         </View>
 
@@ -627,7 +865,7 @@ export default function SettingsScreen() {
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={[styles.menuItem, { padding: theme.spacing.lg }]}
+            style={[styles.menuItem, { padding: theme.spacing.lg, borderBottomWidth: 1, borderBottomColor: theme.colors.divider }]}
             onPress={handleAboutPress}
             accessibilityLabel={t('profile.about')}
             accessibilityRole="button"
@@ -639,6 +877,26 @@ export default function SettingsScreen() {
               </Text>
             </View>
             <ChevronRight size={18} color={theme.colors.muted} />
+          </TouchableOpacity>
+
+          {/* Mode démo — moved here from Account section per UX request. */}
+          <TouchableOpacity
+            ref={demoRowRef as any}
+            onLayout={measureDemoRow}
+            style={[styles.menuItem, { padding: theme.spacing.lg }]}
+            onPress={handleDemoRoleSwitch}
+            accessibilityLabel={t('profile.demoMode')}
+            accessibilityRole="button"
+          >
+            <View style={styles.menuItemLeft}>
+              <Shield size={20} color={theme.colors.textSecondary} />
+              <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.body, marginLeft: 12 }]}>
+                {t('profile.demoMode')}
+              </Text>
+            </View>
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              <ChevronRight size={18} color={theme.colors.muted} />
+            </View>
           </TouchableOpacity>
         </View>
 
@@ -708,60 +966,47 @@ export default function SettingsScreen() {
       </ScrollView>
 
       {/* Language Modal */}
-      <Modal visible={showLanguageModal} transparent animationType="fade" onRequestClose={() => setShowLanguageModal(false)}>
-        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setShowLanguageModal(false)}>
-          <View
-            style={[styles.modalContent, { backgroundColor: theme.colors.surface, borderRadius: theme.radii.r24, padding: theme.spacing.xl, ...theme.shadows.shadowLg }]}
-            onStartShouldSetResponder={() => true}
-          >
-            <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, marginBottom: theme.spacing.lg }]}>
-              {t('profile.selectLanguage')}
-            </Text>
-            {LANGUAGES.map((lang) => {
-              const isSelected = lang.code === currentLang;
-              return (
-                <TouchableOpacity
-                  key={lang.code}
-                  onPress={() => handleLanguageChange(lang.code)}
-                  accessibilityLabel={lang.label}
-                  accessibilityRole="button"
-                  accessibilityState={{ selected: isSelected }}
-                  style={[{
-                    flexDirection: 'row',
-                    alignItems: 'center',
-                    padding: theme.spacing.lg,
-                    borderRadius: theme.radii.r12,
-                    marginBottom: theme.spacing.sm,
-                    backgroundColor: isSelected ? theme.colors.primary + '12' : theme.colors.bg,
-                    borderWidth: isSelected ? 1.5 : 0,
-                    borderColor: theme.colors.primary,
-                  }]}
-                >
-                  <Text style={[{
-                    color: isSelected ? theme.colors.primary : theme.colors.textPrimary,
-                    ...theme.typography.body,
-                    fontWeight: isSelected ? ('600' as const) : ('400' as const),
-                    flex: 1,
-                  }]}>
-                    {lang.label}
-                  </Text>
-                  {isSelected && (
-                    <View style={[{ width: 8, height: 8, borderRadius: 4, backgroundColor: theme.colors.primary }]} />
-                  )}
-                </TouchableOpacity>
-              );
-            })}
+      <ModalCard
+        visible={showLanguageModal}
+        onClose={() => setShowLanguageModal(false)}
+        title={t('profile.selectLanguage')}
+        maxWidth={360}
+      >
+        {LANGUAGES.map((lang) => {
+          const isSelected = lang.code === currentLang;
+          return (
             <TouchableOpacity
-              onPress={() => setShowLanguageModal(false)}
-              style={[{ padding: theme.spacing.md, marginTop: theme.spacing.sm }]}
+              key={lang.code}
+              onPress={() => handleLanguageChange(lang.code)}
+              accessibilityLabel={lang.label}
+              accessibilityRole="button"
+              accessibilityState={{ selected: isSelected }}
+              style={[{
+                flexDirection: 'row',
+                alignItems: 'center',
+                padding: theme.spacing.lg,
+                borderRadius: theme.radii.r12,
+                marginBottom: theme.spacing.sm,
+                backgroundColor: isSelected ? theme.colors.primary + '12' : theme.colors.bg,
+                borderWidth: 1,
+                borderColor: isSelected ? theme.colors.primary : theme.colors.divider,
+              }]}
             >
-              <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.body, textAlign: 'center' as const }]}>
-                {t('common.cancel')}
+              <Text style={[{
+                color: isSelected ? theme.colors.primary : theme.colors.textPrimary,
+                ...theme.typography.body,
+                fontWeight: isSelected ? ('600' as const) : ('400' as const),
+                flex: 1,
+              }]}>
+                {lang.label}
               </Text>
+              {isSelected && (
+                <View style={[{ width: 8, height: 8, borderRadius: 4, backgroundColor: theme.colors.primary }]} />
+              )}
             </TouchableOpacity>
-          </View>
-        </TouchableOpacity>
-      </Modal>
+          );
+        })}
+      </ModalCard>
 
       {/* FAQ Modal — 3-state bottom sheet: half → full → close */}
       <Modal visible={showFaqModal} transparent animationType="fade" onRequestClose={closeSheet}>
@@ -777,14 +1022,14 @@ export default function SettingsScreen() {
               transform: [{ translateY: sheetY }],
             }]}
           >
-            <View {...sheetPan.panHandlers} style={{ paddingTop: 6, paddingBottom: 4 }}>
-              <View style={[styles.bottomModalHandle, { backgroundColor: theme.colors.divider, alignSelf: 'center', marginTop: 4, marginBottom: 4 }]} />
+            <View {...sheetPan.panHandlers} style={{ paddingTop: 10, paddingBottom: 12, alignItems: 'center' }}>
+              <View style={[styles.bottomModalHandle, { backgroundColor: theme.colors.divider }]} />
             </View>
             <View style={[styles.bottomModalHeader, { padding: theme.spacing.xl }]}>
               <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h2 }]}>
                 {t('profile.faq')}
               </Text>
-              <TouchableOpacity onPress={closeSheet}>
+              <TouchableOpacity onPress={closeSheet} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
                 <X size={20} color={theme.colors.textSecondary} />
               </TouchableOpacity>
             </View>
@@ -811,8 +1056,8 @@ export default function SettingsScreen() {
               transform: [{ translateY: sheetY }],
             }]}
           >
-            <View {...sheetPan.panHandlers} style={{ paddingTop: 6, paddingBottom: 4 }}>
-              <View style={[styles.bottomModalHandle, { backgroundColor: theme.colors.divider, alignSelf: 'center', marginTop: 4, marginBottom: 4 }]} />
+            <View {...sheetPan.panHandlers} style={{ paddingTop: 10, paddingBottom: 12, alignItems: 'center' }}>
+              <View style={[styles.bottomModalHandle, { backgroundColor: theme.colors.divider }]} />
             </View>
             <View style={[styles.bottomModalHeader, { padding: theme.spacing.xl }]}>
               <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h2 }]}>
@@ -820,7 +1065,7 @@ export default function SettingsScreen() {
                  showLegalModal === 'cookies' ? t('profile.cookies') :
                  t('profile.privacyPolicy')}
               </Text>
-              <TouchableOpacity onPress={closeSheet}>
+              <TouchableOpacity onPress={closeSheet} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
                 <X size={20} color={theme.colors.textSecondary} />
               </TouchableOpacity>
             </View>
@@ -836,79 +1081,68 @@ export default function SettingsScreen() {
       </Modal>
 
       {/* Customer Support Modal */}
-      <Modal visible={showSupportModal} transparent animationType="fade" onRequestClose={() => setShowSupportModal(false)}>
-        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', alignItems: 'center', padding: 24 }}>
-          <View style={{ backgroundColor: theme.colors.surface, borderRadius: 20, padding: 24, width: '100%', maxWidth: 340, alignItems: 'center', ...theme.shadows.shadowLg }}>
-            <TouchableOpacity
-              onPress={() => setShowSupportModal(false)}
-              style={{ position: 'absolute', top: 12, right: 12, width: 32, height: 32, borderRadius: 16, backgroundColor: theme.colors.bg, justifyContent: 'center', alignItems: 'center', zIndex: 1 }}
-              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-            >
-              <X size={18} color={theme.colors.textSecondary} />
-            </TouchableOpacity>
-            <View style={{ backgroundColor: theme.colors.primary + '15', width: 56, height: 56, borderRadius: 28, justifyContent: 'center', alignItems: 'center', marginBottom: 16 }}>
-              <Headphones size={26} color={theme.colors.primary} />
-            </View>
-            <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3, textAlign: 'center', marginBottom: 8 }}>
-              {t('profile.customerSupport', { defaultValue: 'Support client' })}
-            </Text>
-            <Text style={{ color: theme.colors.textSecondary, ...theme.typography.body, textAlign: 'center', lineHeight: 22, marginBottom: 20 }}>
-              {t('profile.supportDesc', { defaultValue: 'Envoyez-nous un email et nous vous répondrons dans les plus brefs délais.' })}
-            </Text>
-            <TouchableOpacity
-              onPress={() => { Linking.openURL('mailto:contact@barakeat.tn'); setShowSupportModal(false); }}
-              style={{ backgroundColor: theme.colors.primary, borderRadius: 14, paddingVertical: 14, width: '100%', alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 8 }}
-            >
-              <Mail size={16} color="#e3ff5c" />
-              <Text style={{ color: '#e3ff5c', fontWeight: '700', fontSize: 15 }}>contact@barakeat.tn</Text>
-            </TouchableOpacity>
-          </View>
+      <ModalCard
+        visible={showSupportModal}
+        onClose={() => setShowSupportModal(false)}
+        maxWidth={340}
+        contentStyle={{ alignItems: 'center' }}
+      >
+        <View style={{ backgroundColor: theme.colors.primary + '15', width: 56, height: 56, borderRadius: 28, justifyContent: 'center', alignItems: 'center', marginBottom: 16 }}>
+          <Headphones size={26} color={theme.colors.primary} />
         </View>
-      </Modal>
+        <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3, textAlign: 'center', marginBottom: 8 }}>
+          {t('profile.customerSupport', { defaultValue: 'Support client' })}
+        </Text>
+        <Text style={{ color: theme.colors.textSecondary, ...theme.typography.body, textAlign: 'center', lineHeight: 22, marginBottom: 20 }}>
+          {t('profile.supportDesc', { defaultValue: 'Envoyez-nous un email et nous vous répondrons dans les plus brefs délais.' })}
+        </Text>
+        <TouchableOpacity
+          onPress={() => { Linking.openURL('mailto:contact@barakeat.tn'); setShowSupportModal(false); }}
+          style={{ backgroundColor: theme.colors.primary, borderRadius: 14, paddingVertical: 14, width: '100%', alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 8 }}
+        >
+          <Mail size={16} color="#e3ff5c" />
+          <Text style={{ color: '#e3ff5c', fontWeight: '700', fontSize: 15 }}>contact@barakeat.tn</Text>
+        </TouchableOpacity>
+      </ModalCard>
 
       {/* About / A Propos Modal */}
-      <Modal visible={showAboutModal} transparent animationType="fade" onRequestClose={() => setShowAboutModal(false)}>
-        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', alignItems: 'center', padding: 24 }}>
-          <View style={{ backgroundColor: theme.colors.surface, borderRadius: 20, padding: 24, width: '100%', maxWidth: 360, alignItems: 'center', ...theme.shadows.shadowLg }}>
-            <TouchableOpacity
-              onPress={() => setShowAboutModal(false)}
-              style={{ position: 'absolute', top: 12, right: 12, width: 32, height: 32, borderRadius: 16, backgroundColor: theme.colors.bg, justifyContent: 'center', alignItems: 'center', zIndex: 1 }}
-              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-            >
-              <X size={18} color={theme.colors.textSecondary} />
-            </TouchableOpacity>
-            <View style={{ backgroundColor: '#114b3c', width: 56, height: 56, borderRadius: 28, justifyContent: 'center', alignItems: 'center', marginBottom: 16 }}>
-              <Info size={26} color="#e3ff5c" />
-            </View>
-            <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3, textAlign: 'center', marginBottom: 12 }}>
-              {t('profile.about', { defaultValue: 'À propos' })}
-            </Text>
-            <Text style={{ color: theme.colors.textSecondary, ...theme.typography.body, textAlign: 'center', lineHeight: 22, marginBottom: 8 }}>
-              {t('profile.mission')}
-            </Text>
-            <Text style={{ color: theme.colors.primary, ...theme.typography.body, fontStyle: 'italic', textAlign: 'center', marginBottom: 8 }}>
-              "{t('profile.motto')}"
-            </Text>
-            <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, textAlign: 'center', marginBottom: 20 }}>
-              {t('profile.availability')}
-            </Text>
-            <TouchableOpacity
-              onPress={() => Linking.openURL('https://barakeat.tn')}
-              style={{ backgroundColor: '#114b3c', borderRadius: 14, paddingVertical: 12, width: '100%', alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 8 }}
-            >
-              <ExternalLink size={16} color="#e3ff5c" />
-              <Text style={{ color: '#e3ff5c', fontWeight: '700', fontSize: 14 }}>barakeat.tn</Text>
-            </TouchableOpacity>
-          </View>
+      <ModalCard
+        visible={showAboutModal}
+        onClose={() => setShowAboutModal(false)}
+        maxWidth={360}
+        accent
+        contentStyle={{ alignItems: 'center' }}
+      >
+        <View style={{ backgroundColor: '#114b3c', width: 56, height: 56, borderRadius: 28, justifyContent: 'center', alignItems: 'center', marginBottom: 16 }}>
+          <Info size={26} color="#e3ff5c" />
         </View>
-      </Modal>
+        <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3, textAlign: 'center', marginBottom: 12 }}>
+          {t('profile.about', { defaultValue: 'À propos' })}
+        </Text>
+        <Text style={{ color: theme.colors.textSecondary, ...theme.typography.body, textAlign: 'center', lineHeight: 22, marginBottom: 8 }}>
+          {t('profile.mission')}
+        </Text>
+        <Text style={{ color: theme.colors.primary, ...theme.typography.body, fontStyle: 'italic', textAlign: 'center', marginBottom: 8 }}>
+          "{t('profile.motto')}"
+        </Text>
+        <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, textAlign: 'center', marginBottom: 20 }}>
+          {t('profile.availability')}
+        </Text>
+        <TouchableOpacity
+          onPress={() => Linking.openURL('https://barakeat.tn')}
+          style={{ backgroundColor: '#114b3c', borderRadius: 14, paddingVertical: 12, width: '100%', alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 8 }}
+        >
+          <ExternalLink size={16} color="#e3ff5c" />
+          <Text style={{ color: '#e3ff5c', fontWeight: '700', fontSize: 14 }}>barakeat.tn</Text>
+        </TouchableOpacity>
+      </ModalCard>
 
       {/* Delete Account Confirmation Modal */}
       <Modal visible={showDeleteModal} transparent animationType="fade" onRequestClose={() => setShowDeleteModal(false)}>
         <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', alignItems: 'center', padding: 24 }}>
-          <View style={{ backgroundColor: theme.colors.surface, borderRadius: 20, padding: 24, width: '100%', maxWidth: 340, alignItems: 'center', ...theme.shadows.shadowLg }}>
-            <View style={{ backgroundColor: theme.colors.error + '15', width: 56, height: 56, borderRadius: 28, justifyContent: 'center', alignItems: 'center', marginBottom: 16 }}>
-              <AlertTriangle size={26} color={theme.colors.error} />
+          <PaperSurface radius={20} style={{ padding: 24, width: '100%', maxWidth: 340, alignItems: 'center' }}>
+            <View style={{ backgroundColor: theme.colors.surfaceMuted, width: 56, height: 56, borderRadius: 28, justifyContent: 'center', alignItems: 'center', marginBottom: 16 }}>
+              <AlertTriangle size={26} color={theme.colors.textSecondary} />
             </View>
             <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3, textAlign: 'center', marginBottom: 8 }}>
               {deleteStep === 'first'
@@ -937,82 +1171,169 @@ export default function SettingsScreen() {
                 </Text>
               </TouchableOpacity>
             </View>
-          </View>
+          </PaperSurface>
         </View>
       </Modal>
 
       {/* Change Password Modal */}
-      <Modal visible={showPasswordModal} transparent animationType="fade" onRequestClose={() => setShowPasswordModal(false)}>
-        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
-        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setShowPasswordModal(false)}>
-          <View
-            style={[styles.modalContent, { backgroundColor: theme.colors.surface, borderRadius: theme.radii.r24, padding: theme.spacing.xl, ...theme.shadows.shadowLg }]}
-            onStartShouldSetResponder={() => true}
-          >
-            <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, marginBottom: theme.spacing.sm }]}>
-              {t('profile.changePassword')}
+      <ModalCard
+        visible={showPasswordModal}
+        onClose={() => setShowPasswordModal(false)}
+        title={t('profile.changePassword')}
+        maxWidth={380}
+      >
+        {pwSuccess ? (
+          <View style={{ backgroundColor: '#16a34a14', borderWidth: 1, borderColor: '#16a34a40', borderRadius: theme.radii.r12, paddingVertical: 10, paddingHorizontal: 14, marginBottom: theme.spacing.lg }}>
+            <Text style={{ color: '#16a34a', ...theme.typography.bodySm, fontWeight: '600' }}>
+              {t('profile.passwordChanged', { defaultValue: 'Mot de passe changé !' })}
             </Text>
-            {pwError ? <Text style={{ color: theme.colors.error, ...theme.typography.caption, marginBottom: theme.spacing.sm }}>{pwError}</Text> : null}
-            {pwSuccess ? <Text style={{ color: '#16a34a', ...theme.typography.bodySm, fontWeight: '600', marginBottom: theme.spacing.sm }}>{t('profile.passwordChanged', { defaultValue: 'Mot de passe changé !' })}</Text> : null}
-            <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.bodySm, marginBottom: theme.spacing.sm }]}>
-              {t('profile.currentPassword')}
+          </View>
+        ) : null}
+        <AppTextInput
+          label={t('profile.currentPassword')}
+          secureToggle
+          containerStyle={{ marginBottom: theme.spacing.lg }}
+          value={currentPw}
+          onChangeText={setCurrentPw}
+          placeholder={t('profile.currentPassword')}
+          accessibilityLabel={t('profile.currentPassword')}
+        />
+        <AppTextInput
+          label={t('profile.newPasswordLabel')}
+          secureToggle
+          containerStyle={{ marginBottom: theme.spacing.lg }}
+          value={newPw}
+          onChangeText={setNewPw}
+          placeholder={t('profile.newPasswordLabel')}
+          accessibilityLabel={t('profile.newPasswordLabel')}
+        />
+        <AppTextInput
+          label={t('profile.confirmPasswordLabel')}
+          secureToggle
+          containerStyle={{ marginBottom: theme.spacing.sm }}
+          value={confirmPw}
+          onChangeText={setConfirmPw}
+          placeholder={t('profile.confirmPasswordLabel')}
+          accessibilityLabel={t('profile.confirmPasswordLabel')}
+          error={pwError}
+        />
+        <TouchableOpacity
+          onPress={handleChangePassword}
+          disabled={pwLoading}
+          style={{ backgroundColor: theme.colors.primary, borderRadius: theme.radii.r12, padding: theme.spacing.lg, marginTop: theme.spacing.md, opacity: pwLoading ? 0.5 : 1 }}
+          accessibilityLabel={pwLoading ? t('common.loading') : t('common.save')}
+          accessibilityRole="button"
+        >
+          <Text style={{ color: '#fff', ...theme.typography.button, textAlign: 'center' }}>
+            {pwLoading ? t('common.loading') : t('common.save')}
+          </Text>
+        </TouchableOpacity>
+      </ModalCard>
+
+      {/* Change Email Modal — two steps: request code, then verify it */}
+      <ModalCard
+        visible={showEmailModal}
+        onClose={resetEmailModal}
+        title={t('profile.changeEmail', { defaultValue: "Changer l'email" })}
+        maxWidth={380}
+      >
+        {emSuccess ? (
+          <View style={{ backgroundColor: '#16a34a14', borderWidth: 1, borderColor: '#16a34a40', borderRadius: theme.radii.r12, paddingVertical: 10, paddingHorizontal: 14, marginBottom: theme.spacing.lg }}>
+            <Text style={{ color: '#16a34a', ...theme.typography.bodySm, fontWeight: '600' }}>
+              {t('profile.emailChanged', { defaultValue: 'Email changé avec succès.' })}
             </Text>
-            <PasswordInput
-              containerStyle={{ backgroundColor: theme.colors.bg, marginBottom: theme.spacing.lg }}
-              style={{ color: theme.colors.textPrimary, ...theme.typography.body }}
-              value={currentPw}
-              onChangeText={setCurrentPw}
+          </View>
+        ) : null}
+
+        {emStep === 'request' ? (
+          <>
+            {user?.email ? (
+              <View style={{ marginBottom: theme.spacing.lg }}>
+                <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, marginBottom: 4 }}>
+                  {t('profile.currentEmail', { defaultValue: 'Email actuel' })}
+                </Text>
+                <Text style={{ color: theme.colors.textPrimary, ...theme.typography.body }} numberOfLines={1}>
+                  {user.email}
+                </Text>
+              </View>
+            ) : null}
+            <AppTextInput
+              label={t('profile.newEmail', { defaultValue: 'Nouvel email' })}
+              containerStyle={{ marginBottom: theme.spacing.lg }}
+              value={emNewEmail}
+              onChangeText={setEmNewEmail}
+              placeholder="vous@example.com"
+              accessibilityLabel={t('profile.newEmail', { defaultValue: 'Nouvel email' })}
+              autoCapitalize="none"
+              autoCorrect={false}
+              keyboardType="email-address"
+            />
+            <AppTextInput
+              label={t('profile.currentPassword')}
+              secureToggle
+              containerStyle={{ marginBottom: theme.spacing.sm }}
+              value={emCurrentPw}
+              onChangeText={setEmCurrentPw}
               placeholder={t('profile.currentPassword')}
-              placeholderTextColor={theme.colors.muted}
               accessibilityLabel={t('profile.currentPassword')}
-            />
-            <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.bodySm, marginBottom: theme.spacing.sm }]}>
-              {t('profile.newPasswordLabel')}
-            </Text>
-            <PasswordInput
-              containerStyle={{ backgroundColor: theme.colors.bg, marginBottom: theme.spacing.lg }}
-              style={{ color: theme.colors.textPrimary, ...theme.typography.body }}
-              value={newPw}
-              onChangeText={setNewPw}
-              placeholder={t('profile.newPasswordLabel')}
-              placeholderTextColor={theme.colors.muted}
-              accessibilityLabel={t('profile.newPasswordLabel')}
-            />
-            <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.bodySm, marginBottom: theme.spacing.sm }]}>
-              {t('profile.confirmPasswordLabel')}
-            </Text>
-            <PasswordInput
-              containerStyle={{ backgroundColor: theme.colors.bg, marginBottom: theme.spacing.lg }}
-              style={{ color: theme.colors.textPrimary, ...theme.typography.body }}
-              value={confirmPw}
-              onChangeText={setConfirmPw}
-              placeholder={t('profile.confirmPasswordLabel')}
-              placeholderTextColor={theme.colors.muted}
-              accessibilityLabel={t('profile.confirmPasswordLabel')}
+              error={emError}
             />
             <TouchableOpacity
-              onPress={handleChangePassword}
-              disabled={pwLoading}
-              style={{ backgroundColor: theme.colors.primary, borderRadius: theme.radii.r12, padding: theme.spacing.lg, marginTop: theme.spacing.sm, opacity: pwLoading ? 0.5 : 1 }}
-              accessibilityLabel={pwLoading ? t('common.loading') : t('common.save')}
+              onPress={handleSendEmailCode}
+              disabled={emLoading}
+              style={{ backgroundColor: theme.colors.primary, borderRadius: theme.radii.r12, padding: theme.spacing.lg, marginTop: theme.spacing.md, opacity: emLoading ? 0.5 : 1 }}
+              accessibilityLabel={emLoading ? t('common.loading') : t('profile.sendCode', { defaultValue: 'Envoyer le code' })}
               accessibilityRole="button"
             >
               <Text style={{ color: '#fff', ...theme.typography.button, textAlign: 'center' }}>
-                {pwLoading ? t('common.loading') : t('common.save')}
+                {emLoading ? t('common.loading') : t('profile.sendCode', { defaultValue: 'Envoyer le code' })}
+              </Text>
+            </TouchableOpacity>
+          </>
+        ) : (
+          <>
+            <View style={{ marginBottom: theme.spacing.lg }}>
+              <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm, lineHeight: 20 }}>
+                {t('profile.emailCodeSent', { email: emPendingEmail, defaultValue: `Nous avons envoyé un code à 6 chiffres à ${emPendingEmail}. Saisissez-le ci-dessous pour confirmer.` })}
+              </Text>
+            </View>
+            <AppTextInput
+              label={t('profile.confirmationCode', { defaultValue: 'Code de confirmation' })}
+              containerStyle={{ marginBottom: theme.spacing.sm }}
+              value={emOtp}
+              onChangeText={(v) => setEmOtp(v.replace(/[^0-9]/g, '').slice(0, 6))}
+              placeholder="000000"
+              accessibilityLabel={t('profile.confirmationCode', { defaultValue: 'Code de confirmation' })}
+              keyboardType="number-pad"
+              autoCapitalize="none"
+              autoCorrect={false}
+              error={emError}
+            />
+            <TouchableOpacity
+              onPress={handleVerifyEmailCode}
+              disabled={emLoading}
+              style={{ backgroundColor: theme.colors.primary, borderRadius: theme.radii.r12, padding: theme.spacing.lg, marginTop: theme.spacing.md, opacity: emLoading ? 0.5 : 1 }}
+              accessibilityLabel={emLoading ? t('common.loading') : t('profile.verifyAndSave', { defaultValue: 'Vérifier et enregistrer' })}
+              accessibilityRole="button"
+            >
+              <Text style={{ color: '#fff', ...theme.typography.button, textAlign: 'center' }}>
+                {emLoading ? t('common.loading') : t('profile.verifyAndSave', { defaultValue: 'Vérifier et enregistrer' })}
               </Text>
             </TouchableOpacity>
             <TouchableOpacity
-              onPress={() => setShowPasswordModal(false)}
-              style={{ padding: theme.spacing.md, marginTop: theme.spacing.sm }}
+              onPress={handleSendEmailCode}
+              disabled={emLoading}
+              style={{ paddingVertical: theme.spacing.md, marginTop: theme.spacing.xs }}
+              accessibilityLabel={t('auth.resendOtp', { defaultValue: 'Renvoyer le code' })}
+              accessibilityRole="button"
             >
-              <Text style={{ color: theme.colors.textSecondary, ...theme.typography.body, textAlign: 'center' }}>
-                {t('common.cancel')}
+              <Text style={{ color: theme.colors.primary, ...theme.typography.bodySm, fontWeight: '600', textAlign: 'center' }}>
+                {t('auth.resendOtp', { defaultValue: 'Renvoyer le code' })}
               </Text>
             </TouchableOpacity>
-          </View>
-        </TouchableOpacity>
-        </KeyboardAvoidingView>
-      </Modal>
+          </>
+        )}
+      </ModalCard>
 
       {showSettingsOverlay && demoRect && (
         <SettingsDemoOverlay
@@ -1020,15 +1341,24 @@ export default function SettingsScreen() {
           onDone={skipWalkthrough}
           theme={theme}
           t={t}
+          insets={insets}
         />
       )}
     </SafeAreaView>
   );
 }
 
-function SettingsDemoOverlay({ rect, onDone, theme, t }: { rect: { x: number; y: number; w: number; h: number }; onDone: () => void; theme: any; t: any }) {
-  const SCREEN_W = Dimensions.get('window').width;
-  const SCREEN_H = Dimensions.get('window').height;
+function SettingsDemoOverlay({ rect, onDone, theme, t, insets }: { rect: { x: number; y: number; w: number; h: number }; onDone: () => void; theme: any; t: any; insets: { top: number; bottom: number; left: number; right: number } }) {
+  // Live dimensions so the dim mask and tooltip placement work on devices
+  // whose window height settles to a different value after edge-to-edge
+  // initialisation (Pixel 6, foldables, etc.).
+  const { width: SCREEN_W, height: SCREEN_H } = useWindowDimensions();
+  // Self-measure where this overlay sits in window coords. The settings
+  // screen wraps content in <SafeAreaView edges={['top']}>, so without this
+  // the overlay's (0,0) is below the status bar while `rect.x/y` from
+  // measureInWindow are in window coords — leaving the halo `insets.top`
+  // off from the actual row.
+  const { originRef, originX, originY, remeasure: remeasureOrigin } = useOverlayOriginOffset();
   // Pad the hole by 4px so the highlight ring sits outside the row border.
   const pad = 4;
   const x = rect.x - pad;
@@ -1038,9 +1368,12 @@ function SettingsDemoOverlay({ rect, onDone, theme, t }: { rect: { x: number; y:
   const radius = 14;
 
   // Tooltip above the row if the row is in the bottom half, else below.
+  // `insets.bottom` covers the Samsung system nav bar (visible even with
+  // edge-to-edge enabled) so the tooltip never gets clipped by it.
+  const safeBottom = insets.bottom + 12;
   const below = (y + h / 2) < SCREEN_H / 2;
   const tooltipTop = below ? y + h + 20 : undefined;
-  const tooltipBottom = !below ? SCREEN_H - y + 20 : undefined;
+  const tooltipBottom = !below ? SCREEN_H - y + 20 + safeBottom : undefined;
 
   // SVG even-odd path: full-screen rect + inner rounded-rect drawn with
   // opposite winding so the rounded hole is cut out cleanly. Replaces an
@@ -1065,7 +1398,10 @@ function SettingsDemoOverlay({ rect, onDone, theme, t }: { rect: { x: number; y:
   ].join(' ');
 
   return (
-    <View pointerEvents="box-none" style={{ ...StyleSheet.absoluteFillObject, zIndex: 9999 }}>
+    <View pointerEvents="box-none" style={{ ...StyleSheet.absoluteFillObject, zIndex: 9999 }} onLayout={remeasureOrigin}>
+      <View ref={originRef} collapsable={false} pointerEvents="none" style={{ position: 'absolute', top: 0, left: 0, width: 1, height: 1 }} />
+      {/* Window-coords canvas. See useOverlayOriginOffset. */}
+      <View pointerEvents="box-none" style={{ position: 'absolute', top: -originY, left: -originX, width: SCREEN_W, height: SCREEN_H }}>
       {/* Visual dim with rounded cutout — SVG follows the row's rounded
           corners exactly so the halo border isn't cropped at the curves. */}
       <View pointerEvents="none" style={StyleSheet.absoluteFillObject}>
@@ -1125,6 +1461,7 @@ function SettingsDemoOverlay({ rect, onDone, theme, t }: { rect: { x: number; y:
           </TouchableOpacity>
         </View>
       </View>
+      </View>
     </View>
   );
 }
@@ -1132,7 +1469,7 @@ function SettingsDemoOverlay({ rect, onDone, theme, t }: { rect: { x: number; y:
 const styles = StyleSheet.create({
   container: { flex: 1 },
   header: { flexDirection: 'row', alignItems: 'center' },
-  sectionHeader: { textTransform: 'uppercase' },
+  sectionHeader: { textTransform: 'none' },
   menuItem: {
     flexDirection: 'row',
     justifyContent: 'space-between',
