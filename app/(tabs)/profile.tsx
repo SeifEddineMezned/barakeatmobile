@@ -1,18 +1,19 @@
 import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react';
-import { StatusBar } from 'expo-status-bar';
+import { useStatusBarStyleOnFocus } from '@/src/hooks/useStatusBarStyleOnFocus';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity, Modal, TextInput,
-  ActivityIndicator, Animated,
+  ActivityIndicator, Animated, Switch, Alert, Platform,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import { useRouter, useFocusEffect } from 'expo-router';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   ChevronRight, User, Mail,
   CreditCard, Leaf, Banknote, ShoppingBag, UtensilsCrossed, Edit3, X, Check,
-  Flame, Lock, Trophy, Award, Star, Zap, Sun, Coffee, MapPin, Shuffle, Store, BookOpen, Heart, Moon, Medal, XCircle, CheckCircle2,
+  Flame, Lock, Trophy, Award, Star, Zap, Sun, Coffee, MapPin, Shuffle, Store, BookOpen, Heart, Moon, Medal, CheckCircle2,
 } from 'lucide-react-native';
+import { BarakeatErrorIcon } from '@/src/components/ui/BarakeatErrorIcon';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { EditIcon8 } from '@/src/components/ui/Icon8';
 import { useAuthStore } from '@/src/stores/authStore';
@@ -22,6 +23,7 @@ import { getErrorMessage } from '@/src/lib/api';
 import {
   fetchGamificationStats,
   fetchLeaderboard,
+  updateLeaderboardVisibility,
   type Badge,
 } from '@/src/services/gamification';
 import { calcMoneySaved, calcCO2Saved, calcLevelProgress } from '@/src/lib/impactCalculations';
@@ -66,6 +68,7 @@ function getBadgeIcon(badgeId: string) {
 }
 
 export default function ProfileScreen() {
+  useStatusBarStyleOnFocus('dark');
   const { t } = useTranslation();
   const theme = useTheme();
   const router = useRouter();
@@ -77,12 +80,18 @@ export default function ProfileScreen() {
   const [selectedPrefs, setSelectedPrefs] = useState<string[]>([]);
   const [statModal, setStatModal] = useState<'money' | 'co2' | 'baskets' | 'spots' | null>(null);
   const [badgeModal, setBadgeModal] = useState<Badge | null>(null);
+  // Keep the last-shown badge through the modal's fade-OUT so the card never
+  // renders EMPTY (a white box + its shadow) for a frame as it animates closed.
+  // That empty frame is the "a shadow / white div flashes right after I close
+  // it" artifact — the card content was gated on `badgeModal`, which goes null
+  // the instant you close, while the card View kept fading out behind it.
+  const lastBadgeRef = useRef<Badge | null>(null);
+  if (badgeModal) lastBadgeRef.current = badgeModal;
   const [levelModal, setLevelModal] = useState(false);
   const [streakModal, setStreakModal] = useState(false);
-  const [isEditing, setIsEditing] = useState(false);
-  const [editName, setEditName] = useState(user?.name ?? '');
-  const [editGender, setEditGender] = useState<string | null>((user as any)?.gender ?? null);
-  const [saveLoading, setSaveLoading] = useState(false);
+  // Long emails (esp. Apple private-relay …@privaterelay.appleid.com) are
+  // truncated by default in the personal-info row; tap to expand/collapse.
+  const [emailExpanded, setEmailExpanded] = useState(false);
   const [toastMsg, setToastMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   const reservationsQuery = useQuery({
@@ -166,40 +175,65 @@ export default function ProfileScreen() {
     return { basketsBought, moneySaved, co2Saved, level, xp, xpInLevel, xpBandSize, xpProgress, currentStreak, longestStreak, lastPickupDate, daysUntilStreakExpiry, badges, businessesTried };
   }, [gamificationQuery.data, reservationsQuery.data]);
 
-  // Single fontSize applied to EVERY badge title in the row, picked so the
-  // longest single word in any visible badge still fits on one line. Previous
-  // code used `adjustsFontSizeToFit` per-Text, which shrank each badge
-  // independently — a long title like "Amateur de Boulangerie" ended up
-  // visibly smaller than its neighbours, and short titles wrapped mid-word
-  // ("premier s\nauvetage") because the break strategy couldn't relax.
-  // Approach: derive the smallest fontSize the row needs from the longest
-  // single word, clamp into a readable range, and apply uniformly. Badges
-  // can still wrap to a second line at a word boundary if needed.
-  const badgeFontSize = useMemo(() => {
-    const titles: string[] = stats.badges.map((b: any) => {
-      if (!b.unlocked) return t('impact.locked');
-      const bid = b.badge_id ?? b.id;
-      return b.nameKey
-        ? t(`badges.${b.nameKey}`, { defaultValue: b.name ?? bid })
-        : (b.name ?? bid);
-    });
-    // Badge card width 100, padding `theme.spacing.lg` (16) on each side →
-    // ~68px text width inside the card.
-    const availableWidth = 100 - 2 * 16;
-    // Poppins advance per pt (rounded up for safety so the longest single
-    // word is guaranteed to fit at the chosen size).
-    const charPerPx = 0.62;
+  // Badge titles render at the SAME caption size as the impact-stat labels
+  // above — no per-badge shrinking (that made long titles visibly smaller
+  // than their neighbours, breaking the page's font consistency). Instead, if
+  // a badge's longest word wouldn't fit on one line at that size, only THAT
+  // badge's card widens just enough so the word never breaks mid-word. Short
+  // badges keep the default width; multi-word titles still wrap to a second
+  // line at a word boundary.
+  const BADGE_FONT_SIZE = theme.typography.caption.fontSize; // = impact cards
+  const BADGE_BASE_WIDTH = 100;
+  const BADGE_MAX_WIDTH = 260;
+  const badgeCardWidth = (title: string): number => {
+    // Poppins advance per pt. Bumped from 0.62 → 0.78 because the previous
+    // multiplier was an UNDER-estimate: "Premier Sauvetage" (longest word
+    // 9 chars) computed to ~94 px and fell back to the 100 px base width,
+    // but actually rendered at ~110 px which then broke "Sauvetage" mid-
+    // character. 0.78 is the measured average for Poppins_400Regular at
+    // caption size; the +12 px tail is belt-and-suspenders for Android
+    // text rendering, which sometimes adds a few sub-pixel grid pixels
+    // to the advance. Together they keep the heuristic safely above the
+    // actual render width.
+    const charPerPx = 0.78;
+    const safetyPx = 12;
+    const pad = theme.spacing.lg;
     let longestWordLen = 0;
-    for (const title of titles) {
-      for (const w of String(title).split(/\s+/)) {
-        if (w.length > longestWordLen) longestWordLen = w.length;
-      }
+    for (const w of String(title).split(/\s+/)) {
+      if (w.length > longestWordLen) longestWordLen = w.length;
     }
-    if (longestWordLen === 0) return 11;
-    const fits = Math.floor(availableWidth / (longestWordLen * charPerPx));
-    // Clamp: never below 8 (readability floor) or above 11 (caption default).
-    return Math.max(8, Math.min(11, fits));
-  }, [stats.badges, t]);
+    const needed = Math.ceil(longestWordLen * BADGE_FONT_SIZE * charPerPx) + pad * 2 + safetyPx;
+    return Math.min(BADGE_MAX_WIDTH, Math.max(BADGE_BASE_WIDTH, needed));
+  };
+
+  // Per-badge width override populated by the post-layout safety net:
+  // onTextLayout returns the lines the renderer actually drew. If a word
+  // got split mid-character (because the card was narrower than the word's
+  // natural width), we compute the natural width from the rendered char
+  // density and bump THAT badge's card width. Runs at most once per badge
+  // because the next render fits the word and the override stays put.
+  const [badgeWidthOverrides, setBadgeWidthOverrides] = useState<Record<string, number>>({});
+  const handleBadgeTextLayout = (badgeId: string, label: string) => (e: any) => {
+    const lines = e?.nativeEvent?.lines;
+    if (!Array.isArray(lines) || lines.length < 2) return;
+    // Concatenate rendered text. If the user-facing label can't be
+    // reconstructed by joining the rendered lines (modulo whitespace), the
+    // renderer broke a word mid-character.
+    const rendered = lines.map((l: any) => String(l.text ?? '')).join('');
+    const normalize = (s: string) => s.replace(/[\s\n]+/g, ' ').trim();
+    if (normalize(rendered) === normalize(label)) return;
+    const longestLine = lines.reduce((a: any, b: any) => (a.width >= b.width ? a : b));
+    const chars = Math.max(1, String(longestLine.text ?? '').length);
+    const charsPerPx = longestLine.width / chars;
+    const longestWord = String(label).split(/\s+/).reduce((a, b) => (a.length >= b.length ? a : b), '');
+    const naturalLongestWordPx = longestWord.length * charsPerPx;
+    const needed = Math.ceil(naturalLongestWordPx) + theme.spacing.lg * 2 + 14;
+    setBadgeWidthOverrides((prev) => {
+      const current = prev[badgeId] ?? 0;
+      if (current >= needed) return prev;
+      return { ...prev, [badgeId]: Math.min(280, needed) };
+    });
+  };
 
   // Safety net — cross-check the backend's `meals_saved` against the local
   // count of reservations that actually reached a "picked_up" state. The
@@ -262,6 +296,16 @@ export default function ProfileScreen() {
   // screens preserve scroll position across navigation, so without this the
   // halo can land at the pre-scroll y of the credits row.)
   const mainScrollRef = useRef<ScrollView>(null);
+  // Belt-and-braces: also reset at the MOMENT the demo arms (under the
+  // welcome cover), not only when the credits step is reached. Covers the
+  // case where the user scrolled profile down, triggered the demo, and the
+  // demo touches profile via an earlier step than walletBalance — that
+  // earlier step would otherwise inherit the pre-demo scroll offset.
+  const demoSequencePending = useWalkthroughStore((s) => s.demoSequencePending);
+  useEffect(() => {
+    if (!demoSequencePending) return;
+    mainScrollRef.current?.scrollTo({ y: 0, animated: false });
+  }, [demoSequencePending]);
   const walkthroughKey = useWalkthroughStore((s) => s.currentStep?.measureKey);
   useEffect(() => {
     if (walkthroughKey !== 'walletBalance') return;
@@ -280,7 +324,6 @@ export default function ProfileScreen() {
     return () => clearTimeout(t);
   }, [walkthroughKey]);
 
-  const [showAllLeaderboard, setShowAllLeaderboard] = useState(false);
   const leaderboardScrollRef = useRef<ScrollView>(null);
 
   const myLeaderboardIndex = useMemo(() => {
@@ -288,17 +331,63 @@ export default function ProfileScreen() {
     return entries.findIndex((e) => String(e.user_id) === String(user?.id));
   }, [leaderboardQuery.data, user?.id]);
 
+  // Profile-page leaderboard preview = at most 5 rows centered on the user,
+  // or top 5 if they're near the top. The "Voir plus" button below the
+  // preview routes to the full /leaderboard screen instead of expanding
+  // inline — so there's no expand/collapse state on this surface anymore.
   const leaderboardData = useMemo(() => {
     const entries = leaderboardQuery.data ?? [];
-    if (showAllLeaderboard) return entries;
-    // Collapsed: show user ±2 (5 entries centered on user, or top 5 if user is near top)
     if (myLeaderboardIndex >= 0) {
       const start = Math.max(0, myLeaderboardIndex - 2);
       const end = Math.min(entries.length, start + 5);
       return entries.slice(start, end);
     }
     return entries.slice(0, 5);
-  }, [leaderboardQuery.data, showAllLeaderboard, myLeaderboardIndex]);
+  }, [leaderboardQuery.data, myLeaderboardIndex]);
+
+  // Leaderboard privacy: a single opt-in switch controls BOTH appearing on the
+  // leaderboard and being allowed to view it (reciprocity). Defaults to true
+  // (visible) to preserve existing behaviour; users can opt out here or in
+  // Settings. Source of truth is the backend (`show_in_leaderboard`), surfaced
+  // through the gamification-stats query.
+  const queryClient = useQueryClient();
+  // Local optimistic override — when set, takes priority over the server
+  // snapshot so the Switch reflects the user's intent immediately on tap
+  // and stays put while the PUT is in flight. Reset to null when the
+  // server confirms (or when we accept the previous server state on
+  // error). Without this, every transient Network Error would snap the
+  // toggle back to the previous position before the user could read the
+  // alert, which the user reported as "the toggle keeps failing".
+  const [optimisticVisible, setOptimisticVisible] = useState<boolean | null>(null);
+  const serverVisible = (gamificationQuery.data as any)?.show_in_leaderboard !== false;
+  const leaderboardVisible = optimisticVisible ?? serverVisible;
+  const [visibilitySaving, setVisibilitySaving] = useState(false);
+  const handleToggleLeaderboard = useCallback(async (next: boolean) => {
+    setOptimisticVisible(next);
+    setVisibilitySaving(true);
+    try {
+      await updateLeaderboardVisibility(next);
+      // Server accepted — invalidate so the next render reads the fresh
+      // server snapshot, then drop the local override.
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['gamification-stats'] }),
+        queryClient.invalidateQueries({ queryKey: ['leaderboard'] }),
+      ]);
+      setOptimisticVisible(null);
+    } catch (err: any) {
+      // Tear down the optimistic state so the Switch snaps back to the
+      // server's actual position. Prefer the specific backend message via
+      // getErrorMessage; suffix with HTTP status when api.ts attached one
+      // so persistent infra issues stay diagnosable.
+      setOptimisticVisible(null);
+      const status = err?.status ?? err?.response?.status;
+      const base = getErrorMessage(err);
+      const detail = status ? `${base} (${status})` : base;
+      Alert.alert(t('common.error'), detail);
+    } finally {
+      setVisibilitySaving(false);
+    }
+  }, [queryClient, t]);
 
   const FOOD_PREFS = ['Vegetarian', 'Vegan', 'Halal', 'Gluten Free', 'Nut Allergy', 'Lactose Free', 'Shellfish Allergy', 'No Pork'];
   const FOOD_PREF_KEY_MAP: Record<string, string> = {
@@ -317,22 +406,8 @@ export default function ProfileScreen() {
       await updateFoodPreferences(selectedPrefs);
       setToastMsg({ type: 'success', text: t('profile.preferencesUpdated') });
       setShowPrefsModal(false);
-    } catch {
-      setToastMsg({ type: 'error', text: t('common.errorOccurred') });
-    }
-  };
-
-  const handleSaveProfile = async () => {
-    setSaveLoading(true);
-    try {
-      await updateUserProfile({ name: editName.trim(), gender: editGender ?? undefined });
-      setUser({ ...user!, name: editName.trim(), gender: editGender });
-      setToastMsg({ type: 'success', text: t('profile.profileUpdated') });
-      setIsEditing(false);
-    } catch (err: any) {
+    } catch (err) {
       setToastMsg({ type: 'error', text: getErrorMessage(err) });
-    } finally {
-      setSaveLoading(false);
     }
   };
 
@@ -341,9 +416,6 @@ export default function ProfileScreen() {
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]} edges={['top']}>
-      <StatusBar style="dark" />
-
-
       <ScrollView
         ref={mainScrollRef}
         style={styles.content}
@@ -373,15 +445,31 @@ export default function ProfileScreen() {
           ]}
         >
           <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-            <View style={[styles.userAvatar, { backgroundColor: 'rgba(255,255,255,0.18)', borderRadius: 30, width: 60, height: 60, borderWidth: 2, borderColor: 'rgba(255,255,255,0.35)' }]}>
-              <User size={28} color="#fff" />
+            {/* Initials avatar — replaces the generic User glyph.
+                Card is already brand-green (#114b3c via primary), so
+                we INVERT the requested palette to keep contrast: the
+                circle uses the lime accent (#e3ff5c) and the initials
+                are drawn in the same dark green. Same letters
+                everywhere (settings, business interface) — read as
+                "this is you" instantly. */}
+            <View style={[styles.userAvatar, { backgroundColor: '#e3ff5c', borderRadius: 30, width: 60, height: 60, borderWidth: 0, alignItems: 'center', justifyContent: 'center' }]}>
+              <Text style={{ color: '#114b3c', fontSize: 22, fontWeight: '700', fontFamily: 'Poppins_700Bold', letterSpacing: 0.5 }}>
+                {(() => {
+                  const raw = String(user?.name ?? '').trim();
+                  if (raw) {
+                    const parts = raw.split(/\s+/).filter(Boolean);
+                    const first = parts[0]?.charAt(0) ?? '';
+                    const last = parts.length > 1 ? (parts[parts.length - 1]?.charAt(0) ?? '') : '';
+                    const initials = (first + last).toUpperCase();
+                    if (initials) return initials;
+                  }
+                  return (user?.email ?? '?').charAt(0).toUpperCase();
+                })()}
+              </Text>
             </View>
             <View style={[styles.userInfo, { marginLeft: 14 }]}>
               <Text style={[{ color: '#fff', ...theme.typography.h2, fontFamily: 'Poppins_700Bold' }]} numberOfLines={1}>
                 {user?.name ?? 'Utilisateur'}
-              </Text>
-              <Text style={[{ color: 'rgba(255,255,255,0.72)', ...theme.typography.bodySm, marginTop: 2 }]} numberOfLines={1}>
-                {user?.email ?? ''}
               </Text>
             </View>
           </View>
@@ -470,7 +558,7 @@ export default function ProfileScreen() {
           </View>
           <View style={{ flex: 1, marginLeft: 14 }}>
             <Text style={{ color: theme.colors.textPrimary, fontSize: 15, fontWeight: '600' }}>{t('wallet.credits', { defaultValue: 'Crédits Barakeat' })}</Text>
-            <Text style={{ color: theme.colors.muted, fontSize: 12 }}>{t('wallet.earnCreditsShort', { defaultValue: 'Gagnez et utilisez des crédits' })}</Text>
+            <Text style={{ color: theme.colors.muted, fontSize: 12, marginTop: 3 }}>{t('wallet.earnCreditsShort', { defaultValue: 'Gagnez et utilisez des crédits' })}</Text>
           </View>
           <ChevronRight size={18} color={theme.colors.muted} />
         </TouchableOpacity>
@@ -542,6 +630,7 @@ export default function ProfileScreen() {
               const badgeName = badge.nameKey
                 ? t(`badges.${badge.nameKey}`, { defaultValue: badge.name ?? bid })
                 : badge.name ?? bid;
+              const badgeLabel = badge.unlocked ? badgeName : t('impact.locked');
               return (
                 <TouchableOpacity
                   key={badge.id}
@@ -555,7 +644,11 @@ export default function ProfileScreen() {
                       backgroundColor: theme.colors.surface,
                       borderRadius: theme.radii.r16,
                       padding: theme.spacing.lg,
-                      width: 100,
+                      // Pick the LARGER of the heuristic estimate and the
+                      // post-layout measured width — so the card always
+                      // fits the actual rendered text regardless of font
+                      // metrics on the current device.
+                      width: Math.max(badgeCardWidth(badgeLabel), badgeWidthOverrides[badge.id] ?? 0),
                       ...theme.shadows.shadowSm,
                     },
                   ]}
@@ -581,22 +674,24 @@ export default function ProfileScreen() {
                   <Text
                     numberOfLines={2}
                     textBreakStrategy="balanced"
+                    onTextLayout={handleBadgeTextLayout(badge.id, badgeLabel)}
                     style={[
                       {
                         color: badge.unlocked
                           ? theme.colors.textPrimary
                           : theme.colors.muted,
                         ...theme.typography.caption,
-                        // Uniform per-row fontSize — see the `badgeFontSize`
-                        // useMemo above for why this overrides caption.
-                        fontSize: badgeFontSize,
-                        lineHeight: badgeFontSize + 4,
+                        // Fixed caption size for every badge (matches the
+                        // impact-stat labels) — the card widens instead of the
+                        // text shrinking. See `badgeCardWidth` above.
+                        fontSize: BADGE_FONT_SIZE,
+                        lineHeight: BADGE_FONT_SIZE + 4,
                         marginTop: theme.spacing.sm,
                         textAlign: 'center' as const,
                       },
                     ]}
                   >
-                    {badge.unlocked ? badgeName : t('impact.locked')}
+                    {badgeLabel}
                   </Text>
                 </TouchableOpacity>
               );
@@ -606,19 +701,54 @@ export default function ProfileScreen() {
 
         {/* Leaderboard Section */}
         <View style={{ marginBottom: theme.spacing.lg }}>
-          <TouchableOpacity
-            onPress={() => router.push('/leaderboard' as any)}
-            accessibilityLabel={t('impact.leaderboard')}
-            accessibilityRole="button"
-            style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: theme.spacing.md }}
-          >
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: theme.spacing.md }}>
             <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3 }]}>
               {t('impact.leaderboard')}
             </Text>
-            <ChevronRight size={20} color={theme.colors.muted} />
-          </TouchableOpacity>
+            {leaderboardVisible && (
+              <TouchableOpacity
+                onPress={() => router.push('/leaderboard' as any)}
+                accessibilityLabel={t('impact.leaderboard')}
+                accessibilityRole="button"
+                hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}
+              >
+                <ChevronRight size={20} color={theme.colors.muted} />
+              </TouchableOpacity>
+            )}
+          </View>
 
-          {leaderboardQuery.isLoading ? (
+          {/* Opt-in/out switch — a single control gating BOTH appearing on the
+              leaderboard and viewing it. Kept subtle here (a plain muted row,
+              no card); the full disclosure lives in Settings > Privacy.
+              Margins are tighter than the standard spacing.md so the toggle
+              sits closer to the "Classement" subtitle above AND the leaderboard
+              table below — the previous breathing room made the section feel
+              fragmented. */}
+          <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: -theme.spacing.xs, marginBottom: theme.spacing.xs, paddingHorizontal: 2 }}>
+            <Text style={{ flex: 1, color: theme.colors.muted, ...theme.typography.caption, paddingRight: 10 }}>
+              {t('impact.leaderboardVisibility', { defaultValue: 'Apparaître dans le classement' })}
+            </Text>
+            <Switch
+              value={leaderboardVisible}
+              disabled={visibilitySaving}
+              onValueChange={handleToggleLeaderboard}
+              style={{ transform: [{ scale: 0.75 }] }}
+              trackColor={{ false: theme.colors.divider, true: theme.colors.primary }}
+              thumbColor={leaderboardVisible ? '#fff' : (Platform.OS === 'android' ? theme.colors.surface : undefined)}
+              ios_backgroundColor={theme.colors.divider}
+              accessibilityLabel={t('impact.leaderboardVisibility', { defaultValue: 'Apparaître dans le classement' })}
+              accessibilityRole="switch"
+            />
+          </View>
+
+          {!leaderboardVisible ? (
+            <View style={{ backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, padding: theme.spacing.xl, alignItems: 'center' as const, ...theme.shadows.shadowSm }}>
+              <Trophy size={32} color={theme.colors.muted} />
+              <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm, marginTop: theme.spacing.sm, textAlign: 'center' as const }}>
+                {t('impact.leaderboardHidden', { defaultValue: 'Activez le classement ci-dessus pour participer et voir où vous vous situez.' })}
+              </Text>
+            </View>
+          ) : leaderboardQuery.isLoading ? (
             <ActivityIndicator size="small" color={theme.colors.primary} />
           ) : leaderboardData.length === 0 ? (
             <View
@@ -656,17 +786,12 @@ export default function ProfileScreen() {
                 },
               ]}
             >
-              <ScrollView ref={leaderboardScrollRef} nestedScrollEnabled showsVerticalScrollIndicator={false} style={{ maxHeight: showAllLeaderboard ? 400 : undefined }}>
+              <ScrollView ref={leaderboardScrollRef} nestedScrollEnabled showsVerticalScrollIndicator={false}>
                 {leaderboardData.map((entry, index) => {
                   const isMe = String(entry.user_id) === String(user?.id);
                   return (
                     <View
                       key={`lb-${entry.user_id}-${index}`}
-                      onLayout={(e) => {
-                        if (isMe && showAllLeaderboard && leaderboardScrollRef.current) {
-                          leaderboardScrollRef.current.scrollTo({ y: Math.max(0, e.nativeEvent.layout.y - 80), animated: true });
-                        }
-                      }}
                       style={[
                         styles.leaderboardRow,
                         {
@@ -721,7 +846,7 @@ export default function ProfileScreen() {
                           ...theme.typography.bodySm,
                         }}
                       >
-                        {entry.meals_saved} {t('impact.meals')}
+                        {entry.meals_saved} {entry.meals_saved === 1 ? t('impact.basket', { defaultValue: 'panier' }) : t('impact.baskets', { defaultValue: 'paniers' })}
                       </Text>
                     </View>
                   );
@@ -736,12 +861,12 @@ export default function ProfileScreen() {
                     borderTopColor: theme.colors.divider,
                     alignItems: 'center' as const,
                   }}
-                  onPress={() => setShowAllLeaderboard(!showAllLeaderboard)}
-                  accessibilityLabel={showAllLeaderboard ? t('impact.showLess', { defaultValue: 'Show Less' }) : t('impact.showMore')}
+                  onPress={() => router.push('/leaderboard' as any)}
+                  accessibilityLabel={t('impact.showMore')}
                   accessibilityRole="button"
                 >
                   <Text style={{ color: theme.colors.primary, ...theme.typography.button }}>
-                    {showAllLeaderboard ? t('impact.showLess', { defaultValue: 'Show Less' }) : t('impact.showMore')}
+                    {t('impact.showMore')}
                   </Text>
                 </TouchableOpacity>
               )}
@@ -765,20 +890,7 @@ export default function ProfileScreen() {
             <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3 }]}>
               {t('profile.personalInfo')}
             </Text>
-            {!isEditing && (
-              <TouchableOpacity
-                onPress={() => {
-                  setEditName(user?.name ?? '');
-                  setEditGender((user as any)?.gender ?? null);
-                  setIsEditing(true);
-                }}
-                accessibilityLabel={t('profile.editProfile')}
-                accessibilityRole="button"
-                style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}
-              >
-                <EditIcon8 size={16} />
-              </TouchableOpacity>
-            )}
+            {/* Read-only: name + gender are edited from Settings → identity card. */}
           </View>
           {/* Name row */}
           <View
@@ -793,23 +905,11 @@ export default function ProfileScreen() {
               <User size={18} color={theme.colors.textSecondary} />
               <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.bodySm, marginLeft: 10 }]}>
                 {t('profile.name')}
-                {isEditing ? <Text style={{ color: theme.colors.error }}> *</Text> : null}
               </Text>
             </View>
-            {isEditing ? (
-              <TextInput
-                style={{ flex: 1, textAlign: 'right', color: theme.colors.textPrimary, ...theme.typography.bodySm, backgroundColor: theme.colors.bg, borderRadius: theme.radii.r12, paddingHorizontal: 12, paddingVertical: 6, marginLeft: 8 }}
-                value={editName}
-                onChangeText={setEditName}
-                placeholder={t('profile.name')}
-                placeholderTextColor={theme.colors.muted}
-                accessibilityLabel={t('profile.name')}
-              />
-            ) : (
-              <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '500' as const }]}>
-                {user?.name ?? '-'}
-              </Text>
-            )}
+            <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '500' as const }]}>
+              {user?.name ?? '-'}
+            </Text>
           </View>
           {/* Email row */}
           <View
@@ -826,9 +926,22 @@ export default function ProfileScreen() {
                 {t('profile.email')}
               </Text>
             </View>
-            <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '500' as const }]}>
-              {user?.email ?? '-'}
-            </Text>
+            {/* Truncated by default with a comfortable gap from the "Email"
+                label; tap to expand the full address (e.g. a long private-relay
+                email) and tap again to collapse. */}
+            <TouchableOpacity
+              onPress={() => setEmailExpanded((v) => !v)}
+              activeOpacity={0.7}
+              style={{ flexShrink: 1, marginLeft: 24 }}
+            >
+              <Text
+                style={[{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '500' as const, textAlign: 'right' as const }]}
+                numberOfLines={emailExpanded ? undefined : 1}
+                ellipsizeMode="middle"
+              >
+                {user?.email ?? '-'}
+              </Text>
+            </TouchableOpacity>
           </View>
           {/* Gender row — optional */}
           <View
@@ -845,74 +958,12 @@ export default function ProfileScreen() {
                 {t('profile.gender', { defaultValue: 'Gender' })}
               </Text>
             </View>
-            {isEditing ? (
-              <View style={{ flexDirection: 'row', gap: 6 }}>
-                {[
-                  { key: null, label: '-' },
-                  { key: 'male', label: t('profile.genderMale', { defaultValue: 'Male' }) },
-                  { key: 'female', label: t('profile.genderFemale', { defaultValue: 'Female' }) },
-                ].map((opt) => (
-                  <TouchableOpacity
-                    key={opt.key ?? 'none'}
-                    onPress={() => setEditGender(opt.key)}
-                    accessibilityLabel={opt.label}
-                    accessibilityRole="button"
-                    accessibilityState={{ selected: editGender === opt.key }}
-                    style={{
-                      paddingHorizontal: 12,
-                      paddingVertical: 6,
-                      borderRadius: theme.radii.pill,
-                      backgroundColor: editGender === opt.key ? theme.colors.primary + '18' : theme.colors.bg,
-                      borderWidth: editGender === opt.key ? 1.5 : 1,
-                      borderColor: editGender === opt.key ? theme.colors.primary : theme.colors.divider,
-                    }}
-                  >
-                    <Text style={{
-                      color: editGender === opt.key ? theme.colors.primary : theme.colors.textPrimary,
-                      ...theme.typography.caption,
-                      fontWeight: editGender === opt.key ? '600' : '400',
-                    }}>
-                      {opt.label}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-            ) : (
-              <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '500' as const }]}>
-                {(user as any)?.gender === 'male' ? t('profile.genderMale', { defaultValue: 'Male' })
-                  : (user as any)?.gender === 'female' ? t('profile.genderFemale', { defaultValue: 'Female' })
-                  : t('profile.genderNotSet', { defaultValue: 'Not set' })}
-              </Text>
-            )}
+            <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '500' as const }]}>
+              {(user as any)?.gender === 'male' ? t('profile.genderMale', { defaultValue: 'Male' })
+                : (user as any)?.gender === 'female' ? t('profile.genderFemale', { defaultValue: 'Female' })
+                : t('profile.genderNotSet', { defaultValue: 'Not set' })}
+            </Text>
           </View>
-          {/* Save / Cancel buttons when editing */}
-          {isEditing && (
-            <View style={{ flexDirection: 'row', justifyContent: 'flex-end', gap: 10, paddingHorizontal: theme.spacing.lg, paddingVertical: theme.spacing.md, borderTopWidth: 1, borderTopColor: theme.colors.divider }}>
-              <TouchableOpacity
-                onPress={() => setIsEditing(false)}
-                accessibilityLabel={t('common.cancel')}
-                accessibilityRole="button"
-                style={{ flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 14, paddingVertical: 8, borderRadius: theme.radii.r12, backgroundColor: theme.colors.bg, borderWidth: 1, borderColor: theme.colors.divider }}
-              >
-                <X size={16} color={theme.colors.textSecondary} />
-                <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.bodySm }]}>
-                  {t('common.cancel')}
-                </Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                onPress={handleSaveProfile}
-                disabled={saveLoading}
-                accessibilityLabel={saveLoading ? t('common.loading') : t('common.save')}
-                accessibilityRole="button"
-                style={{ flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 14, paddingVertical: 8, borderRadius: theme.radii.r12, backgroundColor: theme.colors.primary, opacity: saveLoading ? 0.5 : 1 }}
-              >
-                <Check size={16} color="#fff" />
-                <Text style={[{ color: '#fff', ...theme.typography.bodySm, fontWeight: '600' as const }]}>
-                  {saveLoading ? t('common.loading') : t('common.save')}
-                </Text>
-              </TouchableOpacity>
-            </View>
-          )}
         </View>
 
         {/* Food Preferences — hidden unless feature flag is enabled */}
@@ -1075,7 +1126,10 @@ export default function ProfileScreen() {
                 return (
                   <View style={{ width: '100%', paddingVertical: theme.spacing.md, paddingHorizontal: theme.spacing.sm }}>
                     <Text style={{ color: theme.colors.textPrimary, ...theme.typography.body, textAlign: 'center', lineHeight: 22 }}>
-                      {t(`impact.copy.${statModal}.${tier}`, { value: valueStr })}
+                      {/* `count` drives i18next singular/plural — only the baskets
+                          "low" tier has _one/_other variants (1 panier vs paniers);
+                          the other copies fall back to their base key. */}
+                      {t(`impact.copy.${statModal}.${tier}`, { value: valueStr, count: value })}
                     </Text>
                   </View>
                 );
@@ -1139,23 +1193,27 @@ export default function ProfileScreen() {
             >
               <X size={18} color={theme.colors.textSecondary} />
             </TouchableOpacity>
-            {badgeModal && (() => {
-              const bid = badgeModal.badge_id ?? badgeModal.id;
-              const BadgeIcon = badgeModal.unlocked ? getBadgeIcon(bid) : Lock;
-              const badgeName = badgeModal.nameKey
-                ? t(`badges.${badgeModal.nameKey}`, { defaultValue: badgeModal.name ?? bid })
-                : badgeModal.name ?? bid;
+            {(() => {
+              // Render from the sticky value so the card stays populated while
+              // the modal fades closed (see lastBadgeRef above).
+              const bm = badgeModal ?? lastBadgeRef.current;
+              if (!bm) return null;
+              const bid = bm.badge_id ?? bm.id;
+              const BadgeIcon = bm.unlocked ? getBadgeIcon(bid) : Lock;
+              const badgeName = bm.nameKey
+                ? t(`badges.${bm.nameKey}`, { defaultValue: bm.name ?? bid })
+                : bm.name ?? bid;
               return (
                 <>
-                  <View style={{ width: 72, height: 72, borderRadius: 36, backgroundColor: badgeModal.unlocked ? theme.colors.primary + '15' : theme.colors.divider, justifyContent: 'center', alignItems: 'center', marginBottom: theme.spacing.lg }}>
-                    <BadgeIcon size={32} color={badgeModal.unlocked ? theme.colors.primary : theme.colors.muted} />
+                  <View style={{ width: 72, height: 72, borderRadius: 36, backgroundColor: bm.unlocked ? theme.colors.primary + '15' : theme.colors.divider, justifyContent: 'center', alignItems: 'center', marginBottom: theme.spacing.lg }}>
+                    <BadgeIcon size={32} color={bm.unlocked ? theme.colors.primary : theme.colors.muted} />
                   </View>
                   <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, textAlign: 'center', marginBottom: theme.spacing.sm }]}>
-                    {badgeModal.unlocked ? badgeName : t('impact.locked')}
+                    {bm.unlocked ? badgeName : t('impact.locked')}
                   </Text>
                   <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.bodySm, textAlign: 'center' }]}>
-                    {badgeModal.unlocked
-                      ? (badgeModal.descKey ? t(`badges.${badgeModal.descKey}`, { defaultValue: t('badges.newBadge') }) : t('badges.newBadge'))
+                    {bm.unlocked
+                      ? (bm.descKey ? t(`badges.${bm.descKey}`, { defaultValue: t('badges.newBadge') }) : t('badges.newBadge'))
                       : t('badges.lockedDesc')}
                   </Text>
                 </>
@@ -1333,7 +1391,7 @@ export default function ProfileScreen() {
             <View style={{ backgroundColor: toastMsg?.type === 'success' ? '#114b3c18' : '#ef444418', width: 56, height: 56, borderRadius: 28, justifyContent: 'center', alignItems: 'center', marginBottom: 16 }}>
               {toastMsg?.type === 'success'
                 ? <CheckCircle2 size={28} color="#114b3c" />
-                : <XCircle size={28} color="#ef4444" />}
+                : <BarakeatErrorIcon size={28} color="#ef4444" />}
             </View>
             <Text style={{ color: '#1a1a1a', fontSize: 18, fontWeight: '700', fontFamily: 'Poppins_700Bold', textAlign: 'center', marginBottom: 10 }}>
               {toastMsg?.type === 'success' ? t('common.success') : t('auth.error')}

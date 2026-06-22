@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, Switch, Alert } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, Switch, Alert, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
@@ -62,6 +62,13 @@ export default function PermissionsScreen() {
     queryFn: () => fetchOrganizationDetails(orgId!),
     enabled: !!orgId,
     staleTime: 30_000,
+    // ALWAYS refetch on mount — when the user demotes someone from admin to
+    // member on the team / member-detail screen and then opens this page,
+    // they expect the toggles to immediately reflect the new role (un-faded,
+    // editable). Without this, the page can render cached "admin" data
+    // until the next stale check and the toggles look locked until the
+    // user taps one.
+    refetchOnMount: 'always',
   });
 
   const currentMember = useMemo(() => {
@@ -120,6 +127,8 @@ export default function PermissionsScreen() {
   const [hydrated, setHydrated] = useState(false);
   const [saving, setSaving] = useState(false);
 
+  // Initial hydration — pull perms out of the org-details cache into local
+  // toggle state. Runs once per mount.
   useEffect(() => {
     if (hydrated || !currentMember) return;
     if (isTargetAdmin) {
@@ -139,6 +148,37 @@ export default function PermissionsScreen() {
     }
     setHydrated(true);
   }, [currentMember, isTargetOrgAdmin, hydrated]);
+
+  // Re-sync local state when admin status FLIPS while the page is open
+  // (e.g. user opened the page when the member was admin, then the
+  // background org-details refetch landed showing the member is now a
+  // plain member). Without this, the visual opacity / disabled flag flip
+  // off via isTargetAdmin, but the toggle values stayed at ALL_PERMS
+  // (= the all-on snapshot from the admin hydration) — so the toggles
+  // looked editable but every value read as "on". Reading freshly from
+  // currentMember.permissions makes the visual match the saved state.
+  const prevIsTargetAdminRef = React.useRef(isTargetAdmin);
+  useEffect(() => {
+    const prev = prevIsTargetAdminRef.current;
+    prevIsTargetAdminRef.current = isTargetAdmin;
+    if (!hydrated || !currentMember) return;
+    if (prev === isTargetAdmin) return;
+    if (isTargetAdmin) {
+      setPermsState(ALL_PERMS);
+    } else {
+      const raw = currentMember?.permissions ?? {};
+      const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+      setPermsState({
+        confirm_pickup: permStringToBool(parsed?.confirm_pickup),
+        edit_quantities: permStringToBool(parsed?.edit_quantities),
+        edit_basket_info: permStringToBool(parsed?.edit_basket_info),
+        create_delete_baskets: permStringToBool(parsed?.create_delete_baskets),
+        view_history: permStringToBool(parsed?.view_history),
+        messaging: permStringToBool(parsed?.messaging),
+        cancel_order: permStringToBool(parsed?.cancel_order),
+      });
+    }
+  }, [isTargetAdmin, currentMember, hydrated]);
 
   const permissionLabels: { key: PermissionKey; label: string; desc: string }[] = [
     { key: 'confirm_pickup', label: t('business.profile.permConfirmPickup', { defaultValue: 'Confirmer les retraits' }), desc: t('business.profile.permConfirmPickupDesc', { defaultValue: "Scanner le QR / saisir le code pour confirmer le retrait d'un client" }) },
@@ -250,8 +290,15 @@ export default function PermissionsScreen() {
                         if (!isTargetAdmin) setPermsState((prev) => ({ ...prev, [key]: val }));
                       }}
                       disabled={isTargetAdmin}
-                      trackColor={{ false: theme.colors.divider, true: theme.colors.primary + '50' }}
-                      thumbColor={displayValue ? theme.colors.primary : theme.colors.muted}
+                      // Mirrors the Switch styling used in /settings — solid
+                      // primary track on, neutral divider track off, white
+                      // thumb on, surface thumb off (Android only — iOS keeps
+                      // the native thumb default). The previous translucent
+                      // (primary + '50') track + colored thumb pattern was
+                      // out of step with the rest of the app's toggles.
+                      trackColor={{ false: theme.colors.divider, true: theme.colors.primary }}
+                      thumbColor={displayValue ? '#fff' : (Platform.OS === 'android' ? theme.colors.surface : undefined)}
+                      ios_backgroundColor={theme.colors.divider}
                     />
                   </View>
                   <Text style={{ color: displayValue ? theme.colors.textSecondary : theme.colors.muted, fontSize: 12, lineHeight: 17, marginTop: 4 }}>

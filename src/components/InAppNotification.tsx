@@ -8,6 +8,7 @@ import { View, Text, TouchableOpacity, Animated, Dimensions } from 'react-native
 import { ChevronRight, ChevronLeft as ChevronLeftIcon, Bell } from 'lucide-react-native';
 import { useNotificationStore } from '@/src/stores/notificationStore';
 import { NotificationDetail } from '@/src/components/NotificationDetail';
+import { SpeechBubblePopup } from '@/src/components/SpeechBubblePopup';
 import { PaperSurface } from '@/src/components/ui/PaperSurface';
 import { useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
@@ -58,11 +59,16 @@ export function InAppNotification() {
   }, [hasPopups, popupQueue.length]);
 
   const handleDismiss = () => {
+    // Same dismissal contract as handleAction: flip the local gate
+    // synchronously so the popup unmounts on the next render commit,
+    // even if the fade-out animation's completion callback never fires
+    // (which can happen if the parent removes us from the tree first —
+    // a real race we hit before). The visual fade still runs for users
+    // whose device commits fast enough to see the intermediate frames.
     consumeAllQueued();
-    Animated.parallel([
-      Animated.timing(scaleAnim, { toValue: 0.85, duration: 150, useNativeDriver: true }),
-      Animated.timing(opacityAnim, { toValue: 0, duration: 150, useNativeDriver: true }),
-    ]).start(() => clearPopups());
+    clearPopups();
+    opacityAnim.setValue(0);
+    scaleAnim.setValue(0.85);
   };
 
   const currentNotif = popupQueue[currentIdx];
@@ -76,7 +82,38 @@ export function InAppNotification() {
   const demoOrderActive = useWalkthroughStore((s) => s.demoOrderActive);
   const isDemoNotif = demoOrderActive && currentNotif && (currentNotif as any).id < 0;
 
+  // Local dismissal flag — flipped on the FIRST tap of either action or
+  // close. As long as it's true, the component returns null regardless of
+  // what the popupQueue store state is. The store update from clearPopups
+  // arrives on its own schedule (zustand subscribers re-render on the next
+  // React commit), and on Android the navigation push from a tap on
+  // "Voir la commande" can grab the JS thread before that commit lands —
+  // so even though the queue cleared, the popup paints for another frame
+  // or two, the action button stays hit-testable, and the user reports
+  // "I had to press twice/thrice". Owning the unmount locally with a
+  // setState that flips synchronously inside the handler closes that gap:
+  // React schedules a re-render with `dismissed: true` immediately, the
+  // gate at the top of render returns null on the next commit, and the
+  // tree unmounts before a second tap can land.
+  const [dismissed, setDismissed] = useState(false);
+  // Reset the flag whenever a fresh popup arrives so it doesn't sticky-shut
+  // future popups. `hasPopups` flipping from false → true is the signal
+  // that the queue has new content to show.
+  useEffect(() => {
+    if (hasPopups) setDismissed(false);
+  }, [hasPopups]);
+
   const handleAction = () => {
+    if (dismissed) return;
+    // Flip the gate synchronously so the next render returns null.
+    setDismissed(true);
+    // Belt-and-braces: collapse the popup visually in the SAME frame as
+    // the tap, regardless of when the render commit lands. `setValue` on
+    // the native-driver Animated values syncs the on-screen view to 0
+    // opacity immediately, so even on a janky frame the popup can't be
+    // seen (or tapped again) between the tap and the unmount.
+    opacityAnim.setValue(0);
+    scaleAnim.setValue(0.85);
     if (isDemoNotif) {
       // Advance the walkthrough past the orders-tab step on the same tap
       // that dismisses the popup. Without this the user would have to tap
@@ -103,10 +140,47 @@ export function InAppNotification() {
       }
     } else if (notifType.includes('new_reservation') || notifType.includes('order_confirmed') || notifType.includes('cancelled')) {
       const refId = currentNotif?.reference_id;
+      const isCancelledNotif = notifType.includes('cancelled');
       if (isBusiness && refId) {
-        useBusinessStore.getState().setTargetOrder(String(refId), null);
+        // Business: setTargetOrder + the incoming-orders screen auto-
+        // switches to the right tab based on the target's status. Pulls
+        // location_id out of the notif's `message` JSON params (same
+        // shape every other branch below uses — basket_picked_up,
+        // /review, etc.) so the incoming-orders deep-link handler can
+        // switch to the correct venue BEFORE looking for the order.
+        // Previous code passed `null` here unconditionally, which left
+        // the user on whatever location they had selected — typically
+        // the wrong one for a multi-location merchant, and the order
+        // expand-loop would then exhaust its 8 retries silently.
+        let msgP: any = {};
+        try { const p = JSON.parse(currentNotif?.message ?? ''); if (p?.params) msgP = p.params; } catch {}
+        const locId = msgP.location_id ?? msgP.locationId ?? null;
+        useBusinessStore.getState().setTargetOrder(String(refId), locId);
+        router.push('/(business)/incoming-orders');
+      } else if (!isBusiness && isCancelledNotif) {
+        // Customer cancelled notif → land on the "issues" (problems) tab so
+        // the cancelled order is visible, instead of the empty "upcoming"
+        // tab (the cancelled order no longer lives there).
+        // `target` carries the cancelled reservation id; the orders screen
+        // scrolls + highlights it (red border) on arrival.
+        router.push({
+          pathname: '/(tabs)/orders',
+          params: { tab: 'issues', target: refId ? String(refId) : '' },
+        } as never);
+      } else if (!isBusiness && refId) {
+        // Customer order-confirmed / new-reservation notif → mirror the
+        // post-reservation "Voir la commande" popup behaviour: target the
+        // freshly-confirmed reservation in the upcoming tab so the orders
+        // screen scrolls + auto-expands the matching card. tab=upcoming
+        // (NOT issues) tells the orders screen to skip the red border —
+        // this is a positive landing.
+        router.push({
+          pathname: '/(tabs)/orders',
+          params: { tab: 'upcoming', target: String(refId) },
+        } as never);
+      } else {
+        router.push(isBusiness ? '/(business)/incoming-orders' : '/(tabs)/orders');
       }
-      router.push(isBusiness ? '/(business)/incoming-orders' : '/(tabs)/orders');
     } else if (isBusiness && (notifType.includes('basket_picked_up') || notifType.includes('picked_up') || notifType.includes('collected'))) {
       // Business "panier récupéré" popup → land on the exact completed
       // order. The incoming-orders screen reads `targetOrderId` + the
@@ -160,7 +234,42 @@ export function InAppNotification() {
     router.push({ pathname: '/notifications', params: { openId: String(id) } } as never);
   };
 
-  if (!hasPopups || !currentNotif) return null;
+  if (dismissed || !hasPopups || !currentNotif) return null;
+
+  // Message / reply notifs short-circuit the centered carousel and render
+  // a SpeechBubblePopup instead — rectangular bubble that springs from
+  // the chat icon (origin pulled from the notification store, set by the
+  // business header's onLayout; customer falls back to the default
+  // top-right spawn point). Same dismiss / acknowledge plumbing as the
+  // regular popup; we just swap the visual.
+  const currentType = (currentNotif?.type ?? '').toLowerCase();
+  const isMessageNotif = currentType.includes('message') || currentType.includes('reply');
+  const chatIconOrigin = useNotificationStore.getState().chatIconOrigin;
+
+  if (isMessageNotif) {
+    return (
+      <SpeechBubblePopup
+        notif={currentNotif}
+        theme={theme}
+        t={t}
+        isBusiness={isBusiness}
+        origin={chatIconOrigin ?? undefined}
+        onClose={handleDismiss}
+        onAction={handleAction}
+      />
+    );
+  }
+
+  // Reserve room for whatever chrome we draw ABOVE the NotificationDetail
+  // card so the card's internal ScrollView shrinks to fit on smaller phones
+  // and the action button never slips under the system home indicator.
+  // - Demo instruction banner (PaperSurface): ~76 px (padding 12*2 + line
+  //   height ~36 + marginBottom 10) when `isDemoNotif`.
+  // - Carousel indicator (chevron row): ~36 px when `popupQueue.length > 1`
+  //   AND not demo.
+  let outerReservedHeight = 0;
+  if (isDemoNotif) outerReservedHeight = 90;
+  else if (popupQueue.length > 1) outerReservedHeight = 40;
 
   return (
     <Animated.View
@@ -232,15 +341,19 @@ export function InAppNotification() {
             isBusiness={isBusiness}
             onClose={handleDismiss}
             onAction={handleAction}
+            outerReservedHeight={outerReservedHeight}
             demoHighlightAction={!!isDemoNotif}
             topRightAction={
               !isDemoNotif && popupQueue.length === 1 ? (
+                // Bell shortcut sits in the new green title bar — soft-white
+                // pill matches the close button next to it so the icons read
+                // as a pair against the brand green.
                 <TouchableOpacity
                   onPress={() => goToNotif(currentNotif.id)}
-                  style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: theme.colors.surfaceMuted, justifyContent: 'center', alignItems: 'center' }}
+                  style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: 'rgba(255,255,255,0.18)', justifyContent: 'center', alignItems: 'center' }}
                   hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                 >
-                  <Bell size={18} color={theme.colors.textSecondary} />
+                  <Bell size={18} color="#fff" />
                 </TouchableOpacity>
               ) : null
             }

@@ -12,13 +12,29 @@ export interface SavedAddress {
 interface AddressState {
   addresses: SavedAddress[];
   selectedId: string | null;
+  // Transient demo-only location (e.g. "Grand Tunis"). NOT persisted, NOT sent
+  // to the backend, and NOT part of `addresses` — it exists purely so that, while
+  // a customer explores demo mode without a real saved address, restaurant cards
+  // still show a distance and the map can center. Cleared when the demo ends.
+  demoAddress: SavedAddress | null;
   hydrated: boolean;
   hydrate: () => Promise<void>;
   addAddress: (addr: Omit<SavedAddress, 'id'>) => Promise<void>;
   updateAddress: (id: string, update: Partial<Omit<SavedAddress, 'id'>>) => Promise<void>;
   removeAddress: (id: string) => Promise<void>;
   selectAddress: (id: string | null) => void;
+  setDemoAddress: (addr: SavedAddress | null) => void;
+  clearDemoAddress: () => void;
 }
+
+/**
+ * The address screens should use for distance/map: the transient demo address
+ * if one is active, otherwise the user's selected saved address. The real
+ * address EDITORS (address-picker, etc.) must keep reading `addresses`/
+ * `selectedId` directly so the demo override never leaks into them.
+ */
+export const selectEffectiveAddress = (s: AddressState): SavedAddress | null =>
+  s.demoAddress ?? s.addresses.find((a) => a.id === s.selectedId) ?? null;
 
 const STORAGE_KEY = '@barakeat_addresses';
 const SELECTED_KEY = '@barakeat_selected_address';
@@ -32,6 +48,7 @@ function cacheLocally(addresses: SavedAddress[], selectedId: string | null) {
 export const useAddressStore = create<AddressState>((set, get) => ({
   addresses: [],
   selectedId: null,
+  demoAddress: null,
   hydrated: false,
 
   hydrate: async () => {
@@ -118,4 +135,8 @@ export const useAddressStore = create<AddressState>((set, get) => ({
       void apiClient.put(`/api/users/addresses/${id}/select`).catch(() => {});
     }
   },
+
+  // Transient demo location — in-memory only, never cached or sent to the API.
+  setDemoAddress: (addr) => set({ demoAddress: addr }),
+  clearDemoAddress: () => set({ demoAddress: null }),
 }));

@@ -5,7 +5,7 @@
 import React from 'react';
 import { View, Text, TouchableOpacity, ScrollView, Image, Linking, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { ShoppingBag, Star, XCircle, Bell, CheckCircle, Clock, MapPin, Navigation, User, MessageCircle, Zap, Flame, X as XIcon } from 'lucide-react-native';
+import { ShoppingBag, Star, XCircle, Bell, CheckCircle, Clock, MapPin, Navigation, User, MessageCircle, Zap, Flame, X as XIcon, Banknote, CreditCard, Info } from 'lucide-react-native';
 import { PaperSurface } from '@/src/components/ui/PaperSurface';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { NotificationFromAPI } from '@/src/services/notifications';
@@ -13,11 +13,18 @@ import { fetchLocationById } from '@/src/services/restaurants';
 import { fetchOrganization } from '@/src/services/teams';
 import { motifDisplay, type MotifAuthor } from '@/src/utils/motif';
 import { MotifText } from '@/src/components/MotifText';
+import { orderIdToCode } from '@/src/utils/orderCode';
+import { adminBroadcastContent } from '@/src/utils/adminBroadcast';
 
 function resolveNotifText(
   raw: string | null | undefined,
   t: (key: string, opts?: Record<string, unknown>) => string,
-  fallback = ''
+  fallback = '',
+  // Override values for specific interpolation params. The caller injects
+  // `location: "Org Name - Location Name"` here once it has resolved the
+  // org context, so EVERY notif title/body gets the org-prefixed location
+  // string regardless of which i18n key fires.
+  overrideParams: Record<string, unknown> = {},
 ): string {
   if (!raw) return fallback;
   try {
@@ -34,6 +41,11 @@ function resolveNotifText(
       if (params.count == null) {
         params.count = params.quantity ?? params.qty ?? params.streak ?? params.rating;
       }
+      // Caller overrides win — non-empty values only, so an override of ''
+      // doesn't blank out a legitimate fallback location string.
+      for (const [k, v] of Object.entries(overrideParams)) {
+        if (v != null && v !== '') params[k] = v;
+      }
       const i18nKey = `notifications.${parsed.key}`;
       const translated = t(i18nKey, params);
       return translated !== i18nKey ? translated : fallback;
@@ -46,6 +58,28 @@ function resolveNotifText(
   // the demo walkthrough's notification popup), don't render blank. Render
   // the raw text itself — it's better than an empty card.
   return raw || fallback;
+}
+
+// Build the canonical "Org — Location" display string. Returns just one
+// side if the other is missing, and never returns a dash with empty
+// halves. Used everywhere a notif surface needs to refer to "the place".
+//
+// Defensive strip: when locationName already starts with "<orgName> - "
+// (the /api/locations endpoint's `display_name` field IS pre-joined
+// "Org Name - Location Name"; older notif payloads may also carry that
+// compound form in `locationName`), peel the org prefix off so we don't
+// emit "Org - Org - Location". The user reported this triple-name leak in
+// every notif popup that fell back to display_name when location_name
+// wasn't on the row.
+function formatOrgLocation(orgName?: string | null, locationName?: string | null): string {
+  const o = orgName?.trim() ?? '';
+  let l = locationName?.trim() ?? '';
+  if (o && l) {
+    const prefix = `${o} - `;
+    if (l.startsWith(prefix)) l = l.slice(prefix.length);
+  }
+  if (o && l && o !== l) return `${o} - ${l}`;
+  return o || l || '';
 }
 
 function timeAgo(dateStr: string, t: any): string {
@@ -67,6 +101,8 @@ function getNotifIcon(type?: string | null, title?: string | null) {
     return { Icon: ShoppingBag, color: '#114b3c', bg: '#114b3c18' };
   if (key.includes('basket_picked_up'))
     return { Icon: CheckCircle, color: '#22c55e', bg: '#22c55e18' };
+  if (key.includes('low_stock'))
+    return { Icon: Clock, color: '#f59e0b', bg: '#f59e0b18' };
   if (key.includes('pickup_confirmed') || key.includes('collected'))
     return { Icon: CheckCircle, color: '#22c55e', bg: '#22c55e18' };
   if (key.includes('cancelled'))
@@ -87,6 +123,13 @@ interface NotificationDetailProps {
   isBusiness?: boolean;
   onClose: () => void;
   onAction?: () => void;
+  /** Extra vertical chrome the CALLER has rendered above/below this card
+   * inside the same modal (demo instruction banner, carousel paginator,
+   * etc.). The scrollable body shrinks by this amount so the WHOLE popup
+   * — including the caller's chrome — still fits on small phones. Pre-fix
+   * the new-order demo notif rendered a ~85 px banner above the card; on
+   * iPhone SE the bottom action button slid under the home indicator. */
+  outerReservedHeight?: number;
   /** When true, the action button gets a yellow-green halo border so the
    *  demo walkthrough can point the user at it inside the in-app popup. */
   demoHighlightAction?: boolean;
@@ -96,7 +139,7 @@ interface NotificationDetailProps {
   topRightAction?: React.ReactNode;
 }
 
-export function NotificationDetail({ notif, theme, t, isBusiness, onClose, onAction, demoHighlightAction, topRightAction }: NotificationDetailProps) {
+export function NotificationDetail({ notif, theme, t, isBusiness, onClose, onAction, outerReservedHeight = 0, demoHighlightAction, topRightAction }: NotificationDetailProps) {
   const { Icon, color } = getNotifIcon(notif.type, notif.title);
   const queryClient = useQueryClient();
   // Screen-aware scroll height for the body. Reserve the card chrome (header +
@@ -109,7 +152,7 @@ export function NotificationDetail({ notif, theme, t, isBusiness, onClose, onAct
   // popup). Floor at 160 so the body is always usable on tiny screens.
   const { height: winHeight } = useWindowDimensions();
   const insets = useSafeAreaInsets();
-  const bodyMaxHeight = Math.max(160, winHeight - insets.top - insets.bottom - 250);
+  const bodyMaxHeight = Math.max(140, winHeight - insets.top - insets.bottom - 250 - outerReservedHeight);
   const notifType = notif.type ?? '';
   const titleStr = notif.title ?? '';
   // Some backends route the discriminator through the message JSON's `key`
@@ -143,6 +186,16 @@ export function NotificationDetail({ notif, theme, t, isBusiness, onClose, onAct
   // commande - <date>" chip + "Order Now" CTA so this popup fully replaces the
   // old standalone streak-warning modal.
   const isStreakExpiring = typeBlob.includes('streak_expiring');
+  // Admin/platform broadcast — title/message come from the admin (multilingual
+  // blob, resolved to the CURRENT app language), so render them directly, show
+  // the Barakeat logo instead of the bell, surface the attached image, and hide
+  // the action button (there's nothing to open).
+  const isAdminBroadcast = notifType.toLowerCase().includes('admin_broadcast')
+    || notifType.toLowerCase().includes('broadcast')
+    || notifType.toLowerCase().includes('announcement');
+  const broadcast = isAdminBroadcast ? adminBroadcastContent(notif) : null;
+  const broadcastTitle = broadcast?.title ?? '';
+  const broadcastBody = broadcast?.body ?? '';
   const streakDays = msgParams.streak ?? msgParams.streakDays ?? msgParams.count ?? null;
   // Last-order date: prefer the notification param; fall back to the cached
   // gamification stats (days_since_last_pickup) so older notifications that
@@ -174,7 +227,12 @@ export function NotificationDetail({ notif, theme, t, isBusiness, onClose, onAct
   const rating = msgParams.rating ?? null;
   const comment = msgParams.comment ?? msgParams.review ?? null;
   const price = msgParams.price ?? msgParams.total ?? msgParams.amount ?? null;
-  const pickupCode = msgParams.code ?? msgParams.pickupCode ?? msgParams.pickup_code ?? null;
+  // Pickup codes are always rendered as 6-character chips across the app;
+  // older notifications still carry the legacy 8-char value in their
+  // payload, so we clip on read so the displayed code matches what the
+  // customer sees on the order card and what the merchant types in.
+  const pickupCodeRaw = msgParams.code ?? msgParams.pickupCode ?? msgParams.pickup_code ?? null;
+  const pickupCode = pickupCodeRaw ? String(pickupCodeRaw).substring(0, 6).toUpperCase() : null;
   const locationImage = msgParams.locationImage ?? msgParams.location_image ?? null;
   const basketImage = msgParams.basketImage ?? msgParams.basket_image ?? null;
   const notifAddress = msgParams.address ?? msgParams.restaurant_address ?? null;
@@ -245,6 +303,32 @@ export function NotificationDetail({ notif, theme, t, isBusiness, onClose, onAct
   const paymentContext = msgParams.context ?? null; // 'cash' | 'refunded' | 'not_charged' | null
   const paymentMethodLabel = msgParams.payment_method_label ?? null;
   const refundAmount = msgParams.refund_amount ?? null;
+
+  // Order-confirmed payment context — mirrors the combined Paiement row
+  // on the customer ReservationCard. Reads paymentMethod and creditAmount
+  // from msgParams first (the new-reservation notif now carries them),
+  // then falls back to the freshly-created reservation in React Query's
+  // cache so older payloads still render the row correctly.
+  const cachedReservationForPayment = (() => {
+    if (notif.reference_id == null) return null;
+    const lists = queryClient.getQueriesData<any[]>({ queryKey: ['reservations'] });
+    for (const [, data] of lists) {
+      if (!Array.isArray(data)) continue;
+      const match = data.find((r: any) => r?.id === notif.reference_id || String(r?.id) === String(notif.reference_id));
+      if (match) return match;
+    }
+    return null;
+  })();
+  const orderPaymentMethod: 'cash' | 'card' | 'credits' = (
+    msgParams.payment_method ?? msgParams.paymentMethod
+    ?? cachedReservationForPayment?.payment_method
+    ?? 'cash'
+  ) as 'cash' | 'card' | 'credits';
+  const orderCreditAmount = Number(
+    msgParams.credit_amount ?? msgParams.creditAmount
+    ?? cachedReservationForPayment?.credit_amount
+    ?? 0
+  );
   const ratingService = msgParams.rating_service ?? null;
   const ratingQuality = msgParams.rating_quality ?? null;
   const ratingQuantity = msgParams.rating_quantity ?? null;
@@ -320,14 +404,19 @@ export function NotificationDetail({ notif, theme, t, isBusiness, onClose, onAct
   const locationQuery = useQuery({
     queryKey: ['location-photo', locId],
     queryFn: () => fetchLocationById(String(locId)),
-    enabled: !isBusiness && locId != null,
+    // Was customer-only — bumped to ALSO fire on the business side so the
+    // org/location lookup is available for the new "Org — Location" label
+    // that goes into every notif title/body and into the renderOrgHeader
+    // chip. The queries are React-Query-cached, so the per-tab business
+    // notifs all share one location fetch.
+    enabled: locId != null,
     staleTime: 60_000,
   });
   const orgId = locationQuery.data?.organization_id ?? null;
   const organizationQuery = useQuery({
     queryKey: ['organization', orgId],
     queryFn: () => fetchOrganization(String(orgId)),
-    enabled: !isBusiness && orgId != null,
+    enabled: orgId != null,
     staleTime: 5 * 60_000,
   });
   // Prefer the ORG logo (brand identity). Backend-provided org_logo_url wins
@@ -347,18 +436,35 @@ export function NotificationDetail({ notif, theme, t, isBusiness, onClose, onAct
     ?? locationQuery.data?.org_name
     ?? null;
   const effectiveLocationName =
-    locationQuery.data?.display_name
+    // location_name is the PLAIN location name on the /api/locations row
+    // (e.g. "Centre Ville"). `display_name` and `name` are pre-joined
+    // "Org Name - Location Name" — useful for one-line labels elsewhere,
+    // but here it would double up with effectiveOrgName below and produce
+    // "Org — Org - Location". Prefer the plain form; fall through to the
+    // compound (formatOrgLocation strips the org prefix defensively).
+    locationQuery.data?.location_name
+    ?? locationQuery.data?.display_name
     ?? locationQuery.data?.name
     ?? locationName
     ?? null;
 
+  // Canonical "Org — Location" string injected as the `location` override
+  // into every resolveNotifText call below. Means every i18n template
+  // that uses {{location}} renders the full "Org Name - Location Name"
+  // pair instead of just the location name on its own — applies to both
+  // title and body, customer and business sides. Falls back gracefully
+  // when only one of the two is known.
+  const orgLocationLabel = formatOrgLocation(effectiveOrgName, effectiveLocationName);
+  const titleOverrides = orgLocationLabel ? { location: orgLocationLabel } : {};
+
   // Shared org-branding header — circular org logo + org name (top) /
-  // location name (bottom). Rendered at the TOP of every CUSTOMER notification
-  // popup (the business is already inside its own org, so the brand chip would
-  // be redundant there). Returns null when there's no org/location context to
-  // show so generic notifs (streak, wallet, etc.) don't get an empty chip.
+  // location name (bottom). Rendered at the TOP of every notification
+  // popup that carries org/location context, regardless of role. Was
+  // customer-only previously; bumped to render on business too so the
+  // merchant can see WHICH of their locations the notif is about (some
+  // orgs run multiple). Returns null when there's no org/location
+  // context (streak / wallet / generic notifs).
   const renderOrgHeader = () => {
-    if (isBusiness) return null;
     if (!effectiveOrgImage && !effectiveOrgName && !effectiveLocationName) return null;
     return (
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 16 }}>
@@ -389,31 +495,66 @@ export function NotificationDetail({ notif, theme, t, isBusiness, onClose, onAct
   };
 
   return (
-    <PaperSurface radius={20} style={{ width: '100%', maxWidth: 420, borderLeftWidth: 4, borderLeftColor: color }}>
+    <PaperSurface radius={20} style={{ width: '100%', maxWidth: 420, borderWidth: 0, overflow: 'hidden', borderLeftWidth: 4, borderLeftColor: color }}>
       {/* The card's actual LEFT BORDER is thickened and tinted by notification
           type (no overlay strip) so the type signal reads as part of the popup
-          frame rather than a line floating on top of it. */}
+          frame rather than a line floating on top of it. The default 1 px
+          paper border is dropped (borderWidth: 0) and the surface is clipped
+          (overflow: 'hidden') so the brand-green title bar reaches the actual
+          top edge of the card — without this, a thin sliver of the paper
+          gradient was visible above the green band. */}
       {/* Header — everything on ONE centered line so the type logo (left),
           title, the relative time, the optional bell shortcut, and the close
           button all align vertically. The time sits inline before the action
           buttons instead of on its own line under the title. The type icon is
           tinted with the notification's color. */}
-      <View style={{ paddingHorizontal: 20, paddingVertical: 16, flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-        <Icon size={22} color={color} />
-        <Text numberOfLines={1} style={{ flex: 1, color: theme.colors.textPrimary, fontSize: 16, fontFamily: 'Poppins_700Bold', letterSpacing: -0.2 }}>
-          {notif.title ? resolveNotifText(notif.title, t) : ''}
-        </Text>
-        <Text style={{ color: theme.colors.muted, fontSize: 11, fontFamily: 'Poppins_400Regular' }}>
-          {timeAgo(notif.created_at, t)}
-        </Text>
-        {topRightAction}
-        <TouchableOpacity
-          onPress={onClose}
-          style={{ width: 28, height: 28, borderRadius: 14, backgroundColor: theme.colors.surfaceMuted, justifyContent: 'center', alignItems: 'center' }}
-          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-        >
-          <XIcon size={17} color={theme.colors.textSecondary} />
-        </TouchableOpacity>
+      {/* Brand-green title bar — matches the "Commande confirmée" detail
+          popup ((tabs)/_layout.tsx:800) so every in-app notification reads
+          as part of the same family. The type icon sits inside a soft white
+          circle (~25 % alpha) for contrast against the green; everything
+          else flips to white / white-translucent. */}
+      {/* Title-bar layout: type icon (left), then title + time stacked or
+          inline using the FULL remaining width. The close button and the
+          optional bell shortcut are pulled OUT of the row and pinned at
+          the top-right corner via position: absolute. The user reported
+          that the prior single-row layout — [icon] [title] [time] [bell]
+          [X] — was eating into the title's horizontal budget so long
+          titles got truncated at "...". Floating the buttons clears that
+          budget; the title row now reserves trailing padding equal to
+          the buttons' footprint so the text never runs under them. */}
+      <View style={{ paddingHorizontal: 20, paddingVertical: 16, flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: '#114b3c' }}>
+        {isAdminBroadcast ? (
+          <Image source={require('@/assets/images/barakeat_halo_logo_ios.png')} style={{ width: 32, height: 32, borderRadius: 16 }} resizeMode="cover" />
+        ) : (
+          <View style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: 'rgba(255,255,255,0.22)', justifyContent: 'center', alignItems: 'center' }}>
+            <Icon size={18} color="#fff" />
+          </View>
+        )}
+        {/* Title takes everything that's left, with a trailing safety pad
+            (paddingRight: 76) reserving room for the floating button stack
+            so we never collide with the X. */}
+        <View style={{ flex: 1, paddingRight: 76 }}>
+          <Text numberOfLines={1} style={{ color: '#fff', fontSize: 16, fontFamily: 'Poppins_700Bold', letterSpacing: -0.2 }}>
+            {isAdminBroadcast ? broadcastTitle : (notif.title ? resolveNotifText(notif.title, t, '', titleOverrides) : '')}
+          </Text>
+          <Text style={{ color: 'rgba(255,255,255,0.65)', fontSize: 11, fontFamily: 'Poppins_400Regular', marginTop: 2 }}>
+            {timeAgo(notif.created_at, t)}
+          </Text>
+        </View>
+        {/* Floating button cluster — top-right corner of the title bar.
+            Pinned with position: absolute so it doesn't push the title
+            row's content. Bell shortcut (when present) sits to the left
+            of the close X with a small gap. */}
+        <View style={{ position: 'absolute', top: 14, right: 14, flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+          {topRightAction}
+          <TouchableOpacity
+            onPress={onClose}
+            style={{ width: 28, height: 28, borderRadius: 14, backgroundColor: 'rgba(255,255,255,0.18)', justifyContent: 'center', alignItems: 'center' }}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          >
+            <XIcon size={17} color="#fff" />
+          </TouchableOpacity>
+        </View>
       </View>
 
       <View style={{ paddingHorizontal: 20, paddingTop: 16, paddingBottom: 20 }}>
@@ -434,6 +575,16 @@ export function NotificationDetail({ notif, theme, t, isBusiness, onClose, onAct
             </View>
           ) : null}
 
+          {/* Admin broadcast image — the picture the admin attached, shown as a
+              large banner above the message text. */}
+          {isAdminBroadcast && broadcast?.image ? (
+            <Image
+              source={{ uri: broadcast.image }}
+              style={{ width: '100%', height: 160, borderRadius: 14, marginBottom: 14, borderWidth: 1, borderColor: theme.colors.divider }}
+              resizeMode="cover"
+            />
+          ) : null}
+
           {/* Message — rendered for every type EXCEPT the customer-side
               pickup_confirmed, which uses its own "How was your experience?"
               prompt block below. The business-side pickup_confirmed
@@ -442,7 +593,7 @@ export function NotificationDetail({ notif, theme, t, isBusiness, onClose, onAct
               {Org - location}" header to sit above the order-summary card. */}
           {!(isPickupConfirmed && !isBusiness) && (
             <Text style={{ color: theme.colors.textSecondary, ...theme.typography.body, lineHeight: 22, marginBottom: 12 }}>
-              {resolveNotifText(notif.message, t)}
+              {isAdminBroadcast ? broadcastBody : resolveNotifText(notif.message, t, '', titleOverrides)}
             </Text>
           )}
 
@@ -463,12 +614,22 @@ export function NotificationDetail({ notif, theme, t, isBusiness, onClose, onAct
                 </View>
               ) : null}
               {lastOrderDateStr ? (
-                <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: '#FF6B3515', borderRadius: 12, paddingVertical: 8, paddingHorizontal: 16, gap: 6 }}>
-                  <Clock size={16} color="#FF6B35" />
-                  <Text style={{ color: '#FF6B35', ...theme.typography.body, fontWeight: '700' }}>
-                    {t('streak.lastOrder', { defaultValue: 'Dernière commande' })} - {lastOrderDateStr}
+                <>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: '#FF6B3515', borderRadius: 12, paddingVertical: 8, paddingHorizontal: 16, gap: 6 }}>
+                    <Clock size={16} color="#FF6B35" />
+                    <Text style={{ color: '#FF6B35', ...theme.typography.body, fontWeight: '700' }}>
+                      {t('streak.lastOrder', { defaultValue: 'Dernière commande' })} - {lastOrderDateStr}
+                    </Text>
+                  </View>
+                  {/* Disambiguates "Dernière commande" — the streak counts
+                      RETRAITS (picked-up orders), not reservations. The
+                      tiny line under the chip clarifies that without
+                      bloating the chip itself ("Dernière commande" is
+                      already at its width limit). */}
+                  <Text style={{ color: theme.colors.muted, ...theme.typography.caption, marginTop: 6, fontStyle: 'italic' }}>
+                    {t('streak.lastOrderHint', { defaultValue: 'commande récupérée' })}
                   </Text>
-                </View>
+                </>
               ) : null}
             </View>
           )}
@@ -478,7 +639,7 @@ export function NotificationDetail({ notif, theme, t, isBusiness, onClose, onAct
             <>
               {basketName && (
                 <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3, fontWeight: '700', marginBottom: 12 }}>
-                  {basketName}{locationName ? ` — ${locationName}` : ''}
+                  {basketName}{orgLocationLabel ? ` — ${orgLocationLabel}` : (locationName ? ` — ${locationName}` : '')}
                 </Text>
               )}
               {basketImage ? (
@@ -530,6 +691,51 @@ export function NotificationDetail({ notif, theme, t, isBusiness, onClose, onAct
                     </Text>
                   </View>
                 ) : null}
+                {/* Combined Paiement row — mirrors the customer expanded
+                    card. Line 1: method label (Paiement en espèces /
+                    Paiement par carte). Line 2 (only when credits were
+                    used): the toDoLine — "À payer à la récupération",
+                    "Réglée entièrement par crédits" — so the user sees
+                    the same payment story they'll see again on the
+                    expanded order card later. */}
+                {!isCancelled ? (() => {
+                  const totalNum = Number(qty ?? 1) > 1 ? Number(price ?? 0) * Number(qty ?? 1) : Number(price ?? 0);
+                  if (!Number.isFinite(totalNum) || totalNum <= 0) return null;
+                  const isCard = orderPaymentMethod === 'card';
+                  const cashSlice = Math.max(0, totalNum - orderCreditAmount);
+                  const PMIcon = isCard ? CreditCard : Banknote;
+                  const methodLabel = isCard
+                    ? (orderCreditAmount > 0
+                        ? t('orders.paymentByCardWithCredits', { defaultValue: 'Paiement par carte (+ crédits)' })
+                        : t('orders.paymentByCard', { defaultValue: 'Paiement par carte' }))
+                    : (orderCreditAmount > 0
+                        ? t('orders.paymentInCashWithCredits', { defaultValue: 'Paiement en espèces (+ crédits)' })
+                        : t('orders.paymentInCash', { defaultValue: 'Paiement en espèces' }));
+                  const fmt = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(2));
+                  let toDoLine: string | null = null;
+                  if (!isCard && cashSlice > 0) {
+                    toDoLine = t('orders.toPayAtPickup', { amount: fmt(cashSlice), defaultValue: 'À payer à la récupération : {{amount}} TND' });
+                  } else if (!isCard && cashSlice === 0 && orderCreditAmount > 0) {
+                    toDoLine = t('orders.paidEntirelyByCredits', { defaultValue: 'Réglée entièrement par crédits' });
+                  }
+                  return (
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 10, borderTopWidth: 1, borderTopColor: theme.colors.divider }}>
+                      <View style={{ width: 30, height: 30, borderRadius: 15, backgroundColor: '#114b3c', justifyContent: 'center', alignItems: 'center' }}>
+                        <PMIcon size={13} color="#e3ff5c" />
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '700' }}>
+                          {methodLabel}
+                        </Text>
+                        {toDoLine ? (
+                          <Text style={{ color: theme.colors.primary, ...theme.typography.bodySm, fontWeight: '600', marginTop: 4 }}>
+                            {toDoLine}
+                          </Text>
+                        ) : null}
+                      </View>
+                    </View>
+                  );
+                })() : null}
                 {pickupTime ? (
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 8, borderTopWidth: 1, borderTopColor: theme.colors.divider }}>
                     <View style={{ width: 30, height: 30, borderRadius: 15, backgroundColor: '#114b3c', justifyContent: 'center', alignItems: 'center' }}>
@@ -613,7 +819,7 @@ export function NotificationDetail({ notif, theme, t, isBusiness, onClose, onAct
                     {t('notifications.bonAppetitTitle', { defaultValue: 'Bon Appétit !' })}
                   </Text>
                   <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm, lineHeight: 20, marginBottom: 14 }}>
-                    {t('notifications.bravoCustomerDesc', { location: effectiveLocationName ?? '', defaultValue: `Votre retrait chez ${effectiveLocationName ?? ''} est terminé. Voulez-vous partager votre expérience ?` })}
+                    {t('notifications.bravoCustomerDesc', { location: orgLocationLabel || (effectiveLocationName ?? ''), defaultValue: `Votre retrait chez ${orgLocationLabel || (effectiveLocationName ?? '')} est terminé. Voulez-vous partager votre expérience ?` })}
                   </Text>
                   {renderOrderSummary('#114b3c1f')}
                 </>
@@ -659,10 +865,10 @@ export function NotificationDetail({ notif, theme, t, isBusiness, onClose, onAct
                   <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '600', flex: 2, textAlign: 'right' }} numberOfLines={1}>{basketName}</Text>
                 </View>
               ) : null}
-              {locationName ? (
+              {(orgLocationLabel || locationName) ? (
                 <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
                   <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, flex: 1 }}>{t('notifications.location', { defaultValue: 'Commerce' })}</Text>
-                  <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '600', flex: 2, textAlign: 'right' }} numberOfLines={1}>{locationName}</Text>
+                  <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '600', flex: 2, textAlign: 'right' }} numberOfLines={1}>{orgLocationLabel || locationName}</Text>
                 </View>
               ) : null}
               {customerName ? (
@@ -686,37 +892,71 @@ export function NotificationDetail({ notif, theme, t, isBusiness, onClose, onAct
             </View>
           ) : null}
 
-          {/* Message */}
-          {isMessage ? (
-            <View style={{ backgroundColor: '#3b82f610', borderRadius: 14, padding: 16, marginBottom: 16, borderWidth: 1, borderColor: '#3b82f626' }}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: messageText ? 12 : 0 }}>
-                <View style={{ width: 40, height: 40, borderRadius: 20, backgroundColor: '#3b82f620', justifyContent: 'center', alignItems: 'center' }}>
-                  <MessageCircle size={18} color="#3b82f6" />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={{ color: theme.colors.textPrimary, ...theme.typography.body, fontWeight: '700' }}>
-                    {senderName || t('notifications.someone', { defaultValue: 'Quelqu\'un' })}
+          {/* Message — clean single-block design.
+              · Customer side header reads "{Org Name} – {Location} vous a
+                envoyé un message" (was just the location name).
+              · Business side reads "{customerName} vous a envoyé un message".
+              · Subline shows the order context — "À propos de la commande
+                BK-XXX" — resolved from notif.reference_id or msgParams.
+              · The chat icon sits inside the message bubble itself, next to
+                the actual message text (was floating in a separate row).
+              The blue tint + blue border are gone; the bubble uses the
+              warm paper background + neutral divider so it reads as part
+              of the popup family (matches the order-confirmed info card). */}
+          {isMessage ? (() => {
+            // Resolve a human-readable sender label per interface side.
+            // CUSTOMER side: prefer the chained "{Org} – {Location}" so the
+            // user knows BOTH the brand and the specific restaurant chip
+            // (the earlier copy only said location, which was ambiguous for
+            // chains). Fall back to whatever single name we have.
+            // BUSINESS side: the sender is the customer; senderName carries
+            // their name.
+            const senderHeader = (() => {
+              if (isBusiness) {
+                return senderName || customerName || t('notifications.someone', { defaultValue: 'Quelqu\'un' });
+              }
+              const org = effectiveOrgName ?? null;
+              const loc = effectiveLocationName ?? null;
+              if (org && loc && org !== loc) return `${org} – ${loc}`;
+              return org ?? loc ?? senderName ?? t('notifications.someone', { defaultValue: 'Quelqu\'un' });
+            })();
+            // Order code for the "concerning order X" line. reference_id is
+            // the reservation row id; msgParams.reservation_id is a fallback
+            // for older payloads that didn't fill reference_id.
+            const refId = notif.reference_id ?? msgParams.reservation_id ?? msgParams.reservationId ?? msgParams.order_id ?? msgParams.orderId ?? null;
+            const orderRef = refId != null ? orderIdToCode(refId) : null;
+            return (
+              <View style={{ marginBottom: 16 }}>
+                <Text style={{ color: theme.colors.textPrimary, ...theme.typography.body, fontWeight: '700' }} numberOfLines={2}>
+                  {senderHeader}
+                </Text>
+                <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, marginTop: 2 }}>
+                  {t('notifications.messageReceived', { defaultValue: 'vous a envoyé un message' })}
+                </Text>
+                {orderRef ? (
+                  <Text style={{ color: theme.colors.muted, ...theme.typography.caption, marginTop: 2 }}>
+                    {t('notifications.aboutOrder', { code: orderRef, defaultValue: 'À propos de la commande {{code}}' })}
                   </Text>
-                  <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, marginTop: 2 }}>
-                    {t('notifications.messageReceived', { defaultValue: 'vous a envoyé un message' })}
-                  </Text>
-                </View>
+                ) : null}
+                {messageText ? (
+                  <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 10, backgroundColor: '#114b3c08', borderRadius: 14, padding: 14, borderWidth: 1, borderColor: '#114b3c1f', marginTop: 12 }}>
+                    <View style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: '#114b3c', justifyContent: 'center', alignItems: 'center' }}>
+                      <MessageCircle size={15} color="#e3ff5c" />
+                    </View>
+                    <Text style={{ flex: 1, color: theme.colors.textPrimary, ...theme.typography.body, lineHeight: 21 }}>
+                      {messageText}
+                    </Text>
+                  </View>
+                ) : null}
               </View>
-              {messageText ? (
-                <View style={{ backgroundColor: '#fff', borderRadius: 12, padding: 12, borderWidth: 1, borderColor: '#3b82f620' }}>
-                  <Text style={{ color: theme.colors.textPrimary, ...theme.typography.body, lineHeight: 20 }}>
-                    {messageText}
-                  </Text>
-                </View>
-              ) : null}
-            </View>
-          ) : null}
+            );
+          })() : null}
         </ScrollView>
 
         {/* Action button — close lives in the header X now. Sits just below the
             last content block (content blocks carry a ~16px trailing margin, so
             a small marginTop keeps the button close without crowding it). */}
-        {onAction ? (
+        {onAction && !isAdminBroadcast ? (
           <View style={demoHighlightAction
             ? { marginTop: 6, borderRadius: 17, borderWidth: 3, borderColor: '#e3ff5c' }
             : { marginTop: 6 }}>
@@ -735,7 +975,6 @@ export function NotificationDetail({ notif, theme, t, isBusiness, onClose, onAct
                   : isPickupConfirmed && !isBusiness ? t('notifications.leaveReview', { defaultValue: 'Laisser un avis' })
                   : isStreakExpiring ? t('streak.orderNow', { defaultValue: 'Commander' })
                   : isReview ? t('notifications.viewDashboard', { defaultValue: 'Tableau de bord' })
-                  : isCancelled ? t('notifications.viewOrder', { defaultValue: 'Voir les commandes' })
                   : t('notifications.viewOrder', { defaultValue: 'Voir la commande' })}
               </Text>
             </TouchableOpacity>

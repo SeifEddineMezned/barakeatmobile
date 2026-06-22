@@ -57,6 +57,23 @@ export function TeamRoleChangeModal({
     [memberships]
   );
 
+  // Full admin permission set. The backend grants this at member CREATION
+  // time when `role === 'admin'` (see backend/routes/teams.js:437), but the
+  // role-update endpoint only writes the columns it receives in the body —
+  // so without explicitly sending permissions on a role flip TO admin, the
+  // promoted user would silently keep whatever perms they had as a member.
+  // That stranded location admins with `confirm_pickup: 'none'` even though
+  // the team UI advertises admins as having all permissions by default.
+  const FULL_ADMIN_PERMS: Record<string, string> = {
+    confirm_pickup: 'write',
+    edit_quantities: 'write',
+    edit_basket_info: 'write',
+    create_delete_baskets: 'write',
+    view_history: 'write',
+    messaging: 'write',
+    cancel_order: 'write',
+  };
+
   // Show the inline location picker when demoting away from org-admin —
   // that's the only transition where we lack a location to scope the new
   // role(s) to.
@@ -96,7 +113,14 @@ export function TeamRoleChangeModal({
           return;
         }
         const [keep, ...drop] = memberships;
-        const updated = await updateMember(orgId, keep.membership_id, { role: 'admin', location_id: null });
+        // Promotion to org-admin — write the full admin perm set alongside
+        // the role flip so the user actually has every per-org capability,
+        // not just the perms they happened to carry from their prior role.
+        const updated = await updateMember(orgId, keep.membership_id, {
+          role: 'admin',
+          location_id: null,
+          permissions: FULL_ADMIN_PERMS,
+        });
         // Defensive: confirm the row actually flipped (role='admin' AND no
         // location). On a healthy deployment this always passes; the check
         // exists to avoid a false "success" if anything along the wire
@@ -130,7 +154,18 @@ export function TeamRoleChangeModal({
           return;
         }
         const [keep, ...rest] = memberships;
-        await updateMember(orgId, keep.membership_id, { role: newRole, location_id: picked[0] });
+        // Demotion from org-admin: when the new role is also `admin`
+        // (i.e. demoting to location admin), we still want the full admin
+        // perm set on every new row — admins have all perms regardless of
+        // scope. When demoting to member, preserve whatever perms the user
+        // already had so we don't accidentally drop a basic-member's
+        // hand-picked capability set.
+        const permsForNewRows = newRole === 'admin' ? FULL_ADMIN_PERMS : currentPermissions;
+        await updateMember(orgId, keep.membership_id, {
+          role: newRole,
+          location_id: picked[0],
+          permissions: permsForNewRows,
+        });
         for (const m of rest) await removeMember(orgId, m.membership_id);
         for (const locId of picked.slice(1)) {
           await addMember(orgId, {
@@ -139,15 +174,23 @@ export function TeamRoleChangeModal({
             password: 'unused-' + Math.random().toString(36).slice(-6),
             role: newRole,
             location_id: locId,
-            permissions: currentPermissions,
+            permissions: permsForNewRows,
           });
         }
       } else {
         // Same-scope role flip (member ↔ location_admin) — preserve existing
-        // location_ids, just rewrite role on every membership row.
+        // location_ids, just rewrite role on every membership row. When
+        // flipping TO admin, also write the full admin perm set in the same
+        // request so the promoted user gains every admin capability instead
+        // of silently inheriting their old member-tier perms (which is what
+        // left location admins with `confirm_pickup: 'none'` and made the
+        // demo skip the verify-pickup / chat sub-tours).
         const newRole = roleChoice === 'member' ? 'member' : 'admin';
+        const updateBody = newRole === 'admin'
+          ? { role: newRole, permissions: FULL_ADMIN_PERMS }
+          : { role: newRole };
         for (const m of memberships) {
-          await updateMember(orgId, m.membership_id, { role: newRole });
+          await updateMember(orgId, m.membership_id, updateBody);
         }
       }
       // Refetch EVERY org-details / my-context query, active or not, regardless

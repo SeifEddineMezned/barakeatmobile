@@ -151,6 +151,16 @@ export default function SelectOrgBasketScreen() {
   const walkthroughKey = useWalkthroughStore((s) => s.currentStep?.measureKey);
   const setMeasuredRect = useWalkthroughStore((s) => s.setMeasuredRect);
   const createNewRef = useRef<View | null>(null);
+  // `existingListRef` is attached to ONE of two surfaces depending on whether
+  // the org has any baskets to reuse:
+  //   • baskets exist → attached to the first basket card. Halo highlights
+  //     a representative card so the user understands they can reuse it.
+  //   • baskets absent → attached to a wrapper around the "Paniers existants"
+  //     subtitle + "Aucun panier..." empty-state block. Halo highlights the
+  //     whole "nothing to reuse here yet" section so the demo step still
+  //     teaches what this part of the page is FOR — even on a fresh org.
+  // We don't skip the step in the empty-org case because the user explicitly
+  // wants the demo to call out this section regardless.
   const existingListRef = useRef<View | null>(null);
   useEffect(() => {
     if (walkthroughKey !== 'selectOrgCreateNew' && walkthroughKey !== 'selectOrgExistingList') return;
@@ -177,7 +187,11 @@ export default function SelectOrgBasketScreen() {
     };
     timers.push(setTimeout(() => tryMeasure(0), 200));
     return () => { timers.forEach(clearTimeout); };
-  }, [walkthroughKey, setMeasuredRect]);
+    // Re-measure when groupedBaskets.length crosses the "has-baskets vs
+    // empty" boundary — the ref then points at a different surface
+    // (first card vs the empty-state block) and the previously-published
+    // rect would be stale.
+  }, [walkthroughKey, setMeasuredRect, groupedBaskets.length]);
 
   if (basketsQuery.isLoading) {
     return (
@@ -189,11 +203,15 @@ export default function SelectOrgBasketScreen() {
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: theme.colors.bg }} edges={['top']}>
-      <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: theme.spacing.lg, paddingVertical: theme.spacing.md }}>
-        <TouchableOpacity onPress={() => router.back()} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingHorizontal: theme.spacing.lg, paddingVertical: theme.spacing.md, minHeight: 48 }}>
+        <TouchableOpacity
+          onPress={() => router.back()}
+          hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}
+          style={{ position: 'absolute', left: theme.spacing.lg, top: theme.spacing.md }}
+        >
           <ArrowLeft size={22} color={theme.colors.textPrimary} />
         </TouchableOpacity>
-        <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h2, marginLeft: 14, flex: 1 }} numberOfLines={1}>
+        <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h2 }} numberOfLines={1}>
           {t('business.createBasket.pickExistingTitle', { defaultValue: 'Ajouter un panier' })}
         </Text>
       </View>
@@ -227,12 +245,39 @@ export default function SelectOrgBasketScreen() {
           </View>
         </TouchableOpacity>
 
+        {/* Section separator between the create-new CTA above and the
+            existing-basket list / empty-state below. A thin divider plus a
+            "Paniers existants" subtitle makes it obvious that the text
+            below describes a different concept than the green CTA. Same
+            chrome renders in BOTH branches so the page feels consistent
+            whether the org has baskets or not.
+
+            When the org has NO existing baskets, the wrapper around the
+            subtitle + empty-state block becomes the walkthrough halo
+            target (`existingListRef`). That way the demo step still
+            teaches "this is the reuse-existing section" instead of
+            painting a halo on empty space or having to skip the step. */}
+        <View
+          ref={groupedBaskets.length === 0 ? (existingListRef as any) : undefined}
+          collapsable={false}
+        >
+          <View style={{ height: 1, backgroundColor: theme.colors.divider, marginBottom: theme.spacing.md }} />
+          <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm, fontWeight: '700' as const, fontFamily: 'Poppins_700Bold', marginBottom: 12 }}>
+            {t('business.createBasket.existingSectionTitle', { defaultValue: 'Paniers existants' })}
+          </Text>
+
         {groupedBaskets.length > 0 ? (
-          <View ref={existingListRef as any} collapsable={false}>
-            <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, fontWeight: '600' as const, letterSpacing: 0.5, textTransform: 'none' as const, marginBottom: 10 }}>
+          <View>
+            {/* Heading sits OUTSIDE the measured wrapper — the walkthrough
+                halo only needs to highlight one representative basket card
+                so the user "gets" the reuse-existing concept. Pre-fix the
+                ref wrapped heading + ALL cards, which produced a halo so
+                tall it spanned the whole list and read as misplaced
+                ("way off") instead of pointing at the relevant element. */}
+            <Text style={{ color: theme.colors.muted, ...theme.typography.caption, marginBottom: 10 }}>
               {t('business.createBasket.orPickExisting', { defaultValue: 'Ou choisissez un panier existant' })}
             </Text>
-            {groupedBaskets.map((group) => {
+            {groupedBaskets.map((group, idx) => {
               const isPending = assigningKey === group.key;
               const alreadyHere = selectedLocationId != null && group.locationIds.has(Number(selectedLocationId));
               const locationCount = group.locationIds.size;
@@ -250,6 +295,9 @@ export default function SelectOrgBasketScreen() {
               return (
                 <TouchableOpacity
                   key={group.key}
+                  // Only the first card is the walkthrough halo target — see
+                  // the comment above the heading for why.
+                  ref={idx === 0 ? (existingListRef as any) : undefined}
                   // Inert during the walkthrough so the demo can highlight a
                   // card without firing a real duplicate.
                   onPress={() => { if (!alreadyHere && !walkthroughActive) handleAssign(group); }}
@@ -318,13 +366,14 @@ export default function SelectOrgBasketScreen() {
             })}
           </View>
         ) : (
-          <View style={{ alignItems: 'center', paddingVertical: 40 }}>
+          <View style={{ alignItems: 'center', paddingVertical: 40, paddingHorizontal: theme.spacing.xl }}>
             <ShoppingBag size={32} color={theme.colors.muted} />
-            <Text style={{ color: theme.colors.muted, ...theme.typography.bodySm, marginTop: 10, textAlign: 'center' }}>
+            <Text style={{ color: theme.colors.muted, ...theme.typography.bodySm, marginTop: 10, textAlign: 'center', lineHeight: 20 }}>
               {t('business.createBasket.noOrgBaskets', { defaultValue: 'Aucun panier dans votre organisation pour le moment.' })}
             </Text>
           </View>
         )}
+        </View>
       </ScrollView>
       <SubScreenWalkthroughOverlay keys={['selectOrgExistingList', 'selectOrgCreateNew']} />
     </SafeAreaView>

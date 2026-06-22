@@ -4,7 +4,8 @@ import { PasswordInput } from '@/src/components/PasswordInput';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { ArrowLeft, Mail, KeyRound, Lock, XCircle, CheckCircle2 } from 'lucide-react-native';
+import { ArrowLeft, Mail, KeyRound, Lock, CheckCircle2 } from 'lucide-react-native';
+import { BarakeatErrorIcon } from '@/src/components/ui/BarakeatErrorIcon';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { StatusBar } from 'expo-status-bar';
 import { PrimaryCTAButton } from '@/src/components/PrimaryCTAButton';
@@ -100,8 +101,12 @@ export default function ForgotPasswordScreen() {
   const renderStepIndicator = () => {
     const steps: Step[] = ['email', 'otp', 'newPassword'];
     const currentIndex = steps.indexOf(step);
+    // No bottom margin — this row now sits at the FOOTER of the page (just
+    // above the safe-area bottom), so any extra spacing would push it off-
+    // screen on shorter devices. Vertical breathing room comes from the
+    // parent's padding.
     return (
-      <View style={[styles.stepIndicator, { marginBottom: theme.spacing.xxl }]}>
+      <View style={styles.stepIndicator}>
         {steps.map((_, i) => (
           <View
             key={i}
@@ -128,21 +133,25 @@ export default function ForgotPasswordScreen() {
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={styles.keyboardView}
       >
-        <ScrollView contentContainerStyle={styles.scrollContent}>
+        <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
           <View style={[styles.content, { padding: theme.spacing.xxl }]}>
+            {/* Header — back button stays at the top-left. */}
             <TouchableOpacity
               onPress={() => {
                 if (step === 'email') router.back();
                 else if (step === 'otp') setStep('email');
                 else setStep('otp');
               }}
-              style={[styles.backButton, { marginBottom: theme.spacing.xxl }]}
+              style={styles.backButton}
             >
               <ArrowLeft size={24} color={theme.colors.textPrimary} />
             </TouchableOpacity>
 
-            {renderStepIndicator()}
-
+            {/* Body — flex:1 + justifyContent:'center' parks the icon / title
+                / form / CTA group in the visual middle of the screen instead
+                of stranded near the top. KeyboardAvoidingView keeps the
+                inputs above the keyboard when one focuses. */}
+            <View style={{ flex: 1, justifyContent: 'center' }}>
             {step === 'email' && (
               <>
                 <View style={[styles.iconContainer, { backgroundColor: theme.colors.primary + '15', borderRadius: theme.radii.r24, padding: theme.spacing.xl, alignSelf: 'center', marginBottom: theme.spacing.xxl }]}>
@@ -162,7 +171,7 @@ export default function ForgotPasswordScreen() {
                     style={[styles.input, { backgroundColor: theme.colors.surface, borderColor: theme.colors.divider, borderRadius: theme.radii.r12, color: theme.colors.textPrimary, ...theme.typography.body, ...theme.shadows.shadowSm }]}
                     value={email}
                     onChangeText={setEmail}
-                    placeholder="you@example.com"
+                    placeholder={t('auth.placeholderEmail')}
                     placeholderTextColor={theme.colors.muted}
                     keyboardType="email-address"
                     autoCapitalize="none"
@@ -258,6 +267,13 @@ export default function ForgotPasswordScreen() {
                 <PrimaryCTAButton onPress={handleResetPassword} title={t('auth.resetPassword')} loading={loading} />
               </>
             )}
+            </View>
+
+            {/* Footer — step indicator pinned to the bottom edge of the
+                screen, just inside the safe area. Sits below the centred
+                body so its position is independent of which step is
+                showing (smaller forms don't pull it up). */}
+            {renderStepIndicator()}
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
@@ -266,7 +282,7 @@ export default function ForgotPasswordScreen() {
         <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 24 }}>
           <View style={{ backgroundColor: '#fff', borderRadius: 24, padding: 28, width: '100%', maxWidth: 340, alignItems: 'center' }}>
             <View style={{ backgroundColor: '#ef444418', width: 56, height: 56, borderRadius: 28, justifyContent: 'center', alignItems: 'center', marginBottom: 16 }}>
-              <XCircle size={28} color="#ef4444" />
+              <BarakeatErrorIcon size={28} color="#ef4444" />
             </View>
             <Text style={{ color: '#1a1a1a', fontSize: 18, fontWeight: '700', fontFamily: 'Poppins_700Bold', textAlign: 'center', marginBottom: 10 }}>
               {t('auth.error')}

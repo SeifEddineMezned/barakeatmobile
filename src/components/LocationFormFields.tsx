@@ -1,5 +1,5 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, ScrollView, ActivityIndicator, StyleSheet, Platform, Modal } from 'react-native';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { View, Text, TextInput, TouchableOpacity, ScrollView, ActivityIndicator, StyleSheet, Platform, Modal, Linking } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MapPin, Navigation, Search, X } from 'lucide-react-native';
 import * as Location from 'expo-location';
@@ -7,6 +7,7 @@ import { useTranslation } from 'react-i18next';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { TimePicker } from '@/src/components/TimePicker';
 import { searchAddresses, reverseGeocode } from '@/src/services/geocoding';
+import { useCustomAlert } from '@/src/components/CustomAlert';
 
 let MapView: any = null;
 if (Platform.OS !== 'web') {
@@ -52,6 +53,7 @@ interface Props {
  */
 export function LocationFormFields({ value, onChange }: Props) {
   const { t } = useTranslation();
+  const customAlert = useCustomAlert();
   const theme = useTheme();
   // SafeAreaView from react-native-safe-area-context doesn't always get its
   // insets inside a <Modal>, so we read the insets directly and pad manually.
@@ -88,43 +90,33 @@ export function LocationFormFields({ value, onChange }: Props) {
   // Reverse geocoding: refresh the resolved-address chip every time the map
   // settles on a new spot. Debounced 500 ms; in-memory dedup lives in the
   // shared geocoding module so we don't double-fetch identical coords.
+  // NOTE: the resolved text is intentionally NOT pushed back into the search
+  // field. The search bar is a user-controlled query input; the bottom chip
+  // is where the live pin-address feedback lives. Keeping the two separated
+  // means typing a query and panning the pin elsewhere doesn't make the
+  // search bar lie about what the user asked for.
   const [reverseGeocodedName, setReverseGeocodedName] = useState('');
   const reverseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // True while the search field is still showing an auto-fill. Once the user
-  // edits the field manually we stop overwriting so their text sticks.
-  const searchAutoFilledRef = useRef(true);
 
   const fetchReverseGeocode = useCallback((lat: number, lng: number) => {
     if (reverseTimer.current) clearTimeout(reverseTimer.current);
     reverseTimer.current = setTimeout(async () => {
       const formatted = await reverseGeocode(lat, lng);
       if (!formatted) return;
-      // Always refresh the chip — this is the user's visual confirmation
-      // that the pin moved. Previously this was gated on
-      // `searchAutoFilledRef.current`, which froze the chip on Android once
-      // the user typed in the search field (root cause of the Android
-      // "name doesn't change when pin moves" bug).
+      // Chip only — never touch the search bar.
       setReverseGeocodedName(formatted);
-      if (searchAutoFilledRef.current) setAddressSearch(formatted);
     }, 500);
   }, []);
 
   const handleSearchChange = useCallback((text: string) => {
-    // User typed → stop overwriting from auto-fill. If they fully clear the
-    // field, opt them back IN to auto-fill so panning the map populates the
-    // resolved address again.
-    searchAutoFilledRef.current = text.length === 0;
     setAddressSearch(text);
     if (searchTimer.current) clearTimeout(searchTimer.current);
     searchTimer.current = setTimeout(() => fetchSuggestions(text), 300);
   }, [fetchSuggestions]);
 
   const handleSelectSuggestion = useCallback((item: AddressSuggestion) => {
-    // Treat selecting a suggestion as a deliberate choice — the search field
-    // now reflects exactly what the user picked; the upcoming reverse-geocode
-    // (after the map animates) shouldn't clobber it. The user can pan away
-    // later to opt back into auto-fill by clearing the field.
-    searchAutoFilledRef.current = false;
+    // Picking a suggestion is the ONE intentional way the search bar takes
+    // a non-typed value — the user explicitly chose this label.
     setAddressSearch(item.name);
     setReverseGeocodedName(item.name);
     setSuggestions([]);
@@ -134,13 +126,49 @@ export function LocationFormFields({ value, onChange }: Props) {
     }, 600);
   }, []);
 
+  // Live pickup-window validation. The submit handler in the parent already
+  // rejects invalid windows, but waiting until "Save" is bad UX — the user
+  // gets no feedback until they try to leave. Re-derives whenever either
+  // time changes and surfaces a red error line under the time pickers so
+  // the user knows immediately that the combination they chose is invalid.
+  const pickupWindowError: string | null = useMemo(() => {
+    const start = value.pickupStart;
+    const end = value.pickupEnd;
+    if (!start || !end) return null;
+    const toMin = (t: string): number | null => {
+      const [hStr, mStr] = String(t).split(':');
+      const h = Number(hStr);
+      const m = Number(mStr);
+      if (!Number.isFinite(h) || !Number.isFinite(m)) return null;
+      if (h < 0 || h > 23 || m < 0 || m > 59) return null;
+      return h * 60 + m;
+    };
+    const s = toMin(start);
+    const e = toMin(end);
+    if (s == null || e == null) return null;
+    if (s === e) {
+      return t('business.availability.errZeroWindow', { defaultValue: 'Le créneau ne peut pas être de durée nulle.' });
+    }
+    // 03:30 = daily-reset threshold (210 minutes from midnight). The window
+    // is invalid when 03:30 falls strictly inside [start, end).
+    const T = 3 * 60 + 30;
+    const crosses = s < e
+      ? (s < T && T < e)
+      : (T > s || T < e); // window wraps midnight
+    if (crosses) {
+      return t('business.availability.errCrossReset', {
+        defaultValue: 'Le créneau traverse 03:30 (réinitialisation). Commencez ≥ 03:30 ou terminez ≤ 03:29.',
+      });
+    }
+    return null;
+  }, [value.pickupStart, value.pickupEnd, t]);
+
   const openMap = () => {
-    // When the user enters the picker with an existing address (edit-location),
-    // treat the existing text as user-chosen so reverse-geocoding doesn't
-    // overwrite it as they explore the map.
+    // When the user reopens the picker with an existing address (edit-location)
+    // seed the search bar with what was previously saved so they can refine
+    // it. From there it only changes on typing or suggestion-tap.
     const existing = value.address ?? '';
     setAddressSearch(existing);
-    searchAutoFilledRef.current = existing.length === 0;
     setReverseGeocodedName(existing);
     setStep('map');
     // If we have coords already, prime the resolved-address chip with the
@@ -148,26 +176,43 @@ export function LocationFormFields({ value, onChange }: Props) {
     if (value.coords) fetchReverseGeocode(value.coords.lat, value.coords.lng);
   };
 
-  const confirmMap = async () => {
-    // Priority order for the saved address text:
-    //   1. The reverse-geocoded chip text shown under the pin RIGHT NOW —
-    //      this always matches the actual pin position.
-    //   2. If no reverse-geocode has come back yet (user confirmed before
-    //      the 500 ms debounce + network round-trip), do a one-shot
-    //      synchronous fetch through the shared module so we benefit from
-    //      the native geocoder there too.
-    //   3. Whatever's in the search field (typed query or last suggestion).
-    //   4. Raw coords as a last resort.
-    let resolved = reverseGeocodedName.trim();
-    if (!resolved) {
-      resolved = (await reverseGeocode(pendingRegion.lat, pendingRegion.lng)).trim();
+  // Submit lock for confirmMap. The one-shot reverse-geocode below can take
+  // up to HTTP_TIMEOUT_MS — without this guard a user who taps Confirm twice
+  // (or once on a slow connection) would queue up multiple awaits and the
+  // modal could stay open with the underlying screen dimmed past the first
+  // tap, which is the "faded but clickable" symptom.
+  const [confirmingMap, setConfirmingMap] = useState(false);
+  const confirmMap = useCallback(async () => {
+    if (confirmingMap) return;
+    setConfirmingMap(true);
+    try {
+      // Priority order for the saved address text:
+      //   1. The reverse-geocoded chip text shown under the pin RIGHT NOW —
+      //      this always matches the actual pin position.
+      //   2. If no reverse-geocode has come back yet (user confirmed before
+      //      the 500 ms debounce + network round-trip), do a one-shot
+      //      synchronous fetch through the shared module so we benefit from
+      //      the native geocoder there too. Every backend in that module is
+      //      now bounded by HTTP_TIMEOUT_MS, so this can't hang the modal.
+      //   3. Whatever's in the search field (typed query or last suggestion).
+      //   4. Raw coords as a last resort.
+      let resolved = reverseGeocodedName.trim();
+      if (!resolved) {
+        try {
+          resolved = (await reverseGeocode(pendingRegion.lat, pendingRegion.lng)).trim();
+        } catch {
+          resolved = '';
+        }
+      }
+      const finalAddress = resolved
+        || addressSearch.trim()
+        || `${pendingRegion.lat.toFixed(5)}, ${pendingRegion.lng.toFixed(5)}`;
+      onChange({ coords: pendingRegion, address: finalAddress });
+      setStep('form');
+    } finally {
+      setConfirmingMap(false);
     }
-    const finalAddress = resolved
-      || addressSearch.trim()
-      || `${pendingRegion.lat.toFixed(5)}, ${pendingRegion.lng.toFixed(5)}`;
-    onChange({ coords: pendingRegion, address: finalAddress });
-    setStep('form');
-  };
+  }, [confirmingMap, reverseGeocodedName, pendingRegion, addressSearch, onChange]);
 
   // The map picker is rendered as a full-screen Modal so it doesn't interfere
   // with the parent ScrollView's layout. Previously an absoluteFillObject
@@ -250,11 +295,20 @@ export function LocationFormFields({ value, onChange }: Props) {
             </View>
           )}
 
+          {/* Center pin — brighter Material blue (#2196F3), larger
+              than before, with a tiny white core dot for precision.
+              Same geometry as the customer-side address-picker so the
+              picking feedback feels consistent across the two
+              interfaces. Was previously a lime accent (#e3ff5c) with
+              a MapPin icon inside; the icon read as decoration
+              instead of a precision indicator. The white core is
+              tighter and gives the user a clear "exactly this pixel"
+              target. */}
           <View style={styles.centerPin} pointerEvents="none">
-            <View style={[styles.pinDot, { backgroundColor: '#e3ff5c', justifyContent: 'center', alignItems: 'center' }]}>
-              <MapPin size={10} color="#114b3c" />
+            <View style={[styles.pinDot, { backgroundColor: '#2196F3' }]}>
+              <View style={styles.pinCore} />
             </View>
-            <View style={[styles.pinStem, { backgroundColor: '#e3ff5c' }]} />
+            <View style={[styles.pinStem, { backgroundColor: '#2196F3' }]} />
           </View>
 
           <View style={[styles.tooltip, { backgroundColor: 'rgba(0,0,0,0.75)' }]}>
@@ -282,14 +336,28 @@ export function LocationFormFields({ value, onChange }: Props) {
             onPress={async () => {
               try {
                 const { status } = await Location.requestForegroundPermissionsAsync();
-                if (status !== 'granted') return;
+                if (status !== 'granted') {
+                  // Branded popup → user understands WHY their tap did nothing
+                  // and gets one-tap access to Settings instead of a silent
+                  // dead button.
+                  customAlert.showAlert(
+                    t('permissions.locationTitle', { defaultValue: 'Localisation désactivée' }),
+                    t('permissions.locationBody', { defaultValue: "Pour utiliser votre position actuelle, autorisez l'accès à la localisation dans les Réglages." }),
+                    [
+                      { text: t('common.cancel', { defaultValue: 'Annuler' }), style: 'cancel' },
+                      { text: t('permissions.openSettings', { defaultValue: 'Ouvrir les Réglages' }), onPress: () => Linking.openSettings() },
+                    ],
+                    { type: 'warning' },
+                  );
+                  return;
+                }
                 const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
                 const newRegion = { lat: pos.coords.latitude, lng: pos.coords.longitude };
                 setPendingRegion(newRegion);
-                // Opt back in to auto-fill — the user explicitly asked for
-                // their current location, so the search field should reflect
-                // the resolved address, not whatever they typed before.
-                searchAutoFilledRef.current = true;
+                // User explicitly asked for their current location — clear
+                // any stale query from the search bar so it doesn't keep
+                // pointing at something unrelated. The resolved address is
+                // shown in the chip below the map.
                 setAddressSearch('');
                 fetchReverseGeocode(newRegion.lat, newRegion.lng);
                 mapRef.current?.animateToRegion({
@@ -306,11 +374,16 @@ export function LocationFormFields({ value, onChange }: Props) {
           </TouchableOpacity>
           <TouchableOpacity
             onPress={confirmMap}
-            style={{ backgroundColor: '#114b3c', borderRadius: 16, paddingVertical: 16, alignItems: 'center' }}
+            disabled={confirmingMap}
+            style={{ backgroundColor: '#114b3c', borderRadius: 16, paddingVertical: 16, alignItems: 'center', opacity: confirmingMap ? 0.7 : 1 }}
           >
-            <Text style={{ color: '#e3ff5c', fontWeight: '700', fontSize: 16 }}>
-              {t('addressPicker.confirmLocation', { defaultValue: "Confirmer l'emplacement" })}
-            </Text>
+            {confirmingMap ? (
+              <ActivityIndicator color="#e3ff5c" />
+            ) : (
+              <Text style={{ color: '#e3ff5c', fontWeight: '700', fontSize: 16 }}>
+                {t('addressPicker.confirmLocation', { defaultValue: "Confirmer l'emplacement" })}
+              </Text>
+            )}
           </TouchableOpacity>
         </View>
       </View>
@@ -321,7 +394,10 @@ export function LocationFormFields({ value, onChange }: Props) {
   return (
     <View>
       {/* Name */}
-      <Text style={label(theme)}>{t('business.team.locationName', { defaultValue: 'Nom' })} *</Text>
+      <Text style={label(theme)}>
+        {t('business.team.locationName', { defaultValue: 'Nom' })}{' '}
+        <Text style={{ color: theme.colors.error }}>*</Text>
+      </Text>
       <TextInput
         style={input(theme)}
         value={value.name}
@@ -336,7 +412,8 @@ export function LocationFormFields({ value, onChange }: Props) {
           create locations with no coordinates, which broke the nearby/map
           discovery for customers. */}
       <Text style={[label(theme), { marginTop: 20 }]}>
-        {t('business.team.locationAddress', { defaultValue: 'Adresse' })} *
+        {t('business.team.locationAddress', { defaultValue: 'Adresse' })}{' '}
+        <Text style={{ color: theme.colors.error }}>*</Text>
       </Text>
       <TouchableOpacity
         onPress={openMap}
@@ -431,6 +508,11 @@ export function LocationFormFields({ value, onChange }: Props) {
           defaultValue: 'Le créneau ne doit pas traverser 03:30 (réinitialisation quotidienne). Commencez ≥ 03:30 ou terminez ≤ 03:29.',
         })}
       </Text>
+      {pickupWindowError ? (
+        <Text style={{ color: theme.colors.error, fontSize: 12, marginTop: 6, lineHeight: 16, fontWeight: '600' }}>
+          {pickupWindowError}
+        </Text>
+      ) : null}
 
       {/* Pickup instructions */}
       <Text style={[label(theme), { marginTop: 20 }]}>
@@ -477,10 +559,24 @@ const input = (theme: any) => ({
 const styles = StyleSheet.create({
   centerPin: {
     position: 'absolute', top: '50%', left: '50%',
-    marginLeft: -8, marginTop: -32, alignItems: 'center',
+    // 22 (dot) + 14 (stem) = 36 tall, half-width 11. Tip lands at
+    // the map's geographic center pixel.
+    marginLeft: -11, marginTop: -36, alignItems: 'center',
   },
-  pinDot: { width: 16, height: 16, borderRadius: 8 },
-  pinStem: { width: 3, height: 20, marginTop: -2 },
+  pinDot: {
+    width: 22, height: 22, borderRadius: 11,
+    borderWidth: 2.5, borderColor: '#fff',
+    justifyContent: 'center', alignItems: 'center',
+    shadowColor: '#000', shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.25, shadowRadius: 2, elevation: 4,
+  },
+  // White precision core — the user's eye locks onto this tiny dot
+  // so they know EXACTLY which pixel is being picked.
+  pinCore: {
+    width: 6, height: 6, borderRadius: 3,
+    backgroundColor: '#fff',
+  },
+  pinStem: { width: 3, height: 14 },
   tooltip: {
     position: 'absolute', top: 16, alignSelf: 'center',
     flexDirection: 'row', alignItems: 'center',

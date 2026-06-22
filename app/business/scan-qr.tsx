@@ -7,12 +7,15 @@ import {
   KeyboardAvoidingView,
   Platform,
   TouchableOpacity,
+  ScrollView,
+  Image,
+  Linking,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import { useRouter, useLocalSearchParams } from 'expo-router';
-import { QrCode, X, CheckCircle, Keyboard, Camera, SwitchCamera, Hand } from 'lucide-react-native';
-import { useQueryClient } from '@tanstack/react-query';
+import { QrCode, X, CheckCircle, Keyboard, Camera, SwitchCamera, Hand, ArrowLeft, Banknote, Wallet, ShoppingBag, MapPin, Navigation, Clock, CreditCard, User as UserIcon } from 'lucide-react-native';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 
 import { useTheme } from '@/src/theme/ThemeProvider';
@@ -22,12 +25,300 @@ import {
   confirmPickup,
   verifyQR,
   type TodayReservationFromAPI,
+  type VerifyQRResult,
 } from '@/src/services/business';
 import { fetchBasketById } from '@/src/services/baskets';
-import { getErrorMessage } from '@/src/lib/api';
+import { getErrorMessage, isActionAlreadyDoneError } from '@/src/lib/api';
 import { useCustomAlert } from '@/src/components/CustomAlert';
 import { useWalkthroughStore } from '@/src/stores/walkthroughStore';
 import { SubScreenWalkthroughOverlay } from '@/src/components/SubScreenWalkthroughOverlay';
+
+// Inner review screen — extracted as its own component so the basket-
+// detail query (useQuery) sits at top level and never violates the
+// rules of hooks. Renders the pre-confirm "Confirmer le retrait" view:
+// one compact basket card (image + name + 3 detail rows), one price
+// breakdown card, then the Confirmer CTA flush to the bottom safe
+// area. Designed to fit a single screen with no scroll on common
+// device sizes.
+function ReviewScreen({
+  t,
+  theme,
+  insets,
+  cancelReview,
+  confirmReview,
+  confirming,
+  basketIdForFetch,
+  rawBasketImageFromOrder,
+  basketName,
+  orgLogo,
+  orgLocationLabel,
+  buyerName,
+  qty,
+  pickupStart,
+  pickupEnd,
+  PMIcon,
+  pmLabel,
+  total,
+  credits,
+  hasCredits,
+  toCollect,
+  fmtDT,
+  row,
+}: {
+  t: any; theme: any; insets: any;
+  cancelReview: () => void;
+  confirmReview: () => void;
+  confirming: boolean;
+  basketIdForFetch: string | number | null;
+  rawBasketImageFromOrder: string | null;
+  basketName: string;
+  orgLogo: string | null;
+  orgLocationLabel: string | null;
+  buyerName: string;
+  qty: number;
+  pickupStart: string | null;
+  pickupEnd: string | null;
+  PMIcon: any;
+  pmLabel: string;
+  total: number;
+  credits: number;
+  hasCredits: boolean;
+  toCollect: number;
+  fmtDT: (n: number) => string;
+  row: any;
+}) {
+  // Fetch the basket directly when we have an id. TodayReservationFromAPI
+  // doesn't include image URLs, so the previous extraction (basket?.image_url
+  // etc) was always falling through to the placeholder. This one-shot
+  // query picks up the real basket image. Cached for 60 s.
+  //
+  // The backend response is not consistently normalised to camelCase —
+  // depending on the route, `imageUrl` vs `image_url` vs the older
+  // `cover_image_url` can all show up. BasketFromAPI's `[key: string]:
+  // unknown` index signature lets us read whichever one the server
+  // actually sent, so the image renders regardless of casing.
+  const basketDetailQuery = useQuery({
+    queryKey: ['basket-detail', basketIdForFetch],
+    queryFn: () => fetchBasketById(String(basketIdForFetch)),
+    enabled: basketIdForFetch != null,
+    staleTime: 60_000,
+  });
+  const detail = basketDetailQuery.data as any | undefined;
+  const basketImage: string | null =
+    detail?.imageUrl
+    ?? detail?.image_url
+    ?? detail?.cover_image_url
+    ?? detail?.coverImageUrl
+    ?? detail?.photo_url
+    ?? detail?.photoUrl
+    ?? rawBasketImageFromOrder
+    ?? null;
+
+  // Compact row used inside the basket card — small icon left, label
+  // text right. No dividers between rows to keep the card dense; rows
+  // stand apart through paddingVertical alone.
+  const TightRow = ({ icon: Icon, value }: { icon: any; value: string }) => (
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 6 }}>
+      <View style={{ width: 26, height: 26, borderRadius: 13, backgroundColor: '#114b3c', justifyContent: 'center', alignItems: 'center' }}>
+        <Icon size={12} color="#e3ff5c" />
+      </View>
+      <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '600', flex: 1 }} numberOfLines={1}>
+        {value}
+      </Text>
+    </View>
+  );
+
+  return (
+    // edges=['top','left','right'] so SafeAreaView no longer adds the
+    // bottom inset automatically. The Confirmer wrapper below now
+    // applies its own `Math.max(insets.bottom, 16) + 8` padding — that
+    // guarantees breathing room on EVERY device shape:
+    //   • iOS with home indicator    (insets.bottom ≈ 34) → 42 px
+    //   • Android immersive mode     (insets.bottom ≈ 0)  → 24 px
+    //   • Android visible nav bar    (insets.bottom ≈ 48) → 56 px
+    // Without the min, the previous `paddingBottom: 0` left the CTA
+    // glued to the screen edge on small Androids where immersive
+    // suppressed the safe-area inset to 0.
+    <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]} edges={['top', 'left', 'right']}>
+      {/* Header — back (top-left) cancels and returns to scanning. */}
+      <View style={[styles.header, { paddingHorizontal: theme.spacing.xl, paddingTop: theme.spacing.sm, paddingBottom: theme.spacing.sm }]}>
+        <TouchableOpacity onPress={cancelReview} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
+          <ArrowLeft size={24} color={theme.colors.textPrimary} />
+        </TouchableOpacity>
+        <Text style={[styles.headerTitle, { color: theme.colors.textPrimary, ...theme.typography.h3, flex: 1, textAlign: 'center' }]}>
+          {t('business.scan.reviewTitle', { defaultValue: 'Confirmer le retrait' })}
+        </Text>
+        <View style={{ width: 24 }} />
+      </View>
+
+      {/* Body — flex:1 so the customer row + two cards + spacer pack the
+          available height without scrolling. Padding kept tight
+          (spacing.lg) so everything fits on typical phone heights. */}
+      <View style={{ flex: 1, paddingHorizontal: theme.spacing.lg, paddingTop: theme.spacing.sm }}>
+        {/* Customer card — sits ABOVE the order-info card on its own
+            surface. Promoted from a small caption-style row to a proper
+            shadowed card so the customer's identity is the first thing
+            the merchant sees on the confirmation screen (the prior
+            "Commande de Sami M." caption was easy to miss). Avatar
+            badge with initials on the left, label + name on the right. */}
+        <View
+          style={{
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: 12,
+            backgroundColor: theme.colors.surface,
+            borderRadius: theme.radii.r16,
+            padding: 14,
+            marginBottom: theme.spacing.md,
+            ...theme.shadows.shadowSm,
+          }}
+        >
+          <View
+            style={{
+              width: 44,
+              height: 44,
+              borderRadius: 22,
+              backgroundColor: theme.colors.primary + '15',
+              justifyContent: 'center',
+              alignItems: 'center',
+            }}
+          >
+            <UserIcon size={20} color={theme.colors.primary} />
+          </View>
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <Text
+              style={{
+                color: theme.colors.textSecondary,
+                ...theme.typography.caption,
+                marginBottom: 2,
+              }}
+            >
+              {t('business.scan.customerLabel', { defaultValue: 'Client' })}
+            </Text>
+            <Text
+              style={{
+                color: theme.colors.textPrimary,
+                ...theme.typography.body,
+                fontWeight: '700',
+              }}
+              numberOfLines={1}
+            >
+              {buyerName}
+            </Text>
+          </View>
+        </View>
+        {/* Card 1 — basket: image (square thumbnail) on the left, basket
+            name on the right. Divider, then the 3 quick detail rows
+            (Retrait, paniers, paiement). One card, customer-free. */}
+        <View style={{ backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, padding: 14, ...theme.shadows.shadowSm, marginBottom: theme.spacing.md }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+            {basketImage ? (
+              <Image
+                source={{ uri: basketImage }}
+                style={{ width: 64, height: 64, borderRadius: 12, borderWidth: 1, borderColor: theme.colors.divider }}
+                resizeMode="cover"
+              />
+            ) : (
+              <View style={{ width: 64, height: 64, borderRadius: 12, backgroundColor: theme.colors.primary + '12', alignItems: 'center', justifyContent: 'center' }}>
+                <ShoppingBag size={26} color={theme.colors.primary} />
+              </View>
+            )}
+            <View style={{ flex: 1, minWidth: 0 }}>
+              <Text style={{ color: theme.colors.textPrimary, ...theme.typography.body, fontWeight: '700' }} numberOfLines={2}>
+                {basketName}
+              </Text>
+              {/* Org logo + "Org - Location" caption row directly under the
+                  basket name. Reads slightly muted (textSecondary) so the
+                  basket name stays primary. Skipped entirely when neither
+                  the logo nor the label is available. */}
+              {(orgLogo || orgLocationLabel) ? (
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4 }}>
+                  {orgLogo ? (
+                    <Image
+                      source={{ uri: orgLogo }}
+                      style={{ width: 14, height: 14, borderRadius: 7, borderWidth: 1, borderColor: theme.colors.divider }}
+                      resizeMode="cover"
+                    />
+                  ) : null}
+                  {orgLocationLabel ? (
+                    <Text
+                      style={{ color: theme.colors.textSecondary, ...theme.typography.caption, flex: 1 }}
+                      numberOfLines={1}
+                    >
+                      {orgLocationLabel}
+                    </Text>
+                  ) : null}
+                </View>
+              ) : null}
+            </View>
+          </View>
+          {/* Divider then the 3 detail rows. */}
+          <View style={{ height: 1, backgroundColor: theme.colors.divider, marginTop: 12, marginBottom: 6 }} />
+          {(pickupStart && pickupEnd) ? (
+            <TightRow icon={Clock} value={`${t('notifications.pickupAt', { defaultValue: 'Retrait' })} : ${pickupStart} - ${pickupEnd}`} />
+          ) : null}
+          <TightRow
+            icon={ShoppingBag}
+            value={`${qty} ${qty > 1 ? t('basket.baskets', { defaultValue: 'paniers' }) : t('basket.basket', { defaultValue: 'panier' })}`}
+          />
+          <TightRow icon={PMIcon} value={pmLabel} />
+        </View>
+
+        {/* Card 2 — price breakdown. À encaisser is the headline number
+            so the merchant always sees what to actually take. */}
+        <View style={{ backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, padding: theme.spacing.lg, ...theme.shadows.shadowSm }}>
+          <View style={row}>
+            <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm }}>{t('reserve.total')}</Text>
+            <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '600' }}>{fmtDT(total)} TND</Text>
+          </View>
+          {hasCredits && (
+            <View style={[row, { marginTop: 6 }]}>
+              <Text style={{ color: theme.colors.primary, ...theme.typography.bodySm }}>{t('business.scan.creditsUsed', { defaultValue: 'Crédits Barakeat' })}</Text>
+              <Text style={{ color: theme.colors.primary, ...theme.typography.bodySm, fontWeight: '600' }}>−{fmtDT(credits)} TND</Text>
+            </View>
+          )}
+          <View style={[row, { marginTop: 10, paddingTop: 10, borderTopWidth: 1, borderTopColor: theme.colors.divider }]}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              <Banknote size={18} color={theme.colors.primary} />
+              <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3 }}>{t('business.scan.toCollect', { defaultValue: 'À encaisser' })}</Text>
+            </View>
+            <Text style={{ color: theme.colors.primary, ...theme.typography.h2, fontWeight: '700' }}>{fmtDT(toCollect)} TND</Text>
+          </View>
+          {hasCredits && (
+            <View style={{ flexDirection: 'row', gap: 8, marginTop: 10, padding: 10, borderRadius: theme.radii.r12, backgroundColor: theme.colors.primary + '0E' }}>
+              <Wallet size={14} color={theme.colors.primary} style={{ marginTop: 2 }} />
+              <Text style={{ flex: 1, color: theme.colors.textSecondary, ...theme.typography.caption, lineHeight: 16 }}>
+                {t('business.scan.creditsReimburseNote', { credits: fmtDT(credits), defaultValue: 'Le client a payé {{credits}} TND avec des crédits Barakeat — ne lui réclamez pas ce montant.' })}
+              </Text>
+            </View>
+          )}
+        </View>
+      </View>
+
+      {/* Confirm button — adaptive bottom padding. The outer
+          SafeAreaView now skips its bottom edge, so this wrapper
+          OWNS the spacing. `Math.max(insets.bottom, 16) + 8` keeps
+          the CTA at least 24 px off the screen bottom on every
+          device shape (see SafeAreaView comment above) — the
+          earlier `paddingBottom: 0` glued it to the edge on small
+          Androids where the immersive nav-bar hook drove
+          insets.bottom to 0. */}
+      <View
+        style={{
+          paddingHorizontal: theme.spacing.lg,
+          paddingTop: 8,
+          paddingBottom: Math.max(insets.bottom, 16) + 8,
+        }}
+      >
+        <PrimaryCTAButton
+          onPress={confirmReview}
+          title={t('business.scan.confirmPickup', { defaultValue: 'Confirmer le retrait' })}
+          loading={confirming}
+        />
+      </View>
+    </SafeAreaView>
+  );
+}
 
 export default function ScanQRScreen() {
   const { t } = useTranslation();
@@ -45,20 +336,39 @@ export default function ScanQRScreen() {
   //     tour. The screen just shows the camera as the user would see it,
   //     plus a floating instruction popup prompting them to tap back. On
   //     unmount the walkthrough advances past the scanQrBack step.
-  const params = useLocalSearchParams<{ demoBack?: string }>();
+  const params = useLocalSearchParams<{ demoBack?: string; prefillCode?: string }>();
   const isDemoBack = params.demoBack === '1';
+  // When the user lands here from the order-card "Verify pickup" path
+  // (incoming-orders.tsx), the pickup code is pre-filled and we boot
+  // straight into the review state — same flow the QR scan produces. This
+  // unifies the two confirmation paths so both end with the rich review +
+  // full-page success animation.
+  const prefillCode = typeof params.prefillCode === 'string' ? params.prefillCode : '';
   const demoScanCode = useWalkthroughStore((s) => s.demoScanCode);
   const setDemoScanCode = useWalkthroughStore((s) => s.setDemoScanCode);
   const setMeasuredRect = useWalkthroughStore((s) => s.setMeasuredRect);
   const walkthroughCurrentStep = useWalkthroughStore((s) => s.currentStep);
   const skipWalkthrough = useWalkthroughStore((s) => s.skipWalkthrough);
   const inDemoMode = demoScanCode !== null;
+  // Idempotency guard: prevents the unmount cleanup from racing with the
+  // (business) layout's safety-net effect at line ~2057 in _layout.tsx,
+  // which ALSO calls nextStep() when pathname leaves /business/scan-qr.
+  // If both fire in the same React batch (the user reported "demo cleared
+  // unexpectedly after pressing Next on scan-qr"), step advances twice,
+  // and on a borderline step count (e.g. a member role that builds fewer
+  // total steps than expected), the second advance can land at the
+  // end-of-walkthrough threshold and wipe the demo state via
+  // clearDemoState. Flipping the ref the FIRST time either path fires
+  // makes the second a no-op.
+  const scanQrAdvanceFiredRef = useRef(false);
   useEffect(() => {
     if (!isDemoBack) return;
     return () => {
       // On unmount (user taps close / nav pops the screen), advance the
       // walkthrough past the scanQrBack step if we're still on it.
+      if (scanQrAdvanceFiredRef.current) return;
       if (useWalkthroughStore.getState().currentStep?.measureKey === 'scanQrBack') {
+        scanQrAdvanceFiredRef.current = true;
         useWalkthroughStore.getState().nextStep(999);
       }
     };
@@ -76,11 +386,26 @@ export default function ScanQRScreen() {
   const [verified, setVerified] = useState(false);
   const [matchedOrder, setMatchedOrder] = useState<TodayReservationFromAPI | null>(null);
   // In demo mode, boot in manual mode so the keyboard view + manual-toggle
-  // highlight are immediately visible.
-  const [mode, setMode] = useState<'camera' | 'manual'>(inDemoMode ? 'manual' : 'camera');
+  // highlight are immediately visible. The prefillCode path also boots in
+  // manual mode — we're not asking the camera to do anything when the
+  // code already arrived via deep-link from the order-card flow.
+  const [mode, setMode] = useState<'camera' | 'manual'>((inDemoMode || prefillCode) ? 'manual' : 'camera');
   const [scanned, setScanned] = useState(false);
+  // The order awaiting the business's review + confirmation. When set, we show a
+  // summary page (customer, basket, price, credits) with a Confirm button —
+  // instead of finalizing the pickup the instant the code is verified.
+  const [reviewOrder, setReviewOrder] = useState<VerifyQRResult | null>(null);
+  // The raw today-order row matched alongside the verifyQR summary. Carries
+  // the richer order context (basket image, address, pickup window) that
+  // VerifyQRResult doesn't expose. Used to enrich the review + success
+  // screens; both paths (QR scan and manual entry) populate it.
+  const [reviewExtra, setReviewExtra] = useState<TodayReservationFromAPI | null>(null);
+  const [confirming, setConfirming] = useState(false);
   const processingRef = useRef(false); // ref-based guard — prevents double-scan race condition
   const [permission, requestPermission] = useCameraPermissions();
+
+  // Amount formatter — integers stay clean ("5 TND"), fractions show millimes.
+  const fmtDT = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(2));
 
   // Mock the success state when the user taps Verify in demo mode — skip
   // the API call and surface a fake confirmed order.
@@ -90,7 +415,7 @@ export default function ScanQRScreen() {
       buyer_id: 0,
       buyer_name: t('walkthrough.biz.demoOrderCustomer', { defaultValue: 'Sami (démo)' }),
       quantity: 2,
-      pickup_code: 'DEMO1',
+      pickup_code: 'DEMO',
       status: 'picked_up',
       basket_name: t('walkthrough.biz.demoOrderBasket', { defaultValue: 'Panier Surprise' }),
     } as unknown as TodayReservationFromAPI);
@@ -120,42 +445,163 @@ export default function ScanQRScreen() {
       alert.showAlert(t('common.error'), t('business.scan.codeTooShort'));
       return;
     }
-    if (processingRef.current || verified) return; // Prevent double processing
+    if (processingRef.current || verified || reviewOrder) return; // Prevent double processing
     processingRef.current = true;
     setLoading(true);
     try {
+      // Resolve the code → reservation, then verify it to get the rich pickup
+      // summary (correct basket name, total, credits) and show it for review
+      // before confirming — no auto-confirm.
       const orders = await fetchTodayOrders();
+      // Backend codes can be 8 chars on older records; the merchant's
+      // manual input is capped at 6. Compare on a 6-char prefix so the
+      // typed "ABCDEF" still matches a stored "ABCDEF12". The full backend
+      // value is still sent to verifyQR below — server-side pickup
+      // confirmation continues to receive whatever the database has.
+      const enteredPrefix = pickupCode.trim().toUpperCase().substring(0, 6);
       const match = orders.find(
-        (o) => (o.pickup_code ?? '').toUpperCase() === pickupCode.trim().toUpperCase()
+        (o) => (o.pickup_code ?? '').toUpperCase().substring(0, 6) === enteredPrefix
       );
       if (!match) {
         alert.showAlert(t('common.error'), t('business.scan.codeNotFound'));
         setLoading(false);
         setScanned(false);
+        processingRef.current = false;
         return;
       }
-      // Pass buyer_id so backend can send pickup notification to the buyer
-      await confirmPickup(String(match.id), pickupCode.trim().toUpperCase(), match.buyer_id);
-      setVerified(true);
-      setMatchedOrder(match);
-      void queryClient.invalidateQueries({ queryKey: ['today-orders'] });
-      void queryClient.invalidateQueries({ queryKey: ['location-orders'] });
-      void queryClient.invalidateQueries({ queryKey: ['business-stats'] });
-      void queryClient.invalidateQueries({ queryKey: ['business-analytics'] });
+      // Send the FULL stored pickup_code to the backend (not the 4-char
+      // truncation the merchant typed). The server may still validate
+      // against the complete legacy 8-char value on older reservations;
+      // we already confirmed a prefix match client-side, so handing it
+      // the canonical code from `match` keeps server-side verification
+      // backwards-compatible without dropping the 4-char UX.
+      const summary = await verifyQR(JSON.stringify({ reservation_id: match.id, pickup_code: (match.pickup_code ?? pickupCode.trim()).toUpperCase() }));
+      if (!summary.valid) {
+        alert.showAlert(t('common.error'), t('business.scan.codeNotFound'));
+        setScanned(false);
+        processingRef.current = false;
+        return;
+      }
+      // Stash the raw today-order alongside the verifyQR summary so the
+      // review screen can show basket image / address / pickup window —
+      // none of which are in VerifyQRResult.
+      setReviewExtra(match);
+      setReviewOrder(summary);
     } catch (err) {
       alert.showAlert(t('common.error'), getErrorMessage(err));
       setScanned(false);
+      processingRef.current = false;
     } finally {
       setLoading(false);
     }
   };
+
+  // Finalize the pickup the business reviewed. Confirms server-side, then shows
+  // the success screen.
+  const confirmReview = async () => {
+    if (!reviewOrder || confirming) return;
+    setConfirming(true);
+    // Hoisted out of the try block so both the success branch and the
+    // ghost-success branch below can use the same success-screen payload
+    // without duplicating the object literal.
+    const successPayload = {
+      id: reviewOrder.reservation_id ?? '',
+      buyer_id: reviewOrder.buyer_id,
+      buyer_name: reviewOrder.buyer_name,
+      quantity: reviewOrder.quantity,
+      pickup_code: reviewOrder.pickup_code,
+      status: 'picked_up',
+      basket_name: reviewOrder.basket_name ?? undefined,
+    } as unknown as TodayReservationFromAPI;
+    const enterSuccessScreen = () => {
+      setMatchedOrder(successPayload);
+      setReviewOrder(null);
+      setVerified(true);
+      void queryClient.invalidateQueries({ queryKey: ['today-orders'] });
+      void queryClient.invalidateQueries({ queryKey: ['location-orders'] });
+      void queryClient.invalidateQueries({ queryKey: ['business-stats'] });
+      void queryClient.invalidateQueries({ queryKey: ['business-analytics'] });
+    };
+    try {
+      await confirmPickup(String(reviewOrder.reservation_id), reviewOrder.pickup_code ?? '', reviewOrder.buyer_id);
+      enterSuccessScreen();
+    } catch (err) {
+      // Ghost-success path 1 — RETRY case: backend says "cette commande a
+      // déjà été récupérée". That means our previous tap committed and only
+      // the response was lost — the order IS picked up server-side. Surface
+      // the success screen. (cancelled / refunded responses are NOT
+      // swallowed by this helper.)
+      if (isActionAlreadyDoneError(err, 'confirm-pickup')) {
+        console.log('[scan-qr] Already-picked-up short-circuit:', reviewOrder.reservation_id);
+        enterSuccessScreen();
+        return;
+      }
+      // Ghost-success path 2 — FIRST-TAP case: the backend may have committed
+      // the picked_up status before the response died in flight (timeout /
+      // 5xx / network drop). Before showing the merchant a misleading "error",
+      // refetch today's orders and check: if this reservation is now
+      // picked_up server-side, the pickup actually succeeded and the success
+      // screen is the correct outcome. 4xx errors (other than 408) skip this
+      // recovery because they mean the backend rejected the request before
+      // commit (bad code, wrong location, etc.) — those are real errors.
+      const status = Number((err as any)?.status);
+      const raw = String((err as any)?.message ?? '').toLowerCase();
+      const isUnknownStatus = !Number.isFinite(status) || status === 0;
+      const isServerUncertain = status >= 500 || status === 408;
+      const isNetworkMessage =
+        raw.includes('network')
+        || raw.includes('timeout')
+        || raw.includes('failed to fetch')
+        || raw.includes('connexion');
+      const looksLikeMaybeSucceeded = isUnknownStatus || isServerUncertain || isNetworkMessage;
+      if (looksLikeMaybeSucceeded) {
+        try {
+          const orders = await fetchTodayOrders();
+          const found = orders.find((o) => String(o.id) === String(reviewOrder.reservation_id));
+          const liveStatus = String((found as any)?.status ?? '').toLowerCase();
+          if (liveStatus === 'picked_up' || liveStatus === 'collected') {
+            console.log('[scan-qr] Ghost-success recovered: order is now', liveStatus);
+            enterSuccessScreen();
+            return;
+          }
+        } catch (verifyErr) {
+          console.log('[scan-qr] Recovery verify failed:', verifyErr);
+        }
+      }
+      alert.showAlert(t('common.error'), getErrorMessage(err));
+    } finally {
+      setConfirming(false);
+    }
+  };
+
+  // Back from the summary → resume scanning / manual entry without finalizing.
+  const cancelReview = () => {
+    setReviewOrder(null);
+    setReviewExtra(null);
+    setScanned(false);
+    processingRef.current = false;
+  };
+
+  // Prefill: when the user arrives via /business/scan-qr?prefillCode=ABCD,
+  // auto-run handleVerifyCode on mount so the rich review screen comes up
+  // without an extra "type the code again" step. Fired exactly once.
+  const prefillFiredRef = useRef(false);
+  useEffect(() => {
+    if (!prefillCode || prefillFiredRef.current) return;
+    if (inDemoMode || isDemoBack) return; // demo paths own this state
+    prefillFiredRef.current = true;
+    setCode(prefillCode.toUpperCase());
+    void handleVerifyCode(prefillCode);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prefillCode, inDemoMode, isDemoBack]);
 
   const handleBarCodeScanned = ({ data }: { data: string }) => {
     if (scanned || loading || processingRef.current) return;
     processingRef.current = true;
     setScanned(true);
 
-    // Try using verifyQR for full backend verification, then confirm pickup once
+    // Verify the QR (read-only) and show the pickup SUMMARY for the business to
+    // review — confirmation happens on the Confirm button, not automatically.
     setLoading(true);
     verifyQR(data)
       .then(async (verifyResult) => {
@@ -165,69 +611,17 @@ export default function ScanQRScreen() {
           processingRef.current = false;
           return;
         }
-        // Confirm pickup — single call only
-        await confirmPickup(
-          String(verifyResult.reservation_id),
-          verifyResult.pickup_code ?? '',
-          verifyResult.buyer_id
-        );
-        // verifyQR's payload is lean (no basket info). To show the correct
-        // basket name on the success screen, locate the FULL reservation row
-        // (which has basket_name straight from the JOIN) and use it as the
-        // matchedOrder. Mirrors what the manual code-entry path does — and
-        // crucially we match across ALL ['today-orders', locationId] cache
-        // entries, since incoming-orders.tsx scopes the key by location.
-        let fullMatch: TodayReservationFromAPI | undefined;
-        const cachedQueries = queryClient.getQueriesData<TodayReservationFromAPI[]>({ queryKey: ['today-orders'] });
-        for (const [, data] of cachedQueries) {
-          if (Array.isArray(data)) {
-            const m = data.find((o) => String(o.id) === String(verifyResult.reservation_id));
-            if (m) { fullMatch = m; break; }
-          }
-        }
-        if (!fullMatch) {
-          try {
-            const orders = await fetchTodayOrders();
-            fullMatch = orders.find((o) => String(o.id) === String(verifyResult.reservation_id));
-          } catch {}
-        }
-        if (fullMatch) {
-          // The row's top-level basket_name is unreliable (backend returns
-          // the location's default basket regardless of which one was
-          // reserved). The row's basket_id IS correct (FK from when the
-          // reservation was created), so resolve the canonical name via
-          // /api/baskets/:id. Patch it onto matchedOrder so the display
-          // priority chain picks it up.
-          const basketId = (fullMatch as any).basket_id;
-          if (basketId != null) {
-            try {
-              const canonical = await fetchBasketById(String(basketId));
-              if (canonical?.name) {
-                (fullMatch as any).basket_name = canonical.name;
-                (fullMatch as any).basket = {
-                  ...((fullMatch as any).basket ?? {}),
-                  name: canonical.name,
-                };
-              }
-            } catch {}
-          }
-          setMatchedOrder(fullMatch);
-        } else {
-          // Last-resort fallback: synthesize from verifyQR (no basket name).
-          setMatchedOrder({
-            id: verifyResult.reservation_id ?? '',
-            buyer_id: verifyResult.buyer_id,
-            buyer_name: verifyResult.buyer_name,
-            quantity: verifyResult.quantity,
-            pickup_code: verifyResult.pickup_code,
-            status: verifyResult.status,
-          } as TodayReservationFromAPI);
-        }
-        setVerified(true);
-        void queryClient.invalidateQueries({ queryKey: ['today-orders'] });
-        void queryClient.invalidateQueries({ queryKey: ['location-orders'] });
-        void queryClient.invalidateQueries({ queryKey: ['business-stats'] });
-        void queryClient.invalidateQueries({ queryKey: ['business-analytics'] });
+        // Try to also resolve the raw today-order row so the review screen
+        // can show basket image + address + pickup window. Best-effort:
+        // if the fetch fails (the QR was valid but the order somehow
+        // isn't in today's list) we still render the minimal review with
+        // just the verifyQR summary.
+        try {
+          const orders = await fetchTodayOrders();
+          const match = orders.find((o) => String(o.id) === String(verifyResult.reservation_id));
+          if (match) setReviewExtra(match);
+        } catch {}
+        setReviewOrder(verifyResult);
       })
       .catch((err) => {
         // verifyQR failed — fall back to manual code entry only if not already processing
@@ -254,14 +648,62 @@ export default function ScanQRScreen() {
   };
 
   const handleClose = () => {
+    // Demo-back mode: when the user taps Suivant / X / "Quitter la démo" on
+    // the walkthrough popup, advance the demo SYNCHRONOUSLY first instead of
+    // popping the screen. The (business) layout's [step] effect notices the
+    // step change, calls router.replace('/(business)/business-profile') to
+    // pop this sub-screen + land on the profile tab, and the next demo
+    // overlay paints there.
+    //
+    // The previous flow (just `router.back()`) had a race: the back animation
+    // pops the pathname to /(business)/incoming-orders BEFORE scan-qr
+    // actually unmounts, so the layout's safety-net effect would fire its
+    // 80 ms deferred `nextStep` first while the screen is still mid-unmount.
+    // Then the unmount cleanup races behind it — and because the store's
+    // `currentStep` reflector is one effect-tick behind the `step` state,
+    // the cleanup's `currentStep?.measureKey === 'scanQrBack'` guard saw a
+    // stale value, passed, and double-advanced into a step whose host hadn't
+    // mounted yet. The user landed on profile with no overlay because the
+    // layout was waiting on a rect from a screen the user hadn't actually
+    // reached.
+    //
+    // Advancing here (and skipping router.back) flips the
+    // `scanQrAdvanceFiredRef` BEFORE either of those code paths can fire,
+    // so the unmount cleanup is a guaranteed no-op and the safety net's
+    // re-check sees the freshly-advanced step. The layout owns the
+    // navigation end-to-end.
+    if (isDemoBack && useWalkthroughStore.getState().currentStep?.measureKey === 'scanQrBack') {
+      scanQrAdvanceFiredRef.current = true;
+      useWalkthroughStore.getState().nextStep(999);
+      return;
+    }
     router.back();
   };
 
   // Success state
   if (verified) {
+    // Same basket-image resolution as the review screen so the success
+    // screen has matching visual context (the merchant just confirmed THIS
+    // basket — show it). Optional: hero is skipped when no image exists.
+    const ex = (reviewExtra ?? matchedOrder ?? {}) as any;
+    const successBasketImage: string | null =
+      ex.basket_image_url
+      ?? ex.basket_image
+      ?? ex.basket?.image_url
+      ?? ex.basket?.cover_image_url
+      ?? ex.cover_image_url
+      ?? ex.image_url
+      ?? null;
     return (
       <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]}>
         <View style={styles.successContainer}>
+          {successBasketImage ? (
+            <Image
+              source={{ uri: successBasketImage }}
+              style={{ width: 120, height: 120, borderRadius: 60, marginBottom: theme.spacing.lg, borderWidth: 2, borderColor: theme.colors.success }}
+              resizeMode="cover"
+            />
+          ) : null}
           <View
             style={[
               styles.successIconCircle,
@@ -341,6 +783,81 @@ export default function ScanQRScreen() {
           </View>
         </View>
       </SafeAreaView>
+    );
+  }
+
+  // Review state — show the order summary so the business can verify the
+  // customer + see how much cash to collect (credits reduce it) BEFORE
+  // finalizing the pickup. Enriched with basket image / address / pickup
+  // window / payment method so the merchant has the same context they get
+  // on the expanded incoming-order card.
+  if (reviewOrder) {
+    const total = Number(reviewOrder.total ?? 0);
+    const credits = Number(reviewOrder.credit_amount ?? 0);
+    const toCollect = Number(reviewOrder.amount_to_collect ?? Math.max(0, total - credits));
+    const hasCredits = credits > 0;
+    const qty = reviewOrder.quantity ?? 1;
+    const basketDisplay = reviewOrder.basket_name || t('orders.surpriseBag', { defaultValue: 'Panier Surprise' });
+    const row = { flexDirection: 'row' as const, justifyContent: 'space-between' as const, alignItems: 'center' as const };
+
+    // Extract richer context from the matched today-order row when present.
+    const x = (reviewExtra ?? {}) as any;
+    const basketIdForFetch = x.basket_id ?? x.basket?.id ?? null;
+    // Org logo + "Org - Location" line that renders under the basket name
+    // on the review card. Both pieces come from whatever the today-order row
+    // happened to carry; either may be missing on older payloads, in which
+    // case the row is skipped silently downstream.
+    const orgLogo: string | null = (
+      x.org_logo_url
+      ?? x.organization?.logo_url
+      ?? x.restaurant?.image_url
+      ?? x.basket?.merchant_logo
+      ?? null
+    );
+    const orgName: string | null = (x.organization_name ?? x.restaurant_name ?? x.org_name ?? null);
+    const locationLabelOnly: string | null = (x.location_name ?? null);
+    const orgLocationLabel: string | null = orgName && locationLabelOnly
+      ? `${orgName} - ${locationLabelOnly}`
+      : (orgName ?? locationLabelOnly);
+    const pickupStart: string | null = x.pickup_start_time ? String(x.pickup_start_time).substring(0, 5) : null;
+    const pickupEnd: string | null = x.pickup_end_time ? String(x.pickup_end_time).substring(0, 5) : null;
+    const paymentMethod: 'cash' | 'card' | 'credits' = (reviewOrder.payment_method ?? x.payment_method ?? 'cash') as any;
+    const isCard = paymentMethod === 'card';
+    const PMIcon = isCard ? CreditCard : Banknote;
+    const pmLabel = isCard
+      ? (hasCredits
+          ? t('orders.paymentByCardWithCredits', { defaultValue: 'Paiement par carte (+ crédits)' })
+          : t('orders.paymentByCard', { defaultValue: 'Paiement par carte' }))
+      : (hasCredits
+          ? t('orders.paymentInCashWithCredits', { defaultValue: 'Paiement en espèces (+ crédits)' })
+          : t('orders.paymentInCash', { defaultValue: 'Paiement en espèces' }));
+
+    return (
+      <ReviewScreen
+        t={t}
+        theme={theme}
+        insets={insets}
+        cancelReview={cancelReview}
+        confirmReview={confirmReview}
+        confirming={confirming}
+        basketIdForFetch={basketIdForFetch}
+        rawBasketImageFromOrder={x.basket_image_url ?? x.basket_image ?? x.basket?.image_url ?? x.basket?.cover_image_url ?? x.cover_image_url ?? x.image_url ?? null}
+        basketName={basketDisplay}
+        orgLogo={orgLogo}
+        orgLocationLabel={orgLocationLabel}
+        buyerName={reviewOrder.buyer_name || '—'}
+        qty={qty}
+        pickupStart={pickupStart}
+        pickupEnd={pickupEnd}
+        PMIcon={PMIcon}
+        pmLabel={pmLabel}
+        total={total}
+        credits={credits}
+        hasCredits={hasCredits}
+        toCollect={toCollect}
+        fmtDT={fmtDT}
+        row={row}
+      />
     );
   }
 
@@ -571,10 +1088,19 @@ export default function ScanQRScreen() {
                 },
               ]}
               value={code}
-              onChangeText={(text) => setCode(text.toUpperCase().slice(0, 6))}
+              // Strip anything that isn't a digit before storing. The
+              // OS keypad enforces this on most devices but Android
+              // hardware keyboards / some keyboard skins can still
+              // inject letters — the regex is the belt-and-suspenders.
+              onChangeText={(text) => setCode(text.replace(/\D/g, '').slice(0, 6))}
               placeholder={t('business.scan.codePlaceholder')}
               placeholderTextColor={theme.colors.muted}
-              autoCapitalize="characters"
+              // `number-pad` opens the dedicated 0-9 keypad on iOS and
+              // Android (no decimal, no minus, no comma). Faster to
+              // tap than the full keyboard's number row, and pickup
+              // codes are now numeric-only (backend generates 6 digits
+              // — see generatePickupCode in reservations.js).
+              keyboardType="number-pad"
               autoCorrect={false}
               maxLength={6}
               textAlign="center"

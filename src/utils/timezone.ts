@@ -140,27 +140,108 @@ export function isPickupWindowOpenInTz(
 }
 
 /**
- * Validate a pickup window so it (a) has non-zero duration and (b) fits
- * inside ONE business day (03:30 → 03:29 next morning) — i.e. it does
- * not straddle the daily reset at 03:30.
+ * Validate a pickup window so it (a) has at least 15 minutes of duration,
+ * (b) doesn't have start === end, and (c) fits inside ONE business day
+ * (03:30 → 03:29 next morning) — i.e. doesn't straddle the daily reset.
  *
- * Returns one of three statuses so the caller can render the matching
+ * Returns one of four statuses so the caller can render the matching
  * translated message:
- *   - `ok`        : valid
- *   - `zero`      : start === end
+ *   - `ok`            : valid
+ *   - `zero`          : start === end
+ *   - `too-short`     : 0 < duration < 15 minutes (in business-day minutes)
  *   - `crosses-reset` : the window includes the 03:30 boundary
  *
  * The biz-day math is symmetric: a window fits one biz day iff
  *   toBizDayMinutes(end) > toBizDayMinutes(start)
  * Anything that crosses 03:30 produces `eBiz <= sBiz`.
  */
-export type PickupWindowError = 'ok' | 'zero' | 'crosses-reset';
+export type PickupWindowError = 'ok' | 'zero' | 'too-short' | 'crosses-reset';
+
+export const MIN_PICKUP_WINDOW_MINUTES = 15;
 
 export function validateBizDayWindow(startStr: string, endStr: string): PickupWindowError {
   const s = timeToMinutes(startStr);
   const e = timeToMinutes(endStr);
   if (s < 0 || e < 0) return 'zero'; // treat unparseable as zero — same UX
   if (s === e) return 'zero';
-  if (toBizDayMinutes(e) <= toBizDayMinutes(s)) return 'crosses-reset';
+  const sBiz = toBizDayMinutes(s);
+  const eBiz = toBizDayMinutes(e);
+  if (eBiz <= sBiz) return 'crosses-reset';
+  if (eBiz - sBiz < MIN_PICKUP_WINDOW_MINUTES) return 'too-short';
   return 'ok';
+}
+
+const DAY_KEYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'] as const;
+
+/**
+ * Day-of-week key ('mon'…'sun') for the CURRENT BUSINESS DAY (03:30 → 03:29).
+ * Mirrors the backend's getBizDayKey: before 03:30 we're still on the previous
+ * day's business day, so an after-midnight window keeps resolving to its
+ * original day instead of flipping at midnight.
+ */
+export function getBizDayKey(timezone?: string): string {
+  const tz = timezone || DEFAULT_BUSINESS_TZ;
+  let idx: number;
+  try {
+    const wd = new Intl.DateTimeFormat('en-US', { timeZone: tz, weekday: 'short' }).format(new Date());
+    idx = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(wd);
+    if (idx < 0) idx = new Date().getDay();
+  } catch {
+    idx = new Date().getDay();
+  }
+  const now = getNowInBusinessTz(tz);
+  if (now.hours * 60 + now.minutes < DAILY_RESET_MINUTES) {
+    idx = (idx + 6) % 7;
+  }
+  return DAY_KEYS[idx];
+}
+
+export interface TodayHours {
+  closed: boolean;
+  start: string | null; // 'HH:MM'
+  end: string | null;   // 'HH:MM'
+}
+
+/**
+ * Resolve a location's effective pickup window for TODAY (business day) from its
+ * weekly_schedule ({ mon: { start, end, closed }, … }). Mirrors the backend
+ * resolver. Returns null when there's no usable per-day entry for today, in
+ * which case the caller should fall back to the flat pickup_start_time/end.
+ */
+export function resolveTodayWeeklyHours(weeklySchedule: any, timezone?: string): TodayHours | null {
+  let ws = weeklySchedule;
+  if (typeof ws === 'string') {
+    try { ws = JSON.parse(ws); } catch { return null; }
+  }
+  if (!ws || typeof ws !== 'object') return null;
+  const entry = ws[getBizDayKey(timezone)];
+  if (!entry || typeof entry !== 'object') return null;
+  if (entry.closed === true) return { closed: true, start: null, end: null };
+  const start = typeof entry.start === 'string' && entry.start ? entry.start.substring(0, 5) : null;
+  const end = typeof entry.end === 'string' && entry.end ? entry.end.substring(0, 5) : null;
+  if (!start || !end) return null;
+  return { closed: false, start, end };
+}
+
+/**
+ * The EFFECTIVE pickup window (HH:MM) for a location TODAY: today's per-day
+ * hours from weekly_schedule when present, otherwise the flat single-window
+ * times. Used by the basket normalisers so cards / the basket page / the
+ * reserve flow show the right window — and inheriting baskets inherit TODAY's
+ * hours — independent of whether the backend resolved them server-side.
+ *
+ * Returns empty start/end with closed:true when the location is closed today.
+ */
+export function effectiveLocationHours(
+  loc:
+    | { weekly_schedule?: any; pickup_start_time?: string | null; pickup_end_time?: string | null }
+    | null
+    | undefined,
+  timezone?: string
+): { start: string; end: string; closed: boolean } {
+  const today = loc ? resolveTodayWeeklyHours(loc.weekly_schedule, timezone) : null;
+  if (today?.closed) return { start: '', end: '', closed: true };
+  if (today) return { start: today.start ?? '', end: today.end ?? '', closed: false };
+  const fmt = (t?: string | null) => (t ? t.substring(0, 5) : '');
+  return { start: fmt(loc?.pickup_start_time), end: fmt(loc?.pickup_end_time), closed: false };
 }

@@ -85,6 +85,21 @@ interface WalkthroughState {
   // this flag the walkthrough would re-launch on every cold start because the
   // server-side onboarding flag races with the no-location nudge.
   hasCompletedWalkthrough: boolean;
+  // The full "boot-up onboarding sequence" gate. True from the moment the
+  // user signs in until the carousel + demo-cover + walkthrough are fully
+  // resolved (or skipped). Any auto-firing popup (the dashboard's
+  // "Ajoutez votre premier point de vente" nudge etc.) checks this so it
+  // never races the carousel and ends up presented OVER the splash /
+  // onboarding flow. The root layout's onboarding probe sets it; the
+  // /endDemoSequence path clears it.
+  onboardingSequenceActive: boolean;
+  // One-shot flag set right after a brand-new account's FIRST login (email
+  // sign-up → verify → signIn). The root layout reads it to mount the
+  // first-run onboarding carousel IMMEDIATELY (under the splash) instead of
+  // waiting for the async server probe — that wait left the app's first
+  // screen flashing for a beat between splash teardown and the carousel.
+  // Cleared by the layout the moment it's consumed. Not persisted.
+  pendingFirstRun: boolean;
   showSettingsOverlay: boolean;
   // True when the user has tapped "Mode démo" in settings and the demo
   // welcome cover should be shown OVER the (tabs) home screen. The cover
@@ -93,6 +108,12 @@ interface WalkthroughState {
   // any halos / dim masks paint — eliminating the jittery "settling"
   // frames users were seeing right at demo start.
   showDemoWelcome: boolean;
+  // True for the lifetime of ONE demo sequence (welcome cover → walkthrough →
+  // end), set when the cover opens (first-login chain OR Settings "Mode démo").
+  // The root layout watches it to run a single "demo ended" handler exactly once
+  // for whichever exit happens (cover quit, walkthrough finish, or skip). NOT
+  // persisted — a sequence never spans an app restart.
+  demoSequencePending: boolean;
   // Single keyed map of measured rects. Screens write their rect on
   // onLayout via setMeasuredRect; the walkthrough overlay reads on render.
   measuredRects: Partial<Record<MeasuredKey, ElementRect>>;
@@ -179,6 +200,9 @@ interface WalkthroughState {
   resetWalkthroughCompletion: () => void;
   setShowSettingsOverlay: (v: boolean) => void;
   setShowDemoWelcome: (v: boolean) => void;
+  setDemoSequencePending: (v: boolean) => void;
+  setOnboardingSequenceActive: (v: boolean) => void;
+  setPendingFirstRun: (v: boolean) => void;
 
   setMeasuredRect: (key: MeasuredKey, r: ElementRect | null) => void;
 
@@ -215,8 +239,11 @@ export const useWalkthroughStore = create<WalkthroughState>()(
     (set, get) => ({
       step: null,
       hasCompletedWalkthrough: false,
+      onboardingSequenceActive: false,
+      pendingFirstRun: false,
       showSettingsOverlay: false,
       showDemoWelcome: false,
+      demoSequencePending: false,
       measuredRects: {},
       demoBasketActive: false,
       demoOrderActive: false,
@@ -276,6 +303,9 @@ export const useWalkthroughStore = create<WalkthroughState>()(
 
       setShowSettingsOverlay: (v: boolean) => set({ showSettingsOverlay: v }),
       setShowDemoWelcome: (v: boolean) => set({ showDemoWelcome: v }),
+      setDemoSequencePending: (v: boolean) => set({ demoSequencePending: v }),
+      setOnboardingSequenceActive: (v: boolean) => set({ onboardingSequenceActive: v }),
+      setPendingFirstRun: (v: boolean) => set({ pendingFirstRun: v }),
 
       setMeasuredRect: (key: MeasuredKey, r: ElementRect | null) =>
         set((state) => {
@@ -309,11 +339,16 @@ export const useWalkthroughStore = create<WalkthroughState>()(
     {
       name: 'walkthrough-store',
       storage: createJSONStorage(() => AsyncStorage),
-      // Persist ONLY the completion flag. step / measuredRects / demo flags
-      // are ephemeral session state — re-hydrating them would re-trigger an
-      // in-flight walkthrough on cold boot, which is exactly the bug we're
-      // fixing.
-      partialize: (state) => ({ hasCompletedWalkthrough: state.hasCompletedWalkthrough }),
+      // Nothing is persisted. The server-side `onboarding_completed` flag is
+      // the single source of truth for "should we show the demo?" — see the
+      // probe at [_layout.tsx:431]. Persisting `hasCompletedWalkthrough`
+      // here used to keep a device-scoped suppression around as a belt-and-
+      // braces gate, but it was redundant (the server flag already covers
+      // the same case) and confusing (a fresh signup on a device where a
+      // previous user finished the demo would need an explicit
+      // `resetWalkthroughCompletion()` to un-gate). Step / measuredRects /
+      // demo flags were never persisted either (ephemeral by design).
+      partialize: () => ({}),
     },
   ),
 );

@@ -5,6 +5,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { XCircle, CheckCircle2, AlertTriangle, Info } from 'lucide-react-native';
 import { tokens } from '@/src/theme/tokens';
 import { PaperSurface } from './ui/PaperSurface';
+import { BarakeatErrorIcon } from './ui/BarakeatErrorIcon';
 
 type AlertType = 'success' | 'error' | 'warning' | 'info';
 type AlertLayout = 'center' | 'sheet';
@@ -53,8 +54,13 @@ const AlertContext = createContext<AlertContextType>({
 // letting an uncaught error reach the red Expo error screen. The provider
 // registers its live `showAlert` on mount.
 let _globalShowAlert: AlertContextType['showAlert'] | null = null;
-export function showGlobalAlert(title: string, message?: string) {
-  _globalShowAlert?.(title, message);
+export function showGlobalAlert(
+  title: string,
+  message?: string,
+  actions?: AlertAction[],
+  options?: AlertOptions | AlertType,
+) {
+  _globalShowAlert?.(title, message, actions, options);
 }
 
 export const useCustomAlert = () => useContext(AlertContext);
@@ -69,7 +75,10 @@ function getType(title: string): AlertType {
 
 const ICON_MAP = {
   success: { Icon: CheckCircle2, color: '#2d8a6e' },
-  error: { Icon: XCircle, color: '#d94f4f' },
+  // Error uses the custom Barakeat sad-paper-bag icon (see BarakeatErrorIcon)
+  // instead of lucide's generic XCircle so the brand carries through to the
+  // failure state. Same { size, color } props contract as a lucide icon.
+  error: { Icon: BarakeatErrorIcon, color: '#d94f4f' },
   warning: { Icon: AlertTriangle, color: '#e8a838' },
   info: { Icon: Info, color: '#114b3c' },
 };
@@ -193,7 +202,14 @@ export function CustomAlertProvider({ children }: { children: React.ReactNode })
     // identical padding + font without needing adjustsFontSizeToFit. 2-
     // button confirm dialogs (Annuler / Confirmer, Annuler / Supprimer)
     // stay side-by-side — they read better as a left/right pair.
-    const stackVertical = alert.actions.length >= 3;
+    //
+    // EXCEPTION: any popup using `layout: 'sheet'` always stacks its
+    // actions vertically — sheet popups are exclusively the photo-source
+    // pickers (Prendre une photo / Choisir depuis la galerie), and those
+    // labels are too long to fit comfortably in two flex:1 columns on a
+    // ~340 px sheet width. Stacking them gives each button the full sheet
+    // width so the labels render without truncation.
+    const stackVertical = alert.actions.length >= 3 || alert.layout === 'sheet';
     return (
       <View style={{ flexDirection: stackVertical ? 'column' : 'row', gap: 10, width: '100%' }}>
         {alert.actions.map((action, i) => {
@@ -275,7 +291,11 @@ export function CustomAlertProvider({ children }: { children: React.ReactNode })
                 borderTopWidth: 1,
                 borderColor: tokens.colors.border,
                 paddingHorizontal: 24,
-                paddingBottom: insets.bottom + 24,
+                // insets.bottom alone — the prior `+ 24` doubled the breathing
+                // room under the last action button and made the sheet feel
+                // bottom-heavy. SafeAreaView inset is enough to clear the home
+                // indicator / nav bar; a small floor for gesture-nav phones.
+                paddingBottom: Math.max(insets.bottom, 8),
                 transform: [{ translateY: sheetY }],
                 shadowColor: '#000',
                 shadowOffset: { width: 0, height: 6 },

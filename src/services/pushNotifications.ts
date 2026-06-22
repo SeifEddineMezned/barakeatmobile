@@ -17,20 +17,64 @@ function ensureHandler(): void {
   if (isExpoGo || handlerSet) return;
   const Notifications = require('expo-notifications');
   Notifications.setNotificationHandler({
-    handleNotification: async () => ({
-      shouldShowAlert: true,
-      shouldPlaySound: true,
-      shouldSetBadge: false,
-    }),
+    handleNotification: async () => {
+      // Hold the foreground banner while the new-order animation / celebration is
+      // on screen — the "order confirmed" push to the buyer's own device would
+      // otherwise pop OVER it. The notification is still delivered to the tray +
+      // bell, and the after-celebration order-confirmed popup shows the details.
+      let busy = false;
+      try {
+        const { useCelebrationStore } = require('@/src/stores/celebrationStore');
+        const s = useCelebrationStore.getState();
+        busy = !!(s.pending || s.orderFlowActive);
+      } catch {}
+      // SDK 54 (expo-notifications 0.32+): `shouldShowAlert` is deprecated and
+      // IGNORED — foreground presentation is now driven by `shouldShowBanner` +
+      // `shouldShowList`. Returning only the old field meant any push that
+      // landed while the app was in the FOREGROUND showed no OS banner at all
+      // (e.g. the pickup-closing reminder, received while the user had the app
+      // open, only appeared in-app). Keep `shouldShowAlert` for back-compat.
+      return {
+        shouldShowBanner: !busy,
+        shouldShowList: !busy,
+        shouldShowAlert: !busy,
+        shouldPlaySound: !busy,
+        shouldSetBadge: false,
+      };
+    },
   });
   handlerSet = true;
 }
+
+// Dedupe in-flight registration. The root layout effect that calls this has
+// deps `[isAuthenticated, isRestoringSession, user?.id]` which can flip in
+// quick succession on cold start (and React StrictMode mounts twice in dev),
+// firing this twice within a few ms. The two parallel PUTs to /api/auth/
+// push-token and /api/auth/fcm-token would then race each other into the
+// backend's express-rate-limit window and both come back 429, with neither
+// getting through — chat push notifications silently broken on Android until
+// the next sign-in. Caching the promise collapses concurrent callers onto
+// one HTTP round-trip; the cache clears the moment the promise settles so a
+// later legitimate re-registration (post-permission-grant, etc.) still works.
+let inFlightRegistration: Promise<string | null> | null = null;
 
 export async function registerForPushNotifications(): Promise<string | null> {
   if (isExpoGo) {
     console.log('[Push] Skipping push registration in Expo Go');
     return null;
   }
+  if (inFlightRegistration) return inFlightRegistration;
+  inFlightRegistration = (async () => {
+    try {
+      return await doRegisterForPushNotifications();
+    } finally {
+      inFlightRegistration = null;
+    }
+  })();
+  return inFlightRegistration;
+}
+
+async function doRegisterForPushNotifications(): Promise<string | null> {
   ensureHandler();
   const Notifications = require('expo-notifications');
 
@@ -57,7 +101,7 @@ export async function registerForPushNotifications(): Promise<string | null> {
     }
 
     const tokenData = await Notifications.getExpoPushTokenAsync({
-      projectId: 'd3b5c7d2-49f2-4de1-bfe8-f6146c2576e8',
+      projectId: '9d8ccb2b-0876-491c-bdc4-eab409cb105a',
     });
     const token = tokenData.data;
 
@@ -66,6 +110,25 @@ export async function registerForPushNotifications(): Promise<string | null> {
       await apiClient.put('/api/auth/push-token', { pushToken: token });
     } catch {
       console.log('[Push] Failed to save token to backend');
+    }
+
+    // Also register the NATIVE FCM device token. The backend uses it to send
+    // collapsible per-conversation chat notifications via FCM directly (one
+    // notification per chat, Messenger-style) — Expo's push relay can't set the
+    // Android collapse tag. On Android this returns { type: 'fcm', data }.
+    try {
+      const deviceToken = await Notifications.getDevicePushTokenAsync();
+      // On Android, `.data` IS the FCM registration token — but the reported
+      // `type` may be 'android' (not 'fcm') depending on the SDK version, so do
+      // NOT gate on it or the token silently never registers (chat collapse then
+      // falls back to Expo = stacked notifications).
+      console.log('[Push] device push token type:', deviceToken?.type);
+      if (Platform.OS === 'android' && typeof deviceToken?.data === 'string' && deviceToken.data) {
+        await apiClient.put('/api/auth/fcm-token', { fcmToken: deviceToken.data });
+        console.log('[Push] FCM device token registered with backend');
+      }
+    } catch (e) {
+      console.log('[Push] Failed to register FCM device token:', (e as any)?.message);
     }
 
     return token;
@@ -115,4 +178,34 @@ export async function cancelAllScheduledNotifications(): Promise<void> {
   if (isExpoGo) return;
   const Notifications = require('expo-notifications');
   await Notifications.cancelAllScheduledNotificationsAsync();
+}
+
+// Clears the OS app-icon badge, and OPTIONALLY dismisses delivered
+// notifications from the tray.
+//
+// `dismissTray` defaults to FALSE: on an ordinary app foreground we only zero
+// the numeric badge and LEAVE the tray intact, so delivered notifications
+// persist (Messenger-style) instead of vanishing every time the user opens the
+// app — previously `dismissAllNotificationsAsync()` ran on every foreground and
+// wiped the whole tray, which is why a pickup/cancel notification appeared to
+// "delete" the earlier ones (the QR scanner bounces the app inactive→active,
+// firing the clear).
+//
+// `dismissTray: true` is passed only on login/logout/account-switch, where we
+// DO want to clear the tray so a freshly-signed-in account never inherits the
+// previous account's notifications.
+//
+// Note: on Android the launcher derives the icon dot from the notifications
+// still in the tray, so with the tray preserved the dot may linger until the
+// user opens the relevant thread — the accepted trade for not nuking notifs.
+// No-ops in Expo Go.
+export async function clearNotificationBadge(dismissTray: boolean = false): Promise<void> {
+  if (isExpoGo) return;
+  try {
+    const Notifications = require('expo-notifications');
+    await Notifications.setBadgeCountAsync(0);
+    if (dismissTray) {
+      await Notifications.dismissAllNotificationsAsync();
+    }
+  } catch {}
 }

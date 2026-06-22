@@ -17,7 +17,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { ChevronLeft, Zap, X, Check } from 'lucide-react-native';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { cancelReservation, fetchMyReservations } from '@/src/services/reservations';
-import { getErrorMessage } from '@/src/lib/api';
+import { getErrorMessage, isActionAlreadyDoneError } from '@/src/lib/api';
 import { useOrdersStore } from '@/src/stores/ordersStore';
 import { useHeroStore } from '@/src/stores/heroStore';
 import { StatusBar } from 'expo-status-bar';
@@ -90,6 +90,15 @@ export default function CancelReservationScreen() {
     }
     void queryClient.invalidateQueries({ queryKey: ['locations'] });
     void queryClient.invalidateQueries({ queryKey: ['baskets'] });
+    // Per-basket detail cache. The basket page uses queryKey: ['basket', id]
+    // (singular), which doesn't match the plural ['baskets'] invalidation
+    // above. Without this, a customer who reserved 2 of a basket then
+    // cancelled would still see the pre-cancel quantity on the basket
+    // detail page — the backend restores baskets.quantity (reservations.js
+    // line 1310) but the cached page never refetched. This invalidates
+    // every ['basket', *] key so any open basket detail picks up the
+    // restored stock the next time it gains focus.
+    void queryClient.invalidateQueries({ queryKey: ['basket'] });
     void queryClient.invalidateQueries({ queryKey: ['wallet'] });
     if (isBusiness) {
       // Business surfaces: refresh the incoming/past order lists and stats so
@@ -101,7 +110,44 @@ export default function CancelReservationScreen() {
     } else {
       // Customer surfaces: gamification (XP penalty) + the buyer's orders list.
       void queryClient.invalidateQueries({ queryKey: ['gamification-stats'] });
+      // Optimistic patch FIRST: when the user navigates back to /orders the
+      // tab subscribes to the same ['reservations'] cache. invalidate +
+      // refetch are async, and a slow network can leave the user staring at
+      // a stale cache for several seconds — long enough that the card moves
+      // into the Problems tab (the partition reads the freshly-cancelled
+      // status the moment refetch lands) BUT the cached row's updated_at is
+      // still the pre-cancel value, so the "il y a X" chip reads "il y a 3h"
+      // (since reservation) instead of "à l'instant" (since cancellation).
+      // Synchronously stamp updated_at + the cancellation markers on the
+      // cached row so the UI shows the right time the moment it renders.
+      const nowIso = new Date().toISOString();
+      queryClient.setQueryData<any[]>(['reservations'], (old) => {
+        if (!Array.isArray(old)) return old;
+        return old.map((r) => {
+          if (String(r?.id) !== String(reservationId)) return r;
+          return {
+            ...r,
+            status: 'cancelled',
+            cancelled_by: 'buyer',
+            // Don't fabricate a cancellation_reason here — the backend stores
+            // the user-typed value and the refetch below replaces this stub
+            // shortly. Touching it would write 'unknown' into the cache for
+            // the brief window between optimistic and canonical.
+            updated_at: nowIso,
+          };
+        });
+      });
+      // FORCE refetch (not just invalidate) so the reservations cache holds
+      // the post-cancel state by the time the user navigates away. The
+      // "delete account still blocked right after cancel" report was caused
+      // by a stale cached row tagged 'confirmed' surviving the screen pop —
+      // the orders tab and any downstream check (e.g. the delete-account
+      // pre-flight in [settings.tsx]) read this cache, not the server. An
+      // invalidate alone marks the query stale but doesn't refetch until a
+      // subscriber re-mounts; an explicit refetch guarantees the canceled
+      // row is reflected before the user moves on.
       void queryClient.invalidateQueries({ queryKey: ['reservations'] });
+      void queryClient.refetchQueries({ queryKey: ['reservations'] });
       // Tell the orders tab to reset its scroll when it regains focus (the
       // removed card otherwise leaves a stale offset that snaps on first touch).
       useOrdersStore.getState().requestScrollReset();
@@ -117,6 +163,17 @@ export default function CancelReservationScreen() {
     mutationFn: (r: string) => cancelReservation(reservationId, r),
     onSuccess: () => finishAsCancelled(),
     onError: async (err: any) => {
+      // Ghost-success fast path: backend explicitly says the order is already
+      // in a terminal "not active" state (cancelled / expired). The user's
+      // cancel intent is satisfied — show success without a roundtrip.
+      // NB: this intentionally does NOT swallow 'picked_up' / 'completed'
+      // (see isActionAlreadyDoneError) so a buyer who tried to cancel an
+      // order the merchant already collected still sees the real conflict.
+      if (isActionAlreadyDoneError(err, 'cancel-reservation')) {
+        console.log('[Cancel] Already-terminal short-circuit:', reservationId);
+        finishAsCancelled();
+        return;
+      }
       // The cancel DELETE does inline notification fan-out; a slow network can
       // time out / drop the connection AFTER the server already cancelled the
       // row. Showing "pas de connexion" then is wrong — the order IS cancelled.
@@ -228,7 +285,7 @@ export default function CancelReservationScreen() {
                 <>
                   <Text style={{ color: theme.colors.textSecondary, ...theme.typography.body }}>·</Text>
                   <Text style={{ color: theme.colors.error, ...theme.typography.bodySm, fontWeight: '600' as const }}>
-                    Level {levelBefore} → {levelAfter}
+                    {t('orders.cancelLevelDrop', { defaultValue: 'Niveau' })} {levelBefore} → {levelAfter}
                   </Text>
                 </>
               )}
@@ -247,15 +304,31 @@ export default function CancelReservationScreen() {
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: theme.colors.bg }} edges={['top']}>
       <StatusBar style="dark" />
-      <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: theme.colors.divider }}>
-        <TouchableOpacity onPress={() => router.back()} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+      {/* Three-column flex header: back button | centred title | spacer.
+          Each column is laid out by Yoga so the title's bounding box can't
+          extend over the back button's hit area — which was the bug. The
+          previous absolute-positioned back button + centred Text approach
+          relied on the Text's `pointerEvents="none"` cascading through its
+          implicit native wrapper, which Android doesn't always honour, so
+          taps on the icon were swallowed by the Text's wide bounding box.
+          The right-side 32 px spacer mirrors the back button column so the
+          title stays visually centred. */}
+      <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: theme.colors.divider, minHeight: 52 }}>
+        <TouchableOpacity
+          onPress={() => router.back()}
+          hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}
+          accessibilityRole="button"
+          accessibilityLabel={t('common.goBack', { defaultValue: 'Go back' })}
+          style={{ width: 32, height: 32, justifyContent: 'center', alignItems: 'flex-start' }}
+        >
           <ChevronLeft size={24} color={theme.colors.textPrimary} />
         </TouchableOpacity>
-        <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h2, flex: 1, marginLeft: 12 }}>
+        <Text style={{ flex: 1, color: theme.colors.textPrimary, ...theme.typography.h2, textAlign: 'center' }} numberOfLines={1}>
           {isBusiness
-            ? t('business.orders.cancelReasonTitle', { defaultValue: 'Pourquoi annulez-vous cette commande ?' })
-            : t('orders.cancelReasonTitle', { defaultValue: 'Pourquoi annulez-vous ?' })}
+            ? t('business.orders.cancelReasonTitle', { defaultValue: 'Annuler la commande' })
+            : t('orders.cancelReasonTitle', { defaultValue: 'Annulation' })}
         </Text>
+        <View style={{ width: 32, height: 32 }} />
       </View>
 
       <KeyboardAvoidingView
@@ -267,6 +340,14 @@ export default function CancelReservationScreen() {
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >
+          {/* Question moved out of the page title (which is now a short
+              header label) and into the body so the header stays compact
+              and the question can wrap freely above the reason chips. */}
+          <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3, fontWeight: '700' as const, marginBottom: 16 }}>
+            {isBusiness
+              ? t('business.orders.cancelReasonQuestion', { defaultValue: 'Pourquoi annulez-vous cette commande ?' })
+              : t('orders.cancelReasonQuestion', { defaultValue: 'Pourquoi annulez-vous ?' })}
+          </Text>
           {/* Reason chips — label on the left, a filled check pill on the
               right when selected (no leading radio dot). The whole row tints
               and its border turns primary on selection, so it reads as a

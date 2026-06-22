@@ -8,6 +8,7 @@ import { useTranslation } from 'react-i18next';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { fetchMyContext, fetchOrganizationDetails, updateLocation } from '@/src/services/teams';
 import { getErrorMessage } from '@/src/lib/api';
+import { verifyOrAlarm } from '@/src/hooks/useVerifyOnError';
 import { useCustomAlert } from '@/src/components/CustomAlert';
 import { LocationFormFields, type LocationFormValue } from '@/src/components/LocationFormFields';
 import { validateBizDayWindow } from '@/src/utils/timezone';
@@ -90,6 +91,7 @@ export default function EditLocationScreen() {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['org-details'] });
       void queryClient.invalidateQueries({ queryKey: ['my-profile'] });
+      void queryClient.invalidateQueries({ queryKey: ['my-context'] });
       void queryClient.invalidateQueries({ queryKey: ['locations'] });
       alert.showAlert(
         t('common.success'),
@@ -97,8 +99,53 @@ export default function EditLocationScreen() {
         [{ text: 'OK', onPress: () => router.back() }],
       );
     },
-    onError: (err: any) => {
-      alert.showAlert(t('common.error'), getErrorMessage(err));
+    onError: async (err: any) => {
+      // Verify-before-alarming. Edit-location PUTs can sometimes
+      // succeed server-side but the response arrives after the 30 s
+      // axios timeout, leaving the user with a popup that lies about
+      // the save. Refetch org-details and check whether the location
+      // row now reflects the requested fields before deciding to
+      // alarm.
+      await verifyOrAlarm<any>({
+        error: err,
+        queryClient,
+        verifyKey: ['org-details', orgId],
+        verify: (fresh) => {
+          const locs = (fresh as any)?.locations ?? [];
+          const live = locs.find((l: any) => Number(l.id) === Number(locationId));
+          if (!live) return false;
+          // Compare what we sent against what the server now reports.
+          // Only checks primitives we know are diffable; trims time
+          // fields to HH:MM so backend HH:MM:SS still matches.
+          const expected: Record<string, any> = {
+            name: form.name.trim() || undefined,
+            address: form.address.trim() || undefined,
+            phone: form.phone.trim() || undefined,
+            category: form.category || undefined,
+          };
+          for (const [k, v] of Object.entries(expected)) {
+            if (v === undefined) continue;
+            if (String(live[k] ?? '') !== String(v)) return false;
+          }
+          return true;
+        },
+        onConfirmed: () => {
+          // Mirror onSuccess: the server got the change, the user just
+          // never saw the response.
+          void queryClient.invalidateQueries({ queryKey: ['org-details'] });
+          void queryClient.invalidateQueries({ queryKey: ['my-profile'] });
+          void queryClient.invalidateQueries({ queryKey: ['my-context'] });
+          void queryClient.invalidateQueries({ queryKey: ['locations'] });
+          alert.showAlert(
+            t('common.success'),
+            t('business.team.locationUpdated', { defaultValue: 'Emplacement mis à jour.' }),
+            [{ text: 'OK', onPress: () => router.back() }],
+          );
+        },
+        onUnconfirmed: () => {
+          alert.showAlert(t('common.error'), getErrorMessage(err));
+        },
+      });
     },
   });
 
@@ -117,11 +164,15 @@ export default function EditLocationScreen() {
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: theme.colors.bg }}>
-      <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: theme.colors.divider }}>
-        <TouchableOpacity onPress={() => router.back()} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: theme.colors.divider, minHeight: 48 }}>
+        <TouchableOpacity
+          onPress={() => router.back()}
+          hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}
+          style={{ position: 'absolute', left: 16, top: 12 }}
+        >
           <ChevronLeft size={24} color={theme.colors.textPrimary} />
         </TouchableOpacity>
-        <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h2, flex: 1, marginLeft: 12 }}>
+        <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h2 }}>
           {t('business.team.editLocation', { defaultValue: "Modifier l'emplacement" })}
         </Text>
       </View>

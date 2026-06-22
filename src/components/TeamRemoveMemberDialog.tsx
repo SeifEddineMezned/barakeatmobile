@@ -1,5 +1,5 @@
-import React, { useState, useMemo } from 'react';
-import { View, Text, Modal, TouchableOpacity, ActivityIndicator } from 'react-native';
+import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react';
+import { View, Text, Modal, TouchableOpacity, ActivityIndicator, Animated, PanResponder, Dimensions, StyleSheet } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Trash2 } from 'lucide-react-native';
 import { useQueryClient } from '@tanstack/react-query';
@@ -57,6 +57,50 @@ export function TeamRemoveMemberDialog({
     setMode(scopedLocationId != null ? 'scoped' : 'all');
     setError(null);
   }, [visible, scopedLocationId]);
+
+  // ── Open/close + drag animation ───────────────────────────────────────────
+  // The backdrop FADES in place (opacity only); the sheet SLIDES up on its own
+  // translateY. (Previously animationType="slide" moved the backdrop and sheet
+  // together.) The handle is draggable to dismiss.
+  const SHEET_OFFSET = Dimensions.get('window').height;
+  const backdropOpacity = useRef(new Animated.Value(0)).current;
+  const sheetTranslateY = useRef(new Animated.Value(SHEET_OFFSET)).current;
+  const closingRef = useRef(false);
+
+  useEffect(() => {
+    if (visible) {
+      closingRef.current = false;
+      backdropOpacity.setValue(0);
+      sheetTranslateY.setValue(SHEET_OFFSET);
+      Animated.parallel([
+        Animated.timing(backdropOpacity, { toValue: 1, duration: 220, useNativeDriver: true }),
+        Animated.spring(sheetTranslateY, { toValue: 0, useNativeDriver: true, friction: 11, tension: 70 }),
+      ]).start();
+    }
+  }, [visible, backdropOpacity, sheetTranslateY, SHEET_OFFSET]);
+
+  // Animate out, THEN tell the parent to unmount us. Guards against re-entry so
+  // a double-tap / drag-release race can't strand the sheet off-screen.
+  const animateClose = useCallback(() => {
+    if (closingRef.current) return;
+    closingRef.current = true;
+    Animated.parallel([
+      Animated.timing(backdropOpacity, { toValue: 0, duration: 180, useNativeDriver: true }),
+      Animated.timing(sheetTranslateY, { toValue: SHEET_OFFSET, duration: 200, useNativeDriver: true }),
+    ]).start(() => { onClose(); });
+  }, [backdropOpacity, sheetTranslateY, SHEET_OFFSET, onClose]);
+
+  const dragResponder = useRef(
+    PanResponder.create({
+      onMoveShouldSetPanResponder: (_, g) => g.dy > 4 && g.dy > Math.abs(g.dx),
+      onPanResponderMove: (_, g) => { if (g.dy > 0 && !closingRef.current) sheetTranslateY.setValue(g.dy); },
+      onPanResponderRelease: (_, g) => {
+        if (closingRef.current) return;
+        if (g.dy + g.vy * 60 > 120 || g.vy > 0.6) animateClose();
+        else Animated.spring(sheetTranslateY, { toValue: 0, useNativeDriver: true, friction: 11, tension: 70 }).start();
+      },
+    })
+  ).current;
 
   const scopedMembership = useMemo(
     () => memberships.find((m) => Number(m.location_id) === Number(scopedLocationId)),
@@ -123,10 +167,17 @@ export function TeamRemoveMemberDialog({
   }
 
   return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'flex-end' }}>
+    <Modal visible={visible} transparent animationType="none" onRequestClose={animateClose}>
+      <View style={{ flex: 1, justifyContent: 'flex-end' }}>
+        {/* Backdrop — fades in place (does not slide with the sheet). */}
+        <Animated.View style={[StyleSheet.absoluteFillObject, { backgroundColor: 'rgba(0,0,0,0.45)', opacity: backdropOpacity }]} />
+        <TouchableOpacity style={StyleSheet.absoluteFillObject} activeOpacity={1} onPress={animateClose} />
+        {/* Sheet — slides up on its own translateY; drag the handle to dismiss. */}
+        <Animated.View style={{ transform: [{ translateY: sheetTranslateY }] }}>
         <PaperSurface radius={24} shadow="lg" style={{ width: '100%', borderBottomLeftRadius: 0, borderBottomRightRadius: 0, paddingTop: 10, paddingHorizontal: 24, paddingBottom: insets.bottom + 20, alignItems: 'center' }}>
-          <View style={{ width: 40, height: 5, borderRadius: 3, backgroundColor: theme.colors.divider, marginBottom: 16 }} />
+          <View {...dragResponder.panHandlers} style={{ width: '100%', alignItems: 'center', paddingTop: 2, paddingBottom: 12 }}>
+            <View style={{ width: 40, height: 5, borderRadius: 3, backgroundColor: theme.colors.divider }} />
+          </View>
           <View style={{ backgroundColor: theme.colors.surfaceMuted, width: 56, height: 56, borderRadius: 28, justifyContent: 'center', alignItems: 'center', marginBottom: 16 }}>
             <Trash2 size={26} color={theme.colors.textSecondary} />
           </View>
@@ -165,7 +216,7 @@ export function TeamRemoveMemberDialog({
 
           <View style={{ flexDirection: 'row', gap: 10, width: '100%' }}>
             <TouchableOpacity
-              onPress={onClose}
+              onPress={animateClose}
               disabled={loading}
               style={{ flex: 1, backgroundColor: theme.colors.bg, borderRadius: 12, paddingVertical: 14, alignItems: 'center', borderWidth: 1, borderColor: theme.colors.divider, opacity: loading ? 0.6 : 1 }}
             >
@@ -186,6 +237,7 @@ export function TeamRemoveMemberDialog({
             </TouchableOpacity>
           </View>
         </PaperSurface>
+        </Animated.View>
       </View>
     </Modal>
   );

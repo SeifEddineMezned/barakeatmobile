@@ -13,7 +13,7 @@ import { SubScreenWalkthroughOverlay } from '@/src/components/SubScreenWalkthrou
 import { StatusBar } from 'expo-status-bar';
 import { DelayedLoader } from '@/src/components/DelayedLoader';
 import { PrimaryCTAButton } from '@/src/components/PrimaryCTAButton';
-import { getErrorMessage } from '@/src/lib/api';
+import { getErrorMessage, makeAttemptKey } from '@/src/lib/api';
 
 const TYPE_CONFIG: Record<string, { icon: any; color: string; labelKey: string }> = {
   reward: { icon: Star, color: '#f59e0b', labelKey: 'wallet.reward' },
@@ -22,6 +22,32 @@ const TYPE_CONFIG: Record<string, { icon: any; color: string; labelKey: string }
   payment: { icon: ArrowUpRight, color: '#ef4444', labelKey: 'wallet.payment' },
   admin_credit: { icon: Gift, color: '#114b3c', labelKey: 'wallet.adminCredit' },
 };
+
+// Maps the canonical French strings the backend writes to wallet_transactions.description
+// (in /backend/routes/reservations.js + /backend/routes/wallet.js) onto i18n keys so the
+// transaction list reads in the customer's chosen language. Anything we don't recognise
+// falls through as-is — admin-entered credit-code blurbs ("Code: SUMMER", custom promo
+// copy) are surfaced verbatim because they vary per campaign and aren't translatable
+// from a static map.
+const DESCRIPTION_KEY_MAP: Record<string, string> = {
+  'paiement par crédits': 'wallet.descPaymentByCredits',
+  'paiement par credits': 'wallet.descPaymentByCredits',
+  'paiement effectué': 'wallet.descPaymentDone',
+  'paiement effectue': 'wallet.descPaymentDone',
+  'remboursement annulation': 'wallet.descRefundCancellation',
+  'account deletion': 'wallet.descAccountDeletion',
+};
+
+function translateDescription(t: (k: string, opts?: any) => string, raw?: string): string | null {
+  if (!raw) return null;
+  const norm = raw.trim().toLowerCase();
+  const key = DESCRIPTION_KEY_MAP[norm];
+  if (key) return t(key, { defaultValue: raw });
+  // Gift-code descriptions look like "Code: SUMMER22" — keep the code part, translate the prefix.
+  const codeMatch = raw.match(/^code\s*:\s*(.+)$/i);
+  if (codeMatch) return t('wallet.descGiftCode', { code: codeMatch[1], defaultValue: raw });
+  return raw;
+}
 
 export default function WalletScreen() {
   const { t } = useTranslation();
@@ -69,6 +95,11 @@ export default function WalletScreen() {
   const walkthroughKey = useWalkthroughStore((s) => s.currentStep?.measureKey);
   useEffect(() => {
     if (walkthroughKey !== 'walletRecharge') return;
+    // When the expanded panel is open, leave the rect alone — the panel's
+    // own onLayout (in the JSX below) publishes its rect under the same
+    // key so the halo follows the textbox the user is supposed to look
+    // at. We only re-measure the button here when the panel is collapsed.
+    if (codeExpanded) return;
     // Clear the prior rect first — /wallet is pushed onto the navigation
     // stack, and the push animation can let an early onLayout publish a
     // mid-animation rect. The SubScreen overlay's haveRect fast-path then
@@ -83,7 +114,7 @@ export default function WalletScreen() {
       });
     }, 280);
     return () => clearTimeout(t);
-  }, [walkthroughKey]);
+  }, [walkthroughKey, codeExpanded]);
 
   const walletQuery = useQuery({
     queryKey: ['wallet'],
@@ -94,6 +125,11 @@ export default function WalletScreen() {
   const balance = walletQuery.data?.balance ?? 0;
   const transactions = walletQuery.data?.transactions ?? [];
 
+  // Per-attempt idempotency key for the redeem POST. Keyed by the redeemed
+  // CODE STRING, so retrying the same code reuses the same key (replay-safe),
+  // while typing a different code starts fresh. Cleared on success.
+  const redeemAttemptKeysRef = useRef<Record<string, string>>({});
+
   // Shared code-redemption handler used by both manual entry ("Appliquer"
   // button) and the QR scanner. Keeps messaging + wallet invalidation in one
   // place so the two entry points stay in sync.
@@ -102,14 +138,78 @@ export default function WalletScreen() {
     if (!code) return;
     setCodeLoading(true);
     setCodeMsg(null);
+    // Mint or reuse the per-code attempt key. The same code typed again (e.g.
+    // user saw "couldn't verify" and tapped Appliquer again) gets the same
+    // key so the backend replays the original outcome. A different code mints
+    // its own. Same-code success → key cleared in the success branch below.
+    const codeKeyMap = redeemAttemptKeysRef.current;
+    if (!codeKeyMap[code]) codeKeyMap[code] = makeAttemptKey();
+    const attemptKey = codeKeyMap[code];
     try {
-      const res = await redeemCode(code);
+      const res = await redeemCode(code, attemptKey);
+      // Successful redemption — drop this code's key so a future redeem of
+      // a different code starts fresh AND so the map doesn't grow unbounded.
+      delete codeKeyMap[code];
       const amountTnd = res.amount.toFixed(2);
       setCodeMsg({ text: t('wallet.codeRedeemed', { amount: amountTnd, defaultValue: `+${amountTnd} TND ajoutés !` }), success: true });
       setGiftCode('');
       void queryClient.invalidateQueries({ queryKey: ['wallet'] });
     } catch (err: any) {
-      setCodeMsg({ text: getErrorMessage(err), success: false });
+      // Map the backend's distinct redeem failures to specific user-facing copy.
+      //
+      // Backend → app mapping:
+      //   400 "Vous avez déjà utilisé ce code"               → already used
+      //   400 "Ce code a expiré"                             → expired/missing
+      //   400 "Ce code est désactivé"                        → expired/missing
+      //   400 "Ce code a déjà été utilisé le nombre maximum" → expired/missing
+      //   404 "Code invalide"                                → expired/missing
+      //   No response at all (cold backend / route crash)    → server unreachable
+      //                                                        — NOT "code doesn't exist"
+      //                                                        because we genuinely
+      //                                                        don't know if the code
+      //                                                        is valid.
+      const status = err?.status;
+      const raw = String(err?.message ?? '').toLowerCase();
+      // A failure with no clean response — status undefined (transport failed,
+      // axios reports "Network Error") OR status 5xx (backend errored) — means
+      // we genuinely don't know whether the code exists. The old copy here
+      // said "Le serveur ne répond pas" which was misleading: in the cases the
+      // user observed, OTHER codes were succeeding in the same session, so
+      // it's not a global outage — just this one request that didn't come
+      // back cleanly. Neutral "couldn't verify this code" copy is true
+      // regardless of underlying cause, and reassures them the wallet wasn't
+      // charged so they can safely retry the same code.
+      const isUnverifiable =
+        status == null ||
+        (typeof status === 'number' && status >= 500) ||
+        raw.includes('network error') ||
+        raw.includes('timeout') ||
+        raw.includes('erreur serveur');
+      const isAlreadyUsed =
+        status === 409 ||
+        raw.includes('déjà utilisé ce code') ||
+        raw.includes('already used') ||
+        raw.includes('already redeemed');
+      const isNotFoundOrExpired =
+        !isAlreadyUsed && !isUnverifiable && (
+          status === 404 ||
+          raw.includes('code invalide') ||
+          raw.includes('expiré') ||
+          raw.includes('expired') ||
+          raw.includes('désactivé') ||
+          raw.includes('disabled') ||
+          raw.includes('nombre maximum') ||
+          raw.includes('max uses') ||
+          raw.includes('not found')
+        );
+      const text = isAlreadyUsed
+        ? t('wallet.codeAlreadyUsed', { defaultValue: 'Vous avez déjà utilisé ce code.' })
+        : isNotFoundOrExpired
+          ? t('wallet.codeNotFoundOrExpired', { defaultValue: 'Ce code n’existe pas ou a expiré.' })
+          : isUnverifiable
+            ? t('wallet.codeUnverifiable', { defaultValue: 'Impossible de vérifier ce code pour le moment. Vérifiez l’orthographe et réessayez — le code n’a pas été utilisé.' })
+            : getErrorMessage(err);
+      setCodeMsg({ text, success: false });
     } finally {
       setCodeLoading(false);
     }
@@ -170,6 +270,7 @@ export default function WalletScreen() {
     const cfg = TYPE_CONFIG[item.type] ?? TYPE_CONFIG.admin_credit;
     const Icon = cfg.icon;
     const isPositive = item.amount > 0;
+    const translatedDesc = translateDescription(t, item.description);
 
     return (
       <View style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 14, paddingHorizontal: 20, borderBottomWidth: 1, borderBottomColor: theme.colors.divider }}>
@@ -180,9 +281,9 @@ export default function WalletScreen() {
           <Text style={{ color: theme.colors.textPrimary, fontSize: 14, fontWeight: '500' }}>
             {t(cfg.labelKey)}
           </Text>
-          {item.description && (
+          {translatedDesc && (
             <Text style={{ color: theme.colors.textSecondary, fontSize: 12, marginTop: 2 }} numberOfLines={1}>
-              {item.description}
+              {translatedDesc}
             </Text>
           )}
           <Text style={{ color: theme.colors.muted, fontSize: 11, marginTop: 2 }}>
@@ -250,11 +351,40 @@ export default function WalletScreen() {
           <ChevronDown size={18} color={theme.colors.muted} style={{ transform: [{ rotate: codeExpanded ? '180deg' : '0deg' }] }} />
         </TouchableOpacity>
         {codeExpanded && (
-          <View style={{ marginHorizontal: 20, marginTop: 8, backgroundColor: theme.colors.surface, borderRadius: 14, padding: 16, borderWidth: 1, borderColor: theme.colors.divider }}>
+          <View
+            // Publish the EXPANDED panel's rect under the same walkthrough
+            // key the button uses — when the user taps the "Code Cadeau"
+            // button during the demo's wallet step, the section expands
+            // and we want the halo to jump to the expanded textbox + Apply
+            // row. The button's onLayout has its own guard that skips
+            // publishing while currentStep.measureKey === 'walletRecharge'
+            // (lines 259-265), so our new rect won't be overwritten by the
+            // button's race-prone re-layout. When the user collapses the
+            // section, this View unmounts; the step-driven re-measure
+            // effect ~280 ms above re-publishes the button rect, so the
+            // halo snaps back.
+            onLayout={(e) => {
+              if (useWalkthroughStore.getState().currentStep?.measureKey !== 'walletRecharge') return;
+              (e.target as any)?.measureInWindow?.((x: number, y: number, w: number, h: number) => {
+                if (w > 0 && h > 0) useWalkthroughStore.getState().setMeasuredRect('walletRecharge', { x, y, w, h });
+              });
+            }}
+            style={{ marginHorizontal: 20, marginTop: 8, backgroundColor: theme.colors.surface, borderRadius: 14, padding: 16, borderWidth: 1, borderColor: theme.colors.divider }}
+          >
             {/* Input row: the code field fills, and a square QR-scan button
                 sits to its right so voucher QR codes can be scanned without
-                typing. */}
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                typing. During the demo's walletRecharge step the entire row
+                is wrapped in a pointerEvents="none" View — tapping the field
+                would otherwise focus it, open the soft keyboard, shift the
+                expanded panel upward, and force the demo halo to chase the
+                new position frame after frame. The walkthrough instructs
+                the user to tap "Suivant" instead of interacting. Same for
+                the QR scan button: opening the camera scanner mid-demo
+                would tear down the walkthrough overlay entirely. */}
+            <View
+              pointerEvents={walkthroughKey === 'walletRecharge' ? 'none' : 'auto'}
+              style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}
+            >
               <TextInput
                 value={giftCode}
                 onChangeText={(v) => { setGiftCode(v.toUpperCase()); setCodeMsg(null); }}
@@ -269,6 +399,8 @@ export default function WalletScreen() {
                     listRef.current?.scrollToOffset({ offset: Math.max(0, codeFormYRef.current - 12), animated: true });
                   }, 250);
                 }}
+                editable={walkthroughKey !== 'walletRecharge'}
+                showSoftInputOnFocus={walkthroughKey !== 'walletRecharge'}
                 style={{ flex: 1, height: 44, borderWidth: 1, borderColor: '#114b3c', borderRadius: 10, paddingHorizontal: 14, color: theme.colors.textPrimary, fontSize: 15, fontWeight: '600', letterSpacing: 2, textAlign: 'center' }}
               />
               <TouchableOpacity
@@ -312,11 +444,15 @@ export default function WalletScreen() {
     <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]}>
       <StatusBar style="dark" />
       {/* Header */}
-      <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: theme.colors.divider }}>
-        <TouchableOpacity onPress={() => router.back()} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: theme.colors.divider, minHeight: 52 }}>
+        <TouchableOpacity
+          onPress={() => router.back()}
+          hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}
+          style={{ position: 'absolute', left: 16, top: 14 }}
+        >
           <ChevronLeft size={24} color={theme.colors.textPrimary} />
         </TouchableOpacity>
-        <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h2, flex: 1, marginLeft: 12 }}>
+        <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h2 }}>
           {t('wallet.title')}
         </Text>
       </View>

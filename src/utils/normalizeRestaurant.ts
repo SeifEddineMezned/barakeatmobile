@@ -1,6 +1,6 @@
 import type { Basket } from '@/src/types';
 import type { RestaurantFromAPI, LocationFromAPI } from '@/src/services/restaurants';
-import { isPickupExpiredInTz } from '@/src/utils/timezone';
+import { isPickupExpiredInTz, effectiveLocationHours } from '@/src/utils/timezone';
 
 // ── Tunisia coordinate lookup table ──────────────────────────────────────────
 // Used as a fallback when the API does not return GPS coordinates.
@@ -111,7 +111,7 @@ export function normalizeRawBasketToBasket(
   // the consumer-side normaliser would slap the hardcoded 18:00/19:00
   // default on every "inheriting" basket — which is exactly the chez-joe
   // bug ("6-7 PM" displayed instead of the location's actual hours).
-  locationDefaults?: { start?: string | null; end?: string | null },
+  locationDefaults?: { start?: string | null; end?: string | null; weekly_schedule?: any },
 ): Basket {
   const originalPrice = Number(b.original_price ?? 0);
   const discountedPrice = Number(b.selling_price ?? 0);
@@ -130,8 +130,16 @@ export function normalizeRawBasketToBasket(
 
   const basketStart = formatTime(b.pickup_start_time);
   const basketEnd = formatTime(b.pickup_end_time);
-  const locStart = formatTime(locationDefaults?.start);
-  const locEnd = formatTime(locationDefaults?.end);
+  // Resolve the LOCATION's effective hours for TODAY (a per-day weekly_schedule
+  // wins over the flat single-window times) so an inheriting basket shows the
+  // location's hours for the current business day, not the widest weekly span.
+  const locEff = effectiveLocationHours({
+    weekly_schedule: locationDefaults?.weekly_schedule,
+    pickup_start_time: locationDefaults?.start ?? null,
+    pickup_end_time: locationDefaults?.end ?? null,
+  });
+  const locStart = locEff.start;
+  const locEnd = locEff.end;
 
   return {
     id: String(b.id),
@@ -153,6 +161,17 @@ export function normalizeRawBasketToBasket(
       start: basketStart || locStart || '18:00',
       end: basketEnd || locEnd || '19:00',
     },
+    // Single source of truth for the yellow "horaires personnalisés" chip.
+    // True iff the basket's own pickup_start_time OR pickup_end_time column
+    // is non-null at the DB level (formatTime → empty string when null).
+    // Previously the chip-render code at restaurant/[id].tsx did its own
+    // string comparison against the location's hours, which silently
+    // suppressed the chip whenever the location's hours were missing /
+    // sentinel-zero — explaining why the badge showed for some locations
+    // and not for others. Surfaced here once so every basket-display
+    // surface reads from the same flag.
+    hasCustomPickup: Boolean(basketStart || basketEnd),
+    closedToday: locEff.closed,
     quantityLeft,
     quantityTotal: Math.max(quantityTotal, quantityLeft),
     distance: 0,
@@ -193,7 +212,10 @@ export function normalizeRestaurantToBasket(r: RestaurantFromAPI): Basket {
   const availableLeft = isPausedForBuyer ? 0 : Number(r.available_left ?? r.available_quantity ?? 0);
   const quantityTotal = Number(r.available_quantity || r.default_daily_quantity || 0);
 
-  const isActive = !isPausedForBuyer && !r.pickup_expired;
+  // Effective pickup window for TODAY (per-day weekly_schedule wins over the
+  // flat widest-span times). Closed today → treat as inactive.
+  const eff = effectiveLocationHours(r as any);
+  const isActive = !isPausedForBuyer && !r.pickup_expired && !eff.closed;
 
   const bagDesc = r.bag_description?.trim();
   const description = r.description?.trim();
@@ -217,8 +239,8 @@ export function normalizeRestaurantToBasket(r: RestaurantFromAPI): Basket {
     discountedPrice,
     discountPercentage,
     pickupWindow: {
-      start: formatTime(r.pickup_start_time) || '18:00',
-      end: formatTime(r.pickup_end_time) || '19:00',
+      start: eff.start || '18:00',
+      end: eff.end || '19:00',
     },
     quantityLeft: availableLeft,
     quantityTotal: Math.max(quantityTotal, availableLeft),
@@ -234,6 +256,7 @@ export function normalizeRestaurantToBasket(r: RestaurantFromAPI): Basket {
     isActive,
     isSupermarket: r.category === 'supermarket',
     maxPerCustomer: (r as any).max_per_customer ?? undefined,
+    closedToday: eff.closed,
   };
 }
 
@@ -264,14 +287,18 @@ export function normalizeLocationToBasket(loc: LocationFromAPI): Basket {
   const maxBasketEnd = (loc as any).max_basket_pickup_end
     ? formatTime((loc as any).max_basket_pickup_end)
     : null;
-  const locEnd = formatTime(loc.pickup_end_time);
-  const effectiveEnd = maxBasketEnd || locEnd || '19:00';
+  // Effective pickup window for TODAY (per-day weekly_schedule wins over the
+  // flat widest-span times). Drives both the displayed window and expiry, so a
+  // card shows e.g. Wednesday's 08:00–03:00 rather than the weekly span.
+  const eff = effectiveLocationHours(loc as any);
+  const effectiveEnd = maxBasketEnd || eff.end || '19:00';
   const pickupExpired = isPickupExpiredInTz(effectiveEnd);
 
   const isActive = !loc.is_paused
     && loc.availability_status !== 'paused'
     && totalBasketQty > 0
-    && !pickupExpired;
+    && !pickupExpired
+    && !eff.closed;
 
   // baskets.quantity is already decremented on reserve (and restored on cancel), so
   // totalBasketQty IS the remaining count — subtracting reserved_today would double-count.
@@ -323,8 +350,17 @@ export function normalizeLocationToBasket(loc: LocationFromAPI): Basket {
     discountedPrice,
     discountPercentage,
     pickupWindow: {
-      start: formatTime(loc.pickup_start_time) || '18:00',
-      end: formatTime(loc.pickup_end_time) || '19:00',
+      // `end` must use `effectiveEnd` (which already includes max basket
+      // pickup time via the SQL MAX(COALESCE(b.pickup_end_time,
+      // l.pickup_end_time))), NOT `eff.end` (the location's flat default).
+      // Otherwise BasketCard.tsx's `isPickupExpiredInTz(basket.pickupWindow?
+      // .end)` check fires against the location default — and the card
+      // shows expired even when a basket with custom-extended pickup is
+      // still in its window. `pickupExpired` above already uses
+      // `effectiveEnd`; this keeps the visible window aligned with that
+      // internal verdict so the card-level expiry signal matches it.
+      start: eff.start || '18:00',
+      end: effectiveEnd,
     },
     quantityLeft: availableLeft,
     quantityTotal: totalBasketQty,
@@ -339,6 +375,7 @@ export function normalizeLocationToBasket(loc: LocationFromAPI): Basket {
     isActive,
     isSupermarket: loc.category === 'supermarket',
     basketTypeCount: basketCount > 1 ? basketCount : undefined,
+    closedToday: eff.closed,
   };
 }
 
@@ -347,14 +384,27 @@ export function normalizeLocationToBasket(loc: LocationFromAPI): Basket {
  * These keys MUST exist in all three locale files under home.categories.*
  * UI components call t(`home.categories.${basket.category}`) to render the label.
  *
- * Returned keys: 'all' | 'bakery' | 'restaurant' | 'supermarket' | 'fresh' | 'cafe' | 'fastfood'
+ * Returned keys (must match the canonical LOCATION_CATEGORIES list in
+ * src/lib/locationCategories.ts):
+ *   'all' | 'bakery' | 'restaurant' | 'supermarket' | 'fresh' | 'cafe'
+ *   | 'fastfood' | 'pizzeria' | 'traiteur' | 'hotel' | 'healthy'
  *
  * IMPORTANT: this function is exported so the home screen can use it for
  * the "all" sentinel without hardcoding French.
+ *
+ * Bug history: the default branch used to fall through to 'restaurant',
+ * silently rewriting any unknown category — so a partner edited to
+ * 'hotel' rendered as a Restaurant on the customer side, the user
+ * reported "I changed it to hotel and it kept it as restaurant". Now the
+ * default returns the lower-cased input verbatim if it's a recognised
+ * canonical key, AND fully maps the four newer categories (pizzeria /
+ * traiteur / hotel / healthy) that the create-basket / edit-location
+ * form has been writing for a while.
  */
 export function mapCategory(cat: string | null | undefined): string {
   if (!cat || typeof cat !== 'string') return 'all';
-  switch (cat.toLowerCase().trim()) {
+  const normalized = cat.toLowerCase().trim();
+  switch (normalized) {
     // Bakery / pastry
     case 'bakery':
     case 'boulangerie':
@@ -366,16 +416,33 @@ export function mapCategory(cat: string | null | undefined): string {
     case 'baked_goods':
     case 'baked goods':
       return 'bakery';
-    // Restaurants / meals (includes French backend values like "Plats Préparés")
+    // Restaurants / meals (NOTE: 'traiteur' is now its own bucket below
+    // — was previously rolled into 'restaurant' which made it impossible
+    // to surface caterers separately on the customer side).
     case 'meals':
     case 'restaurant':
     case 'restaurants':
     case 'meal':
     case 'food':
-    case 'traiteur':
     case 'plats préparés':  // French backend label → enum key
     case 'plats prepares':
       return 'restaurant';
+    case 'pizzeria':
+    case 'pizza':
+      return 'pizzeria';
+    case 'traiteur':
+    case 'catering':
+    case 'caterer':
+      return 'traiteur';
+    case 'hotel':
+    case 'hôtel':
+      return 'hotel';
+    case 'healthy':
+    case 'health':
+    case 'health_food':
+    case 'salade':
+    case 'salad':
+      return 'healthy';
     // Supermarket / grocery
     case 'supermarket':
     case 'grocery':
@@ -408,8 +475,12 @@ export function mapCategory(cat: string | null | undefined): string {
     case 'sandwich':
       return 'fastfood';
     default:
-      // Unknown backend category — treat as restaurant (safe, visible)
-      return 'restaurant';
+      // Unknown backend category — pass through the lower-cased value
+      // verbatim instead of silently rewriting to 'restaurant'. The
+      // category chip then renders the raw key (with no i18n hit) which
+      // is visually obvious and tells us a new backend value has appeared
+      // that needs an explicit branch here.
+      return normalized;
   }
 }
 

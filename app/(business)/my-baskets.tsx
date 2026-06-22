@@ -4,30 +4,35 @@ import Svg, { Path } from 'react-native-svg';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import { useRouter, useLocalSearchParams } from 'expo-router';
-import { Plus, Clock, ShoppingBag, MoreVertical, Minus, Camera, X, MapPin, Hand, TimerOff, Pause, AlertTriangle } from 'lucide-react-native';
+import { Plus, Clock, ShoppingBag, MoreVertical, Minus, X, MapPin, Hand, TimerOff, Pause, AlertTriangle, ChevronRight, Info } from 'lucide-react-native';
 import { useTheme } from '@/src/theme/ThemeProvider';
-import { StatusBar } from 'expo-status-bar';
+import { useStatusBarStyleOnFocus } from '@/src/hooks/useStatusBarStyleOnFocus';
 import { useBusinessStore } from '@/src/stores/businessStore';
 import { useWalkthroughStore } from '@/src/stores/walkthroughStore';
 import { DEMO_BASKET_PHOTOS } from '@/src/lib/demoData';
 import { DemoTapHintToast } from '@/src/components/DemoTapHintToast';
 import { fetchMyContext, fetchOrganizationDetails } from '@/src/services/teams';
 import { NoLocationCTA } from '@/src/components/NoLocationCTA';
-import { isPickupExpiredInTz } from '@/src/utils/timezone';
+import { isPickupExpiredInTz, effectiveLocationHours } from '@/src/utils/timezone';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { fetchMyBaskets, deleteBasket as deleteBasketAPI, fetchMyProfile, updateQuantity, updateBasket as updateBasketAPI, updateBasketWithImage, type BusinessBasketFromAPI } from '@/src/services/business';
-import * as ImagePicker from 'expo-image-picker';
-import { useImageCropper } from '@/src/components/ImageCropper';
+import { verifyOrAlarm, createVerifyDisappeared } from '@/src/hooks/useVerifyOnError';
 import { getErrorMessage } from '@/src/lib/api';
 import { FeatureFlags } from '@/src/lib/featureFlags';
 import { DelayedLoader } from '@/src/components/DelayedLoader';
 import { useCustomAlert } from '@/src/components/CustomAlert';
 import { ActionMenuCard, ActionMenuItem, ActionMenuDivider } from '@/src/components/ui/ActionMenu';
-import { EditIcon8, DeleteIcon8, PlayIcon8, PauseIcon8 } from '@/src/components/ui/Icon8';
-import { effectiveDailyReinit } from '@/src/utils/dailyReinit';
+import { EditIcon8, DeleteIcon8, PlayIcon8, PauseIcon8, Icon8Preloader } from '@/src/components/ui/Icon8';
+import { effectiveDailyReinit, nextReinitQuantity, hasPerDayReinit, reinitScheduleEntries, nextResetDayKey } from '@/src/utils/dailyReinit';
 import { formatLocationName } from '@/src/utils/formatLocation';
 
+// Map reinit day keys (mon…sun) to the i18n label keys used elsewhere (Mon…Sun).
+const DAY_KEY_TO_LABEL: Record<string, string> = {
+  mon: 'Mon', tue: 'Tue', wed: 'Wed', thu: 'Thu', fri: 'Fri', sat: 'Sat', sun: 'Sun',
+};
+
 export default function MyBasketsScreen() {
+  useStatusBarStyleOnFocus('dark');
   const targetBasketId = useBusinessStore((s) => s.targetBasketId);
   const targetBasketTs = useBusinessStore((s) => s.targetBasketTs);
   const { t } = useTranslation();
@@ -37,7 +42,6 @@ export default function MyBasketsScreen() {
   const selectedLocationId = useBusinessStore((s) => s.selectedLocationId);
   const queryClient = useQueryClient();
   const alert = useCustomAlert();
-  const { pickAndCrop } = useImageCropper();
 
   // Permission check — granular basket permissions
   const contextQuery = useQuery({ queryKey: ['my-context'], queryFn: fetchMyContext, staleTime: 10_000 });
@@ -59,7 +63,12 @@ export default function MyBasketsScreen() {
     refetchOnMount: 'always',
   });
   const isOrgAdmin = (myRole === 'owner' || myRole === 'admin') && !contextQuery.data?.location_id;
-  const hasNoLocation = isOrgAdmin
+  // Suppressed during the walkthrough — see [_layout.tsx:206]. The demo
+  // injects fake baskets via demoBasketActive, so the empty-state CTA
+  // must step aside while the tour is running.
+  const basketsWalkthroughStep = useWalkthroughStore((s) => s.step);
+  const hasNoLocation = basketsWalkthroughStep === null
+    && isOrgAdmin
     && !!orgIdForNoLoc
     && !orgDetailsQuery.isLoading
     && (orgDetailsQuery.data?.locations?.length ?? 0) === 0;
@@ -91,8 +100,12 @@ export default function MyBasketsScreen() {
   });
 
   const currentQty = profileQuery.data?.available_quantity ?? 0;
-  const pickupStart = profileQuery.data?.pickup_start_time?.substring(0, 5) ?? '--:--';
-  const pickupEnd = profileQuery.data?.pickup_end_time?.substring(0, 5) ?? '--:--';
+  // Show the location's hours for TODAY (per-day weekly_schedule wins over the
+  // flat widest span), resolved client-side from weekly_schedule.
+  const todayProfileHours = effectiveLocationHours(profileQuery.data as any);
+  const isLocationClosedToday = todayProfileHours.closed === true;
+  const pickupStart = todayProfileHours.start || '--:--';
+  const pickupEnd = todayProfileHours.end || '--:--';
 
   const qtyMutation = useMutation({
     mutationFn: (qty: number) => updateQuantity(qty),
@@ -105,9 +118,32 @@ export default function MyBasketsScreen() {
   const basketUpdateMutation = useMutation({
     mutationFn: async ({ id, data }: { id: string; data: Record<string, any> }) => {
       console.log('[MyBaskets] Saving basket', id, 'with:', JSON.stringify(data));
-      const result = await updateBasketAPI(id, data);
-      console.log('[MyBaskets] Server returned:', JSON.stringify({ id: result?.id, quantity: result?.quantity, daily_reinitialization_quantity: result?.daily_reinitialization_quantity, status: result?.status }));
-      return result;
+      // Silent retry on transient network failures. The first attempt
+      // can drop on a Railway hiccup / SSL handshake glitch / cellular
+      // dead air, and the merchant tap then surfaces a hard error
+      // popup for what's actually a flake. Retry ONCE after a short
+      // backoff before letting onError fire. We don't retry on real
+      // 4xx/5xx because those are deterministic — only the
+      // "no response arrived" failures (no err.status, or a 502/503/
+      // 504 gateway code).
+      const isTransient = (e: any) => {
+        if (!e) return false;
+        const status = Number(e?.status ?? e?.response?.status ?? 0);
+        if (!status) return true; // no response at all → network error
+        return status === 502 || status === 503 || status === 504;
+      };
+      try {
+        const result = await updateBasketAPI(id, data);
+        console.log('[MyBaskets] Server returned:', JSON.stringify({ id: result?.id, quantity: result?.quantity, daily_reinitialization_quantity: result?.daily_reinitialization_quantity, status: result?.status }));
+        return result;
+      } catch (firstErr: any) {
+        if (!isTransient(firstErr)) throw firstErr;
+        console.log('[MyBaskets] First attempt failed transiently, retrying once...');
+        await new Promise((r) => setTimeout(r, 800));
+        const result = await updateBasketAPI(id, data);
+        console.log('[MyBaskets] Server returned (after retry):', JSON.stringify({ id: result?.id, quantity: result?.quantity, daily_reinitialization_quantity: result?.daily_reinitialization_quantity, status: result?.status }));
+        return result;
+      }
     },
     onSuccess: (updatedBasket: BusinessBasketFromAPI) => {
       console.log('[MyBaskets] Basket saved OK, quantity:', updatedBasket?.quantity);
@@ -130,13 +166,65 @@ export default function MyBasketsScreen() {
       }
       void queryClient.invalidateQueries({ queryKey: ['basket', String(updatedBasket.id)] });
     },
-    onError: (err: any) => {
+    onError: async (err: any, variables) => {
       console.error('[MyBaskets] Save FAILED:', err?.status, err?.message, JSON.stringify(err?.data));
-      // The server's `err.data.error` is English-only ("Failed to update basket")
-      // and we don't want to surface it raw to a French/Arabic user. Show the
-      // localized fallback instead; the console log above keeps the raw text
-      // available for debugging.
-      alert.showAlert(t('common.error'), getErrorMessage(err));
+      // Verify-before-alarming. The basket save sometimes succeeds
+      // server-side but the response never arrives (cellular packet
+      // drop, Railway slowness past the 30 s axios timeout). Before
+      // showing a popup that would lie to the user, refetch the
+      // basket list and see whether the change is actually there.
+      //
+      // verify() compares each top-level key in the just-sent
+      // `variables.data` against the freshly-refetched basket row.
+      // If every requested field matches, the write committed and we
+      // silently treat as success (invalidate the standard caches and
+      // dismiss). If anything still differs, we fall through to the
+      // soft "refresh and retry" popup. Image / blob fields are
+      // skipped by the comparator since they're not directly diffable.
+      await verifyOrAlarm<BusinessBasketFromAPI[]>({
+        error: err,
+        queryClient,
+        verifyKey: ['my-baskets'],
+        verify: (fresh) => {
+          if (!Array.isArray(fresh)) return false;
+          const live = fresh.find((b) => String(b.id) === String(variables.id));
+          if (!live) return false;
+          // Every primitive field in `variables.data` should match
+          // `live` for us to confidently treat the save as confirmed.
+          for (const [k, v] of Object.entries(variables.data ?? {})) {
+            if (v === undefined || v === null) continue;
+            if (k === 'image' || k === 'image_url') continue;
+            if (typeof v === 'object') continue;
+            if (String((live as any)[k] ?? '') !== String(v)) return false;
+          }
+          return true;
+        },
+        onConfirmed: () => {
+          console.log('[MyBaskets] Save SUCCEEDED silently — server committed, response was lost');
+          // Reflect on every dependent cache the same way onSuccess does.
+          void queryClient.invalidateQueries({ queryKey: ['my-baskets'] });
+          void queryClient.invalidateQueries({ queryKey: ['my-profile'] });
+          void queryClient.invalidateQueries({ queryKey: ['locations'] });
+        },
+        onUnconfirmed: () => {
+          // Soft, brand-protective copy. Raw "Failed to update basket"
+          // / network exception text reads as "our server is broken"
+          // — alarming when most are transient blips. The merchant
+          // gets a calm "refresh and retry" prompt instead.
+          const status = Number(err?.status ?? err?.response?.status ?? 0);
+          const isNetwork = !status || status === 502 || status === 503 || status === 504;
+          alert.showAlert(
+            t('business.baskets.saveErrorTitle', { defaultValue: 'Connexion instable' }),
+            isNetwork
+              ? t('business.baskets.saveErrorRetry', {
+                  defaultValue: 'Un petit souci de connexion. Veuillez actualiser l’application puis réessayer.',
+                })
+              : t('business.baskets.saveErrorGeneric', {
+                  defaultValue: 'Modification non enregistrée. Veuillez actualiser l’application puis réessayer.',
+                }),
+          );
+        },
+      });
     },
   });
 
@@ -145,7 +233,7 @@ export default function MyBasketsScreen() {
   // still display the right times even in "all locations" mode where every
   // basket may belong to a different location than `selectedLocationId`.
   const locationsById = React.useMemo(() => {
-    const m = new Map<number, { pickup_start_time?: string; pickup_end_time?: string; name?: string }>();
+    const m = new Map<number, { pickup_start_time?: string; pickup_end_time?: string; name?: string; weekly_schedule?: any }>();
     for (const loc of orgDetailsQuery.data?.locations ?? []) {
       if (typeof loc.id === 'number') m.set(loc.id, loc);
     }
@@ -161,11 +249,14 @@ export default function MyBasketsScreen() {
     // "use business hours" checked made the basket display 18:00-19:00
     // regardless of the location's real hours.
     const ownLoc = b.location_id != null ? locationsById.get(Number(b.location_id)) : undefined;
-    const fallbackStart = ownLoc?.pickup_start_time?.substring(0, 5)
-      ?? profileQuery.data?.pickup_start_time?.substring(0, 5)
+    // Resolve TODAY's hours for the basket's own location (per-day
+    // weekly_schedule wins over the flat widest span), then the current profile.
+    const ownLocToday = ownLoc ? effectiveLocationHours(ownLoc as any) : null;
+    const fallbackStart = (ownLocToday?.start || undefined)
+      ?? (todayProfileHours.start || undefined)
       ?? '09:00';
-    const fallbackEnd = ownLoc?.pickup_end_time?.substring(0, 5)
-      ?? profileQuery.data?.pickup_end_time?.substring(0, 5)
+    const fallbackEnd = (ownLocToday?.end || undefined)
+      ?? (todayProfileHours.end || undefined)
       ?? '18:00';
     return {
       id: String(b.id),
@@ -188,6 +279,11 @@ export default function MyBasketsScreen() {
       hasPickupOverride: !!(b.pickup_start_time && b.pickup_end_time),
       quantityLeft: Number(b.quantity) || 0,
       quantityTotal: effectiveDailyReinit(b),
+      // What the basket will RESET to at the next 03:30 (today's value if before
+      // 03:30, else tomorrow's), plus the per-day schedule for the popup.
+      nextReinit: nextReinitQuantity(b),
+      perDayReinit: hasPerDayReinit(b),
+      reinitSchedule: reinitScheduleEntries(b),
       distance: 0,
       address: '',
       latitude: 0,
@@ -249,8 +345,25 @@ export default function MyBasketsScreen() {
         void queryClient.invalidateQueries({ queryKey: ['baskets-by-location', String(selectedLocationId)] });
       }
     },
-    onError: (err) => {
-      alert.showAlert(t('common.error'), getErrorMessage(err));
+    onError: async (err, deletedId) => {
+      // Verify-before-alarming. The DELETE may have succeeded server-side
+      // even when the response was lost; refetch the list and check
+      // whether the basket is gone before showing a popup.
+      await verifyOrAlarm<BusinessBasketFromAPI[]>({
+        error: err,
+        queryClient,
+        verifyKey: ['my-baskets'],
+        verify: createVerifyDisappeared((cache) => cache as any, deletedId),
+        onConfirmed: () => {
+          console.log('[MyBaskets] Delete confirmed via refetch — server actually committed');
+          setDetailBasket(null);
+          setActionMenu(null);
+          void queryClient.invalidateQueries({ queryKey: ['my-baskets'] });
+          void queryClient.invalidateQueries({ queryKey: ['my-profile'] });
+          void queryClient.invalidateQueries({ queryKey: ['locations'] });
+        },
+        onUnconfirmed: () => alert.showAlert(t('common.error'), getErrorMessage(err)),
+      });
     },
   });
   const [quantityModalBasket, setQuantityModalBasket] = useState<string | null>(null);
@@ -383,6 +496,21 @@ export default function MyBasketsScreen() {
     if (detailBasket?.id === 'demo-basket-1') setDemoQtyChanged(false);
   }, [detailBasket?.id]);
   const [showFullDesc, setShowFullDesc] = useState(false);
+  // Per-day reinit schedule popup (opened from the availability modal).
+  const [schedulePopup, setSchedulePopup] = useState<{ name: string; entries: Array<{ day: string; qty: number }> } | null>(null);
+  const nextResetDayKeyForPopup = nextResetDayKey();
+  // Responsive sizing for the availability detail modal so it fits short
+  // screens without the Save/customer-view buttons falling off. The card is
+  // already capped at 90% height with an inner ScrollView, but the fixed
+  // photo + 20px paddings made small screens cramped — these shrink them
+  // proportionally. The qty/cutout halos are measurement-based (onLayout)
+  // so they follow automatically; only the Save-button halo wrapper needs
+  // its margins kept at `button margin − 3` (done below) to stay flush.
+  const modalCompact = SH_MODAL < 720;
+  const modalPhotoH = Math.round(Math.max(132, Math.min(200, SH_MODAL * 0.23)));
+  const modalCardPad = modalCompact ? 14 : 20;
+  const modalCardGap = modalCompact ? 12 : 16;
+  const modalSaveMV = modalCompact ? 12 : 16; // Save button vertical margin
   const [descTruncated, setDescTruncated] = useState(false);
   const [detailMaxPerCustomer, setDetailMaxPerCustomer] = useState(1);
   // After the demo Save, override the demo basket's displayed qty so the
@@ -485,6 +613,16 @@ export default function MyBasketsScreen() {
   // modalQtyPlus → modalSave). Without it the demo dead-ends at the modal.
   const setExpandedDemoCardFlag = useWalkthroughStore((s) => s.setExpandedDemoCard);
   const skipWalkthrough = useWalkthroughStore((s) => s.skipWalkthrough);
+  // Reset my-baskets scroll to top THE MOMENT any demo arms (under the
+  // welcome cover, before any halo paints). Tab screens preserve scroll
+  // across navigation, so the demoBasketCard halo would otherwise land
+  // offset by the user's pre-demo scroll position.
+  const myBasketsScrollRef = useRef<ScrollView>(null);
+  const demoSequencePending = useWalkthroughStore((s) => s.demoSequencePending);
+  useEffect(() => {
+    if (!demoSequencePending) return;
+    myBasketsScrollRef.current?.scrollTo({ y: 0, animated: false });
+  }, [demoSequencePending]);
 
   // Compute the popup's target `top` value (in the padding-corrected space
   // of the Animated.View backdrop) based on the active step and the
@@ -632,6 +770,9 @@ export default function MyBasketsScreen() {
     },
     quantityLeft: demoBasketQtyOverride ?? 5,
     quantityTotal: 5,
+    nextReinit: 5,
+    perDayReinit: false,
+    reinitSchedule: [],
     distance: 0,
     address: '',
     latitude: 0,
@@ -676,42 +817,10 @@ export default function MyBasketsScreen() {
     }
   }, [quantityModalBasket, tempQuantity, updateBasket]);
 
-  // ─── Change Photo ────────────────────────────────────────────────────────────
-  const handleChangePhoto = useCallback(async (basketId: string) => {
-    // Unified picker + crop UX. On iOS the native picker handles cropping;
-    // on Android our in-app cropper (with a real "Choisir" button) runs.
-    const croppedUri = await pickAndCrop({ aspect: [4, 3], quality: 0.8 });
-    if (!croppedUri) {
-      // Distinguish permission denial from cancel by re-checking — keeps the
-      // existing toast wording without duplicating the permissions probe.
-      const perm = await ImagePicker.getMediaLibraryPermissionsAsync();
-      if (perm.status !== 'granted') {
-        alert.showAlert(t('common.error'), t('business.menuItems.photoPermRequired'));
-      }
-      return;
-    }
-    // Demo basket has no backend row — sending its id to the API hits the
-    // baskets.id integer column and 500s ("invalid input syntax for type
-    // integer: demo-basket-1"). Mirror the picked photo onto the local
-    // detail-modal state so the user sees the new image during the demo.
-    if (basketId === 'demo-basket-1') {
-      setDetailBasket(prev => prev ? { ...prev, imageUrl: croppedUri } : prev);
-      return;
-    }
-    const formData = new FormData();
-    formData.append('image', {
-      uri: croppedUri,
-      name: 'basket.jpg',
-      type: 'image/jpeg',
-    } as any);
-    try {
-      await updateBasketWithImage(basketId, formData);
-      void queryClient.invalidateQueries({ queryKey: ['my-baskets'] });
-      setDetailBasket(prev => prev ? { ...prev, imageUrl: `${croppedUri}#${Date.now()}` } : prev);
-    } catch (err: any) {
-      alert.showAlert(t('common.error'), getErrorMessage(err));
-    }
-  }, [queryClient, alert, t, pickAndCrop]);
+  // The handleChangePhoto callback used to live here for the camera button
+  // on the availability sheet. Photo editing now lives only in the
+  // edit-basket form, so the sole call site is gone and the helper plus
+  // its ImagePicker / pickAndCrop deps were dead code — removed.
 
   // Bypass the loader during a walkthrough run — otherwise step 3 (Add
   // Basket halo) lands while my-baskets is still in its initial query and
@@ -722,7 +831,6 @@ export default function MyBasketsScreen() {
   if (basketsQuery.isLoading && !basketsQuery.data && !inWalkthrough) {
     return (
       <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]} edges={[]}>
-        <StatusBar style="dark" />
         <DelayedLoader />
       </SafeAreaView>
     );
@@ -730,7 +838,13 @@ export default function MyBasketsScreen() {
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]} edges={[]}>
-      <StatusBar style="dark" />
+      {/* Warm the icons8 PNG cache (edit / pause / play) the moment this screen
+          mounts. Without this, those three icons inside the 3-dots action menu
+          take a visible second to appear when the menu opens, because their
+          <Image>s are decoding for the first time in-place — meanwhile delete
+          (an inline SVG) shows instantly. The preloader is offscreen 1×1 and
+          has no visual / layout impact. */}
+      <Icon8Preloader />
       <View style={[styles.header, { paddingHorizontal: theme.spacing.xl, paddingTop: theme.spacing.xs, paddingBottom: theme.spacing.md }]}>
         <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h1 }]}>
           {t('business.baskets.title')}
@@ -750,7 +864,7 @@ export default function MyBasketsScreen() {
         </TouchableOpacity>
       </View>
 
-      <ScrollView style={styles.content} contentContainerStyle={{ paddingHorizontal: theme.spacing.xl, paddingBottom: 100 }} showsVerticalScrollIndicator={false}>
+      <ScrollView ref={myBasketsScrollRef} style={styles.content} contentContainerStyle={{ paddingHorizontal: theme.spacing.xl, paddingBottom: 100 }} showsVerticalScrollIndicator={false}>
         {/* Location pickup hours summary — shows what time window the baskets
             for this location inherit by default. Hidden in "all locations"
             admin mode (selectedLocationId is null) because there's no single
@@ -760,18 +874,20 @@ export default function MyBasketsScreen() {
             flexDirection: 'row',
             alignItems: 'center',
             gap: 8,
-            backgroundColor: theme.colors.primary + '10',
+            backgroundColor: isLocationClosedToday ? theme.colors.error + '12' : theme.colors.primary + '10',
             borderRadius: theme.radii.r12,
             paddingHorizontal: 12,
             paddingVertical: 10,
             marginTop: theme.spacing.sm,
           }}>
-            <Clock size={14} color={theme.colors.primary} />
-            <Text style={{ color: theme.colors.primary, ...theme.typography.bodySm, fontWeight: '600' }}>
+            <Clock size={14} color={isLocationClosedToday ? theme.colors.error : theme.colors.primary} />
+            <Text style={{ color: isLocationClosedToday ? theme.colors.error : theme.colors.primary, ...theme.typography.bodySm, fontWeight: '600' }}>
               {t('business.baskets.locationHoursLabel', { defaultValue: 'Horaires du commerce' })} :
             </Text>
-            <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '600' }}>
-              {pickupStart} - {pickupEnd}
+            <Text style={{ color: isLocationClosedToday ? theme.colors.error : theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '600' }}>
+              {isLocationClosedToday
+                ? t('basket.closedToday', { defaultValue: 'Fermé aujourd\'hui' })
+                : `${pickupStart} - ${pickupEnd}`}
             </Text>
           </View>
         )}
@@ -800,7 +916,29 @@ export default function MyBasketsScreen() {
             // Demo basket must NEVER show expired / sold-out / inactive —
             // the user's actual pickup window may already be past when the
             // demo runs, but the demo is conceptually "always live".
-            const isExpired = !isDemo && !isSoldOut && !isPaused && isPickupExpiredInTz(basket.pickupWindow?.end);
+            // When the LOCATION is closed for the entire business day, force
+            // every basket card into the expired state — matches what the
+            // customer side now shows, and removes any "sold-out vs closed"
+            // ambiguity for the merchant.
+            // selectedLocationId is set when the user is viewing a SINGLE
+            // location; the baskets displayed all belong to it. In that mode
+            // the location's "closed today" verdict applies blanket-wide. In
+            // "all locations" admin mode we can't apply it without per-basket
+            // location lookup, so we only fall through to the per-basket
+            // pickup-window check.
+            const blanketClosed = !!(selectedLocationId && isLocationClosedToday);
+            // isExpired is independent of isSoldOut — a sold-out basket
+            // whose pickup time has also passed should display as
+            // "Expiré" (more actionable info than "Épuisé" — the time
+            // window was missed, the stock count is a side-effect). The
+            // status pill below renders Expiré when isExpired is true,
+            // and the stock badge over the image is hidden in that case,
+            // so the two never conflict. Still gated on !isPaused because
+            // paused baskets get their own "En pause" treatment.
+            const isExpired = !isDemo && (
+              blanketClosed
+              || (!isPaused && isPickupExpiredInTz(basket.pickupWindow?.end))
+            );
             const isUnavailable = !isDemo && (isSoldOut || isExpired || isPaused || !basket.isActive);
             return (
               <View
@@ -867,35 +1005,38 @@ export default function MyBasketsScreen() {
                       {/* Stock badge over the image — quantity number, or
                           "Épuisé" when sold out. NEVER "Expiré" here:
                           expiration is time-based (not stock-based) and gets
-                          its own pill at the top-right of the CARD below so
-                          both states can be read simultaneously when a
-                          basket is both expired AND still has stock. */}
-                      <View
-                        ref={isDemo ? (demoBasketCardQtyRef as any) : undefined}
-                        onLayout={isDemo ? measureDemoCardQty : undefined}
-                        collapsable={false}
-                        style={{
-                        position: 'absolute',
-                        top: -4,
-                        right: -6,
-                        backgroundColor: isSoldOut ? theme.colors.error : theme.colors.primary,
-                        borderRadius: theme.radii.pill,
-                        minWidth: isSoldOut ? 44 : 24,
-                        height: 24,
-                        justifyContent: 'center',
-                        alignItems: 'center',
-                        paddingHorizontal: isSoldOut ? 8 : 6,
-                        shadowColor: '#000',
-                        shadowOffset: { width: 0, height: 1 },
-                        shadowOpacity: 0.25,
-                        shadowRadius: 3,
-                        elevation: 4,
-                        zIndex: 10,
-                      }}>
-                        <Text style={{ color: '#fff', fontSize: 10, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
-                          {isSoldOut ? t('basket.soldOut', { defaultValue: 'Épuisé' }) : basket.quantityLeft >= 10 ? '9+' : basket.quantityLeft}
-                        </Text>
-                      </View>
+                          its own pill at the top-right of the CARD below.
+                          Hidden entirely when the basket is expired — the
+                          stock count is meaningless at that point and the
+                          Expiré pill already conveys the status. */}
+                      {!isExpired && (
+                        <View
+                          ref={isDemo ? (demoBasketCardQtyRef as any) : undefined}
+                          onLayout={isDemo ? measureDemoCardQty : undefined}
+                          collapsable={false}
+                          style={{
+                          position: 'absolute',
+                          top: -4,
+                          right: -6,
+                          backgroundColor: isSoldOut ? theme.colors.error : theme.colors.primary,
+                          borderRadius: theme.radii.pill,
+                          minWidth: isSoldOut ? 44 : 24,
+                          height: 24,
+                          justifyContent: 'center',
+                          alignItems: 'center',
+                          paddingHorizontal: isSoldOut ? 8 : 6,
+                          shadowColor: '#000',
+                          shadowOffset: { width: 0, height: 1 },
+                          shadowOpacity: 0.25,
+                          shadowRadius: 3,
+                          elevation: 4,
+                          zIndex: 10,
+                        }}>
+                          <Text style={{ color: '#fff', fontSize: 10, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
+                            {isSoldOut ? t('basket.soldOut', { defaultValue: 'Épuisé' }) : basket.quantityLeft >= 10 ? '9+' : basket.quantityLeft}
+                          </Text>
+                        </View>
+                      )}
                     </View>
                     <View style={styles.basketInfo}>
                       <View style={styles.basketNameRow}>
@@ -921,7 +1062,7 @@ export default function MyBasketsScreen() {
                           }}>
                             <Pause size={11} color="#fff" />
                             <Text style={{ color: '#fff', fontSize: 10, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
-                              {t('business.baskets.pausedBadge', { defaultValue: 'Pausé' })}
+                              {t('business.baskets.pausedBadge', { defaultValue: 'En pause' })}
                             </Text>
                           </View>
                         ) : isExpired ? (
@@ -967,7 +1108,7 @@ export default function MyBasketsScreen() {
                         >
                           <ShoppingBag size={10} color={theme.colors.textSecondary} />
                           <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, marginLeft: 3 }]}>
-                            {t('business.baskets.dailyReinit', { defaultValue: 'Réinit.' })} {basket.quantityTotal}
+                            {t('business.baskets.dailyReinit', { defaultValue: 'Réinit.' })} {(basket as any).nextReinit ?? basket.quantityTotal}
                           </Text>
                         </View>
                         {/* Pickup time chip — yellow when basket has its own
@@ -977,10 +1118,15 @@ export default function MyBasketsScreen() {
                             compare against the SELECTED location, so it stays
                             correct in "all locations" mode too. */}
                         {(basket as any).hasPickupOverride ? (
-                          <View style={[styles.metaChip, { backgroundColor: '#e3ff5c18', borderRadius: theme.radii.pill, paddingHorizontal: 8, paddingVertical: 3 }]}>
+                          <View style={[styles.metaChip, { backgroundColor: '#e3ff5c18', borderRadius: theme.radii.pill, paddingHorizontal: 8, paddingVertical: 3, flexShrink: 0 }]}>
                             <Clock size={10} color="#8a7d00" />
-                            <Text style={[{ color: '#8a7d00', ...theme.typography.caption, marginLeft: 3, fontWeight: '600' }]}>
-                              {basket.pickupWindow.start}-{basket.pickupWindow.end}
+                            <Text
+                              numberOfLines={1}
+                              style={[{ color: '#8a7d00', ...theme.typography.caption, marginLeft: 3, fontWeight: '600' }]}
+                            >
+                              {/* Non-breaking hyphen so "15:10-16:00" can never
+                                  split onto two lines when the chip row is tight. */}
+                              {`${basket.pickupWindow.start}‑${basket.pickupWindow.end}`}
                             </Text>
                           </View>
                         ) : (
@@ -1041,6 +1187,12 @@ export default function MyBasketsScreen() {
                     disabled={!canEditQuantities}
                     onPress={() => handleToggle(detailBasket!.id)}
                     style={{
+                      // `alignSelf: 'flex-start'` so the pill hugs its
+                      // content width ("Actif" + dot + padding) instead
+                      // of stretching to match the parent column's width
+                      // — which was being pushed wide by the long
+                      // "Dernier changement" timestamp line below it.
+                      alignSelf: 'flex-start',
                       flexDirection: 'row',
                       alignItems: 'center',
                       backgroundColor: detailBasket?.isActive ? '#114b3c18' : '#114b3c10',
@@ -1085,7 +1237,7 @@ export default function MyBasketsScreen() {
               </View>
 
               {/* Photo section */}
-              <View style={{ height: 200, backgroundColor: theme.colors.divider, position: 'relative' }}>
+              <View style={{ height: modalPhotoH, backgroundColor: theme.colors.divider, position: 'relative' }}>
                 {detailBasket?.imageUrl ? (
                   <Image source={{ uri: detailBasket.imageUrl }} style={{ width: '100%', height: '100%' }} resizeMode="cover" />
                 ) : (
@@ -1096,25 +1248,11 @@ export default function MyBasketsScreen() {
                     </Text>
                   </View>
                 )}
-                {/* Camera button — top-right of the photo area. */}
-                <TouchableOpacity
-                  onPress={() => detailBasket && void handleChangePhoto(detailBasket.id)}
-                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                  style={{
-                    position: 'absolute',
-                    top: 12,
-                    right: 12,
-                    backgroundColor: theme.colors.primary,
-                    borderRadius: 20,
-                    width: 40,
-                    height: 40,
-                    justifyContent: 'center',
-                    alignItems: 'center',
-                    ...(closing ? null : theme.shadows.shadowMd),
-                  }}
-                >
-                  <Camera size={18} color="#fff" />
-                </TouchableOpacity>
+                {/* Camera button removed — photo editing now lives only in
+                    the edit-basket form so the availability sheet has a
+                    single, focused job (today's quantity + per-day
+                    schedule) and the merchant can't accidentally change
+                    the photo while just adjusting stock. */}
               </View>
 
               {/* Info card overlapping photo. Shadow gated on !closing for
@@ -1125,7 +1263,7 @@ export default function MyBasketsScreen() {
                 borderRadius: theme.radii.r16,
                 marginTop: -20,
                 marginHorizontal: 16,
-                padding: 20,
+                padding: modalCardPad,
                 ...(closing ? null : theme.shadows.shadowSm),
               }}>
                 <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h2 }}>
@@ -1163,11 +1301,11 @@ export default function MyBasketsScreen() {
                 backgroundColor: theme.colors.surface,
                 borderRadius: theme.radii.r16,
                 marginHorizontal: 16,
-                marginTop: 16,
-                padding: 20,
+                marginTop: modalCardGap,
+                padding: modalCardPad,
                 ...(closing ? null : theme.shadows.shadowSm),
               }}>
-                <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3, marginBottom: 16 }}>
+                <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3, marginBottom: modalCardGap }}>
                   {t('business.availability.title', { defaultValue: 'Availability' })}
                 </Text>
 
@@ -1179,7 +1317,7 @@ export default function MyBasketsScreen() {
                   const ms = walkthroughCurrentStep?.measureKey;
                   const haloOn = (key: string) => ms === key ? { borderWidth: 3, borderColor: '#e3ff5c' as const } : null;
                   return (
-                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, opacity: canEditQuantities ? 1 : 0.4 }}>
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: modalCardGap, opacity: canEditQuantities ? 1 : 0.4 }}>
                       <Text style={{ color: theme.colors.textPrimary, ...theme.typography.body }}>
                         {t('business.baskets.todayQty')}
                       </Text>
@@ -1222,10 +1360,43 @@ export default function MyBasketsScreen() {
                   );
                 })()}
 
-                {/* Pickup time editing now lives only in the full edit-basket
-                    form (app/business/create-basket.tsx in edit mode) — the
-                    inline editor that used to sit here was removed to keep
-                    one source of truth and avoid two divergent UIs. */}
+                {/* Tomorrow's quantity — INFO row, not editable. The
+                    user wanted a clear visual contrast with the Today
+                    row above (which carries −/+ controls) so it reads
+                    as "this is what will happen next" rather than
+                    "tap to change". Same Poppins family + 600 weight
+                    so it still looks intentional, but smaller font
+                    (bodySm vs the h3 number above) and a muted color
+                    (textSecondary). Per-day schedules tuck a small ⓘ
+                    next to the number — tap opens the schedule popup. */}
+                {detailBasket && (
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                    {/* Single label for both flat and per-day reinit —
+                        the ⓘ icon to the right already tells the user
+                        when there's a custom schedule, so the label
+                        doesn't need to repeat that and can stay short
+                        + grammatical ("Quantité de demain"). */}
+                    <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm, flex: 1, paddingRight: 12 }}>
+                      {t('business.baskets.tomorrowReset', { defaultValue: 'Quantité de demain' })}
+                    </Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                      <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
+                        {(detailBasket as any).nextReinit}
+                      </Text>
+                      {(detailBasket as any).perDayReinit && (
+                        <TouchableOpacity
+                          onPress={() => setSchedulePopup({ name: detailBasket.name, entries: (detailBasket as any).reinitSchedule ?? [] })}
+                          hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}
+                          style={{ width: 22, height: 22, borderRadius: 11, backgroundColor: theme.colors.primary + '14', justifyContent: 'center', alignItems: 'center' }}
+                          accessibilityLabel={t('business.baskets.perDayInfo', { defaultValue: 'Voir le détail par jour' })}
+                          accessibilityRole="button"
+                        >
+                          <Info size={12} color={theme.colors.primary} />
+                        </TouchableOpacity>
+                      )}
+                    </View>
+                  </View>
+                )}
               </View>
               )}
 
@@ -1239,9 +1410,11 @@ export default function MyBasketsScreen() {
                 ref={qtySaveBtnRef as any}
                 onLayout={measureModalCutout('save', qtySaveBtnRef)}
                 style={walkthroughCurrentStep?.measureKey === 'modalSave' ? {
+                  // Kept at `button margin − 3` so the 3px border lands flush
+                  // around the button on every screen size (see modalSaveMV).
                   marginHorizontal: 13,
-                  marginTop: 13,
-                  marginBottom: 17,
+                  marginTop: modalSaveMV - 3,
+                  marginBottom: modalSaveMV - 3,
                   borderRadius: theme.radii.r16 + 3,
                   borderWidth: 3,
                   borderColor: '#e3ff5c',
@@ -1302,8 +1475,8 @@ export default function MyBasketsScreen() {
                   borderRadius: theme.radii.r16,
                   padding: 16,
                   marginHorizontal: 16,
-                  marginTop: 16,
-                  marginBottom: 20,
+                  marginTop: modalSaveMV,
+                  marginBottom: modalSaveMV,
                   alignItems: 'center',
                   opacity: (detailBasket?.id === 'demo-basket-1' && !demoQtyChanged) ? 0.4 : 1,
                 }}
@@ -1328,7 +1501,7 @@ export default function MyBasketsScreen() {
                   justifyContent: 'center',
                   gap: 8,
                   marginHorizontal: 20,
-                  marginBottom: 20,
+                  marginBottom: modalSaveMV,
                   paddingVertical: 12,
                   borderRadius: theme.radii.r12,
                   borderWidth: 1,
@@ -1343,6 +1516,104 @@ export default function MyBasketsScreen() {
               </TouchableOpacity>
             </ScrollView>
           </Animated.View>
+
+          {/* Per-day reinit schedule — IN-MODAL overlay (a second <Modal>
+              stacks unreliably on iOS). Cleaner redesign:
+                - No more rounded-card highlight on the next-reset day —
+                  the user said it looked like a tappable button. Now
+                  the rows are flat (no per-row background), separated
+                  by a thin hairline so the seven entries read as a
+                  list. The next-reset day is signalled by a brand-
+                  green dot to the left of the day name + the day name
+                  itself in primary color + "Demain" tag at the right —
+                  same information, no fake-button visual. */}
+          {schedulePopup && (
+            <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 24 }}>
+              <TouchableOpacity style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }} activeOpacity={1} onPress={() => setSchedulePopup(null)} />
+              <View style={{ width: '100%', maxWidth: 360, maxHeight: '80%', backgroundColor: theme.colors.surface, borderRadius: theme.radii.r24, paddingHorizontal: 20, paddingTop: 18, paddingBottom: 16, ...theme.shadows.shadowLg }}>
+                {/* Header */}
+                <View style={{ flexDirection: 'row', alignItems: 'flex-start', marginBottom: 4 }}>
+                  <View style={{ flex: 1, paddingRight: 8 }}>
+                    <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3 }}>
+                      {t('business.baskets.perDayScheduleTitle', { defaultValue: 'Quantité par jour' })}
+                    </Text>
+                    {schedulePopup.name ? (
+                      <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm, marginTop: 2 }} numberOfLines={1}>
+                        {schedulePopup.name}
+                      </Text>
+                    ) : null}
+                  </View>
+                  <TouchableOpacity
+                    onPress={() => setSchedulePopup(null)}
+                    hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}
+                    style={{ width: 28, height: 28, borderRadius: 14, backgroundColor: theme.colors.bg, justifyContent: 'center', alignItems: 'center' }}
+                  >
+                    <X size={16} color={theme.colors.textSecondary} />
+                  </TouchableOpacity>
+                </View>
+                <Text style={{ color: theme.colors.muted, ...theme.typography.caption, marginTop: 6, marginBottom: 12 }}>
+                  {t('business.baskets.perDayScheduleHint', { defaultValue: 'Quantité restaurée chaque jour à 03:30.' })}
+                </Text>
+
+                <ScrollView showsVerticalScrollIndicator={false}>
+                  {(schedulePopup.entries ?? []).map((e, idx, arr) => {
+                    const isNext = e.day === nextResetDayKeyForPopup;
+                    const isLast = idx === arr.length - 1;
+                    return (
+                      <View
+                        key={e.day}
+                        style={{
+                          flexDirection: 'row',
+                          alignItems: 'center',
+                          paddingVertical: 12,
+                          borderBottomWidth: isLast ? 0 : StyleSheet.hairlineWidth,
+                          borderBottomColor: theme.colors.divider,
+                        }}
+                      >
+                        {/* Day name — fixed width column so the qty
+                            numbers stay right-aligned on the same x. */}
+                        <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, gap: 8 }}>
+                          <View
+                            style={{
+                              width: 6,
+                              height: 6,
+                              borderRadius: 3,
+                              backgroundColor: isNext ? theme.colors.primary : 'transparent',
+                            }}
+                          />
+                          <Text
+                            style={{
+                              color: isNext ? theme.colors.primary : theme.colors.textPrimary,
+                              ...theme.typography.body,
+                              fontWeight: isNext ? '700' : '500',
+                              fontFamily: isNext ? 'Poppins_700Bold' : 'Poppins_500Medium',
+                            }}
+                          >
+                            {t(`business.dashboard.days.${DAY_KEY_TO_LABEL[e.day]}`, { defaultValue: DAY_KEY_TO_LABEL[e.day] })}
+                          </Text>
+                          {isNext ? (
+                            <Text style={{ color: theme.colors.primary, ...theme.typography.caption, fontWeight: '600', marginLeft: 4 }}>
+                              · {t('business.baskets.tomorrowTag', { defaultValue: 'demain' })}
+                            </Text>
+                          ) : null}
+                        </View>
+                        <Text
+                          style={{
+                            color: isNext ? theme.colors.primary : theme.colors.textPrimary,
+                            ...theme.typography.body,
+                            fontWeight: '700',
+                            fontFamily: 'Poppins_700Bold',
+                          }}
+                        >
+                          {e.qty}
+                        </Text>
+                      </View>
+                    );
+                  })}
+                </ScrollView>
+              </View>
+            </View>
+          )}
 
           {/* In-modal walkthrough dim — covers the whole window during the
               modalQty/modalSave sub-steps, with a cutout for the active
@@ -1529,7 +1800,7 @@ export default function MyBasketsScreen() {
                           icon={paused ? <PlayIcon8 size={16} /> : <PauseIcon8 size={16} />}
                           label={paused
                             ? t('business.baskets.resumeBasket', { defaultValue: 'Reprendre' })
-                            : t('business.baskets.pauseBasket', { defaultValue: 'Pause' })}
+                            : t('business.baskets.pauseBasket', { defaultValue: 'Mettre en pause' })}
                           onPress={() => {
                             const id = actionMenu.basketId;
                             setActionMenu(null);
@@ -1726,7 +1997,7 @@ export default function MyBasketsScreen() {
                         icon={paused ? <PlayIcon8 size={16} /> : <PauseIcon8 size={16} />}
                         label={paused
                           ? t('business.baskets.resumeBasket', { defaultValue: 'Reprendre' })
-                          : t('business.baskets.pauseBasket', { defaultValue: 'Pause' })}
+                          : t('business.baskets.pauseBasket', { defaultValue: 'Mettre en pause' })}
                         onPress={() => {
                           const id = actionMenu.basketId;
                           setActionMenu(null);

@@ -1,7 +1,18 @@
 import React, { useEffect, useRef } from 'react';
-import { View, Modal, Animated, TouchableWithoutFeedback, PanResponder, ViewStyle, StyleSheet, Platform } from 'react-native';
+import { View, Modal, Animated, TouchableWithoutFeedback, PanResponder, ViewStyle, StyleSheet, Platform, Dimensions } from 'react-native';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+
+// Captured once at module load. Used as the initial / dismiss-target
+// translateY so the sheet always starts fully BELOW the device viewport,
+// regardless of how tall the sheet's content ends up being. The previous
+// `400` constant was too small for tall sheets (cancel-reservation
+// reasons list, etc.) — the top of the sheet peeked above the screen
+// bottom for one frame before the slide-in animation kicked in, which
+// the user saw as a "2-snap" appearance: small peek, then a continuous
+// slide. SCREEN_H is taller than any sheet content can be (max-height
+// is gated to 90% of the screen), so the off-screen guarantee holds.
+const SCREEN_H = Dimensions.get('window').height;
 
 interface BottomSheetProps {
   visible: boolean;
@@ -30,7 +41,7 @@ export function BottomSheet({
 }: BottomSheetProps) {
   const theme = useTheme();
   const insets = useSafeAreaInsets();
-  const translateY = useRef(new Animated.Value(400)).current;
+  const translateY = useRef(new Animated.Value(SCREEN_H)).current;
   const backdrop = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
@@ -47,7 +58,7 @@ export function BottomSheet({
       ]).start();
     } else {
       Animated.parallel([
-        Animated.timing(translateY, { toValue: 400, duration: 180, useNativeDriver: true }),
+        Animated.timing(translateY, { toValue: SCREEN_H, duration: 180, useNativeDriver: true }),
         Animated.timing(backdrop, { toValue: 0, duration: 160, useNativeDriver: true }),
       ]).start();
     }

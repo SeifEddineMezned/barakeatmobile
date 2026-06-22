@@ -319,3 +319,36 @@ export async function sendMemberCredentials(orgId: number | string, memberId: nu
 export async function sendMemberEmail(orgId: number | string, memberId: number | string, subject: string, body: string): Promise<void> {
   await apiClient.post(`/api/teams/organizations/${orgId}/members/${memberId}/send-email`, { subject, body });
 }
+
+// ---------------------------------------------------------
+// Deleted-member archive (30-day retention window)
+// ---------------------------------------------------------
+export interface DeletedMemberFromAPI {
+  id: number;
+  original_user_id: number;
+  name?: string;
+  email?: string;
+  role?: string;
+  permissions?: Record<string, unknown> | null;
+  was_org_owner?: boolean;
+  deleted_at: string;
+  purge_at: string;
+  location_id?: number | null;
+  location_name?: string | null;
+}
+
+export async function fetchDeletedMembers(orgId: number | string): Promise<DeletedMemberFromAPI[]> {
+  const res = await apiClient.get<DeletedMemberFromAPI[]>(`/api/teams/organizations/${orgId}/deleted-members`);
+  return res.data || [];
+}
+
+export async function hideDeletedMember(orgId: number | string, deletedUserId: number | string): Promise<void> {
+  await apiClient.put(`/api/teams/organizations/${orgId}/deleted-members/${deletedUserId}/hide`, {});
+}
+
+// ---------------------------------------------------------
+// Transfer org ownership to another org admin.
+// ---------------------------------------------------------
+export async function transferOwnership(orgId: number | string, newOwnerMemberId: number): Promise<void> {
+  await apiClient.put(`/api/teams/organizations/${orgId}/transfer-ownership`, { newOwnerMemberId });
+}

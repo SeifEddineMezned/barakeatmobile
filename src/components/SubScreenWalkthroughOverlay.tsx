@@ -20,6 +20,7 @@ import { Hand } from 'lucide-react-native';
 import { useTranslation } from 'react-i18next';
 import { useRouter } from 'expo-router';
 import { useTheme } from '@/src/theme/ThemeProvider';
+import { useAuthStore } from '@/src/stores/authStore';
 import { useWalkthroughStore, type MeasuredKey } from '@/src/stores/walkthroughStore';
 import { DemoTapHintToast } from '@/src/components/DemoTapHintToast';
 import { useOverlayOriginOffset } from '@/src/components/useOverlayOriginOffset';
@@ -86,14 +87,28 @@ export function SubScreenWalkthroughOverlay({ keys }: Props) {
   // Quit-demo handler: clears all walkthrough state (skipWalkthrough also
   // calls `clearDemoState`, wiping demoCustomerActive/demoOrderActive flags
   // so the injected demo basket on Discover and the demo order on the
-  // orders tab both disappear), THEN pops back to the Discover tab. From a
-  // pushed Stack screen (/restaurant/demo, /basket/demo-basket, /reserve)
-  // skipping alone leaves the user stranded on the demo page — the demo
-  // data is gone but the URL still points at it.
+  // orders tab both disappear), THEN pops back to the role-appropriate
+  // root. The old version hard-routed to /(tabs)/ — the customer home —
+  // which sent BUSINESS users to a tab their account can't render, leaving
+  // them on a blank white screen with no way out but reloading the app.
+  // Now we route by role: business → /(business)/dashboard, customer →
+  // /(tabs)/. Without a role context (e.g. just-signed-out edge case)
+  // we fall through to router.back() so we never strand the user.
+  const userRole = useAuthStore((s) => s.user?.role);
+  const userType = useAuthStore((s) => (s.user as any)?.type);
   const handleQuit = React.useCallback(() => {
     skipWalkthrough();
-    try { router.replace('/(tabs)/' as never); } catch {}
-  }, [router, skipWalkthrough]);
+    const isBusiness = userRole === 'business' || userType === 'restaurant';
+    try {
+      if (isBusiness) {
+        router.replace('/(business)/dashboard' as never);
+      } else {
+        router.replace('/(tabs)/' as never);
+      }
+    } catch {
+      try { router.back(); } catch {}
+    }
+  }, [router, skipWalkthrough, userRole, userType]);
 
   const shouldRender = !!currentStep && keys.includes(currentStep.measureKey);
 
@@ -125,61 +140,119 @@ export function SubScreenWalkthroughOverlay({ keys }: Props) {
   // paint — this prevents the halo from briefly appearing at the previous
   // step's fallback position and then snapping when the new rect arrives.
   const [haloReady, setHaloReady] = React.useState(false);
-  const activeMeasureKey = shouldRender ? currentStep?.measureKey : null;
+
+  // `displayedStep` is the step object the overlay is RENDERING right now
+  // (rect, title, desc, icon, radius — everything visible). `currentStep`
+  // from the store is the TARGET. They diverge briefly during a step
+  // transition: we animate contentAnim 1→0 with the OLD step still
+  // rendering, THEN swap displayedStep to the target, THEN wait for the
+  // new rect and fade back in at the new position. Without this
+  // two-phase commit, the cutout rectangle's position and the tooltip
+  // copy jumped the instant the store advanced — that's the "snap"
+  // between steps. The dim mask itself stays at opacity 1 throughout so
+  // the background never flashes bright.
+  const targetStep = shouldRender ? (currentStep ?? null) : null;
+  const [displayedStep, setDisplayedStep] = React.useState<typeof targetStep>(null);
+  const activeMeasureKey = displayedStep?.measureKey ?? null;
+  // Subscribe to THIS step's measured rect so the effect below re-fires the
+  // moment the host screen publishes it. Without this subscription the effect
+  // only ran on `activeMeasureKey` change and we had to time out blindly —
+  // which is what caused the "fallback halo flashes then snaps to the real
+  // position" jitter the user reported for the `reutiliser un panier` /
+  // pickup-time / confirm-button steps.
+  const activeMeasuredRect = useWalkthroughStore((s) =>
+    activeMeasureKey ? s.measuredRects[activeMeasureKey] : null,
+  );
+
+  // Per-step content fade — the halo ring + tooltip fade in once the rect has
+  // settled (haloReady) so step-to-step transitions glide instead of popping.
+  const contentAnim = React.useRef(new Animated.Value(0)).current;
+
+  // Effect 1 — target → displayed transition. Fade out the old step first,
+  // then swap to the new step. Skips the fade-out on first entry
+  // (displayedStep === null) since there's nothing to fade out from.
+  // Compare by measureKey so a parent re-render with an identity-different
+  // currentStep object doesn't trigger an unnecessary fade. When we DO
+  // swap, also reset haloReady in the same batch so the next render
+  // frame can't briefly paint the cutout at the new position before
+  // Effect 2 has a chance to reset it — that single frame is exactly
+  // the visible snap the user reported.
   React.useEffect(() => {
-    if (!activeMeasureKey) { setHaloReady(false); return; }
-    setHaloReady(false);
-    const isTeamScroll = activeMeasureKey === 'teamOrgCard'
-      || activeMeasureKey === 'teamLocationsSection'
-      || activeMeasureKey === 'teamAddLocationBtn'
-      || activeMeasureKey === 'teamAddMemberBtn'
-      || activeMeasureKey === 'teamMembersSection';
-    // Defer the fast-path by 1 frame so the host screen's clear-on-step-change
-    // effect (e.g. map-view's per-step setMeasuredRect(key, null)) has a
-    // chance to run first. Without this, a stale rect from a previous render
-    // would trip the fast-path and paint the halo at the old position for
-    // one frame before the host clears + re-measures.
-    let cancelled = false;
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    const rafId = requestAnimationFrame(() => {
-      if (cancelled) return;
-      const haveRect = !!useWalkthroughStore.getState().measuredRects[activeMeasureKey];
-      if (haveRect) { setHaloReady(true); return; }
-      const delay = isTeamScroll ? 520 : 320;
-      timer = setTimeout(() => { if (!cancelled) setHaloReady(true); }, delay);
-    });
-    return () => {
-      cancelled = true;
-      cancelAnimationFrame(rafId);
-      if (timer) clearTimeout(timer);
+    const targetKey = targetStep?.measureKey ?? null;
+    const displayedKey = displayedStep?.measureKey ?? null;
+    if (targetKey === displayedKey) {
+      // Same measureKey but maybe other fields changed — sync silently.
+      if (targetStep !== displayedStep) setDisplayedStep(targetStep);
+      return;
+    }
+    if (displayedStep === null) {
+      setDisplayedStep(targetStep);
+      return;
+    }
+    // Safety net: don't rely on `finished: true` to commit the swap.
+    // A parallel timeout fires after 220 ms regardless — whichever the
+    // animation callback or the timer reaches first wins. Prevents the
+    // overlay from getting stuck on the previous step when contentAnim
+    // gets cancelled by a rapid step change (the user's reported
+    // "tooltip doesn't show / screen doesn't advance" intermittent bug).
+    let committed = false;
+    const commit = () => {
+      if (committed) return;
+      committed = true;
+      setHaloReady(false);
+      setDisplayedStep(targetStep);
     };
-  }, [activeMeasureKey]);
+    const timer = setTimeout(commit, 220);
+    Animated.timing(contentAnim, { toValue: 0, duration: 180, useNativeDriver: true }).start(() => {
+      commit();
+    });
+    return () => clearTimeout(timer);
+  }, [targetStep, displayedStep, contentAnim]);
+
+  // Effect 2 — displayedStep settled. Reset halo state and wait for the
+  // new step's measurement.
+  React.useEffect(() => {
+    if (!displayedStep) { setHaloReady(false); contentAnim.setValue(0); return; }
+    setHaloReady(false);
+    if (activeMeasuredRect) {
+      const raf = requestAnimationFrame(() => setHaloReady(true));
+      return () => cancelAnimationFrame(raf);
+    }
+    const timer = setTimeout(() => setHaloReady(true), 1500);
+    return () => clearTimeout(timer);
+  }, [displayedStep, !!activeMeasuredRect, contentAnim]);
 
   // Measure the actual rendered tooltip height so the clamp/widen math
   // below uses the REAL size rather than a fixed estimate. Reset per
   // step so each step measures fresh.
   const [tooltipH, setTooltipH] = React.useState<number>(ESTIMATED_TOOLTIP_HEIGHT);
-  React.useEffect(() => { setTooltipH(ESTIMATED_TOOLTIP_HEIGHT); }, [currentStep?.measureKey, currentStep?.titleKey]);
+  React.useEffect(() => { setTooltipH(ESTIMATED_TOOLTIP_HEIGHT); }, [displayedStep?.measureKey, displayedStep?.titleKey]);
 
-  // Per-step content fade — the halo ring + tooltip fade in once the rect has
-  // settled (haloReady) so step-to-step transitions glide instead of popping.
-  const contentAnim = React.useRef(new Animated.Value(0)).current;
-  React.useEffect(() => { contentAnim.setValue(0); }, [currentStep?.measureKey, contentAnim]);
+  // Effect 3 — once the new rect is ready, fade the content back in.
+  // Safety net: same pattern as the (business) overlay — if the timing is
+  // hijacked by another animation on contentAnim, force a setValue(1)
+  // at the duration ceiling so the tooltip is never stuck half-faded.
   React.useEffect(() => {
-    if (haloReady && shouldRender) {
-      Animated.timing(contentAnim, { toValue: 1, duration: 220, useNativeDriver: true }).start();
-    }
+    if (!haloReady || !shouldRender) return;
+    const timer = setTimeout(() => contentAnim.setValue(1), 320);
+    Animated.timing(contentAnim, { toValue: 1, duration: 260, useNativeDriver: true }).start(({ finished }) => {
+      if (finished) clearTimeout(timer);
+    });
+    return () => clearTimeout(timer);
   }, [haloReady, shouldRender, contentAnim]);
 
-  if (!shouldRender || !currentStep) return null;
-  const measured = measuredRects[currentStep.measureKey];
+  if (!shouldRender || !displayedStep) return null;
+  // Read from the DISPLAYED step so the cutout / halo / tooltip render at
+  // the previous step's rect during the fade-out, then swap to the new
+  // step underneath contentAnim ≈ 0, then fade in at the new position.
+  const measured = measuredRects[displayedStep.measureKey];
   // Resolve the rect from EITHER the host's measured-rect publication OR the
   // step's `target` fallback. Without a fallback, screens whose
   // `setMeasuredRect` is racing the first paint would render just a dim mask
   // with no tooltip — the user would see "nothing happened" after tapping
   // the previous step's element (exactly the symptom users hit on the
   // /restaurant/demo screen).
-  const t2 = currentStep.target;
+  const t2 = displayedStep.target;
   // Only build a fallback rect when the target actually carries a POSITION.
   // Team steps pass `target: { radius: 16 }` (no top/left/width/height) — they
   // rely entirely on the host's measured rect. Without this guard the old
@@ -227,7 +300,7 @@ export function SubScreenWalkthroughOverlay({ keys }: Props) {
   // Match the element's own corner radius. Falls back to 12 for steps that
   // don't declare a radius. Pill-shaped buttons (target.radius = 28) get a
   // pill cutout; rounded-rect cards (radius = 16) get matching corners.
-  const rectRadius = currentStep.radius ?? 12;
+  const rectRadius = displayedStep.radius ?? 12;
   const cx = rectX + rectW / 2;
   const cy = rectY + rectH / 2;
   // Pick a placement, then verify it actually fits inside the visible
@@ -264,23 +337,34 @@ export function SubScreenWalkthroughOverlay({ keys }: Props) {
   const GAP = 16;
   const fitsBelow = tHeight <= spaceBelow - GAP;
   const fitsAbove = tHeight <= spaceAbove - GAP;
-  let tooltipBelow = currentStep.tooltipPosition
-    ? currentStep.tooltipPosition === 'bottom'
+  let tooltipBelow = displayedStep.tooltipPosition
+    ? displayedStep.tooltipPosition === 'bottom'
     : cy < SH / 2;
   if (tooltipBelow && !fitsBelow && fitsAbove) tooltipBelow = false;
   else if (!tooltipBelow && !fitsAbove && fitsBelow) tooltipBelow = true;
   else if (!fitsBelow && !fitsAbove) tooltipBelow = spaceBelow >= spaceAbove; // neither fits → roomier side
   const tooltipLeft = Math.max(16, Math.min(cx - tooltipWidth / 2, SW - tooltipWidth - 16));
-  // SHRINK, don't cover. If the tooltip is taller than the room beside the
-  // element, scale it down to fit that room instead of clamping it ON TOP of
-  // the highlighted card. Center-origin scale → offset layoutTop so the VISUAL
-  // box sits in the gap next to the element (never overlapping it).
+  // Placement strategy — NEVER overlap the highlighted element. Pick the
+  // roomier side (above vs below) at the flip step above, then:
+  //   • Full room → scale 1.
+  //   • Tight side → shrink the tooltip down to scale 0.55 minimum so it
+  //     still fits above/below without covering the halo. Smaller scales
+  //     are sacrificed in favour of "the user can see the halo they're
+  //     supposed to be pointed at". Centered-overlap fallback was removed
+  //     after the user reported the tooltip covering the members-list halo
+  //     on the team page — overlap is the worse trade-off because the
+  //     element underneath becomes invisible behind the tooltip card.
   const available = (tooltipBelow ? spaceBelow : spaceAbove) - GAP;
-  const ttScale = tHeight > available ? Math.max(0.7, available / tHeight) : 1;
+  const minAcceptableScale = 0.55;
+  const tightFit = tHeight > available;
+  const ttScale = !tightFit ? 1 : Math.max(minAcceptableScale, available / tHeight);
   const scaledH = tHeight * ttScale;
-  const layoutTop = tooltipBelow
-    ? (elementBottom + GAP) - (tHeight - scaledH) / 2
-    : (elementTop - GAP) - (tHeight + scaledH) / 2;
+  let layoutTop: number;
+  if (tooltipBelow) {
+    layoutTop = (elementBottom + GAP) - (tHeight - scaledH) / 2;
+  } else {
+    layoutTop = (elementTop - GAP) - (tHeight + scaledH) / 2;
+  }
   const tooltipStyle: any = {
     position: 'absolute',
     top: layoutTop,
@@ -290,8 +374,8 @@ export function SubScreenWalkthroughOverlay({ keys }: Props) {
   };
 
   const cutoutPath = buildCutoutPath(SW, SH, rectX, rectY, rectW, rectH, rectRadius);
-  const showNextButton = !currentStep.requireTap;
-  const showTapHint = currentStep.requireTap;
+  const showNextButton = !displayedStep.requireTap;
+  const showTapHint = displayedStep.requireTap;
 
   // Clamp the cutout rect so the four absorber frames around it never get
   // negative widths / heights when the highlight is near a screen edge.
@@ -351,24 +435,24 @@ export function SubScreenWalkthroughOverlay({ keys }: Props) {
         shadowColor: '#000', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.15, shadowRadius: 20, elevation: 10,
       }}>
         <Text style={{ color: theme.colors.muted, fontSize: 12, fontFamily: 'Poppins_500Medium', marginBottom: 10 }}>
-          {currentStep.stepIndex + 1}/{currentStep.totalSteps}
+          {displayedStep.stepIndex + 1}/{displayedStep.totalSteps}
         </Text>
         <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 10 }}>
           <View style={{ width: 44, height: 44, borderRadius: 22, backgroundColor: '#114b3c12', justifyContent: 'center', alignItems: 'center', marginRight: 12 }}>
             <Hand size={22} color="#114b3c" />
           </View>
           <Text style={{ color: '#114b3c', fontSize: 17, fontWeight: '700', fontFamily: 'Poppins_700Bold', flex: 1 }}>
-            {t(currentStep.titleKey)}
+            {t(displayedStep.titleKey)}
           </Text>
         </View>
         <Text style={{ color: '#666', fontSize: 13, fontFamily: 'Poppins_400Regular', lineHeight: 19, marginBottom: showTapHint ? 10 : 16 }}>
-          {t(currentStep.descKey)}
+          {t(displayedStep.descKey)}
         </Text>
         {showTapHint && (
           <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 14, backgroundColor: '#114b3c0f', paddingHorizontal: 10, paddingVertical: 8, borderRadius: 10 }}>
             <Hand size={14} color="#114b3c" />
             <Text style={{ color: '#114b3c', fontSize: 12, fontFamily: 'Poppins_600SemiBold', marginLeft: 6, flex: 1 }}>
-              {currentStep.tapTarget === 'card'
+              {displayedStep.tapTarget === 'card'
                 ? t('walkthrough.tapCardToContinue', { defaultValue: 'Appuyez sur la carte entourée pour continuer.' })
                 : t('walkthrough.tapToContinue', { defaultValue: 'Appuyez sur le bouton entouré pour continuer.' })}
             </Text>
@@ -382,11 +466,11 @@ export function SubScreenWalkthroughOverlay({ keys }: Props) {
           </TouchableOpacity>
           {showNextButton && (
             <TouchableOpacity
-              onPress={() => nextStep(currentStep.totalSteps)}
+              onPress={() => nextStep(displayedStep.totalSteps)}
               style={{ backgroundColor: '#114b3c', borderRadius: 12, paddingHorizontal: 20, paddingVertical: 10 }}
             >
               <Text style={{ color: '#e3ff5c', fontSize: 14, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
-                {currentStep.isLast ? t('walkthrough.done', { defaultValue: "C'est parti !" }) : t('walkthrough.next', { defaultValue: 'Suivant' })}
+                {displayedStep.isLast ? t('walkthrough.done', { defaultValue: "C'est parti !" }) : t('walkthrough.next', { defaultValue: 'Suivant' })}
               </Text>
             </TouchableOpacity>
           )}

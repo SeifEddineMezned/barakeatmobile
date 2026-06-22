@@ -1,21 +1,28 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { View, Text, TouchableOpacity, TextInput, ScrollView, ActivityIndicator, Share, Alert, KeyboardAvoidingView, Keyboard, Platform, Image } from 'react-native';
+import React, { useRef, useState } from 'react';
+import { View, Text, TouchableOpacity, TextInput, ScrollView, ActivityIndicator, Share, Alert, KeyboardAvoidingView, Platform, Image } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import { ChevronLeft, CheckCircle, Copy, AlertTriangle, Camera, X } from 'lucide-react-native';
 import * as ImagePicker from 'expo-image-picker';
+import { ensureCameraAccess } from '@/src/lib/photoPermission';
+import { useImageCropper } from '@/src/components/ImageCropper';
+import * as ImageManipulator from 'expo-image-manipulator';
+import { useQuery } from '@tanstack/react-query';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { useCustomAlert } from '@/src/components/CustomAlert';
 import { submitReport } from '@/src/services/reports';
-import { getErrorMessage } from '@/src/lib/api';
+import { fetchMyReservations } from '@/src/services/reservations';
+import { getErrorMessage, makeAttemptKey } from '@/src/lib/api';
 import { StatusBar } from 'expo-status-bar';
 import { useOrdersStore } from '@/src/stores/ordersStore';
+import { OrderSummaryCard } from '@/src/components/OrderSummaryCard';
+import { PrimaryCTAButton } from '@/src/components/PrimaryCTAButton';
 
 const REASONS = [
   { key: 'food_quality', labelKey: 'claims.foodQuality', defaultLabel: 'Qualité du repas' },
   { key: 'wrong_info', labelKey: 'claims.wrongInfo', defaultLabel: 'Informations incorrectes' },
-  { key: 'hygiene', labelKey: 'claims.hygiene', defaultLabel: 'Hygiène' },
+  { key: 'insufficient_quantity', labelKey: 'claims.insufficientQuantity', defaultLabel: 'Quantité insuffisante' },
   { key: 'not_received', labelKey: 'claims.notReceived', defaultLabel: 'Commande non reçue' },
   { key: 'other', labelKey: 'claims.other', defaultLabel: 'Autre' },
 ];
@@ -23,9 +30,61 @@ const REASONS = [
 export default function ClaimScreen() {
   const { reservationId, locationName, basketName } = useLocalSearchParams<{ reservationId?: string; locationName?: string; basketName?: string }>();
   const { t } = useTranslation();
+  // Aliased — this screen already has its own `pickPhoto` (the action sheet).
+  const { pickPhoto: pickFromLibrary } = useImageCropper();
   const theme = useTheme();
   const router = useRouter();
   const customAlert = useCustomAlert();
+
+  // Same fallback pattern as the review screen — the deep-link params from
+  // the notification carry only the basics; everything else (basket image,
+  // org logo, quantity, total) comes from the cached reservations list so
+  // the order summary card at the top of the form has the same fidelity as
+  // the leave-a-review card.
+  const reservationsQuery = useQuery({
+    queryKey: ['reservations'],
+    queryFn: fetchMyReservations,
+    enabled: !!reservationId,
+    staleTime: 60_000,
+  });
+  const matchedReservation = React.useMemo(() => {
+    if (!reservationId) return null;
+    return (reservationsQuery.data ?? []).find((r: any) => String(r.id) === String(reservationId)) ?? null;
+  }, [reservationsQuery.data, reservationId]);
+  const r: any = matchedReservation ?? {};
+  const resolvedBasketImage =
+    r?.basket_image_url ||
+    r?.basketImageUrl ||
+    r?.basket?.imageUrl ||
+    r?.basket?.image_url ||
+    r?.basket?.cover_image_url ||
+    r?.basket?.coverImageUrl ||
+    r?.basket_image ||
+    r?.image_url ||
+    null;
+  const resolvedBasketName =
+    (basketName && basketName.trim())
+    || r?.basket?.name
+    || r?.basket_name
+    || null;
+  const resolvedLocationName =
+    (locationName && locationName.trim())
+    || r?.restaurant?.name
+    || r?.restaurant_name
+    || r?.location_name
+    || null;
+  const resolvedLocationLogo =
+    r?.restaurant?.image_url
+    || r?.restaurant_image
+    || r?.basket?.merchantLogo
+    || r?.basket?.merchant_logo
+    || null;
+  const resolvedQuantity = r?.quantity ? Number(r.quantity) : undefined;
+  const resolvedTotal =
+    r?.txn_amount != null ? Number(r.txn_amount)
+    : r?.total_price != null ? Number(r.total_price)
+    : r?.total != null ? Number(r.total)
+    : undefined;
 
   const [reason, setReason] = useState<string | null>(null);
   const [description, setDescription] = useState('');
@@ -40,19 +99,19 @@ export default function ClaimScreen() {
   const [refNumber, setRefNumber] = useState('');
   const [error, setError] = useState('');
 
-  // Keyboard-aware scrolling: track keyboard height so the textbox can stay visible
-  // even when the system keyboard covers the bottom half of the screen.
+  // The KeyboardAvoidingView below already lifts the form above the keyboard.
+  // We keep this ref only so focusing the description can gently scroll it into
+  // view. We deliberately DON'T also add the keyboard height to the scroll
+  // padding — doing both double-compensated and shot the whole form way up.
   const scrollRef = useRef<ScrollView | null>(null);
-  const [kbHeight, setKbHeight] = useState(0);
-  useEffect(() => {
-    const showEvt = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
-    const hideEvt = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
-    const showSub = Keyboard.addListener(showEvt, (e) => setKbHeight(e.endCoordinates?.height ?? 0));
-    const hideSub = Keyboard.addListener(hideEvt, () => setKbHeight(0));
-    return () => { showSub.remove(); hideSub.remove(); };
-  }, []);
 
   const markReservationReported = useOrdersStore((s) => s.markReservationReported);
+
+  // Per-attempt idempotency key. Minted lazily on first submit so a retry of
+  // the same attempt (network blip after the image upload + INSERT committed
+  // but before we got the response) lands on the existing report row instead
+  // of creating a duplicate. Cleared on submit success.
+  const submitAttemptKeyRef = useRef<string | null>(null);
 
   const handleSubmit = async () => {
     if (!reason) return;
@@ -67,16 +126,20 @@ export default function ClaimScreen() {
     }
     setLoading(true);
     setError('');
+    if (!submitAttemptKeyRef.current) submitAttemptKeyRef.current = makeAttemptKey();
     try {
       const result = await submitReport({
         reservation_id: reservationId ? Number(reservationId) : undefined,
         reason,
         details: descTrimmed,
         image_data_url: photoDataUrl || undefined,
-      });
+      }, submitAttemptKeyRef.current);
       const ref = result.reference_number || result.report?.reference_number || '';
       setRefNumber(ref);
       setSubmitted(true);
+      // Report durably committed — clear the key so any next report attempt
+      // mints a fresh one.
+      submitAttemptKeyRef.current = null;
       // Remember this reservation was reported so the order card hides its
       // Report/Review buttons on next render.
       if (reservationId) markReservationReported(String(reservationId));
@@ -87,36 +150,39 @@ export default function ClaimScreen() {
     }
   };
 
-  // Convert an ImagePicker asset to (uri, dataUrl). The backend wants a
-  // base64 data URL, but we still keep the local URI for the preview <Image>.
-  const captureAsset = (asset: ImagePicker.ImagePickerAsset) => {
-    setPhotoUri(asset.uri);
-    if (asset.base64) {
-      const mime = asset.mimeType || 'image/jpeg';
-      setPhotoDataUrl(`data:${mime};base64,${asset.base64}`);
-    } else {
+  // Convert an ImagePicker asset to (uri, dataUrl). The backend wants a base64
+  // data URL. We DON'T trust the picker's raw base64 — a 12MP phone photo
+  // base64-encodes to several MB, which silently 413s / times out the report
+  // POST. Downscale to max 1280px wide + JPEG compress first so the payload
+  // stays small and the upload reliably succeeds.
+  const captureAssetUri = async (uri: string) => {
+    setPhotoUri(uri);
+    try {
+      const manipulated = await ImageManipulator.manipulateAsync(
+        uri,
+        [{ resize: { width: 1280 } }],
+        { compress: 0.6, format: ImageManipulator.SaveFormat.JPEG, base64: true },
+      );
+      // Show the downscaled image in the preview too, so what the user sees is
+      // what gets uploaded.
+      setPhotoUri(manipulated.uri);
+      setPhotoDataUrl(manipulated.base64 ? `data:image/jpeg;base64,${manipulated.base64}` : null);
+    } catch (e) {
+      console.log('[Claim] image manipulate failed:', e);
       setPhotoDataUrl(null);
     }
   };
 
   const launchCamera = async () => {
-    const { status } = await ImagePicker.requestCameraPermissionsAsync();
-    if (status !== 'granted') {
-      setError(t('common.cameraPermRequired', { defaultValue: "L'accès à la caméra est requis." }));
-      return;
-    }
-    const result = await ImagePicker.launchCameraAsync({ allowsEditing: true, quality: 0.7, base64: true });
-    if (!result.canceled && result.assets?.[0]) captureAsset(result.assets[0]);
+    if (!(await ensureCameraAccess())) return;
+    const result = await ImagePicker.launchCameraAsync({ allowsEditing: true, quality: 0.7 });
+    if (!result.canceled && result.assets?.[0]) await captureAssetUri(result.assets[0].uri);
   };
 
   const launchLibrary = async () => {
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== 'granted') {
-      setError(t('common.photoPermRequired', { defaultValue: "L'accès à la galerie photo est requis." }));
-      return;
-    }
-    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: 'images', allowsEditing: true, quality: 0.7, base64: true });
-    if (!result.canceled && result.assets?.[0]) captureAsset(result.assets[0]);
+    // Limited-access-aware grid (handles its own permission popup).
+    const res = await pickFromLibrary();
+    if (res?.uri) await captureAssetUri(res.uri);
   };
 
   const pickPhoto = () => {
@@ -132,7 +198,6 @@ export default function ClaimScreen() {
       [
         { text: t('common.takePhoto', { defaultValue: 'Prendre une photo' }), onPress: launchCamera },
         { text: t('common.chooseFromGallery', { defaultValue: 'Choisir depuis la galerie' }), onPress: launchLibrary },
-        { text: t('common.cancel', { defaultValue: 'Annuler' }), style: 'cancel' },
       ],
       { layout: 'sheet' },
     );
@@ -157,7 +222,7 @@ export default function ClaimScreen() {
           <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h2, textAlign: 'center', marginBottom: 8 }}>
             {t('claims.submitted', { defaultValue: 'Réclamation envoyée' })}
           </Text>
-          <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm, textAlign: 'center', marginBottom: 24 }}>
+          <Text style={{ color: theme.colors.textSecondary, ...theme.typography.body, textAlign: 'center', marginBottom: 24 }}>
             {t('claims.refDesc', { defaultValue: 'Votre numéro de référence :' })}
           </Text>
           <TouchableOpacity onPress={copyRef} style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: theme.colors.primary + '10', borderRadius: 14, paddingHorizontal: 20, paddingVertical: 14, gap: 10 }}>
@@ -181,36 +246,48 @@ export default function ClaimScreen() {
   }
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: theme.colors.bg }}>
+    <SafeAreaView style={{ flex: 1, backgroundColor: theme.colors.bg }} edges={['top']}>
       <StatusBar style="dark" />
-      <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: theme.colors.divider }}>
-        <TouchableOpacity onPress={() => router.back()} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+      {/* No borderBottom — matches the leave-review header (review.tsx). The
+          two forms now read as siblings instead of the claim form having an
+          extra divider line under its title. */}
+      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 16, paddingVertical: 14, minHeight: 52 }}>
+        <TouchableOpacity
+          onPress={() => router.back()}
+          hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}
+          style={{ position: 'absolute', left: 16, top: 14 }}
+        >
           <ChevronLeft size={24} color={theme.colors.textPrimary} />
         </TouchableOpacity>
-        <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h2, flex: 1, marginLeft: 12 }}>
+        <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h2 }}>
           {t('claims.title', { defaultValue: 'Signaler un problème' })}
         </Text>
       </View>
 
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      >
       <ScrollView
         ref={scrollRef}
         keyboardShouldPersistTaps="handled"
-        contentContainerStyle={{ padding: 20, paddingBottom: 40 + kbHeight }}
+        style={{ flex: 1 }}
+        contentContainerStyle={{ padding: 16, paddingBottom: 32 }}
       >
-        {locationName ? (
-          <View style={{ marginBottom: 20 }}>
-            <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm }}>
-              {t('claims.regarding', { defaultValue: 'Concernant :' })} {locationName}
-            </Text>
-            {basketName ? (
-              <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm, marginTop: 2 }}>
-                {t('claims.basket', { defaultValue: 'Panier :' })} {basketName}
-              </Text>
-            ) : null}
-          </View>
-        ) : null}
+        {/* Order context — same compact card the leave-a-review screen
+            uses at the top, so the two surfaces read as siblings instead
+            of the report form having a thin "Concernant : X" caption. */}
+        <OrderSummaryCard
+          basketImage={resolvedBasketImage}
+          basketName={resolvedBasketName}
+          locationLogo={resolvedLocationLogo}
+          locationName={resolvedLocationName}
+          quantity={resolvedQuantity}
+          total={resolvedTotal}
+          orderId={reservationId ?? null}
+        />
 
-        <Text style={{ color: theme.colors.textPrimary, ...theme.typography.body, fontWeight: '600', marginBottom: 12 }}>
+        <Text style={{ color: theme.colors.textPrimary, ...theme.typography.body, fontWeight: '600', marginBottom: 8 }}>
           {t('claims.selectReason', { defaultValue: 'Raison de la réclamation' })}
           <Text style={{ color: theme.colors.error }}> *</Text>
         </Text>
@@ -220,22 +297,22 @@ export default function ClaimScreen() {
             key={r.key}
             onPress={() => setReason(r.key)}
             style={{
-              flexDirection: 'row', alignItems: 'center', paddingVertical: 14, paddingHorizontal: 16,
+              flexDirection: 'row', alignItems: 'center', paddingVertical: 9, paddingHorizontal: 12,
               borderWidth: 1, borderColor: reason === r.key ? theme.colors.primary : theme.colors.divider,
               backgroundColor: reason === r.key ? theme.colors.primary + '08' : theme.colors.surface,
-              borderRadius: 12, marginBottom: 8,
+              borderRadius: 10, marginBottom: 5,
             }}
           >
-            <View style={{ width: 20, height: 20, borderRadius: 10, borderWidth: 2, borderColor: reason === r.key ? theme.colors.primary : theme.colors.muted, justifyContent: 'center', alignItems: 'center' }}>
-              {reason === r.key && <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: theme.colors.primary }} />}
+            <View style={{ width: 16, height: 16, borderRadius: 8, borderWidth: 2, borderColor: reason === r.key ? theme.colors.primary : theme.colors.muted, justifyContent: 'center', alignItems: 'center' }}>
+              {reason === r.key && <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: theme.colors.primary }} />}
             </View>
-            <Text style={{ color: theme.colors.textPrimary, ...theme.typography.body, marginLeft: 12 }}>
+            <Text style={{ color: theme.colors.textPrimary, ...theme.typography.body, marginLeft: 10 }}>
               {t(r.labelKey, { defaultValue: r.defaultLabel })}
             </Text>
           </TouchableOpacity>
         ))}
 
-        <Text style={{ color: theme.colors.textPrimary, ...theme.typography.body, fontWeight: '600', marginTop: 20, marginBottom: 8 }}>
+        <Text style={{ color: theme.colors.textPrimary, ...theme.typography.body, fontWeight: '600', marginTop: 14, marginBottom: 6 }}>
           {t('claims.description', { defaultValue: 'Description' })}
           <Text style={{ color: theme.colors.error }}> *</Text>
         </Text>
@@ -243,7 +320,7 @@ export default function ClaimScreen() {
           value={description}
           onChangeText={setDescription}
           multiline
-          numberOfLines={4}
+          numberOfLines={3}
           placeholder={t('claims.descPlaceholder', { defaultValue: 'Décrivez le problème...' })}
           placeholderTextColor={theme.colors.muted}
           onFocus={() => {
@@ -251,12 +328,12 @@ export default function ClaimScreen() {
           }}
           style={{
             backgroundColor: theme.colors.surface, borderWidth: 1, borderColor: theme.colors.divider,
-            borderRadius: 12, padding: 14, color: theme.colors.textPrimary, ...theme.typography.body,
-            minHeight: 100, textAlignVertical: 'top',
+            borderRadius: 10, padding: 12, color: theme.colors.textPrimary, ...theme.typography.body,
+            minHeight: 72, textAlignVertical: 'top',
           }}
         />
 
-        <Text style={{ color: theme.colors.textPrimary, ...theme.typography.body, fontWeight: '600', marginTop: 20, marginBottom: 8 }}>
+        <Text style={{ color: theme.colors.textPrimary, ...theme.typography.body, fontWeight: '600', marginTop: 14, marginBottom: 6 }}>
           {/* Photo input is optional on both customer photo surfaces (review
               and report). Subtitle mirrors the review screen exactly so the
               two pages read as siblings. */}
@@ -295,23 +372,25 @@ export default function ClaimScreen() {
             </TouchableOpacity>
           </View>
         ) : (
-          // Identical styling to the review screen's photo button — dark
-          // green pill with the lime icon + lime label — so both customer
-          // photo-input flows share one visual language.
+          // Mirrors the review screen's ghost-style photo button — light
+          // surface + primary-coloured icon and label with a subtle border.
+          // The filled dark-green CTA at the bottom is the SEND button; this
+          // attachment button has to read as visually distinct.
           <TouchableOpacity
             onPress={pickPhoto}
             style={{
               flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-              gap: 10,
-              backgroundColor: '#114b3c',
-              borderRadius: theme.radii.r16,
-              paddingVertical: 16,
-              paddingHorizontal: 16,
-              ...theme.shadows.shadowSm,
+              gap: 8,
+              backgroundColor: theme.colors.surface,
+              borderWidth: 1.5,
+              borderColor: theme.colors.primary + '40',
+              borderRadius: 12,
+              paddingVertical: 11,
+              paddingHorizontal: 14,
             }}
           >
-            <Camera size={20} color="#e3ff5c" />
-            <Text style={{ color: '#e3ff5c', ...theme.typography.body, fontWeight: '600' }}>
+            <Camera size={16} color={theme.colors.primary} />
+            <Text style={{ color: theme.colors.primary, ...theme.typography.body, fontWeight: '600' }}>
               {t('common.insertOrTakePhoto', { defaultValue: 'Insérer ou prendre une photo' })}
             </Text>
           </TouchableOpacity>
@@ -336,23 +415,34 @@ export default function ClaimScreen() {
           </View>
         ) : null}
 
-        <TouchableOpacity
-          onPress={handleSubmit}
-          disabled={!reason || !description.trim() || loading}
-          style={{
-            backgroundColor: theme.colors.primary, borderRadius: 14, paddingVertical: 16,
-            alignItems: 'center', marginTop: 24, opacity: !reason || !description.trim() || loading ? 0.5 : 1,
-          }}
-        >
-          {loading ? (
-            <ActivityIndicator color="#e3ff5c" />
-          ) : (
-            <Text style={{ color: '#e3ff5c', fontSize: 15, fontWeight: '700' }}>
-              {t('claims.submit', { defaultValue: 'Envoyer la réclamation' })}
-            </Text>
-          )}
-        </TouchableOpacity>
       </ScrollView>
+
+      {/* Sticky footer — same pattern as the leave-review form (app/review.tsx):
+          surface bg + top hairline divider + shadowLg, button always pinned
+          to the bottom of the screen above the keyboard. The previous
+          implementation kept the submit button inside the ScrollView with
+          neon-green text on dark-green bg; PrimaryCTAButton ships the
+          canonical pill shape, white text on primary, larger typography,
+          and the right padding so the label sits clear of the edges. */}
+      <View
+        style={{
+          backgroundColor: theme.colors.surface,
+          paddingHorizontal: theme.spacing.xl,
+          paddingVertical: theme.spacing.lg,
+          borderTopWidth: 1,
+          borderTopColor: theme.colors.divider,
+          ...theme.shadows.shadowLg,
+        }}
+      >
+        <PrimaryCTAButton
+          onPress={handleSubmit}
+          title={t('claims.submit', { defaultValue: 'Envoyer la réclamation' })}
+          loading={loading}
+          disabled={!reason || !description.trim()}
+          fullWidth
+        />
+      </View>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }

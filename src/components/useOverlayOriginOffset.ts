@@ -38,9 +38,30 @@ export interface OriginOffset {
   remeasure: () => void;
 }
 
-export function useOverlayOriginOffset(): OriginOffset {
+/**
+ * @param initial Optional pre-measurement guess. When the caller knows the
+ *   approximate origin in advance (e.g. the overlay sits in a SafeAreaView so
+ *   the Y offset is essentially insets.top), passing it here lets the first
+ *   paint already have a usable origin instead of starting at (0, 0) and
+ *   snapping to the measured value a frame later.
+ *
+ *   This was the root cause of the demo step 0 "page snaps into position" on
+ *   Android: the overlay would render its first frame at origin (0, 0), the
+ *   halo would land insets.top pixels too low, then the measurement would fire
+ *   and the halo would snap up. With initial: { y: insets.top } the first
+ *   frame is already aligned and the async measurement just confirms it.
+ *
+ *   `originMeasured` is initialised true when an initial guess is provided,
+ *   so callers gated on it don't need to wait for the async measurement.
+ */
+export function useOverlayOriginOffset(initial?: { x?: number; y?: number }): OriginOffset {
   const originRef = useRef<View | null>(null);
-  const [{ x, y, measured }, setOrigin] = useState({ x: 0, y: 0, measured: false });
+  const hasInitial = initial != null;
+  const [{ x, y, measured }, setOrigin] = useState({
+    x: initial?.x ?? 0,
+    y: initial?.y ?? 0,
+    measured: hasInitial,
+  });
 
   const remeasure = useCallback(() => {
     // requestAnimationFrame so we measure after the next layout pass — if we

@@ -26,11 +26,17 @@ export default function LegalScreen() {
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: theme.colors.bg }}>
       <StatusBar style="dark" />
-      <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: theme.colors.divider }}>
-        <TouchableOpacity onPress={() => router.back()} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: theme.colors.divider, minHeight: 52 }}>
+        <TouchableOpacity
+          onPress={() => router.back()}
+          hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}
+          style={{ position: 'absolute', left: 16, top: 14 }}
+        >
           <ChevronLeft size={24} color={theme.colors.textPrimary} />
         </TouchableOpacity>
-        <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h2, flex: 1, marginLeft: 12 }}>
+        {/* pointerEvents="none" — title paints later than the absolute back
+            button and would otherwise swallow taps over the icon. */}
+        <Text pointerEvents="none" style={{ color: theme.colors.textPrimary, ...theme.typography.h2 }}>
           {title}
         </Text>
       </View>
@@ -66,8 +72,8 @@ function renderMarkdown(raw: string, theme: any): React.ReactNode[] {
       <View key={`l${key++}`} style={{ marginVertical: 6, paddingLeft: 4 }}>
         {items.map((item, i) => (
           <View key={i} style={{ flexDirection: 'row', marginBottom: 4 }}>
-            <Text style={{ color: theme.colors.primary, marginRight: 8, fontSize: 14, lineHeight: 22 }}>•</Text>
-            <Text style={{ flex: 1, color: theme.colors.textPrimary, fontSize: 14, lineHeight: 22 }}>
+            <Text style={{ color: theme.colors.primary, marginRight: 8, fontSize: 14, lineHeight: 22, fontFamily: 'Poppins_400Regular' }}>•</Text>
+            <Text style={{ flex: 1, color: theme.colors.textPrimary, fontSize: 14, lineHeight: 22, fontFamily: 'Poppins_400Regular' }}>
               {renderInline(item)}
             </Text>
           </View>
@@ -97,7 +103,7 @@ function renderMarkdown(raw: string, theme: any): React.ReactNode[] {
         {calloutLines.map((line, i) => (
           <Text
             key={i}
-            style={{ color: theme.colors.textPrimary, fontSize: 14, lineHeight: 22, fontStyle: 'italic' }}
+            style={{ color: theme.colors.textPrimary, fontSize: 14, lineHeight: 22, fontStyle: 'italic', fontFamily: 'Poppins_400Regular' }}
           >
             {renderInline(line)}
           </Text>
@@ -186,7 +192,7 @@ function renderMarkdown(raw: string, theme: any): React.ReactNode[] {
     nodes.push(
       <Text
         key={`p${key++}`}
-        style={{ color: theme.colors.textPrimary, fontSize: 14, lineHeight: 22, marginBottom: 8 }}
+        style={{ color: theme.colors.textPrimary, fontSize: 14, lineHeight: 22, marginBottom: 8, fontFamily: 'Poppins_400Regular' }}
       >
         {renderInline(line)}
       </Text>
@@ -218,7 +224,7 @@ function renderInline(text: string): React.ReactNode {
       if (close > i + 1) {
         flushBuf();
         out.push(
-          <Text key={`b${k++}`} style={{ fontWeight: '700' as const }}>
+          <Text key={`b${k++}`} style={{ fontWeight: '700' as const, fontFamily: 'Poppins_700Bold' }}>
             {text.slice(i + 2, close)}
           </Text>
         );
@@ -231,7 +237,7 @@ function renderInline(text: string): React.ReactNode {
       if (close > i) {
         flushBuf();
         out.push(
-          <Text key={`i${k++}`} style={{ fontStyle: 'italic' }}>
+          <Text key={`i${k++}`} style={{ fontStyle: 'italic', fontFamily: 'Poppins_400Regular' }}>
             {text.slice(i + 1, close)}
           </Text>
         );

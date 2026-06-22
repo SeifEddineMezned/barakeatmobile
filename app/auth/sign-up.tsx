@@ -1,13 +1,16 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { View, Text, StyleSheet, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, ScrollView, Animated, Modal, Image, ActivityIndicator } from 'react-native';
 import { PasswordInput } from '@/src/components/PasswordInput';
 import { useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Store, User, ArrowLeft, CheckCircle2, XCircle } from 'lucide-react-native';
+import { Store, User, ChevronLeft, CheckCircle2, Check } from 'lucide-react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { BarakeatErrorIcon } from '@/src/components/ui/BarakeatErrorIcon';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { useAuthStore } from '@/src/stores/authStore';
-import { register, restaurantAccessRequest } from '@/src/services/auth';
+import { register, restaurantAccessRequest, checkEmailAvailable } from '@/src/services/auth';
+import { LOCATION_CATEGORIES } from '@/src/lib/locationCategories';
 import { getErrorMessage } from '@/src/lib/api';
 import { FeatureFlags } from '@/src/lib/featureFlags';
 import type { UserRole, User as UserType } from '@/src/types';
@@ -15,8 +18,32 @@ import { StatusBar } from 'expo-status-bar';
 
 type Step = 'role' | 'customer' | 'gender' | 'business' | 'businessSuccess';
 
+/**
+ * Tunisian flag — real flag asset (assets/images/tunisia_flag.png) instead
+ * of the OS emoji (which renders as a glossy/wavy 3D flag on iOS) or a
+ * hand-rolled SVG approximation. Uses resizeMode="cover" inside a rounded
+ * 24×16 frame so the badge sits cleanly next to the +216 prefix.
+ */
+function TunisianFlag({ width = 24, height = 16 }: { width?: number; height?: number }) {
+  return (
+    <Image
+      source={require('@/assets/images/tunisia_flag.png')}
+      style={{ width, height, borderRadius: 2 }}
+      resizeMode="cover"
+    />
+  );
+}
+
+// Pre-app language pills removed — language is set from the phone's system
+// locale on first launch (see src/i18n/index.ts) and changed from Settings
+// once the user is inside. Stub kept to avoid touching every step layout
+// that referenced <LanguagePills/> — renders nothing.
+function LanguagePills() {
+  return null;
+}
+
 export default function SignUpScreen() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const theme = useTheme();
   const router = useRouter();
   const signIn = useAuthStore((state) => state.signIn);
@@ -27,20 +54,61 @@ export default function SignUpScreen() {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  // Repeat-password field — guards against a silent typo in the password field
+  // sending the user into an account they can't sign back into.
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [gender, setGender] = useState<'male' | 'female' | null>(null);
   const [tosAccepted, setTosAccepted] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [checkingEmail, setCheckingEmail] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   // Business access request state
   const [contactName, setContactName] = useState('');
   const [restaurantName, setRestaurantName] = useState('');
   const [bizEmail, setBizEmail] = useState('');
+  // Phone is stored as the display string "XX XXX XXX" (no prefix, no country
+  // code) so the input rendering stays in sync with what the user typed. We
+  // strip the spaces and prepend +216 in the submit handler.
   const [bizPhone, setBizPhone] = useState('');
+  const [bizCategory, setBizCategory] = useState<string | null>(null);
+  const [showCategoryPicker, setShowCategoryPicker] = useState(false);
 
-  // Step 1 → validate the form, then move to the gender step (registration
-  // happens there, with the chosen gender or skipped).
-  const handleCustomerContinue = () => {
+  /**
+   * Format a Tunisian phone number progressively as the user types — pattern
+   * is "XX XXX XXX" (8 digits total, space after the 2nd and 5th digit).
+   * Non-digit characters are stripped so paste / autofill from a contact
+   * picker that includes "+216 " or punctuation lands in the same canonical
+   * form as direct typing.
+   */
+  const formatTunisianPhone = (raw: string): string => {
+    const digits = raw.replace(/\D/g, '').slice(0, 8);
+    if (digits.length <= 2) return digits;
+    if (digits.length <= 5) return `${digits.slice(0, 2)} ${digits.slice(2)}`;
+    return `${digits.slice(0, 2)} ${digits.slice(2, 5)} ${digits.slice(5)}`;
+  };
+
+  // Slide-up offset for the category bottom sheet. The Modal itself fades in
+  // (backdrop appears instantly), while the inner sheet rides this animated
+  // translateY from off-screen up to 0 — so we get the "fade-in scrim + sheet
+  // slides up" combo instead of the default "everything slides together".
+  const categorySheetY = useRef(new Animated.Value(420)).current;
+  useEffect(() => {
+    if (showCategoryPicker) {
+      categorySheetY.setValue(420);
+      Animated.spring(categorySheetY, {
+        toValue: 0,
+        friction: 12,
+        tension: 80,
+        useNativeDriver: true,
+      }).start();
+    }
+  }, [showCategoryPicker, categorySheetY]);
+
+  // Step 1 → validate the form, verify the email is free for a customer account,
+  // THEN move to the gender step (registration happens there). The email check
+  // is type-scoped, so an email already used for a RESTAURANT account is fine.
+  const handleCustomerContinue = async () => {
     if (FeatureFlags.IS_PROTOTYPE) {
       setErrorMsg(t('auth.prototypeMode', { defaultValue: 'L\'application est en mode prototype. L\'inscription n\'est pas disponible.' }));
       return;
@@ -49,13 +117,33 @@ export default function SignUpScreen() {
       setErrorMsg(t('auth.tosRequired'));
       return;
     }
-    if (!name.trim() || !email.trim() || !password.trim()) {
+    if (!name.trim() || !email.trim() || !password.trim() || !confirmPassword.trim()) {
       setErrorMsg(t('auth.fillAllFields'));
       return;
     }
     if (password.length < 8 || !/[A-Z]/.test(password) || !/[a-z]/.test(password) || !/[0-9]/.test(password) || !/[!@#$%^&*]/.test(password)) {
       setErrorMsg(t('auth.passwordRequirements'));
       return;
+    }
+    // Check AFTER the strength rule so the user sees the actionable "use a
+    // stronger password" message first when the password itself is weak —
+    // otherwise they'd fix the mismatch only to immediately bounce on the
+    // strength check.
+    if (password !== confirmPassword) {
+      setErrorMsg(t('auth.passwordsDontMatch', { defaultValue: 'Les mots de passe ne correspondent pas.' }));
+      return;
+    }
+    // Email availability — surfaced HERE (not on the gender page) so the gender
+    // step only ever shows once email + password are accepted.
+    setCheckingEmail(true);
+    try {
+      const available = await checkEmailAvailable(email.trim(), 'buyer');
+      if (!available) {
+        setErrorMsg(t('errors.emailExists', { defaultValue: 'Cet email est déjà enregistré.' }));
+        return;
+      }
+    } finally {
+      setCheckingEmail(false);
     }
     setGender(null);
     setStep('gender');
@@ -71,27 +159,29 @@ export default function SignUpScreen() {
     }
     setLoading(true);
     try {
+      // Pin the current UI language onto the register call so the backend
+      // sends the verification OTP email in that locale. Falls back to 'fr'
+      // for anything outside the supported set so the email template never
+      // sees an unmapped code.
+      const rawLang = (i18n.language || 'fr').slice(0, 2).toLowerCase();
+      const arAllowed = FeatureFlags.LANGUAGES_AR_ENABLED;
+      const locale = (rawLang === 'en' || (rawLang === 'ar' && arAllowed) ? rawLang : 'fr') as 'fr' | 'en' | 'ar';
       const payload = {
         name: name.trim(),
         email: email.trim(),
         password,
         gender: selectedGender,
         type: 'buyer' as const,
+        locale,
       };
       const res = await register(payload);
-      const rawType = (res.user as any).type ?? 'buyer';
-      const resolvedRole: UserRole = rawType === 'restaurant' ? 'business' : 'customer';
-      const user: UserType = {
-        id: res.user.id,
-        name: res.user.name,
-        firstName: res.user.firstName,
-        email: res.user.email,
-        phone: res.user.phone,
-        gender: (res.user as any).gender ?? selectedGender ?? undefined,
-        role: resolvedRole,
-      };
-      signIn(user, res.token);
-      router.replace('/(tabs)');
+      // Buyer registration always returns { requiresVerification: true, email }
+      // — no session token yet. Hand off to the OTP verify screen; signIn
+      // happens there after the user enters the code we just emailed them.
+      // Use URL-style routing so the email survives the navigation reliably,
+      // and fall back to the form value if the response lacks one.
+      const verifyEmail = (res?.email || payload.email).trim();
+      router.replace(`/auth/verify-email?email=${encodeURIComponent(verifyEmail)}` as never);
     } catch (err) {
       setErrorMsg(getErrorMessage(err));
     } finally {
@@ -104,20 +194,46 @@ export default function SignUpScreen() {
       setErrorMsg(t('auth.prototypeMode', { defaultValue: 'L\'application est en mode prototype. L\'inscription n\'est pas disponible.' }));
       return;
     }
-    if (!contactName.trim() || !restaurantName.trim() || !bizEmail.trim() || !bizPhone.trim()) {
+    if (!contactName.trim() || !restaurantName.trim() || !bizEmail.trim() || !bizPhone.trim() || !bizCategory) {
       setErrorMsg(t('auth.fillAllFields'));
+      return;
+    }
+    // Tunisian phone numbers are exactly 8 digits and start with a digit in
+    // [2-9]. Strip spaces from the display value, validate, prepend +216 for
+    // backend storage so the format matches the rest of the app's phone
+    // entries.
+    const phoneDigits = bizPhone.replace(/\D/g, '');
+    if (!/^[2-9]\d{7}$/.test(phoneDigits)) {
+      setErrorMsg(t('errors.invalidTunisianPhone', { defaultValue: 'Numéro de téléphone tunisien invalide (8 chiffres requis).' }));
       return;
     }
     setLoading(true);
     try {
-      await restaurantAccessRequest({
+      const res = await restaurantAccessRequest({
         name: contactName.trim(),
         restaurantName: restaurantName.trim(),
         email: bizEmail.trim(),
-        phone: bizPhone.trim(),
+        phone: `+216${phoneDigits}`,
+        category: bizCategory,
       });
-      setStep('businessSuccess');
-    } catch (err) {
+      // Backend now returns { requiresVerification: true, email } — hand off
+      // to the same OTP verify screen the customer flow uses. After verify,
+      // the user lands on the businessSuccess thank-you panel rather than
+      // the (tabs) home, since restaurants still need admin approval.
+      const verifyEmail = (res?.email || bizEmail.trim()).toString();
+      router.push(`/auth/verify-email?email=${encodeURIComponent(verifyEmail)}&kind=restaurant` as never);
+    } catch (err: any) {
+      // Email already belongs to a verified business account: the backend
+      // answers 409. getErrorMessage() can't map that French string to a key,
+      // so it would fall through to the generic "an error occurred" — surface a
+      // clear, actionable popup instead of that vague message.
+      const status = err?.status ?? err?.response?.status;
+      const data = err?.data ?? err?.response?.data ?? {};
+      const rawMsg = String(data?.error ?? err?.message ?? '');
+      if (status === 409 || /compte commerce|déjà associé|business account/i.test(rawMsg)) {
+        setErrorMsg(t('errors.businessEmailExists', { defaultValue: 'Cet email est déjà associé à un compte commerce. Connectez-vous avec cet email ou utilisez une autre adresse.' }));
+        return;
+      }
       setErrorMsg(getErrorMessage(err));
     } finally {
       setLoading(false);
@@ -129,7 +245,7 @@ export default function SignUpScreen() {
       <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 24 }}>
         <View style={{ backgroundColor: '#fff', borderRadius: 24, padding: 28, width: '100%', maxWidth: 340, alignItems: 'center' }}>
           <View style={{ backgroundColor: '#ef444418', width: 56, height: 56, borderRadius: 28, justifyContent: 'center', alignItems: 'center', marginBottom: 16 }}>
-            <XCircle size={28} color="#ef4444" />
+            <BarakeatErrorIcon size={28} color="#ef4444" />
           </View>
           <Text style={{ color: '#1a1a1a', fontSize: 18, fontWeight: '700', fontFamily: 'Poppins_700Bold', textAlign: 'center', marginBottom: 10 }}>
             {t('auth.error')}
@@ -155,6 +271,7 @@ export default function SignUpScreen() {
     return (
       <SafeAreaView style={[styles.container, { backgroundColor: '#fffff8' }]}>
         <StatusBar style="dark" />
+        <LanguagePills />
         <View style={[styles.roleScreen, { padding: theme.spacing.xxl }]}>
           <Text style={{ color: '#114b3c80', fontSize: 18, fontFamily: 'Poppins_400Regular', textAlign: 'center' }}>
             {t('auth.welcomeTo', { defaultValue: 'Bienvenue chez' })}
@@ -230,17 +347,25 @@ export default function SignUpScreen() {
         <StatusBar style="dark" />
         {renderErrorModal()}
         <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.keyboardView}>
-          <ScrollView contentContainerStyle={styles.scrollContent}>
-            <View style={[styles.content, { padding: theme.spacing.xxl }]}>
+          <ScrollView contentContainerStyle={[styles.scrollContent, { justifyContent: 'center' }]}>
+            <View style={[styles.content, { paddingHorizontal: theme.spacing.xxl, paddingVertical: theme.spacing.lg }]}>
               {/* Back button */}
-              <TouchableOpacity onPress={() => setStep('role')} style={[styles.backBtn, { marginBottom: theme.spacing.xl }]} accessibilityLabel={t('common.goBack', { defaultValue: 'Go back' })} accessibilityRole="button">
-                <ArrowLeft size={22} color="#114b3c" />
+              <TouchableOpacity onPress={() => setStep('role')} style={[styles.backBtn, { marginBottom: theme.spacing.md }]} accessibilityLabel={t('common.goBack', { defaultValue: 'Go back' })} accessibilityRole="button">
+                <ChevronLeft size={28} color="#114b3c" />
               </TouchableOpacity>
+
+              {/* Customer icon — mirrors the partner sign-up form's icon
+                  bubble (brand-yellow circle, brand-green glyph) but uses the
+                  User glyph instead of Store so the two flows read as a
+                  matching pair at a glance. */}
+              <View style={{ alignSelf: 'center', backgroundColor: '#e3ff5c', borderRadius: 40, padding: 18, marginBottom: theme.spacing.lg }}>
+                <User size={28} color="#114b3c" />
+              </View>
 
               <Text style={[styles.title, { color: '#114b3c', ...theme.typography.h1, marginBottom: theme.spacing.sm }]}>
                 {t('auth.createAccount')}
               </Text>
-              <Text style={[styles.subtitle, { color: '#114b3c80', ...theme.typography.body, marginBottom: theme.spacing.xxl }]}>
+              <Text style={[styles.subtitle, { color: '#114b3c80', ...theme.typography.body, marginBottom: theme.spacing.xl }]}>
                 {t('auth.customerRoleDesc')}
               </Text>
 
@@ -253,7 +378,7 @@ export default function SignUpScreen() {
                   <TextInput
                     style={[styles.input, { backgroundColor: '#fff', borderColor: '#114b3c30', borderWidth: 1.5, borderRadius: 14, color: '#114b3c', ...theme.typography.body }]}
                     value={name} onChangeText={setName}
-                    placeholder="John Doe" placeholderTextColor="#114b3c40"
+                    placeholder={t('auth.placeholderName')} placeholderTextColor="#114b3c40"
                     accessibilityLabel={t('auth.name')}
                   />
                 </View>
@@ -266,7 +391,7 @@ export default function SignUpScreen() {
                   <TextInput
                     style={[styles.input, { backgroundColor: '#fff', borderColor: '#114b3c30', borderWidth: 1.5, borderRadius: 14, color: '#114b3c', ...theme.typography.body }]}
                     value={email} onChangeText={setEmail}
-                    placeholder="you@example.com" placeholderTextColor="#114b3c40"
+                    placeholder={t('auth.placeholderEmail')} placeholderTextColor="#114b3c40"
                     keyboardType="email-address" autoCapitalize="none" autoCorrect={false}
                     accessibilityLabel={t('auth.email')}
                   />
@@ -286,6 +411,34 @@ export default function SignUpScreen() {
                   />
                 </View>
 
+                {/* Confirm password — must match `password` before Continue
+                    advances. The border turns red the moment both fields are
+                    non-empty and disagree (inline signal); the actual blocking
+                    happens in handleCustomerContinue with a modal so the user
+                    can't proceed past a typo. */}
+                <View style={[styles.inputContainer, { marginBottom: theme.spacing.lg }]}>
+                  <Text style={[styles.label, { color: '#114b3c', ...theme.typography.bodySm }]}>
+                    {t('auth.confirmPassword', { defaultValue: 'Confirmer le mot de passe' })}<Text style={{ color: theme.colors.error }}> *</Text>
+                  </Text>
+                  <PasswordInput
+                    containerStyle={{
+                      backgroundColor: '#fff',
+                      borderColor: confirmPassword.length > 0 && password !== confirmPassword
+                        ? theme.colors.error
+                        : '#114b3c',
+                    }}
+                    style={[styles.input, { color: '#114b3c', borderWidth: 0, ...theme.typography.body }]}
+                    value={confirmPassword} onChangeText={setConfirmPassword}
+                    placeholder="••••••••" placeholderTextColor="#114b3c40"
+                    accessibilityLabel={t('auth.confirmPassword', { defaultValue: 'Confirmer le mot de passe' })}
+                  />
+                  {confirmPassword.length > 0 && password !== confirmPassword ? (
+                    <Text style={{ color: theme.colors.error, ...theme.typography.caption, marginTop: 6 }}>
+                      {t('auth.passwordsDontMatch', { defaultValue: 'Les mots de passe ne correspondent pas.' })}
+                    </Text>
+                  ) : null}
+                </View>
+
                 {/* ToS */}
                 <View style={[styles.tosRow, { marginTop: theme.spacing.sm }]}>
                   <TouchableOpacity
@@ -296,7 +449,7 @@ export default function SignUpScreen() {
                     accessibilityState={{ checked: tosAccepted }}
                     accessibilityLabel={t('auth.agreeToThe', { defaultValue: 'I agree to the Terms of Service and Privacy Policy' })}
                   >
-                    {tosAccepted && <Text style={{ color: '#114b3c', fontSize: 13, fontWeight: '700' as const, lineHeight: 18 }}>✓</Text>}
+                    {tosAccepted && <Check size={14} color="#fff" strokeWidth={3} />}
                   </TouchableOpacity>
                   <Text style={{ color: '#114b3c', ...theme.typography.bodySm, flex: 1, flexWrap: 'wrap' }}>
                     {t('auth.agreeToThe', { defaultValue: 'I agree to the ' })}
@@ -324,15 +477,19 @@ export default function SignUpScreen() {
                 <View style={[styles.buttonContainer, { marginTop: theme.spacing.xl }]}>
                   <TouchableOpacity
                     onPress={handleCustomerContinue}
-                    disabled={!tosAccepted}
-                    style={{ height: 56, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 32, backgroundColor: '#114b3c', borderRadius: 14, opacity: !tosAccepted ? 0.5 : 1 }}
+                    disabled={!tosAccepted || checkingEmail}
+                    style={{ height: 56, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 32, backgroundColor: '#114b3c', borderRadius: 14, opacity: (!tosAccepted || checkingEmail) ? 0.5 : 1 }}
                     activeOpacity={0.8}
                     accessibilityLabel={t('common.continue', { defaultValue: 'Continue' })}
                     accessibilityRole="button"
                   >
-                    <Text style={{ color: '#e3ff5c', ...theme.typography.button, textAlign: 'center', fontWeight: '700' as const }}>
-                      {t('common.continue', { defaultValue: 'Continue' })}
-                    </Text>
+                    {checkingEmail ? (
+                      <ActivityIndicator color="#e3ff5c" />
+                    ) : (
+                      <Text style={{ color: '#e3ff5c', ...theme.typography.button, textAlign: 'center', fontWeight: '700' as const }}>
+                        {t('common.continue', { defaultValue: 'Continue' })}
+                      </Text>
+                    )}
                   </TouchableOpacity>
                 </View>
 
@@ -389,41 +546,44 @@ export default function SignUpScreen() {
         {renderErrorModal()}
         <ScrollView contentContainerStyle={styles.scrollContent}>
           <View style={[styles.content, { padding: theme.spacing.xxl }]}>
-            {/* Back to the form (keeps the entered name/email/password) */}
-            <TouchableOpacity onPress={() => setStep('customer')} style={[styles.backBtn, { marginBottom: theme.spacing.xl }]} accessibilityLabel={t('common.goBack', { defaultValue: 'Go back' })} accessibilityRole="button">
-              <ArrowLeft size={22} color="#114b3c" />
+            {/* Only the back button sits at the top-left (keeps name/email/password). */}
+            <TouchableOpacity onPress={() => setStep('customer')} style={styles.backBtn} accessibilityLabel={t('common.goBack', { defaultValue: 'Go back' })} accessibilityRole="button">
+              <ChevronLeft size={28} color="#114b3c" />
             </TouchableOpacity>
 
-            <Text style={[styles.title, { color: '#114b3c', ...theme.typography.h1, marginBottom: theme.spacing.sm }]}>
-              {t('auth.genderTitle', { defaultValue: 'Vous êtes ?' })}
-            </Text>
-            <Text style={[styles.subtitle, { color: '#114b3c80', ...theme.typography.body, marginBottom: theme.spacing.xxl }]}>
-              {t('auth.genderSubtitle', { defaultValue: 'Cela nous aide à personnaliser votre expérience. Vous pouvez passer cette étape.' })}
-            </Text>
+            {/* Everything else is vertically centered in the remaining space. */}
+            <View style={{ flex: 1, justifyContent: 'center' }}>
+              <Text style={[styles.title, { color: '#114b3c', ...theme.typography.h1, marginBottom: theme.spacing.sm }]}>
+                {t('auth.genderTitle', { defaultValue: 'Vous êtes ?' })}
+              </Text>
+              <Text style={[styles.subtitle, { color: '#114b3c80', ...theme.typography.body, marginBottom: theme.spacing.xxl }]}>
+                {t('auth.genderSubtitle', { defaultValue: 'Cela nous aide à personnaliser votre expérience. Vous pouvez passer cette étape.' })}
+              </Text>
 
-            {/* Two image buttons, side by side */}
-            <View style={{ flexDirection: 'row', gap: theme.spacing.lg, marginBottom: theme.spacing.xl }}>
-              {genderCard('male', require('@/assets/images/man_holding_basket-removebg-preview.png'), t('auth.genderMale', { defaultValue: 'Homme' }))}
-              {genderCard('female', require('@/assets/images/woman_holding_basket-removebg-preview.png'), t('auth.genderFemale', { defaultValue: 'Femme' }))}
-            </View>
-
-            {loading ? (
-              <View style={{ height: 48, justifyContent: 'center', alignItems: 'center' }}>
-                <ActivityIndicator color="#114b3c" />
+              {/* Two image buttons, side by side */}
+              <View style={{ flexDirection: 'row', gap: theme.spacing.lg, marginBottom: theme.spacing.xl }}>
+                {genderCard('male', require('@/assets/images/man_holding_basket-removebg-preview.png'), t('auth.genderMale', { defaultValue: 'Homme' }))}
+                {genderCard('female', require('@/assets/images/woman_holding_basket-removebg-preview.png'), t('auth.genderFemale', { defaultValue: 'Femme' }))}
               </View>
-            ) : (
-              /* Skip — register without a gender */
-              <TouchableOpacity
-                onPress={() => handleCustomerSignUp(null)}
-                style={{ height: 48, justifyContent: 'center', alignItems: 'center' }}
-                accessibilityLabel={t('common.skip', { defaultValue: 'Skip' })}
-                accessibilityRole="button"
-              >
-                <Text style={{ color: '#114b3c', ...theme.typography.body, fontWeight: '600' as const, textDecorationLine: 'underline' as const }}>
-                  {t('common.skip', { defaultValue: 'Skip' })}
-                </Text>
-              </TouchableOpacity>
-            )}
+
+              {loading ? (
+                <View style={{ height: 48, justifyContent: 'center', alignItems: 'center' }}>
+                  <ActivityIndicator color="#114b3c" />
+                </View>
+              ) : (
+                /* Skip — register without a gender */
+                <TouchableOpacity
+                  onPress={() => handleCustomerSignUp(null)}
+                  style={{ height: 48, justifyContent: 'center', alignItems: 'center' }}
+                  accessibilityLabel={t('common.skip', { defaultValue: 'Skip' })}
+                  accessibilityRole="button"
+                >
+                  <Text style={{ color: '#114b3c', ...theme.typography.body, fontWeight: '600' as const, textDecorationLine: 'underline' as const }}>
+                    {t('common.skip', { defaultValue: 'Skip' })}
+                  </Text>
+                </TouchableOpacity>
+              )}
+            </View>
           </View>
         </ScrollView>
       </SafeAreaView>
@@ -436,12 +596,49 @@ export default function SignUpScreen() {
       <SafeAreaView style={[styles.container, { backgroundColor: '#fffff8' }]}>
         <StatusBar style="dark" />
         {renderErrorModal()}
+
+        {/* Category picker — backdrop FADES in (Modal animationType="fade"),
+            sheet itself SLIDES up via the categorySheetY animated transform.
+            Decoupling the two avoids the default "everything slides together"
+            look which the user found heavy on this screen. */}
+        <Modal visible={showCategoryPicker} transparent animationType="fade" onRequestClose={() => setShowCategoryPicker(false)}>
+          <TouchableOpacity activeOpacity={1} onPress={() => setShowCategoryPicker(false)} style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' }}>
+            <Animated.View style={{ transform: [{ translateY: categorySheetY }] }}>
+              <TouchableOpacity activeOpacity={1} onPress={() => {}} style={{ backgroundColor: '#fffff8', borderTopLeftRadius: 24, borderTopRightRadius: 24, paddingVertical: 16, paddingHorizontal: 4 }}>
+                <View style={{ alignSelf: 'center', width: 36, height: 4, borderRadius: 2, backgroundColor: '#114b3c33', marginBottom: 12 }} />
+                <Text style={{ color: '#114b3c', fontSize: 16, fontWeight: '700', fontFamily: 'Poppins_700Bold', textAlign: 'center', marginBottom: 8 }}>
+                  {t('business.auth.categoryPickerTitle', { defaultValue: 'Choisissez une catégorie' })}
+                </Text>
+                <ScrollView style={{ maxHeight: 360 }}>
+                  {LOCATION_CATEGORIES.map((cat) => {
+                    const selected = bizCategory === cat;
+                    return (
+                      <TouchableOpacity
+                        key={cat}
+                        onPress={() => { setBizCategory(cat); setShowCategoryPicker(false); }}
+                        style={{
+                          paddingVertical: 14, paddingHorizontal: 20,
+                          backgroundColor: selected ? '#114b3c14' : 'transparent',
+                        }}
+                      >
+                        <Text style={{ color: selected ? '#114b3c' : '#114b3cb0', ...theme.typography.body, fontWeight: selected ? '700' : '400' }}>
+                          {t(`categories.${cat}`, { defaultValue: cat })}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </ScrollView>
+              </TouchableOpacity>
+            </Animated.View>
+          </TouchableOpacity>
+        </Modal>
+
         <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.keyboardView}>
           <ScrollView contentContainerStyle={styles.scrollContent}>
             <View style={[styles.content, { padding: theme.spacing.xxl }]}>
               {/* Back button */}
               <TouchableOpacity onPress={() => setStep('role')} style={[styles.backBtn, { marginBottom: theme.spacing.xl }]} accessibilityLabel={t('common.goBack', { defaultValue: 'Go back' })} accessibilityRole="button">
-                <ArrowLeft size={22} color="#114b3c" />
+                <ChevronLeft size={28} color="#114b3c" />
               </TouchableOpacity>
 
               {/* Icon */}
@@ -465,7 +662,7 @@ export default function SignUpScreen() {
                   <TextInput
                     style={[styles.input, { backgroundColor: '#fff', borderColor: '#114b3c30', borderWidth: 1.5, borderRadius: 14, color: '#114b3c', ...theme.typography.body }]}
                     value={contactName} onChangeText={setContactName}
-                    placeholder="Ahmed Ben Ali" placeholderTextColor="#114b3c40"
+                    placeholder={t('auth.placeholderContactName')} placeholderTextColor="#114b3c40"
                     accessibilityLabel={t('business.auth.contactName')}
                   />
                 </View>
@@ -478,7 +675,7 @@ export default function SignUpScreen() {
                   <TextInput
                     style={[styles.input, { backgroundColor: '#fff', borderColor: '#114b3c30', borderWidth: 1.5, borderRadius: 14, color: '#114b3c', ...theme.typography.body }]}
                     value={restaurantName} onChangeText={setRestaurantName}
-                    placeholder="Mon Restaurant" placeholderTextColor="#114b3c40"
+                    placeholder={t('auth.placeholderBusinessName')} placeholderTextColor="#114b3c40"
                     accessibilityLabel={t('business.auth.businessName')}
                   />
                 </View>
@@ -491,24 +688,59 @@ export default function SignUpScreen() {
                   <TextInput
                     style={[styles.input, { backgroundColor: '#fff', borderColor: '#114b3c30', borderWidth: 1.5, borderRadius: 14, color: '#114b3c', ...theme.typography.body }]}
                     value={bizEmail} onChangeText={setBizEmail}
-                    placeholder="contact@monrestaurant.tn" placeholderTextColor="#114b3c40"
+                    placeholder={t('auth.placeholderBusinessEmail')} placeholderTextColor="#114b3c40"
                     keyboardType="email-address" autoCapitalize="none" autoCorrect={false}
                     accessibilityLabel={t('auth.email')}
                   />
                 </View>
 
-                {/* Phone */}
+                {/* Category dropdown — opens a bottom modal of the 8
+                    LOCATION_CATEGORIES used everywhere else in the app. */}
+                <View style={[styles.inputContainer, { marginBottom: theme.spacing.lg }]}>
+                  <Text style={[styles.label, { color: '#114b3c', ...theme.typography.bodySm }]}>
+                    {t('business.auth.category', { defaultValue: 'Catégorie' })}<Text style={{ color: theme.colors.error }}> *</Text>
+                  </Text>
+                  <TouchableOpacity
+                    onPress={() => setShowCategoryPicker(true)}
+                    style={[styles.input, { backgroundColor: '#fff', borderColor: '#114b3c30', borderWidth: 1.5, borderRadius: 14, justifyContent: 'center' }]}
+                    accessibilityRole="button"
+                    accessibilityLabel={t('business.auth.category', { defaultValue: 'Catégorie' })}
+                  >
+                    <Text style={{ color: bizCategory ? '#114b3c' : '#114b3c40', ...theme.typography.body }}>
+                      {bizCategory
+                        ? t(`categories.${bizCategory}`, { defaultValue: bizCategory })
+                        : t('business.auth.categoryPlaceholder', { defaultValue: 'Sélectionnez une catégorie' })}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+
+                {/* Phone — Tunisian flag + +216 prefix as a fixed badge on
+                    the left, then the formatted XX XXX XXX input. The
+                    prefix is visual only; we always submit +216 + digits. */}
                 <View style={[styles.inputContainer, { marginBottom: theme.spacing.xl }]}>
                   <Text style={[styles.label, { color: '#114b3c', ...theme.typography.bodySm }]}>
                     {t('auth.phone')}<Text style={{ color: theme.colors.error }}> *</Text>
                   </Text>
-                  <TextInput
-                    style={[styles.input, { backgroundColor: '#fff', borderColor: '#114b3c30', borderWidth: 1.5, borderRadius: 14, color: '#114b3c', ...theme.typography.body }]}
-                    value={bizPhone} onChangeText={setBizPhone}
-                    placeholder="+216 XX XXX XXX" placeholderTextColor="#114b3c40"
-                    keyboardType="phone-pad"
-                    accessibilityLabel={t('auth.phone')}
-                  />
+                  <View style={{ flexDirection: 'row', alignItems: 'stretch', gap: 8 }}>
+                    <View style={{
+                      flexDirection: 'row', alignItems: 'center', gap: 8,
+                      paddingHorizontal: 12, height: 56,
+                      backgroundColor: '#fff', borderColor: '#114b3c30', borderWidth: 1.5, borderRadius: 14,
+                    }}>
+                      <TunisianFlag width={24} height={16} />
+                      <Text style={{ color: '#114b3c', ...theme.typography.body, fontWeight: '600' as const }}>+216</Text>
+                    </View>
+                    <TextInput
+                      style={[styles.input, { flex: 1, backgroundColor: '#fff', borderColor: '#114b3c30', borderWidth: 1.5, borderRadius: 14, color: '#114b3c', ...theme.typography.body }]}
+                      value={bizPhone}
+                      onChangeText={(v) => setBizPhone(formatTunisianPhone(v))}
+                      placeholder="XX XXX XXX"
+                      placeholderTextColor="#114b3c40"
+                      keyboardType="phone-pad"
+                      maxLength={10} // 8 digits + 2 spaces
+                      accessibilityLabel={t('auth.phone')}
+                    />
+                  </View>
                 </View>
 
                 <TouchableOpacity
@@ -588,7 +820,18 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   roleCardText: { flex: 1 },
-  backBtn: { alignSelf: 'flex-start' },
+  // Circular back button — same 44×44 chip used on the sign-in email/password
+  // step so the back-affordance reads as one consistent shape across both
+  // auth flows.
+  backBtn: {
+    alignSelf: 'flex-start',
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#114b3c15',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
   form: {},
   inputContainer: {},
   label: { marginBottom: 8 },

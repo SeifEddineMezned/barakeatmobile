@@ -1,13 +1,15 @@
 import React, { useState } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, ScrollView, ActivityIndicator, Modal, KeyboardAvoidingView, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { ChevronLeft, ShieldCheck, XCircle, CheckCircle2 } from 'lucide-react-native';
+import { ChevronLeft, ShieldCheck, CheckCircle2 } from 'lucide-react-native';
+import { BarakeatErrorIcon } from '@/src/components/ui/BarakeatErrorIcon';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { addLocation, fetchMyContext } from '@/src/services/teams';
 import { getErrorMessage } from '@/src/lib/api';
+import { verifyOrAlarm } from '@/src/hooks/useVerifyOnError';
 import { FeatureFlags } from '@/src/lib/featureFlags';
 import { LocationFormFields, type LocationFormValue } from '@/src/components/LocationFormFields';
 import { useBusinessStore } from '@/src/stores/businessStore';
@@ -33,6 +35,11 @@ export default function AddLocationScreen() {
     hhmm && hhmm.includes(':') && hhmm.split(':').length === 2 ? `${hhmm}:00` : (hhmm || undefined);
 
   const mutation = useMutation({
+    onMutate: () => {
+      const existing = ((queryClient.getQueryData<any>(['org-details', orgId])?.locations ?? []) as any[]);
+      const preIds = new Set(existing.map((l: any) => l?.id));
+      return { preIds, expectedName: form.name.trim() };
+    },
     mutationFn: async () => {
       if (!orgId) throw new Error(t('business.team.noOrganization', { defaultValue: "Aucune organisation trouvée. Veuillez d'abord créer une organisation." }));
       // Enforce the cross-03:30 / zero-duration rule here too — the team
@@ -74,8 +81,34 @@ export default function AddLocationScreen() {
       }
       setSuccessMsg(t('business.team.locationAdded', { defaultValue: 'Emplacement ajouté avec succès.' }));
     },
-    onError: (err) => {
-      setErrorMsg(getErrorMessage(err));
+    onError: async (err, _vars, context) => {
+      // Verify before alarming: if the location actually got created
+      // even though the response was lost, just navigate to the
+      // success state silently. Prevents the user from re-tapping and
+      // creating duplicate locations (each tied to its own basket and
+      // pickup window).
+      await verifyOrAlarm<any>({
+        error: err,
+        queryClient,
+        verifyKey: ['org-details', orgId],
+        verify: (fresh: any) => {
+          const locations = ((fresh as any)?.locations ?? []) as any[];
+          const newLoc = locations.find((l: any) => {
+            const isNew = l?.id != null && !context?.preIds?.has(l.id);
+            const nameMatch = String(l?.name ?? '').trim() === String(context?.expectedName ?? '').trim();
+            return isNew && nameMatch;
+          });
+          if (!newLoc) return false;
+          // Auto-select the recovered location, same as onSuccess.
+          useBusinessStore.getState().setSelectedLocationId(Number(newLoc.id));
+          return true;
+        },
+        onConfirmed: () => {
+          void queryClient.invalidateQueries({ queryKey: ['org-details'] });
+          setSuccessMsg(t('business.team.locationAdded', { defaultValue: 'Emplacement ajouté avec succès.' }));
+        },
+        onUnconfirmed: () => setErrorMsg(getErrorMessage(err)),
+      });
     },
   });
 
@@ -92,11 +125,27 @@ export default function AddLocationScreen() {
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]}>
-      <View style={[styles.header, { borderBottomColor: theme.colors.divider }]}>
-        <TouchableOpacity onPress={() => router.back()} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+      <View
+        style={[
+          styles.header,
+          {
+            borderBottomColor: theme.colors.divider,
+            justifyContent: 'center',
+            alignItems: 'center',
+            minHeight: 48,
+          },
+        ]}
+      >
+        <TouchableOpacity
+          onPress={() => router.back()}
+          hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}
+          style={{ position: 'absolute', left: 16, top: 12 }}
+        >
           <ChevronLeft size={24} color={theme.colors.textPrimary} />
         </TouchableOpacity>
-        <Text style={[theme.typography.h2, { color: theme.colors.textPrimary, flex: 1, marginLeft: 12 }]}>
+        {/* pointerEvents="none" — title paints later than the absolute back
+            button and would otherwise swallow taps over the icon. */}
+        <Text pointerEvents="none" style={[theme.typography.h2, { color: theme.colors.textPrimary }]}>
           {t('business.team.addLocation', { defaultValue: 'Ajouter un emplacement' })}
         </Text>
       </View>
@@ -147,7 +196,7 @@ export default function AddLocationScreen() {
         <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 24 }}>
           <View style={{ backgroundColor: '#fff', borderRadius: 24, padding: 28, width: '100%', maxWidth: 340, alignItems: 'center' }}>
             <View style={{ backgroundColor: '#ef444418', width: 56, height: 56, borderRadius: 28, justifyContent: 'center', alignItems: 'center', marginBottom: 16 }}>
-              <XCircle size={28} color="#ef4444" />
+              <BarakeatErrorIcon size={28} color="#ef4444" />
             </View>
             <Text style={{ color: '#1a1a1a', fontSize: 18, fontWeight: '700', textAlign: 'center', marginBottom: 10 }}>
               {t('auth.error')}

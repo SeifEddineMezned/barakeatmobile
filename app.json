@@ -1,20 +1,21 @@
 {
   "expo": {
-    "name": "Barakeat Surprise Baskets",
-    "slug": "barakeat-surprise-baskets",
+    "name": "Barakeat",
+    "slug": "barakeat",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/images/icon.png",
+    "icon": "./assets/images/barakeat_icon_ios.png",
     "scheme": "barakeat",
     "userInterfaceStyle": "automatic",
-    "newArchEnabled": false,
+    "newArchEnabled": true,
     "splash": {
-      "image": "./assets/images/splash-icon.png",
+      "image": "./assets/images/barakeat_splash.png",
       "resizeMode": "contain",
-      "backgroundColor": "#ffffff"
+      "backgroundColor": "#114b3c"
     },
     "ios": {
       "supportsTablet": false,
+      "icon": "./assets/images/barakeat_icon_ios.png",
       "bundleIdentifier": "tn.barakeat.app",
       "usesAppleSignIn": true,
       "infoPlist": {
@@ -23,11 +24,18 @@
     },
     "android": {
       "edgeToEdgeEnabled": true,
+      "allowBackup": false,
       "adaptiveIcon": {
-        "foregroundImage": "./assets/images/adaptive-icon.png",
-        "backgroundColor": "#ffffff"
+        "foregroundImage": "./assets/images/barakeat_icon_android.png",
+        "backgroundColor": "#114b3c"
       },
       "package": "tn.barakeat.app",
+      "googleServicesFile": "./google-services.json",
+      "config": {
+        "googleMaps": {
+          "apiKey": "AIzaSyAIu2rvaQv2fuc_MH3pf1yxJZI4VB7hQ6g"
+        }
+      },
       "softwareKeyboardLayoutMode": "resize",
       "permissions": [
         "android.permission.ACCESS_COARSE_LOCATION",
@@ -45,7 +53,14 @@
           "origin": "https://barakeat.tn/"
         }
       ],
-      "expo-font",
+      [
+        "expo-font",
+        {
+          "fonts": [
+            "./assets/fonts/Chillax-Bold.ttf"
+          ]
+        }
+      ],
       "expo-web-browser",
       "expo-localization",
       "expo-navigation-bar",
@@ -55,6 +70,14 @@
         {
           "photosPermission": "Allow Barakeat to access your photos to upload images.",
           "cameraPermission": "Allow Barakeat to access your camera to take photos."
+        }
+      ],
+      [
+        "expo-media-library",
+        {
+          "photosPermission": "Allow Barakeat to access your photos to upload images.",
+          "savePhotosPermission": "Allow Barakeat to save photos.",
+          "isAccessMediaLocationEnabled": false
         }
       ],
       [
@@ -72,14 +95,28 @@
       [
         "expo-notifications",
         {
-          "icon": "./assets/images/icon.png",
+          "icon": "./assets/images/notification_icon.png",
           "color": "#114b3c"
         }
       ],
       "expo-apple-authentication",
       "./plugins/withRemovePermissions",
       "./plugins/withTransparentSystemBars",
-      "./plugins/withDisableHaptics"
+      "./plugins/withDisableHaptics",
+      [
+        "@react-native-google-signin/google-signin",
+        {
+          "iosUrlScheme": "com.googleusercontent.apps.347897166718-e65j3461423p2c7loofv7c4cb3p6193r"
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "ios": {
+            "useFrameworks": "static"
+          }
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true
@@ -89,15 +126,15 @@
         "origin": "https://barakeat.tn/"
       },
       "eas": {
-        "projectId": "d3b5c7d2-49f2-4de1-bfe8-f6146c2576e8"
+        "projectId": "9d8ccb2b-0876-491c-bdc4-eab409cb105a"
       }
     },
     "runtimeVersion": {
       "policy": "appVersion"
     },
     "updates": {
-      "url": "https://u.expo.dev/d3b5c7d2-49f2-4de1-bfe8-f6146c2576e8"
+      "url": "https://u.expo.dev/9d8ccb2b-0876-491c-bdc4-eab409cb105a"
     },
-    "owner": "smzd"
+    "owner": "barakeat-developers-organization"
   }
 }

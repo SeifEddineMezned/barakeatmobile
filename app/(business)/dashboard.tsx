@@ -1,19 +1,29 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Modal, Dimensions, Image, Animated as RNAnimated, PanResponder, Platform } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Modal, Dimensions, Image, Animated as RNAnimated, PanResponder, Platform, ActivityIndicator } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Image as ExpoImage } from 'expo-image';
 import { useTranslation } from 'react-i18next';
-import { TrendingUp, ShoppingBag, Banknote, Clock, Leaf, Star, X, Package, Store, Settings, Bell, ChevronDown, Check, Building2, MapPin } from 'lucide-react-native';
+import { TrendingUp, ShoppingBag, Banknote, Clock, Leaf, Star, X, Package, Store, Settings, Bell, ChevronDown, Check, Building2, MapPin, MessageCircle, Flag, ChevronRight } from 'lucide-react-native';
+import { reportReview, ReviewReportReason } from '@/src/services/reviews';
 import { NoLocationCTA } from '@/src/components/NoLocationCTA';
+import { ModalCard } from '@/src/components/ui/ModalCard';
+import { useWalkthroughStore } from '@/src/stores/walkthroughStore';
+import { Plus } from 'lucide-react-native';
 import { useQuery } from '@tanstack/react-query';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { useTheme } from '@/src/theme/ThemeProvider';
-import { StatusBar } from 'expo-status-bar';
+import { useStatusBarStyleOnFocus } from '@/src/hooks/useStatusBarStyleOnFocus';
 import { useAuthStore } from '@/src/stores/authStore';
 import { useBusinessStore } from '@/src/stores/businessStore';
+import { useSplashStore } from '@/src/stores/splashStore';
 import { useNotificationStore } from '@/src/stores/notificationStore';
 import { fetchStats, fetchTodayOrders, fetchAnalytics, fetchMyProfile, fetchMyBaskets, type BusinessBasketFromAPI } from '@/src/services/business';
+import { fetchConversations } from '@/src/services/messages';
 import { fetchMyContext, fetchOrganizationDetails } from '@/src/services/teams';
 import { apiClient } from '@/src/lib/api';
+import { resolveTodayWeeklyHours } from '@/src/utils/timezone';
+import { isPendingReservationActive } from '@/src/utils/orderExpiry';
+import { usePollWhenForegrounded } from '@/src/hooks/usePollWhenFocused';
 import { orderIdToCode } from '@/src/utils/orderCode';
 import { formatLocationName } from '@/src/utils/formatLocation';
 import { LineChart } from '@/src/components/LineChart';
@@ -133,6 +143,10 @@ function ReviewStarRow({ label, value }: { label: string; value: number }) {
             />
           </View>
         ))}
+        {/* Numeric note to the right of the stars (parity with the customer popup). */}
+        <Text style={{ color: theme.colors.textPrimary, ...theme.typography.caption, fontWeight: '700', marginLeft: 6, minWidth: 26, textAlign: 'right' }}>
+          {value > 0 ? value.toFixed(1) : 'N/A'}
+        </Text>
       </View>
     </View>
   );
@@ -181,12 +195,50 @@ const miniStyles = StyleSheet.create({
 });
 
 export default function BusinessDashboard() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  // BCP 47 locale tag derived from the user's app-language pick — fed to
+  // every `toLocaleDateString` / `toLocaleTimeString` call below so day-of-
+  // week and month formatting follows the current language instead of the
+  // hardcoded 'fr-FR' the screen used to ship with.
+  const dateLocale = i18n.language === 'ar' ? 'ar-TN' : i18n.language === 'en' ? 'en-GB' : 'fr-FR';
   const theme = useTheme();
   const router = useRouter();
   const { user } = useAuthStore();
   const unreadCount = useNotificationStore((s) => s.unreadCount);
   const insets = useSafeAreaInsets();
+
+  // Conversation unread badge for the chat icon in the dashboard pill.
+  // Shares the ['conversations'] cache with the (business)/_layout header
+  // and /business/conversations, so this query is essentially free — it
+  // resolves to the same data structure either side renders. The badge
+  // counts the NUMBER OF CONVERSATIONS with unread messages (1 conv =
+  // 1 dot on the badge), matching what the conversations list shows.
+  //
+  // `usePollWhenForegrounded` pauses the poll when the app is in the
+  // background. Without this gate the layout-level mount kept hitting
+  // /conversations every 30 s with the phone in the user's pocket,
+  // which on Railway's small instance contributed to the timeout-
+  // shaped errors users were seeing on unrelated mutations.
+  const dashboardConversationsRefetch = usePollWhenForegrounded(30_000);
+  const conversationsQuery = useQuery({
+    queryKey: ['conversations'],
+    queryFn: fetchConversations,
+    staleTime: 25_000,
+    refetchInterval: dashboardConversationsRefetch,
+    refetchOnWindowFocus: true,
+  });
+  const msgUnreadsTotal = React.useMemo(() => {
+    const RECENT_CUTOFF_MS = 7 * 24 * 60 * 60 * 1000;
+    const now = Date.now();
+    const convs = conversationsQuery.data ?? [];
+    let count = 0;
+    for (const c of convs) {
+      const lastMs = c.last_message_at ? new Date(c.last_message_at).getTime() : 0;
+      if (lastMs > 0 && (now - lastMs) > RECENT_CUTOFF_MS) continue;
+      if ((c.unread_count ?? 0) > 0) count++;
+    }
+    return count;
+  }, [conversationsQuery.data]);
 
   const selectedLocationId = useBusinessStore((s) => s.selectedLocationId);
   const setSelectedLocationId = useBusinessStore((s) => s.setSelectedLocationId);
@@ -240,6 +292,15 @@ export default function BusinessDashboard() {
     useCallback(() => {
       void statsQuery.refetch();
       void analyticsQuery.refetch();
+      // Pull the latest reviews on focus too, so a rating the buyer
+      // submitted while the merchant was on another tab lands in the
+      // "Detail des notes" + "Commentaires récents" sections as soon as
+      // they tap back to the dashboard. Without this the 60s staleTime
+      // would leave both surfaces showing the pre-review averages and
+      // comment list until the merchant left the tab idle past the
+      // stale window, which the user reported as "the rating never
+      // shows up".
+      void reviewsQuery.refetch();
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [selectedLocationId])
   );
@@ -251,6 +312,30 @@ export default function BusinessDashboard() {
     refetchInterval: 30_000,
     retry: 1,
   });
+
+  // Per-location pending-order count map — shares the cache key
+  // ['today-orders-count'] with the always-mounted (business)/_layout
+  // badge query, so React Query dedupes: one network fetch backs both
+  // the nav-bar badge AND the per-location chips on the dashboard
+  // dropdown. Same `isPendingReservationActive` predicate used by the
+  // dashboard "En attente" tile, so the chip and tile numbers can
+  // never disagree.
+  const allLocationsTodayQuery = useQuery({
+    queryKey: ['today-orders-count'],
+    queryFn: () => fetchTodayOrders(null),
+    staleTime: 30_000,
+    refetchInterval: 45_000,
+  });
+  const pendingCountByLocation = React.useMemo(() => {
+    const map = new Map<number, number>();
+    for (const o of allLocationsTodayQuery.data ?? []) {
+      if (!isPendingReservationActive(o)) continue;
+      const lid = Number((o as any).location_id);
+      if (!Number.isFinite(lid)) continue;
+      map.set(lid, (map.get(lid) ?? 0) + 1);
+    }
+    return map;
+  }, [allLocationsTodayQuery.data]);
 
   const profileQuery = useQuery({
     queryKey: ['my-profile', selectedLocationId],
@@ -273,7 +358,7 @@ export default function BusinessDashboard() {
       const avgQuantity = reviews.reduce((s: number, r: any) => s + (r.rating_quantity ?? 0), 0) / reviews.length;
       const avgQuality = reviews.reduce((s: number, r: any) => s + (r.rating_quality ?? 0), 0) / reviews.length;
       const avgVariety = reviews.reduce((s: number, r: any) => s + (r.rating_variety ?? 0), 0) / reviews.length;
-      return { service: avgService, quantite: avgQuantity, qualite: avgQuality, variete: avgVariety, reviews };
+      return { service: avgService, quantite: avgQuantity, qualite: avgQuality, variete: avgVariety, count: reviews.length, reviews };
     },
     enabled: !!profileQuery.data?.id,
     staleTime: 60_000,
@@ -311,7 +396,12 @@ export default function BusinessDashboard() {
     // ─ Today ─────────────────────────────────────────────
     totalRevenue: summaryData?.revenue_today ?? statsData?.today_revenue ?? 0,
     totalBasketsSold: summaryData?.baskets_sold_today ?? statsData?.today_baskets ?? 0,
-    pendingOrders: todayOrders.filter((o: any) => ['confirmed', 'reserved', 'pending'].includes(o.status ?? '')).length,
+    // Filtered by the shared `isPendingReservationActive` predicate
+    // (see src/utils/orderExpiry.ts). A naive status-only filter would
+    // count stale rows whose pickup day already passed — /location/today
+    // returns up to 14 days of active orders to support next-day
+    // pickups, so the date check is mandatory.
+    pendingOrders: todayOrders.filter((o: any) => isPendingReservationActive(o)).length,
     mealsRescued: summaryData?.pickups_today ?? 0,
     // ─ Overview ──────────────────────────────────────────
     activeBaskets: Number(statsData?.active_baskets || 0) || Number(profileQuery.data?.available_quantity || 0),
@@ -356,7 +446,70 @@ export default function BusinessDashboard() {
 
   const [showRatingModal, setShowRatingModal] = useState(false);
   const [showAllComments, setShowAllComments] = useState(false);
+
+  // Report a customer review left on THIS business's location (UGC moderation).
+  const [reviewReportTarget, setReviewReportTarget] = useState<{ id: number } | null>(null);
+  const [reviewReportSubmitting, setReviewReportSubmitting] = useState(false);
+  // null = show the reason picker; otherwise show the branded result screen.
+  const [reviewReportResult, setReviewReportResult] = useState<'success' | 'already' | 'error' | null>(null);
+  // When the merchant taps an ALREADY-flagged review, we open an info popup
+  // (not the reason picker) showing what they reported it with + the status.
+  const [reviewReportInfo, setReviewReportInfo] = useState<{ reason: string; at?: string | null } | null>(null);
+  // Optimistic, session-only record of reviews reported during THIS session
+  // (review id → reason + when). It layers on top of the authoritative
+  // `my_report_reason` the reviews endpoint returns for the signed-in caller,
+  // so the flag colours instantly before the post-report refetch lands and the
+  // info popup has the reason even before the server round-trip.
+  const [localReports, setLocalReports] = useState<Map<number, { reason: ReviewReportReason; at: string }>>(new Map());
+  const markReviewFlagged = (id: number, reason: ReviewReportReason) => {
+    setLocalReports((prev) => {
+      const next = new Map(prev);
+      next.set(id, { reason, at: new Date().toISOString() });
+      return next;
+    });
+  };
+  // Resolve a review's report info from the optimistic map first, then the
+  // server field. Returns null when the caller hasn't reported it.
+  const getReviewReport = (r: any): { reason: string; at?: string | null } | null => {
+    const local = localReports.get(Number(r.id));
+    if (local) return { reason: local.reason, at: local.at };
+    if (r?.my_report_reason) return { reason: String(r.my_report_reason), at: r.my_report_at ?? null };
+    return null;
+  };
+  const closeReviewReport = () => { setReviewReportTarget(null); setReviewReportResult(null); setReviewReportInfo(null); };
+
+  const submitReviewReport = async (reason: ReviewReportReason) => {
+    const target = reviewReportTarget;
+    if (!target || reviewReportSubmitting) return;
+    setReviewReportSubmitting(true);
+    try {
+      const { alreadyReported } = await reportReview(target.id, reason);
+      markReviewFlagged(target.id, reason); // colour the flag immediately
+      // Show a branded in-popup confirmation instead of the native Alert.
+      setReviewReportResult(alreadyReported ? 'already' : 'success');
+      // Pull the authoritative my_report_reason so the flag stays coloured
+      // across refetches / re-opens / other devices.
+      void reviewsQuery.refetch();
+    } catch {
+      setReviewReportResult('error');
+    } finally {
+      setReviewReportSubmitting(false);
+    }
+  };
+  const REVIEW_REPORT_OPTIONS: { reason: ReviewReportReason; label: string }[] = [
+    { reason: 'offensive', label: t('review.report.reasons.offensive', { defaultValue: 'Contenu offensant ou haineux' }) },
+    { reason: 'spam', label: t('review.report.reasons.spam', { defaultValue: 'Spam ou publicité' }) },
+    { reason: 'false_info', label: t('review.report.reasons.false_info', { defaultValue: 'Fausses informations' }) },
+    { reason: 'personal_info', label: t('review.report.reasons.personal_info', { defaultValue: 'Données personnelles / vie privée' }) },
+    { reason: 'other', label: t('review.report.reasons.other', { defaultValue: 'Autre' }) },
+  ];
+  const reviewReasonLabel = (reason: string) =>
+    REVIEW_REPORT_OPTIONS.find((o) => o.reason === reason)?.label
+    ?? t('review.report.reasons.other', { defaultValue: 'Autre' });
   const ratingSlideY = useRef(new RNAnimated.Value(400)).current;
+  // Manually-driven backdrop opacity. With animationType="none" the Modal
+  // unmounts instantly, so without this the dark dim would pop in/out hard.
+  const ratingBackdropOpacity = useRef(new RNAnimated.Value(0)).current;
   // Velocity-projected, follow-finger dismiss. Same model as the shared
   // useSwipeToDismiss hook (just inlined here because this sheet has a
   // custom slide-in/out animation tied to ratingSlideY that we want to
@@ -376,9 +529,12 @@ export default function BusinessDashboard() {
         const projection = g.dy + g.vy * 60;
         if (projection > 80 || g.vy > 0.6) {
           const duration = Math.max(120, Math.min(280, 220 - g.vy * 50));
-          RNAnimated.timing(ratingSlideY, { toValue: 800, duration, useNativeDriver: true }).start(({ finished }) => {
-            if (finished) setShowRatingModal(false);
-          });
+          // Fade the backdrop in parallel with the velocity-projected slide
+          // so the swipe-dismiss matches the X-button close visually.
+          RNAnimated.parallel([
+            RNAnimated.timing(ratingSlideY, { toValue: 800, duration, useNativeDriver: true }),
+            RNAnimated.timing(ratingBackdropOpacity, { toValue: 0, duration, useNativeDriver: true }),
+          ]).start(({ finished }) => { if (finished) setShowRatingModal(false); });
         } else {
           RNAnimated.spring(ratingSlideY, { toValue: 0, friction: 10, tension: 80, useNativeDriver: true }).start();
         }
@@ -387,9 +543,31 @@ export default function BusinessDashboard() {
     })
   ).current;
   useEffect(() => {
-    if (showRatingModal) RNAnimated.spring(ratingSlideY, { toValue: 0, friction: 8, useNativeDriver: true }).start();
-    else ratingSlideY.setValue(400);
+    if (showRatingModal) {
+      // Open: slide content up + fade backdrop in, in parallel.
+      RNAnimated.parallel([
+        RNAnimated.spring(ratingSlideY, { toValue: 0, friction: 8, useNativeDriver: true }),
+        RNAnimated.timing(ratingBackdropOpacity, { toValue: 1, duration: 200, useNativeDriver: true }),
+      ]).start();
+    } else {
+      // Reset to closed state — `closeRatingModal` already animated to these
+      // values; this just guarantees the next open starts from a clean slate
+      // even if the modal was force-closed via state without our helper.
+      ratingSlideY.setValue(400);
+      ratingBackdropOpacity.setValue(0);
+    }
   }, [showRatingModal]);
+
+  // Single animated-close path for the rating-details sheet. Slide-down +
+  // backdrop-fade run in parallel; the modal unmounts when the slide finishes.
+  // Routes every close source (X button, backdrop tap, Android back) through
+  // the same animation so dismissals look identical.
+  const closeRatingModal = () => {
+    RNAnimated.parallel([
+      RNAnimated.timing(ratingSlideY, { toValue: 400, duration: 220, useNativeDriver: true }),
+      RNAnimated.timing(ratingBackdropOpacity, { toValue: 0, duration: 200, useNativeDriver: true }),
+    ]).start(({ finished }) => { if (finished) setShowRatingModal(false); });
+  };
 
   const teamContextQuery = useQuery({
     queryKey: ['my-context'],
@@ -441,10 +619,75 @@ export default function BusinessDashboard() {
   // partner-screen short-circuits to a single "add your first location" CTA in
   // this state. Wait for orgDetails to finish loading so we don't briefly flash
   // the empty state on hydration.
-  const hasNoLocation = isAdmin
+  // "Ajoutez votre premier point de vente" popup. Lifted off the dashboard
+  // surface (which used to render NoLocationCTA inline above the title) into
+  // a centered modal that fires every time the dashboard regains focus while
+  // the org has zero locations AND the walkthrough is not running — so the
+  // demo can play out over a populated UI without the empty-state nudge
+  // stepping on top of the walkthrough tooltips.
+  //
+  // Also gated on `splashDone` so the popup cannot paint over the bag-tip
+  // splash animation: the Modal renders in its own native window and would
+  // otherwise cover the splash regardless of zIndex. Same gate is applied
+  // to both the state setter (we don't queue it during splash) AND the
+  // Modal `visible` prop (belt-and-braces in case the state was already
+  // true when splash started).
+  const walkthroughStep = useWalkthroughStore((s) => s.step);
+  const onboardingSequenceActive = useWalkthroughStore((s) => s.onboardingSequenceActive);
+  const showDemoWelcome = useWalkthroughStore((s) => s.showDemoWelcome);
+  // Reset dashboard scroll to top THE MOMENT any demo arms (under the
+  // welcome cover, before any halo paints). Tab screens preserve scroll
+  // across navigation, so a user who scrolled the dashboard down and then
+  // triggered the demo would otherwise see every dashboard halo offset by
+  // their pre-demo scroll position. Reported on the business side most often
+  // because the dashboard's revenue/rating cards live well below the fold.
+  const dashboardScrollRef = useRef<ScrollView>(null);
+  const demoSequencePending = useWalkthroughStore((s) => s.demoSequencePending);
+  useEffect(() => {
+    if (!demoSequencePending) return;
+    dashboardScrollRef.current?.scrollTo({ y: 0, animated: false });
+  }, [demoSequencePending]);
+  const splashDone = useSplashStore((s) => s.splashDone);
+  // Race-proof gate. The popup is suppressed while ANY of these is true:
+  //  • splash animation still playing (covered before),
+  //  • the onboarding sequence is active (probe + carousel + demo cover +
+  //    walkthrough — set by the probe in [_layout.tsx], cleared in
+  //    endDemoSequence()),
+  //  • the "Démarrer la démo" cover is up,
+  //  • the interactive walkthrough is running (step !== null).
+  // Without these, the dashboard popup races the probe on a brand-new
+  // business signup and presents OVER the carousel because RN modals
+  // always paint above plain React views — see the user report
+  // "create location popup firing before onboarding".
+  const popupBlocked = !splashDone
+    || onboardingSequenceActive
+    || showDemoWelcome
+    || walkthroughStep !== null;
+  const hasNoLocation = walkthroughStep === null
+    && isAdmin
     && !!orgId
     && !orgDetailsQuery.isLoading
     && orgLocations.length === 0;
+  const [showAddLocationPopup, setShowAddLocationPopup] = useState(false);
+  useFocusEffect(
+    useCallback(() => {
+      if (hasNoLocation && !popupBlocked) {
+        setShowAddLocationPopup(true);
+      }
+    }, [hasNoLocation, popupBlocked])
+  );
+  // Close the popup via STATE (never by yanking the native Modal's `visible`
+  // prop) the instant it becomes blocked. The Modal's `visible` is now driven
+  // ONLY by `showAddLocationPopup`; if we instead flipped `visible` off the
+  // thrashing `popupBlocked` gate, a rapid present→dismiss could leave Android
+  // with a GHOST modal layer that silently captured every touch — the "popup
+  // flashed, then the dashboard froze and stayed frozen across restarts"
+  // report (it recurred each launch because the org still had no location, so
+  // the popup re-opened and re-closed abruptly every time). Closing through
+  // state lets the Modal run its normal exit and tear down cleanly.
+  useEffect(() => {
+    if (popupBlocked && showAddLocationPopup) setShowAddLocationPopup(false);
+  }, [popupBlocked, showAddLocationPopup]);
   // The switcher is tappable when there's an actual choice to make:
   // an org-admin in an org with 2+ locations (can jump to any one +
   // "Tous les emplacements"), or a member with 2+ assigned locations.
@@ -479,6 +722,30 @@ export default function BusinessDashboard() {
 
   const chartWidth = SCREEN_WIDTH > 768 ? Math.min((SCREEN_WIDTH - 120) / 2, 400) : Math.min(SCREEN_WIDTH - 80, 320);
 
+  // Status bar adapts to what's actually behind the icons. The cover photo is
+  // dark/coloured for the first ~(200 + insets.top) px of scroll content; below
+  // that the page is white. Flip the icons the moment the cover scrolls past
+  // the status bar's bottom edge so the time/battery stay legible on both.
+  //
+  // These hooks MUST be declared above the `isLoading` early-return below.
+  // React enforces a stable hook order across renders, and the loader return
+  // (taken while the dashboard query is in flight) would otherwise skip them
+  // — the next render with data would then execute three more hooks than the
+  // previous one and crash with "Rendered more hooks than during the
+  // previous render."
+  const [coverInStatusBar, setCoverInStatusBar] = React.useState(true);
+  const coverInStatusBarRef = React.useRef(true);
+  const COVER_PIXEL_HEIGHT = 200; // matches the cover View's `height: 200 + insets.top` below
+  const handleDashboardScroll = (e: any) => {
+    const y = e.nativeEvent?.contentOffset?.y ?? 0;
+    const covering = y < COVER_PIXEL_HEIGHT - 8;
+    if (covering !== coverInStatusBarRef.current) {
+      coverInStatusBarRef.current = covering;
+      setCoverInStatusBar(covering);
+    }
+  };
+  useStatusBarStyleOnFocus(coverInStatusBar ? 'light' : 'dark');
+
   // No fade animation — render at full opacity immediately to avoid "faded" state
 
   if (isLoading) {
@@ -491,9 +758,13 @@ export default function BusinessDashboard() {
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]} edges={[]}>
-      {/* Cover photo is always dark/coloured — keep status bar icons white */}
-      <StatusBar style="light" />
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 100 }}>
+      <ScrollView
+        ref={dashboardScrollRef}
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={{ paddingBottom: 100 }}
+        onScroll={handleDashboardScroll}
+        scrollEventThrottle={16}
+      >
         {/* Floating header - overlays the cover image. Height + top mirror the
             other tabs' React Navigation header content area (insets.top, 52px
             tall, vertically centered) so the location pill sits at the exact
@@ -518,6 +789,10 @@ export default function BusinessDashboard() {
           {/* Team / location switcher — org admins can switch to any
               location; regular members get the dropdown once they're
               assigned to 2+ locations. */}
+          {/* Same pill treatment everywhere — Building2 + textPrimary + name,
+              no orange empty-state recolouring. The "Aucun emplacement"
+              copy is carried in selectedLocationName itself, so the
+              affordance is still informative without the palette swap. */}
           {canSwitchDashLocation ? (
             <TouchableOpacity
               onPress={() => setShowLocationModal(true)}
@@ -530,24 +805,20 @@ export default function BusinessDashboard() {
                 alignItems: 'center',
                 gap: 6,
                 ...theme.shadows.shadowMd,
-                maxWidth: 220,
-                borderWidth: hasNoLocation ? 1 : 0,
-                borderColor: hasNoLocation ? '#e67e22' : 'transparent',
+                maxWidth: 240,
               }}
             >
-              {hasNoLocation
-                ? <MapPin size={14} color="#e67e22" />
-                : <Building2 size={14} color={theme.colors.primary} />}
+              <Building2 size={14} color={theme.colors.primary} />
               <Text
-                style={{ color: hasNoLocation ? '#e67e22' : theme.colors.textPrimary, fontSize: 13, fontWeight: '600', fontFamily: 'Poppins_600SemiBold', flexShrink: 1 }}
+                style={{ color: theme.colors.textPrimary, fontSize: 13, fontWeight: '600', fontFamily: 'Poppins_600SemiBold', flexShrink: 1 }}
                 numberOfLines={1}
               >
                 {selectedLocationName}
               </Text>
-              <ChevronDown size={13} color={hasNoLocation ? '#e67e22' : theme.colors.textSecondary} />
+              <ChevronDown size={13} color={theme.colors.textSecondary} />
             </TouchableOpacity>
           ) : (
-            <View style={{ backgroundColor: theme.colors.surface, borderRadius: 20, paddingHorizontal: 12, paddingVertical: 8, flexDirection: 'row', alignItems: 'center', gap: 6, ...theme.shadows.shadowMd, maxWidth: 200 }}>
+            <View style={{ backgroundColor: theme.colors.surface, borderRadius: 20, paddingHorizontal: 12, paddingVertical: 8, flexDirection: 'row', alignItems: 'center', gap: 6, ...theme.shadows.shadowMd, maxWidth: 240 }}>
               <Building2 size={14} color={theme.colors.primary} />
               <Text style={{ color: theme.colors.textPrimary, fontSize: 13, fontWeight: '600', fontFamily: 'Poppins_600SemiBold', flexShrink: 1 }} numberOfLines={1}>
                 {selectedLocationName}
@@ -573,11 +844,35 @@ export default function BusinessDashboard() {
             paddingVertical: 8,
             flexDirection: 'row',
             alignItems: 'center',
-            gap: 12,
+            // Pill now carries three buttons: Settings → Chat → Bell, matching
+            // the (business)/_layout nav header on every other business tab.
+            // The 24 px gap mirrors the nav-header rhythm (padding:6 + marginRight:12).
+            gap: 24,
             ...theme.shadows.shadowMd,
           }}>
             <TouchableOpacity onPress={() => router.push('/settings' as never)}>
               <Settings size={20} color={theme.colors.textPrimary} />
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => router.push('/business/conversations' as never)}>
+              <MessageCircle size={20} color={theme.colors.textPrimary} />
+              {msgUnreadsTotal > 0 && (
+                <View style={{
+                  position: 'absolute',
+                  top: -4,
+                  right: -6,
+                  backgroundColor: theme.colors.error,
+                  borderRadius: 8,
+                  minWidth: 16,
+                  height: 16,
+                  justifyContent: 'center',
+                  alignItems: 'center',
+                  paddingHorizontal: 4,
+                }}>
+                  <Text style={{ color: '#fff', fontSize: 10, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
+                    {msgUnreadsTotal > 99 ? '99+' : msgUnreadsTotal}
+                  </Text>
+                </View>
+              )}
             </TouchableOpacity>
             <TouchableOpacity onPress={() => router.push('/notifications' as never)}>
               <Bell size={20} color={theme.colors.textPrimary} />
@@ -606,7 +901,19 @@ export default function BusinessDashboard() {
         {/* Cover photo - extends to absolute top of screen */}
         <View style={{ position: 'relative', height: 200 + insets.top, backgroundColor: theme.colors.primary + '20', overflow: 'visible', marginTop: 0 }}>
           {profileQuery.data?.cover_image_url ? (
-            <Image source={{ uri: profileQuery.data.cover_image_url }} style={{ width: '100%', height: '100%' }} resizeMode="cover" />
+            // expo-image (not RN <Image>): RN's remote-image decode races the
+            // first layout on some Android devices, leaving the cover blank
+            // until a re-mount (navigating away + back). expo-image paints
+            // reliably and caches to disk. `key` on the URL forces a fresh load
+            // when the selected location changes.
+            <ExpoImage
+              key={profileQuery.data.cover_image_url}
+              source={{ uri: profileQuery.data.cover_image_url }}
+              style={{ width: '100%', height: '100%' }}
+              contentFit="cover"
+              cachePolicy="memory-disk"
+              transition={150}
+            />
           ) : (
             <LinearGradient
               colors={['#1a6b54', '#0d3d30']}
@@ -666,14 +973,10 @@ export default function BusinessDashboard() {
           </View>
         </View>
 
-        {hasNoLocation && (
-          <View style={{ marginTop: theme.spacing.lg, marginHorizontal: theme.spacing.lg }}>
-            {/* Only the dashboard's CTA publishes its bounds for the
-                walkthrough — other instances (e.g. inside the location
-                dropdown) would otherwise overwrite this rect when opened. */}
-            <NoLocationCTA publishMeasure />
-          </View>
-        )}
+        {/* No-location empty-state moved off the dashboard surface — now
+            surfaced as a centered popup (rendered at the bottom of this
+            file) that fires on every focus while there are zero locations
+            and no walkthrough running. */}
 
         <Text style={{ color: theme.colors.textPrimary, fontSize: 26, fontFamily: 'Poppins_700Bold', letterSpacing: -0.4, paddingHorizontal: theme.spacing.xl, marginTop: 14 }}>
           {t('business.dashboard.title')}
@@ -699,13 +1002,13 @@ export default function BusinessDashboard() {
                 const lastDay = weeklySeries.length > 0 ? weeklySeries[weeklySeries.length - 1] : null;
                 if (lastDay?.day) {
                   const d = new Date(lastDay.day + 'T12:00:00');
-                  return d.toLocaleDateString('fr-FR', { weekday: 'long' }).replace(/^\w/, (c: string) => c.toUpperCase());
+                  return d.toLocaleDateString(dateLocale, { weekday: 'long' }).replace(/^\w/, (c: string) => c.toUpperCase());
                 }
                 const fullDayName = lastDay?.dayName ?? lastDay?.day_name ?? '';
                 if (fullDayName) {
                   return t(`business.dashboard.days.${fullDayName}`, { defaultValue: fullDayName });
                 }
-                return new Date().toLocaleDateString('fr-FR', { weekday: 'long' }).replace(/^\w/, (c: string) => c.toUpperCase());
+                return new Date().toLocaleDateString(dateLocale, { weekday: 'long' }).replace(/^\w/, (c: string) => c.toUpperCase());
               })()})
             </Text>
             {/* 4 metrics on same line */}
@@ -723,7 +1026,7 @@ export default function BusinessDashboard() {
                 <Text style={{ color: '#fff', fontSize: 18, fontFamily: 'Poppins_700Bold', marginTop: 4, letterSpacing: -0.4 }}>
                   <AnimatedNumber value={stats.totalBasketsSold} />
                 </Text>
-                <Text style={{ color: 'rgba(255,255,255,0.5)', fontSize: 10, fontFamily: 'Poppins_400Regular', marginTop: 1 }}>{t('business.dashboard.sold')}</Text>
+                <Text style={{ color: 'rgba(255,255,255,0.5)', fontSize: 10, fontFamily: 'Poppins_400Regular', marginTop: 1 }}>{t('business.dashboard.sold', { count: stats.totalBasketsSold })}</Text>
               </View>
               <View style={{ width: 1, backgroundColor: 'rgba(255,255,255,0.12)' }} />
               <View style={{ flex: 1, alignItems: 'center' }}>
@@ -731,7 +1034,7 @@ export default function BusinessDashboard() {
                 <Text style={{ color: '#fff', fontSize: 18, fontFamily: 'Poppins_700Bold', marginTop: 4, letterSpacing: -0.4 }}>
                   <AnimatedNumber value={stats.pendingOrders} />
                 </Text>
-                <Text style={{ color: 'rgba(255,255,255,0.5)', fontSize: 10, fontFamily: 'Poppins_400Regular', marginTop: 1 }}>{t('business.dashboard.pending')}</Text>
+                <Text style={{ color: 'rgba(255,255,255,0.5)', fontSize: 10, fontFamily: 'Poppins_400Regular', marginTop: 1 }}>{t('business.dashboard.pending', { count: stats.pendingOrders })}</Text>
               </View>
               <View style={{ width: 1, backgroundColor: 'rgba(255,255,255,0.12)' }} />
               <View style={{ flex: 1, alignItems: 'center' }}>
@@ -739,7 +1042,7 @@ export default function BusinessDashboard() {
                 <Text style={{ color: '#fff', fontSize: 18, fontFamily: 'Poppins_700Bold', marginTop: 4, letterSpacing: -0.4 }}>
                   <AnimatedNumber value={stats.activeBaskets} />
                 </Text>
-                <Text style={{ color: 'rgba(255,255,255,0.5)', fontSize: 10, fontFamily: 'Poppins_400Regular', marginTop: 1 }}>{t('business.dashboard.rescued')}</Text>
+                <Text style={{ color: 'rgba(255,255,255,0.5)', fontSize: 10, fontFamily: 'Poppins_400Regular', marginTop: 1 }}>{t('business.dashboard.rescued', { count: stats.activeBaskets })}</Text>
               </View>
             </View>
           </LinearGradient>
@@ -816,9 +1119,18 @@ export default function BusinessDashboard() {
               </Text>
             </View>
             <View style={styles.statsRow}>
-              <StatMiniCard icon={Banknote} value={`${stats.monthlyRevenue}`} suffix="TND" label="Revenus ce mois" color={theme.colors.secondaryDark} theme={theme} />
+              <StatMiniCard icon={Banknote} value={`${stats.monthlyRevenue}`} suffix="TND" label={t('business.dashboard.revenueThisMonth', { defaultValue: 'Revenus ce mois' })} color={theme.colors.secondaryDark} theme={theme} />
               <View style={{ width: 10 }} />
-              <StatMiniCard icon={ShoppingBag} value={stats.monthlyBaskets} label={stats.monthlyBaskets > 1 ? 'Paniers vendus ce mois' : 'Panier vendu ce mois'} color={theme.colors.accentFresh} theme={theme} />
+              <StatMiniCard
+                icon={ShoppingBag}
+                value={stats.monthlyBaskets}
+                label={t(
+                  stats.monthlyBaskets > 1 ? 'business.dashboard.basketsThisMonth' : 'business.dashboard.basketThisMonth',
+                  { defaultValue: stats.monthlyBaskets > 1 ? 'Paniers vendus ce mois' : 'Panier vendu ce mois' },
+                )}
+                color={theme.colors.accentFresh}
+                theme={theme}
+              />
             </View>
           </View>
         </View>
@@ -834,7 +1146,7 @@ export default function BusinessDashboard() {
             <View style={{ flexDirection: 'row', alignItems: 'center' }}>
               <View style={{ width: 3, height: 16, backgroundColor: theme.colors.primary, borderRadius: 2, marginRight: 8 }} />
               <Text style={{ color: theme.colors.textPrimary, fontSize: 13, fontFamily: 'Poppins_600SemiBold', letterSpacing: 0.3, textTransform: 'none' as const }}>
-                {'Ventes cette semaine'}
+                {t('business.dashboard.salesThisWeek', { defaultValue: 'Ventes cette semaine' })}
               </Text>
             </View>
             {weeklyRevenueTotal > 0 && (
@@ -866,7 +1178,7 @@ export default function BusinessDashboard() {
                 end={{ x: 1, y: 1 }}
                 style={{ width: 3, height: 14, borderRadius: 2, marginRight: 8 }}
               />
-              <Text style={{ color: theme.colors.textSecondary, fontSize: 10, fontFamily: 'Poppins_400Regular', letterSpacing: 0.3 }}>{'Paniers vendus / jour'}</Text>
+              <Text style={{ color: theme.colors.textSecondary, fontSize: 10, fontFamily: 'Poppins_400Regular', letterSpacing: 0.3 }}>{t('business.dashboard.basketsPerDay', { defaultValue: 'Paniers vendus / jour' })}</Text>
             </View>
             <View style={{ paddingHorizontal: 12, paddingBottom: 16, alignItems: 'center' }}>
               {stats.dailySales.length > 0 && stats.dailySales.some((v: number) => v > 0) ? (
@@ -882,7 +1194,7 @@ export default function BusinessDashboard() {
                 <View style={{ height: 150, justifyContent: 'center', alignItems: 'center' }}>
                   <ShoppingBag size={26} color={theme.colors.divider} />
                   <Text style={{ color: theme.colors.muted, fontSize: 12, fontFamily: 'Poppins_400Regular', marginTop: 10 }}>
-                    {'Pas encore de ventes cette semaine'}
+                    {t('business.dashboard.noSalesThisWeek', { defaultValue: 'Pas encore de ventes cette semaine' })}
                   </Text>
                 </View>
               )}
@@ -897,13 +1209,13 @@ export default function BusinessDashboard() {
             <View style={{ flexDirection: 'row', alignItems: 'center' }}>
               <View style={{ width: 3, height: 16, backgroundColor: theme.colors.secondaryDark, borderRadius: 2, marginRight: 8 }} />
               <Text style={{ color: theme.colors.textPrimary, fontSize: 13, fontFamily: 'Poppins_600SemiBold', letterSpacing: 0.3, textTransform: 'none' as const }}>
-                {'Performance mensuelle'}
+                {t('business.dashboard.monthlyPerformance', { defaultValue: 'Performance mensuelle' })}
               </Text>
             </View>
             {stats.monthlyBaskets > 0 && (
               <View style={{ backgroundColor: theme.colors.accentFresh + '15', borderRadius: 20, paddingHorizontal: 10, paddingVertical: 4 }}>
                 <Text style={{ color: theme.colors.accentFresh, fontSize: 11, fontFamily: 'Poppins_600SemiBold' }}>
-                  {`${stats.monthlyBaskets} ${stats.monthlyBaskets > 1 ? 'paniers' : 'panier'}`}
+                  {`${stats.monthlyBaskets} ${t(stats.monthlyBaskets > 1 ? 'basket.baskets' : 'basket.basket', { defaultValue: stats.monthlyBaskets > 1 ? 'paniers' : 'panier' })}`}
                 </Text>
               </View>
             )}
@@ -929,7 +1241,7 @@ export default function BusinessDashboard() {
                 end={{ x: 1, y: 1 }}
                 style={{ width: 3, height: 14, borderRadius: 2, marginRight: 8 }}
               />
-              <Text style={{ color: theme.colors.textSecondary, fontSize: 10, fontFamily: 'Poppins_400Regular', letterSpacing: 0.3 }}>{'Paniers / mois'}</Text>
+              <Text style={{ color: theme.colors.textSecondary, fontSize: 10, fontFamily: 'Poppins_400Regular', letterSpacing: 0.3 }}>{t('business.dashboard.basketsPerMonth', { defaultValue: 'Paniers / mois' })}</Text>
             </View>
             <View style={{ paddingHorizontal: 12, paddingBottom: 16 }}>
               {stats.monthlySales.length > 0 ? (
@@ -942,14 +1254,14 @@ export default function BusinessDashboard() {
                 <View style={{ height: 120, justifyContent: 'center', alignItems: 'center' }}>
                   <TrendingUp size={26} color={theme.colors.divider} />
                   <Text style={{ color: theme.colors.muted, fontSize: 12, fontFamily: 'Poppins_400Regular', marginTop: 10 }}>
-                    {'Pas encore de données mensuelles'}
+                    {t('business.dashboard.noMonthlyData', { defaultValue: 'Pas encore de données mensuelles' })}
                   </Text>
                 </View>
               )}
               {stats.monthlySales.length > 0 && stats.monthlyRevenue > 0 && (
                 <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 10, borderTopWidth: 1, borderTopColor: theme.colors.divider, paddingTop: 10 }}>
                   <Text style={{ color: theme.colors.textSecondary, fontSize: 11, fontFamily: 'Poppins_400Regular' }}>
-                    {'Revenus ce mois:\u00A0'}
+                    {t('business.dashboard.revenueThisMonthInline', { defaultValue: 'Revenus ce mois\u00A0:\u00A0' })}
                   </Text>
                   <Text style={{ color: theme.colors.secondaryDark, fontSize: 11, fontFamily: 'Poppins_600SemiBold' }}>
                     {`${stats.monthlyRevenue.toFixed(0)} TND`}
@@ -981,10 +1293,20 @@ export default function BusinessDashboard() {
                 const locName = formatLocationName(orgName, bareLocName);
                 // Fall back to the location's pickup window when the basket
                 // inherits "horaires du commerce" (server-side these basket
-                // columns are NULL). Without the fallback the time chip was
-                // hidden for inheriting baskets.
-                const pickupStart = ((basket.pickup_start_time ?? (loc as any)?.pickup_start_time) ?? '').substring(0, 5);
-                const pickupEnd   = ((basket.pickup_end_time   ?? (loc as any)?.pickup_end_time)   ?? '').substring(0, 5);
+                // columns are NULL). Resolve the location's window for TODAY
+                // from its per-day weekly_schedule so inheriting baskets show
+                // the current day's hours, not the widest weekly span.
+                const locToday = resolveTodayWeeklyHours((loc as any)?.weekly_schedule);
+                // If the location is closed for today, force the card to its
+                // expired/closed appearance — even when the basket itself has
+                // stock or its own pickup times, the customer can't actually
+                // pick it up on a closed day. Mirror what the customer search
+                // page now shows so the merchant sees the same state.
+                const locClosedToday = locToday?.closed === true;
+                const locStart = locToday && !locToday.closed ? locToday.start : (loc as any)?.pickup_start_time;
+                const locEnd   = locToday && !locToday.closed ? locToday.end   : (loc as any)?.pickup_end_time;
+                const pickupStart = ((basket.pickup_start_time ?? locStart) ?? '').substring(0, 5);
+                const pickupEnd   = ((basket.pickup_end_time   ?? locEnd)   ?? '').substring(0, 5);
                 return (
                   <TouchableOpacity
                     key={basket.id}
@@ -993,18 +1315,22 @@ export default function BusinessDashboard() {
                       useBusinessStore.getState().setTargetBasket(String(basket.id));
                       router.push('/(business)/my-baskets' as never);
                     }}
-                    style={{ width: 160, backgroundColor: theme.colors.surface, borderRadius: 14, overflow: 'hidden', ...theme.shadows.shadowSm }}
+                    style={{ width: 160, backgroundColor: theme.colors.surface, borderRadius: 14, overflow: 'hidden', ...theme.shadows.shadowSm, opacity: locClosedToday ? 0.55 : 1 }}
                   >
                     <View style={{ width: 160, height: 100, backgroundColor: theme.colors.bg }}>
                       {basket.image_url ? (
-                        <Image source={{ uri: basket.image_url }} style={{ width: 160, height: 100 }} resizeMode="cover" />
+                        <Image source={{ uri: basket.image_url }} style={{ width: 160, height: 100, opacity: locClosedToday ? 0.5 : 1 }} resizeMode="cover" />
                       ) : (
                         <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
                           <Package size={28} color={theme.colors.muted} />
                         </View>
                       )}
-                      <View style={{ position: 'absolute', top: 6, right: 6, backgroundColor: Number(basket.quantity) > 0 ? theme.colors.primary : theme.colors.error, borderRadius: 8, paddingHorizontal: 6, paddingVertical: 2, minWidth: 22, alignItems: 'center' }}>
-                        <Text style={{ color: '#fff', fontSize: 11, fontWeight: '700' }}>{basket.quantity}</Text>
+                      <View style={{ position: 'absolute', top: 6, right: 6, backgroundColor: locClosedToday ? '#888' : Number(basket.quantity) > 0 ? theme.colors.primary : theme.colors.error, borderRadius: 8, paddingHorizontal: 6, paddingVertical: 2, minWidth: 22, alignItems: 'center' }}>
+                        <Text style={{ color: '#fff', fontSize: 11, fontWeight: '700' }}>
+                          {locClosedToday
+                            ? t('orders.status.expired', { defaultValue: 'Expiré' })
+                            : Number(basket.quantity) > 0 ? basket.quantity : t('basket.soldOut', { defaultValue: 'Épuisé' })}
+                        </Text>
                       </View>
                     </View>
                     <View style={{ padding: 10 }}>
@@ -1016,7 +1342,14 @@ export default function BusinessDashboard() {
                           {locName}
                         </Text>
                       )}
-                      {(pickupStart || pickupEnd) && (
+                      {locClosedToday ? (
+                        <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 4, gap: 4 }}>
+                          <Clock size={10} color={theme.colors.error} />
+                          <Text style={{ color: theme.colors.error, fontSize: 10, fontFamily: 'Poppins_400Regular', fontWeight: '600' }}>
+                            {t('basket.closedToday', { defaultValue: 'Fermé aujourd\'hui' })}
+                          </Text>
+                        </View>
+                      ) : (pickupStart || pickupEnd) && (
                         <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 4, gap: 4 }}>
                           <Clock size={10} color={theme.colors.muted} />
                           <Text style={{ color: theme.colors.textSecondary, fontSize: 10, fontFamily: 'Poppins_400Regular' }}>
@@ -1035,11 +1368,15 @@ export default function BusinessDashboard() {
         <View style={{ height: 40 }} />
       </ScrollView>
 
-      <Modal visible={showRatingModal} transparent animationType="fade" onRequestClose={() => setShowRatingModal(false)}>
-        <View style={styles.modalOverlay}>
-          <TouchableOpacity style={StyleSheet.absoluteFillObject} activeOpacity={1} onPress={() => {
-            RNAnimated.timing(ratingSlideY, { toValue: 400, duration: 200, useNativeDriver: true }).start(() => setShowRatingModal(false));
-          }} />
+      {/* animationType="none": RN's native fade was layering a 300 ms opacity
+          tween OVER the manual slide-down, and on Android the native driver
+          can momentarily reset translateY to 0 during that fade — which read
+          as the popup "briefly reappearing" before vanishing. With "none" the
+          modal unmounts instantly after the slide finishes; the backdrop
+          opacity is faded manually in parallel so it doesn't pop. */}
+      <Modal visible={showRatingModal} transparent animationType="none" onRequestClose={closeRatingModal}>
+        <RNAnimated.View style={[styles.modalOverlay, { opacity: ratingBackdropOpacity }]}>
+          <TouchableOpacity style={StyleSheet.absoluteFillObject} activeOpacity={1} onPress={closeRatingModal} />
           <RNAnimated.View
             style={[styles.modalContent, { backgroundColor: theme.colors.surface, borderTopLeftRadius: 28, borderTopRightRadius: 28, paddingHorizontal: theme.spacing.xl, paddingBottom: theme.spacing.xl, ...theme.shadows.shadowLg, transform: [{ translateY: ratingSlideY }] }]}
           >
@@ -1058,7 +1395,7 @@ export default function BusinessDashboard() {
                 <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h2 }]}>
                   {t('business.dashboard.ratingDetails')}
                 </Text>
-                <TouchableOpacity onPress={() => setShowRatingModal(false)} style={[styles.modalCloseBtn, { backgroundColor: theme.colors.bg }]}>
+                <TouchableOpacity onPress={closeRatingModal} style={[styles.modalCloseBtn, { backgroundColor: theme.colors.bg }]}>
                   <X size={18} color={theme.colors.textSecondary} />
                 </TouchableOpacity>
               </View>
@@ -1069,6 +1406,11 @@ export default function BusinessDashboard() {
                   {stats.averageRating > 0 ? stats.averageRating.toFixed(1) : '--'}
                 </Text>
                 <Text style={[{ color: theme.colors.muted, fontSize: 16, marginLeft: 4, fontFamily: 'Poppins_400Regular' }]}>/5</Text>
+                {reviewsQuery.data?.count ? (
+                  <Text style={[{ color: theme.colors.muted, ...theme.typography.bodySm, marginLeft: 8 }]}>
+                    ({t('review.reviewCount', { count: reviewsQuery.data.count, defaultValue: '{{count}} avis' })})
+                  </Text>
+                ) : null}
               </View>
 
               <View style={[{ backgroundColor: theme.colors.bg, borderRadius: theme.radii.r16, padding: theme.spacing.xl, marginTop: theme.spacing.md }]}>
@@ -1114,31 +1456,89 @@ export default function BusinessDashboard() {
                             disabled={!goToOrder}
                             style={{ backgroundColor: theme.colors.bg, borderRadius: 14, padding: 14, marginBottom: 10 }}
                           >
-                            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
+                            {/* Header row — stars + customer name + date.
+                                Customer name is `flex: 1` + numberOfLines=1
+                                so a long name truncates with an ellipsis
+                                instead of pushing the date off-screen.
+                                The order chip moved out of this row — it
+                                now lives bottom-right under the comment
+                                so the row never overflows even with a
+                                very long name + a 5-digit BK code. */}
+                            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8, gap: 8 }}>
                               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3 }}>
                                 {[1,2,3,4,5].map(s => (
                                   <Star key={s} size={12} color="#f59e0b" fill={s <= Math.round(Number(r.rating ?? r.rating_service ?? 0)) ? '#f59e0b' : 'transparent'} />
                                 ))}
                               </View>
-                              <Text style={{ color: theme.colors.muted, ...theme.typography.caption, marginLeft: 8 }}>
+                              <Text
+                                style={{ flex: 1, color: theme.colors.muted, ...theme.typography.caption }}
+                                numberOfLines={1}
+                                ellipsizeMode="tail"
+                              >
                                 {r.buyer_name ?? r.customer_name ?? t('business.orders.customer')}
                               </Text>
-                              {r.reservation_id && (
-                                <View style={{ marginLeft: 6, backgroundColor: theme.colors.primary + '12', borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2 }}>
-                                  <Text style={{ color: theme.colors.primary, fontSize: 10, fontWeight: '700' }}>
-                                    {orderIdToCode(r.reservation_id)}
-                                  </Text>
-                                </View>
-                              )}
                               {r.created_at && (
-                                <Text style={{ color: theme.colors.muted, ...theme.typography.caption, marginLeft: 'auto' }}>
-                                  {new Date(r.created_at).toLocaleDateString('fr-FR')}
+                                <Text style={{ color: theme.colors.muted, ...theme.typography.caption }}>
+                                  {new Date(r.created_at).toLocaleDateString(dateLocale)}
                                 </Text>
                               )}
+                              {/* Report this review (business can flag an
+                                  objectionable review left on its location). */}
+                              {r.id != null && (() => {
+                                const report = getReviewReport(r);
+                                const isFlagged = !!report;
+                                return (
+                                  <TouchableOpacity
+                                    onPress={() => {
+                                      if (isFlagged) {
+                                        // Already reported → open the status / info popup.
+                                        setReviewReportInfo({ reason: report!.reason, at: report!.at });
+                                      } else {
+                                        setReviewReportResult(null);
+                                        setReviewReportTarget({ id: Number(r.id) });
+                                      }
+                                    }}
+                                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                                    accessibilityRole="button"
+                                    accessibilityState={{ selected: isFlagged }}
+                                    accessibilityLabel={t(isFlagged ? 'review.report.flagged' : 'review.report.action', { defaultValue: isFlagged ? 'Avis déjà signalé' : 'Signaler cet avis' })}
+                                  >
+                                    {/* Filled red flag = already signalé by this business. */}
+                                    <Flag size={14} color={isFlagged ? '#ef4444' : theme.colors.muted} fill={isFlagged ? '#ef4444' : 'transparent'} />
+                                  </TouchableOpacity>
+                                );
+                              })()}
                             </View>
+                            {/* Comment text — wraps naturally over multiple
+                                lines. The trailing marginBottom leaves a
+                                small gap before the order-code chip below
+                                so the chip never touches the last text
+                                line. No numberOfLines cap — long reviews
+                                are expected to wrap. */}
                             <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontStyle: 'italic', lineHeight: 19 }}>
                               « {r.comment} »
                             </Text>
+                            {/* Order code — pinned bottom-right. Sits in
+                                its own row so it never collides with the
+                                customer name in the header (which used
+                                to push it off-screen on long names) and
+                                never overlaps the wrapped comment text
+                                above (always renders BELOW it). */}
+                            {(r.basket_name || r.reservation_id) && (
+                              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 8, gap: 8 }}>
+                                {/* Basket name, left of the order code chip. */}
+                                <Text style={{ color: theme.colors.muted, ...theme.typography.caption, flex: 1 }} numberOfLines={1}>
+                                  {r.basket_name ?? ''}
+                                </Text>
+                                {r.reservation_id && (
+                                  <View style={{ backgroundColor: theme.colors.primary + '12', borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2 }}>
+                                    <Text style={{ color: theme.colors.primary, fontSize: 10, fontWeight: '700' }}>
+                                      {orderIdToCode(r.reservation_id)}
+                                    </Text>
+                                  </View>
+                                )}
+                              </View>
+                            )}
                           </TouchableOpacity>
                         );
                       })}
@@ -1156,7 +1556,143 @@ export default function BusinessDashboard() {
 
             </ScrollView>
           </RNAnimated.View>
-        </View>
+
+          {/* ── Report-a-review picker ──────────────────────────────────────
+              Rendered as an absolute overlay INSIDE the rating Modal (over the
+              sheet) — NOT a separate RN <Modal>. A second Modal stacked on top
+              of this one was the cause of the flag "doing nothing", popping up
+              only after a long delay, or freezing the app (nested RN Modals are
+              unreliable on both platforms). */}
+          {(reviewReportTarget !== null || reviewReportInfo !== null) && (
+            <View style={{ ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', alignItems: 'center', padding: 24 }}>
+              <TouchableOpacity
+                style={StyleSheet.absoluteFill}
+                activeOpacity={1}
+                onPress={() => { if (!reviewReportSubmitting) closeReviewReport(); }}
+              />
+              <View style={{ width: '100%', maxWidth: 360, backgroundColor: theme.colors.surface, borderRadius: 20, padding: 22, ...theme.shadows.shadowLg }}>
+                {reviewReportInfo ? (
+                  // ── Report status / info (already-flagged review) ──
+                  (() => {
+                    const flaggedDate = reviewReportInfo.at
+                      ? new Date(reviewReportInfo.at).toLocaleDateString(dateLocale)
+                      : null;
+                    return (
+                      <View style={{ alignItems: 'center' }}>
+                        <View style={{ width: 64, height: 64, borderRadius: 32, backgroundColor: '#ef444418', alignItems: 'center', justifyContent: 'center', marginBottom: 14 }}>
+                          <Flag size={30} color="#ef4444" fill="#ef4444" />
+                        </View>
+                        <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3, textAlign: 'center', marginBottom: 6 }}>
+                          {t('review.report.infoTitle', { defaultValue: 'Avis signalé' })}
+                        </Text>
+                        <Text style={{ color: theme.colors.muted, ...theme.typography.bodySm, textAlign: 'center', marginBottom: 16 }}>
+                          {t('review.report.infoSubtitle', { defaultValue: "Voici le statut de votre signalement." })}
+                        </Text>
+                        <View style={{ alignSelf: 'stretch', backgroundColor: theme.colors.surfaceMuted, borderRadius: 14, padding: 16, marginBottom: 18, gap: 12 }}>
+                          <View>
+                            <Text style={{ color: theme.colors.muted, ...theme.typography.caption, marginBottom: 2 }}>
+                              {t('review.report.infoReason', { defaultValue: 'Motif signalé' })}
+                            </Text>
+                            <Text style={{ color: theme.colors.textPrimary, ...theme.typography.body }}>
+                              {reviewReasonLabel(reviewReportInfo.reason)}
+                            </Text>
+                          </View>
+                          {flaggedDate && (
+                            <View>
+                              <Text style={{ color: theme.colors.muted, ...theme.typography.caption, marginBottom: 2 }}>
+                                {t('review.report.infoDate', { defaultValue: 'Signalé le' })}
+                              </Text>
+                              <Text style={{ color: theme.colors.textPrimary, ...theme.typography.body }}>{flaggedDate}</Text>
+                            </View>
+                          )}
+                          <View>
+                            <Text style={{ color: theme.colors.muted, ...theme.typography.caption, marginBottom: 2 }}>
+                              {t('review.report.infoStatus', { defaultValue: 'Statut' })}
+                            </Text>
+                            <Text style={{ color: theme.colors.primary, ...theme.typography.body, fontWeight: '600' }}>
+                              {t('review.report.statusUnderReview', { defaultValue: "En cours d'examen par notre équipe de modération" })}
+                            </Text>
+                          </View>
+                        </View>
+                        <TouchableOpacity
+                          onPress={closeReviewReport}
+                          style={{ alignSelf: 'stretch', alignItems: 'center', backgroundColor: theme.colors.primary, borderRadius: theme.radii.pill, paddingVertical: 13 }}
+                        >
+                          <Text style={{ color: '#fff', fontSize: 15, fontWeight: '600', fontFamily: 'Poppins_600SemiBold' }}>
+                            {t('common.ok', { defaultValue: 'OK' })}
+                          </Text>
+                        </TouchableOpacity>
+                      </View>
+                    );
+                  })()
+                ) : reviewReportResult ? (
+                  // ── Branded confirmation / error ──
+                  (() => {
+                    const isError = reviewReportResult === 'error';
+                    const accent = isError ? '#ef4444' : theme.colors.primary;
+                    const title = isError
+                      ? t('common.errorOccurred', { defaultValue: 'Une erreur est survenue' })
+                      : t('review.report.thanksTitle', { defaultValue: 'Merci' });
+                    const msg = isError
+                      ? t('review.report.error', { defaultValue: 'Le signalement a échoué. Réessayez.' })
+                      : reviewReportResult === 'already'
+                        ? t('review.report.alreadyReported', { defaultValue: 'Vous avez déjà signalé cet avis.' })
+                        : t('review.report.thanksBody', { defaultValue: "L'avis a été signalé à notre équipe de modération." });
+                    return (
+                      <View style={{ alignItems: 'center' }}>
+                        <View style={{ width: 64, height: 64, borderRadius: 32, backgroundColor: accent + '18', alignItems: 'center', justifyContent: 'center', marginBottom: 14 }}>
+                          {isError ? <X size={32} color={accent} /> : <Check size={32} color={accent} />}
+                        </View>
+                        <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3, textAlign: 'center', marginBottom: 6 }}>{title}</Text>
+                        <Text style={{ color: theme.colors.muted, ...theme.typography.bodySm, textAlign: 'center', marginBottom: 18 }}>{msg}</Text>
+                        <TouchableOpacity
+                          onPress={isError ? () => setReviewReportResult(null) : closeReviewReport}
+                          style={{ alignSelf: 'stretch', alignItems: 'center', backgroundColor: accent, borderRadius: theme.radii.pill, paddingVertical: 13 }}
+                        >
+                          <Text style={{ color: '#fff', fontSize: 15, fontWeight: '600', fontFamily: 'Poppins_600SemiBold' }}>
+                            {isError ? t('common.retry', { defaultValue: 'Réessayer' }) : t('common.ok', { defaultValue: 'OK' })}
+                          </Text>
+                        </TouchableOpacity>
+                      </View>
+                    );
+                  })()
+                ) : (
+                  // ── Reason picker ──
+                  <>
+                    <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3, marginBottom: 6 }}>
+                      {t('review.report.title', { defaultValue: 'Signaler cet avis' })}
+                    </Text>
+                    <Text style={{ color: theme.colors.muted, ...theme.typography.bodySm, marginBottom: 12 }}>
+                      {t('review.report.subtitle', { defaultValue: 'Pourquoi signalez-vous cet avis ?' })}
+                    </Text>
+                    {REVIEW_REPORT_OPTIONS.map((opt) => (
+                      <TouchableOpacity
+                        key={opt.reason}
+                        onPress={() => submitReviewReport(opt.reason)}
+                        disabled={reviewReportSubmitting}
+                        style={{
+                          flexDirection: 'row',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          paddingVertical: 14,
+                          borderTopWidth: 1,
+                          borderTopColor: theme.colors.divider,
+                          opacity: reviewReportSubmitting ? 0.5 : 1,
+                        }}
+                      >
+                        <Text style={{ color: theme.colors.textPrimary, ...theme.typography.body, flex: 1 }}>{opt.label}</Text>
+                        <ChevronRight size={18} color={theme.colors.muted} />
+                      </TouchableOpacity>
+                    ))}
+                    {reviewReportSubmitting && (
+                      <ActivityIndicator color={theme.colors.primary} style={{ marginTop: 14 }} />
+                    )}
+                  </>
+                )}
+              </View>
+            </View>
+          )}
+        </RNAnimated.View>
       </Modal>
 
       {/* Location / team switcher — inline dropdown anchored just below the
@@ -1220,7 +1756,31 @@ export default function BusinessDashboard() {
                   >
                     {t('business.allLocations', { defaultValue: 'Tous les emplacements' })}
                   </Text>
-                  {selectedLocationId === null && <Check size={18} color={theme.colors.primary} />}
+                  {/* Sum of pending orders across every location. Same
+                      cache the nav-bar badge reads from, so this
+                      number is guaranteed to match whatever the badge
+                      shows when the user is on the dashboard's
+                      "Tous" view. Replaces the old "this row is
+                      selected" check (the row's tinted background
+                      already conveys selection). */}
+                  {(() => {
+                    let total = 0;
+                    for (const n of pendingCountByLocation.values()) total += n;
+                    return total > 0 ? (
+                      <View style={{
+                        minWidth: 24, height: 24,
+                        borderRadius: 12,
+                        backgroundColor: theme.colors.primary,
+                        paddingHorizontal: 7,
+                        justifyContent: 'center',
+                        alignItems: 'center',
+                      }}>
+                        <Text style={{ color: '#fff', fontSize: 11, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
+                          {total}
+                        </Text>
+                      </View>
+                    ) : null;
+                  })()}
                 </TouchableOpacity>
               )}
 
@@ -1262,7 +1822,27 @@ export default function BusinessDashboard() {
                         </Text>
                       ) : null}
                     </View>
-                    {isSelected && <Check size={18} color={theme.colors.primary} />}
+                    {/* Per-location pending chip (mirrors the
+                        ['today-orders-count'] cache shared with the
+                        nav-bar badge). Hidden when zero so quiet
+                        venues stay visually uncluttered. */}
+                    {(() => {
+                      const count = pendingCountByLocation.get(Number(loc.id)) ?? 0;
+                      return count > 0 ? (
+                        <View style={{
+                          minWidth: 24, height: 24,
+                          borderRadius: 12,
+                          backgroundColor: theme.colors.primary,
+                          paddingHorizontal: 7,
+                          justifyContent: 'center',
+                          alignItems: 'center',
+                        }}>
+                          <Text style={{ color: '#fff', fontSize: 11, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
+                            {count}
+                          </Text>
+                        </View>
+                      ) : null;
+                    })()}
                   </TouchableOpacity>
                 );
               })}
@@ -1282,6 +1862,70 @@ export default function BusinessDashboard() {
           </View>
         </TouchableOpacity>
       </Modal>
+
+      {/* "Ajoutez votre premier point de vente" popup. Renders only when
+          the org has zero locations and the walkthrough isn't running — see
+          the useFocusEffect above. Tapping the primary CTA dismisses the
+          popup and routes to the add-location flow; the X / backdrop just
+          dismiss (the popup will re-show next time the dashboard regains
+          focus while still in the empty state). */}
+      <ModalCard
+        visible={showAddLocationPopup}
+        onClose={() => setShowAddLocationPopup(false)}
+        maxWidth={360}
+      >
+        <View style={{ alignItems: 'center', paddingTop: 4 }}>
+          <View
+            style={{
+              width: 88,
+              height: 88,
+              borderRadius: 44,
+              backgroundColor: theme.colors.primary + '15',
+              justifyContent: 'center',
+              alignItems: 'center',
+              marginBottom: 20,
+            }}
+          >
+            <MapPin size={40} color={theme.colors.primary} />
+          </View>
+          <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h2, textAlign: 'center' }}>
+            {t('business.noLocation.title')}
+          </Text>
+          <Text
+            style={{
+              color: theme.colors.textSecondary,
+              ...theme.typography.body,
+              marginTop: 10,
+              textAlign: 'center',
+              lineHeight: 22,
+            }}
+          >
+            {t('business.noLocation.description')}
+          </Text>
+          <TouchableOpacity
+            onPress={() => {
+              setShowAddLocationPopup(false);
+              router.push('/business/add-location' as never);
+            }}
+            activeOpacity={0.85}
+            style={{
+              marginTop: 24,
+              backgroundColor: theme.colors.primary,
+              borderRadius: theme.radii.r12,
+              paddingVertical: 12,
+              paddingHorizontal: 22,
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: 8,
+            }}
+          >
+            <Plus size={16} color="#fff" />
+            <Text style={{ color: '#fff', ...theme.typography.bodySm, fontWeight: '700' }}>
+              {t('business.noLocation.cta')}
+            </Text>
+          </TouchableOpacity>
+        </View>
+      </ModalCard>
 
       {/* Location switching animation overlay */}
       {isSwitchingLocation && (

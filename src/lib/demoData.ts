@@ -77,7 +77,7 @@ export function getDemoPickupWindow(): { start: string; end: string } {
 
 export const DEMO_LATITUDE = 36.8005;
 export const DEMO_LONGITUDE = 10.1825;
-export const DEMO_PICKUP_CODE = 'DEMO1';
+export const DEMO_PICKUP_CODE = 'DEMO';
 
 // Per-basket pricing/qty — basket #1 keeps the original numbers so the rest
 // of the walkthrough (which targets basket #1) reads the same totals as

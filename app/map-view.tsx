@@ -27,7 +27,7 @@ import { Search, Navigation, X, Clock, MapPin, ShoppingBag, Store, ChevronUp, Ch
 import { captureRef } from 'react-native-view-shot';
 import Supercluster from 'supercluster';
 import * as Location from 'expo-location';
-import { StatusBar } from 'expo-status-bar';
+import { useStatusBarStyleOnFocus } from '@/src/hooks/useStatusBarStyleOnFocus';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { MapFallback } from '@/src/components/MapFallback';
@@ -36,11 +36,13 @@ import { normalizeLocationToBasket } from '@/src/utils/normalizeRestaurant';
 import type { Basket } from '@/src/types';
 import { FeatureFlags } from '@/src/lib/featureFlags';
 import { useAddressStore } from '@/src/stores/addressStore';
+import { resolveAddressLabel } from '@/src/utils/addressLabel';
 import { useFavoritesStore } from '@/src/stores/favoritesStore';
 import { useWalkthroughStore } from '@/src/stores/walkthroughStore';
 import { buildDemoListingBasket, DEMO_LOCATION_ID } from '@/src/lib/demoData';
 import { BasketCard } from '@/src/components/BasketCard';
 import { SubScreenWalkthroughOverlay } from '@/src/components/SubScreenWalkthroughOverlay';
+import { RadiusSlider } from '@/src/components/RadiusSlider';
 
 let MapView: any = null;
 let Marker: any = null;
@@ -127,130 +129,8 @@ const MERCHANT_LABEL_STYLE = Platform.OS === 'android'
 
 type BasketWithDist = Basket & { dist: number };
 
-
-const SLIDER_MIN = 1;
-const SLIDER_MAX = 60;
-const THUMB_SIZE = 24;
-const THUMB_HALF = THUMB_SIZE / 2;
-const _THUMB_HALF_ANIM = new Animated.Value(THUMB_HALF);
-
-function RadiusSlider({
-  value,
-  onChange,
-  primaryColor,
-  trackColor,
-}: {
-  value: number;
-  onChange: (km: number) => void;
-  primaryColor: string;
-  trackColor: string;
-}) {
-  const trackWidth = useRef(0);
-  const trackPageX = useRef(0);
-  const isDragging = useRef(false);
-  const lastKm = useRef(value);
-  const thumbX = useRef(new Animated.Value(0)).current;
-  const onChangeRef = useRef(onChange);
-  onChangeRef.current = onChange;
-
-  const kmToXFn = (km: number, width: number) =>
-    ((km - SLIDER_MIN) / (SLIDER_MAX - SLIDER_MIN)) * width;
-
-  const absToKmFn = (absX: number, width: number) => {
-    const localX = absX - trackPageX.current;
-    const clamped = Math.max(0, Math.min(width, localX));
-    const raw = (clamped / width) * (SLIDER_MAX - SLIDER_MIN) + SLIDER_MIN;
-    return Math.max(SLIDER_MIN, Math.min(SLIDER_MAX, Math.round(raw)));
-  };
-
-  const kmToXRef = useRef(kmToXFn);
-  const absToKmRef = useRef(absToKmFn);
-
-  const setThumbToKm = (km: number, width: number) => {
-    thumbX.setValue(kmToXRef.current(km, width));
-  };
-
-  const syncFromProp = (km: number) => {
-    if (!isDragging.current && trackWidth.current > 0) {
-      setThumbToKm(km, trackWidth.current);
-      lastKm.current = km;
-    }
-  };
-
-  const valueRef = useRef(value);
-  if (valueRef.current !== value) {
-    valueRef.current = value;
-    syncFromProp(value);
-  }
-
-  const sliderPan = useRef(
-    PanResponder.create({
-      onStartShouldSetPanResponder: () => true,
-      onMoveShouldSetPanResponder: () => true,
-      onPanResponderGrant: (_, gs) => {
-        isDragging.current = true;
-        const w = trackWidth.current;
-        if (w <= 0) return;
-        const km = absToKmRef.current(gs.x0, w);
-        thumbX.setValue(kmToXRef.current(km, w));
-        if (km !== lastKm.current) { lastKm.current = km; onChangeRef.current(km); }
-      },
-      onPanResponderMove: (_, gs) => {
-        const w = trackWidth.current;
-        if (w <= 0) return;
-        const km = absToKmRef.current(gs.moveX, w);
-        const px = Math.max(0, Math.min(w, gs.moveX - trackPageX.current));
-        thumbX.setValue(px);
-        if (km !== lastKm.current) { lastKm.current = km; onChangeRef.current(km); }
-      },
-      onPanResponderRelease: (_, gs) => {
-        const w = trackWidth.current;
-        if (w <= 0) { isDragging.current = false; return; }
-        const km = absToKmRef.current(gs.moveX, w);
-        thumbX.setValue(kmToXRef.current(km, w));
-        if (km !== lastKm.current) { lastKm.current = km; onChangeRef.current(km); }
-        isDragging.current = false;
-      },
-    }),
-  ).current;
-
-  return (
-    <View
-      style={{ paddingVertical: 8, paddingHorizontal: 2 }}
-      onLayout={(e) => {
-        const { width } = e.nativeEvent.layout;
-        trackWidth.current = width;
-        if (!isDragging.current) setThumbToKm(lastKm.current, width);
-      }}
-      ref={(ref: any) => {
-        if (ref && ref.measure) {
-          ref.measure((_x: number, _y: number, _w: number, _h: number, px: number) => {
-            if (px !== undefined && px !== null) trackPageX.current = px;
-          });
-        }
-      }}
-      {...sliderPan.panHandlers}
-    >
-      <View style={{ height: 5, borderRadius: 3, backgroundColor: trackColor, overflow: 'visible' }}>
-        <Animated.View style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: thumbX, backgroundColor: primaryColor, borderRadius: 3 }} />
-        <Animated.View
-          style={{
-            position: 'absolute', top: -(THUMB_HALF - 2),
-            width: THUMB_SIZE, height: THUMB_SIZE, borderRadius: THUMB_HALF,
-            backgroundColor: primaryColor, borderWidth: 3, borderColor: '#fff',
-            shadowColor: '#000', shadowOpacity: 0.2, shadowRadius: 4,
-            shadowOffset: { width: 0, height: 2 }, elevation: 5,
-            transform: [{ translateX: Animated.subtract(thumbX, _THUMB_HALF_ANIM) }],
-          }}
-        />
-      </View>
-      <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 14 }}>
-        <Text style={{ fontSize: 10, color: trackColor, fontFamily: 'Poppins_500Medium' }}>1 km</Text>
-        <Text style={{ fontSize: 10, color: trackColor, fontFamily: 'Poppins_500Medium' }}>{SLIDER_MAX} km</Text>
-      </View>
-    </View>
-  );
-}
+// RadiusSlider moved to src/components/RadiusSlider.tsx and shared with the
+// leaderboard's "Ma région" radius picker (same UX, same gesture model).
 
 export default function MapViewScreen() {
   const { t } = useTranslation();
@@ -310,6 +190,66 @@ export default function MapViewScreen() {
   const [userLocation, setUserLocation] = useState<{ latitude: number; longitude: number } | null>(null);
   const [locationStatus, setLocationStatus] = useState<'loading' | 'granted' | 'denied'>('loading');
   const mapRef = useRef<any>(null);
+
+  // iOS-only: render the address pin as a screen-overlay Animated.View
+  // positioned via Animated.Values. Every Marker-based approach failed
+  // to stay visible during zoom-out on iOS (custom children, view-shot
+  // PNG image, native pinColor, exact business-pin pattern — all
+  // disappeared). A screen overlay sits ABOVE the MapView in the parent
+  // tree, so MapKit has no opportunity to drop it.
+  //
+  // To eliminate the pan/zoom lag that a state-based overlay had:
+  // `onRegionChange` updates Animated.Values directly via setValue (no
+  // re-render), and the View's transform reads from those Animated.Values
+  // — same way every smooth animation in React Native works. The lag
+  // window collapses to the native→JS bridge latency, which is much
+  // smaller than React's reconciler cost.
+  const mapLayoutRef = useRef<{ width: number; height: number } | null>(null);
+  const pinTranslateX = useRef(new Animated.Value(0)).current;
+  const pinTranslateY = useRef(new Animated.Value(0)).current;
+  // Tracks whether the projection has run at least once — controls the
+  // pin's opacity so the user doesn't see it at (0,0) for one frame on
+  // mount before the first onRegionChange fires.
+  const [pinProjected, setPinProjected] = useState(false);
+
+  const projectPinPosition = useCallback((region: MapRegion | undefined | null) => {
+    // Defensive guards: `onRegionChange` can fire with no payload during
+    // initial mount / unmount races (react-native-maps quirk — the error
+    // surfaced as "Cannot read property 'latitude' of undefined"); the
+    // map layout depends on onLayout firing first; `center` is memoized
+    // but inflight when the screen is mounting. Any missing → skip; the
+    // next valid event (within ms) catches up.
+    const layout = mapLayoutRef.current;
+    if (!layout) return;
+    if (!region
+        || typeof region.latitude !== 'number'
+        || typeof region.longitude !== 'number'
+        || typeof region.latitudeDelta !== 'number'
+        || typeof region.longitudeDelta !== 'number') return;
+    // Read `center` from a ref so this callback can be stable (no deps).
+    // Without the ref, useCallback would have to include `center` in its
+    // deps, which re-creates this function on every center change — and
+    // the native side of react-native-maps was caching whichever version
+    // it had wired up at mount, so it kept calling the OLD function with
+    // a frozen DEFAULT_CENTER from the first render. See the centerRef
+    // comment above for the full second-entry symptom.
+    const c = centerRef.current;
+    if (!c
+        || typeof c.latitude !== 'number'
+        || typeof c.longitude !== 'number') return;
+    const lngLeft = region.longitude - region.longitudeDelta / 2;
+    const latTop = region.latitude + region.latitudeDelta / 2;
+    const x = ((c.longitude - lngLeft) / region.longitudeDelta) * layout.width;
+    const y = ((latTop - c.latitude) / region.latitudeDelta) * layout.height;
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+    // 11 = half of the 22×22 dot — centers the dot on the projected coord.
+    pinTranslateX.setValue(x - 11);
+    pinTranslateY.setValue(y - 11);
+    if (!pinProjectedRef.current) {
+      pinProjectedRef.current = true;
+      setPinProjected(true);
+    }
+  }, [pinTranslateX, pinTranslateY]);
 
   // Step-driven re-measure for the map screen halos. /map-view is a pushed
   // Stack screen, so the onLayout that publishes mapRadiusPill /
@@ -398,16 +338,41 @@ export default function MapViewScreen() {
   const pinRefs = useRef<Record<string, View | null>>({});
 
   const captureMarkerForKey = useCallback((key: string) => {
-    // Android-only — iOS uses native custom-children markers and doesn't go
-    // through view-shot. Skipping on iOS keeps Expo Go (which lacks the
-    // view-shot native module) from throwing.
-    if (Platform.OS !== 'android') return;
+    // Android always uses view-shot (rich-content markers don't render
+    // reliably as custom <Marker> children on Android). On iOS, view-shot
+    // is normally skipped — MapKit handles custom children fine for
+    // business pins — but the SINGLE address pin is the exception: it
+    // sits at the user's location, gets covered by business clusters at
+    // far zoom, and MapKit's annotation pipeline can lose the cached
+    // bitmap during aggressive pinch-zoom-out. Switching it to a PNG
+    // image (the same way every Android marker on this map does) means
+    // the native side just blits a pre-rendered bitmap at the lat/lng —
+    // there's nothing for MapKit's snapshot pipeline to drop.
+    //
+    // The legacy iOS-skip rule existed only to keep Expo Go (which lacks
+    // the view-shot native module) from throwing. We preserve that
+    // safety net via the .catch below — if capture throws, we log and
+    // fall back to the custom-children Marker that's still rendered
+    // conditionally on the on-map side.
+    if (Platform.OS !== 'android' && key !== 'address-pin') return;
+    // Address pin → `result: 'data-uri'` (in-memory base64 PNG). The
+    // previous `tmpfile` mode returned a `file://` URI that the iOS tmp
+    // cache could evict between renders — a category change re-renders
+    // the whole MapView, MapKit re-loads the image, the file is gone,
+    // the marker silently disappears. data-uri embeds the PNG bytes in
+    // the URI string itself, so MapKit always has them.
+    // Cluster + business pins keep `tmpfile` (Android-only path) — the
+    // bigger images would bloat JS state if base64-embedded, and the
+    // tmpfile lifetime issue doesn't seem to affect Android in practice.
+    const captureFormat = key === 'address-pin'
+      ? { format: 'png' as const, quality: 1, result: 'data-uri' as const }
+      : { format: 'png' as const, quality: 1, result: 'tmpfile' as const };
     // Wait two RAFs after onLayout so Text + lucide SVG finish painting before
     // view-shot snapshots the view. Without this, the PNG comes back partial.
     requestAnimationFrame(() => requestAnimationFrame(() => {
       const ref = pinRefs.current[key];
       if (!ref) return;
-      captureRef(ref, { format: 'png', quality: 1, result: 'tmpfile' })
+      captureRef(ref, captureFormat)
         .then((uri) => {
           setPinImages((prev) => prev[key] ? prev : { ...prev, [key]: uri });
         })
@@ -438,7 +403,10 @@ export default function MapViewScreen() {
   // Use saved address (Tunisia) for center, not device GPS (could be US/abroad)
   // Must be defined BEFORE handleRecenter so the callback captures the current value
   const { addresses, selectedId } = useAddressStore();
-  const selectedAddr = addresses.find((a) => a.id === selectedId);
+  // Demo location (Grand Tunis) takes priority so the map centers sensibly
+  // during demo mode even without a real saved address.
+  const demoAddress = useAddressStore((s) => s.demoAddress);
+  const selectedAddr = demoAddress ?? addresses.find((a) => a.id === selectedId);
   const center = useMemo(() =>
     selectedAddr
       ? { latitude: selectedAddr.lat, longitude: selectedAddr.lng }
@@ -452,56 +420,153 @@ export default function MapViewScreen() {
     [selectedAddr?.id, selectedAddr?.lat, selectedAddr?.lng, userLocation?.latitude, userLocation?.longitude]
   );
 
+  // The pin + radius should only paint once we know WHERE to put them.
+  // Without this gate, on first mount with no saved address the pin/circle
+  // render at DEFAULT_CENTER (Tunis), then jump to the real GPS coords as
+  // soon as expo-location resolves — the user sees a brief "marker over
+  // there, then radius over here" flash. Treat each input as a definite
+  // answer: a saved address wins, a resolved GPS wins, a denied permission
+  // means "use the default and commit to it". While we're still waiting
+  // for the GPS callback we hide both layers.
+  const centerResolved = !!selectedAddr || !!userLocation || locationStatus === 'denied';
+
+  // Mirrors of `center` and `pinProjected` exposed via refs so the iOS
+  // `projectPinPosition` callback can read THE LATEST values without
+  // having to be re-created on every change. Re-creating the callback
+  // was the whole reason for the "second-entry pin stuck at Tunis" bug:
+  // when the user navigated away and back, react-native-maps' native
+  // onRegionChange handler was still firing with a stale `center` closed
+  // over from the very first render (DEFAULT_CENTER) instead of the
+  // updated `center` (userLocation). The dot landed where Tunis projects
+  // on the user-location map. Refs keep projectPinPosition stable AND
+  // always reading the freshest center.
+  const centerRef = useRef(center);
+  useEffect(() => { centerRef.current = center; }, [center]);
+  const pinProjectedRef = useRef(false);
+
+  // Transient "results based on Tunis center" toast. Only surfaces when there
+  // is NO usable center yet: no saved address AND no current location (because
+  // permission is denied or the fix hasn't arrived). If the user has picked an
+  // address in the app, we centre on THAT instead — Tunis fallback never
+  // applies, so the toast must not fire. Auto-hides after 4 s.
+  const [showLocationToast, setShowLocationToast] = useState(false);
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const triggerLocationToast = useCallback(() => {
+    setShowLocationToast(true);
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = setTimeout(() => setShowLocationToast(false), 4000);
+  }, []);
+  useEffect(() => { return () => { if (toastTimerRef.current) clearTimeout(toastTimerRef.current); }; }, []);
+  useEffect(() => {
+    // Mount-time / permission-flip: only show the Tunis-center toast when the
+    // user has NO saved address AND location is unavailable. Saved address →
+    // we centre on that, no fallback explanation needed.
+    if (locationStatus === 'denied' && !selectedAddr) triggerLocationToast();
+  }, [locationStatus, selectedAddr, triggerLocationToast]);
 
   const handleRecenter = useCallback(() => {
+    // ALWAYS recenter — this is the "use current location" action and the
+    // user expects the camera to fly back to whatever spot the marker is
+    // pinned to, even if that's the Tunis fallback. Additionally surface
+    // the toast when there's no real "current location" to use AND no saved
+    // address either — that's the only case where the camera actually lands
+    // at Tunis center and the user might wonder why.
     if (mapRef.current) {
       const target = selectedAddr
         ? { latitude: selectedAddr.lat, longitude: selectedAddr.lng }
         : userLocation ?? DEFAULT_CENTER;
       mapRef.current.animateToRegion({ ...target, latitudeDelta: Math.max(0.02, radius * 0.015), longitudeDelta: Math.max(0.02, radius * 0.015) }, 600);
     }
-  }, [selectedAddr, userLocation, radius]);
-
-  // Auto-center on first GPS fix — but ONLY if the user has not chosen an
-  // in-app address. The chosen address always wins (same priority as the
-  // re-center button in handleRecenter above), otherwise the GPS fix
-  // arriving a few hundred ms after mount would yank the camera off the
-  // user's selected location.
-  const hasAutocentered = useRef(false);
-  useEffect(() => {
-    if (userLocation && mapRef.current && !hasAutocentered.current && !selectedAddr) {
-      hasAutocentered.current = true;
-      const timer = setTimeout(() => {
-        if (mapRef.current && userLocation) {
-          mapRef.current.animateToRegion(
-            { ...userLocation, latitudeDelta: Math.max(0.02, radius * 0.015), longitudeDelta: Math.max(0.02, radius * 0.015) },
-            600,
-          );
-        }
-      }, 350);
-      return () => clearTimeout(timer);
+    if (!selectedAddr && !userLocation) {
+      triggerLocationToast();
     }
-  }, [userLocation, radius, selectedAddr]);
+  }, [selectedAddr, userLocation, radius, triggerLocationToast]);
 
-  // Auto-zoom map when radius changes so the circle stays visible
+  // Single source of truth for "camera chases center". Fires whenever
+  // `center` settles to a new geographic point — that includes:
+  //   · selectedAddr picked, edited in place, or removed
+  //   · userLocation arrives (first GPS fix)
+  //   · locationStatus settles to 'denied' (centerResolved flips true)
+  // Animation duration is short (180 ms) on purpose: on iOS the address-pin
+  // is rendered as a screen-space overlay whose projection is updated via
+  // the JS bridge as `onRegionChange` ticks during the fly. Longer flies
+  // gave the bridge time to lag behind the native map, so the dot drifted
+  // visibly out of sync with the radius circle (which is a native annotation
+  // attached to lat/lng). 180 ms is short enough that no visible drift
+  // accumulates while still feeling like a transition rather than a teleport.
+  // Tiny 80 ms wait gives the MapView's initial onLayout time to fire on
+  // first mount (animateToRegion silently no-ops before the native side is
+  // ready). The radius-slider has its own debounced effect below — center
+  // is intentionally NOT in its deps so a fresh slider drag doesn't double-
+  // fire animateToRegion with the previous-but-still-valid center.
   useEffect(() => {
-    if (mapRef.current) {
+    if (!mapRef.current) return;
+    if (!centerResolved) return;
+    if (!Number.isFinite(center.latitude) || !Number.isFinite(center.longitude)) return;
+    const lat = center.latitude;
+    const lng = center.longitude;
+    const delta = Math.max(0.02, radius * 0.015);
+    const t = setTimeout(() => {
+      if (!mapRef.current) return;
+      try {
+        mapRef.current.animateToRegion(
+          { latitude: lat, longitude: lng, latitudeDelta: delta, longitudeDelta: delta },
+          180,
+        );
+      } catch (e) {
+        console.warn('[MapView] animateToRegion (center) failed:', (e as Error)?.message);
+      }
+    }, 80);
+    return () => clearTimeout(t);
+    // radius is read for the delta but NOT in deps — slider has its own effect.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [centerResolved, center.latitude, center.longitude]);
+
+  // Radius-only re-frame. Debounced 220 ms because the slider fires
+  // setRadius on every pan tick (~20/s) and react-native-maps can crash if
+  // animateToRegion is called while a previous animation is still in
+  // flight. Reuses the latest center via the closure but doesn't include
+  // it in deps — center changes are handled above.
+  useEffect(() => {
+    if (!mapRef.current) return;
+    if (!centerResolved) return;
+    if (!Number.isFinite(center.latitude) || !Number.isFinite(center.longitude)) return;
+    const lat = center.latitude;
+    const lng = center.longitude;
+    const t = setTimeout(() => {
+      if (!mapRef.current) return;
       const delta = Math.max(0.02, radius * 0.018);
-      mapRef.current.animateToRegion({ ...center, latitudeDelta: delta, longitudeDelta: delta }, 400);
-    }
+      try {
+        mapRef.current.animateToRegion(
+          { latitude: lat, longitude: lng, latitudeDelta: delta, longitudeDelta: delta },
+          400,
+        );
+      } catch (e) {
+        console.warn('[MapView] animateToRegion (radius) failed:', (e as Error)?.message);
+      }
+    }, 220);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [radius]);
 
-  // Auto-center map when user changes their selected address OR edits the
-  // current address's pin in place (same id, new lat/lng).
+  // iOS-only: re-project the address-pin overlay when `center` OR the
+  // committed map region changes. Lists `center.latitude` and
+  // `center.longitude` explicitly because projectPinPosition is stable
+  // now (it reads the latest center from `centerRef`) — without these
+  // deps a center change wouldn't trigger a re-projection until the next
+  // onRegionChange tick fired, leaving the dot at its previous projection
+  // until the user touched the map. That's exactly what landed the dot at
+  // Tunis when the radius had already moved to the user's location on
+  // second entry. Calling projectPinPosition here syncs the dot
+  // immediately on center change; the camera animation that follows then
+  // emits onRegionChange events that continue refining the projection
+  // until the fly settles with the dot at the same pixel as the radius
+  // circle's centre.
   useEffect(() => {
-    if (mapRef.current && selectedAddr) {
-      const delta = Math.max(0.02, radius * 0.015);
-      mapRef.current.animateToRegion(
-        { latitude: selectedAddr.lat, longitude: selectedAddr.lng, latitudeDelta: delta, longitudeDelta: delta },
-        600,
-      );
-    }
-  }, [selectedAddr?.id, selectedAddr?.lat, selectedAddr?.lng]);
+    if (Platform.OS !== 'ios') return;
+    if (!mapRegion) return;
+    projectPinPosition(mapRegion);
+  }, [projectPinPosition, mapRegion, center.latitude, center.longitude]);
 
   const sheetHeight = useRef(new Animated.Value(COLLAPSED_HEIGHT)).current;
   // 3-state: 0 = collapsed, 1 = expanded (half), 2 = full
@@ -551,6 +616,23 @@ export default function MapViewScreen() {
     if (!locationsQuery.data) return [];
     return locationsQuery.data.map(normalizeLocationToBasket);
   }, [locationsQuery.data]);
+
+  // Only show the category chips that actually have at least one partner on
+  // the platform — mirrors the search-page logic in `(tabs)/index.tsx` and
+  // closes the divergence the user reported (the map used to render a
+  // hardcoded ['bakery','restaurant','supermarket','cafe','fastfood','fresh']
+  // with a misspelt 'fastfood' that NEVER matched the DB enum 'fast_food',
+  // plus phantom 'fresh' that isn't a real category — so filtering on either
+  // would return nothing). Dynamic derivation also keeps the new categories
+  // we just standardised (pizzeria / traiteur / hotel / healthy) showing up
+  // automatically once a partner picks them.
+  const availableCategories = useMemo(() => {
+    const cats = new Set<string>();
+    baskets.forEach((b) => {
+      if (b.category && b.category !== 'all') cats.add(b.category);
+    });
+    return Array.from(cats);
+  }, [baskets]);
 
   // Map shows all baskets by default. When the inline category dropdown
   // has a selection, narrow to that category — both the pins on the map
@@ -796,19 +878,28 @@ export default function MapViewScreen() {
     animateToLevel(sheetLevelRef.current === 0 ? 1 : 0);
   }, []);
 
+  // Status bar: the map fills the screen with a darkish satellite/street palette
+  // so light (white) icons read best while the map is the dominant surface.
+  // Only the search takeover (white) swaps to dark icons — the bottom sheet
+  // no longer paints a white top bar, so the status-bar area still shows the
+  // map even at sheetLevel === 2 and the light icons stay legible there.
+  const statusBarStyle: 'light' | 'dark' = searchFullScreen ? 'dark' : 'light';
+  useStatusBarStyleOnFocus(statusBarStyle);
+
   return (
     <View style={styles.container}>
-      <StatusBar style="dark" />
 
-      {/* White header bg when sheet is full */}
-      {sheetLevel === 2 && (
-        <View style={{ position: 'absolute', top: 0, left: 0, right: 0, height: insets.top + 52, backgroundColor: '#fff', zIndex: 25, borderBottomWidth: 1, borderBottomColor: 'rgba(0,0,0,0.06)' }} />
-      )}
+      {/* No top-bar swap when the sheet is fully expanded. The previous
+          version painted a white strip over the status-bar area at
+          sheetLevel === 2 — the user didn't want that. Now the map's
+          top remains the map (with the floating "Discover" title pill
+          and the radius pill) regardless of how far the bottom sheet is
+          dragged up. */}
 
       {/* ── Back button — returns to Découvrir cleanly ── */}
       <TouchableOpacity
         onPress={() => router.back()}
-        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+        hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}
         style={[styles.backBtn, { top: insets.top + 8, backgroundColor: 'rgba(255,255,255,0.92)', shadowColor: '#000', shadowOpacity: 0.12, shadowRadius: 8, shadowOffset: { width: 0, height: 2 }, elevation: 5 }]}
         accessibilityLabel="Back to Découvrir"
       >
@@ -836,11 +927,19 @@ export default function MapViewScreen() {
           customMapStyle={Platform.OS === 'android' ? MAP_STYLE : undefined}
           initialRegion={{ latitude: center.latitude, longitude: center.longitude, latitudeDelta: Math.max(0.02, radius * 0.015), longitudeDelta: Math.max(0.02, radius * 0.015) }}
           onPress={handleMapPress}
+          onLayout={Platform.OS === 'ios' ? (e) => {
+            mapLayoutRef.current = { width: e.nativeEvent.layout.width, height: e.nativeEvent.layout.height };
+          } : undefined}
+          onRegionChange={Platform.OS === 'ios' ? projectPinPosition : undefined}
           showsUserLocation={false}
           showsMyLocationButton={false}
           clusteringEnabled={false}
           onRegionChangeComplete={(region: any) => {
             setMapRegion(region);
+            // iOS-only: snap the address-pin overlay to the final region
+            // so it lands exactly on the user's lat/lng after a gesture,
+            // even if the last `onRegionChange` event was a tick early.
+            if (Platform.OS === 'ios') projectPinPosition(region);
             if (FeatureFlags.ENABLE_EASTER_EGGS && FeatureFlags.ENABLE_MAP_EASTER_EGG && region.latitudeDelta > 0.3 && nearbyBaskets.length >= 2 && !constellationShown.current) {
               constellationShown.current = true;
               setShowConstellationBanner(true);
@@ -848,27 +947,45 @@ export default function MapViewScreen() {
             }
           }}
         >
-          {/* Address pin — shape-only (no Text/SVG), renders fine on both
-              platforms as a native Marker child. */}
-          {Marker && (
-            <Marker
-              key="address-pin"
-              identifier="address-pin"
-              coordinate={center}
-              anchor={{ x: 0.5, y: 1 }}
-              tracksViewChanges={true}
-              zIndex={9999}
-              flat={false}
-              stopPropagation={true}
-            >
-              <View style={{ alignItems: 'center', width: 24, height: 30 }}>
-                <View style={{ width: 20, height: 20, borderRadius: 10, backgroundColor: '#3b82f6', borderWidth: 3, borderColor: '#fff' }} />
-                <View style={{ width: 0, height: 0, marginTop: -1, borderLeftWidth: 5, borderRightWidth: 5, borderTopWidth: 6, borderLeftColor: 'transparent', borderRightColor: 'transparent', borderTopColor: '#3b82f6' }} />
-              </View>
-            </Marker>
-          )}
-          {Circle && (
-            <Circle key="radius-circle" center={center} radius={radius * 1000} fillColor={circleFillColor} strokeColor={circleStrokeColor} strokeWidth={2.5} />
+          {/* Address pin.
+              · iOS  → native custom-children marker (works fine, no
+                snapshot pipeline needed). `tracksViewChanges` flips false
+                after the initial paint so MapKit caches the bitmap.
+              · Android → blitted from a PNG captured by react-native-view-
+                shot (same pipeline as the business pins). The previous
+                version used custom children directly inside <Marker>,
+                which the react-native-maps@1.20.1 native side could lose
+                during heavy zoom-out gestures (bitmap-capture race). With
+                a static PNG, the native side just blits the pre-rendered
+                image at the lat/lng on every frame — it can't disappear.
+                The PNG is captured ONCE per session from an off-screen
+                copy below the MapView (see the addressPinPng-keyed entry
+                in the off-screen layer). */}
+          {/* Address pin moved BELOW the business pins / clusters block —
+              see the bottom of this MapView. iOS MapKit honors render order
+              far more reliably than the `zIndex` prop: when zoomed out
+              enough that a business cluster's centroid sits near the
+              user's location, the cluster — rendered LATER in the JSX
+              tree — was painting on top of the address pin even with
+              `zIndex={9999}` set on the pin. The fix is to render the
+              address pin LAST so it's always painted on top of every
+              other annotation. The user reported the pin "disappearing on
+              zoom-out"; what was actually happening was a cluster covering
+              it at far zoom levels. */}
+          {Circle && centerResolved && (
+            <Circle
+              // Coord-keyed so a center change forces a fresh native overlay
+              // rather than relying on react-native-maps to propagate the
+              // updated `center` prop — that prop update was occasionally
+              // landing late on Android, leaving the radius drawn around the
+              // PREVIOUS address while the address pin had already moved.
+              key={`radius-circle-${center.latitude.toFixed(4)}-${center.longitude.toFixed(4)}`}
+              center={center}
+              radius={radius * 1000}
+              fillColor={circleFillColor}
+              strokeColor={circleStrokeColor}
+              strokeWidth={2.5}
+            />
           )}
           {/* ── Pins + clusters. iOS uses native custom-children <Marker>
               (Expo-Go-friendly). Android uses an image-based <Marker> fed by
@@ -977,19 +1094,115 @@ export default function MapViewScreen() {
               />
             );
           })}
+          {/* Address pin.
+              · Android → real native <Marker> attached to `coordinate=center`.
+                Stable: the native side renders it at the same lat/lng as the
+                radius <Circle> every frame. data-uri image bytes can't be
+                evicted.
+              · iOS    → screen-space Animated.View overlay rendered AFTER
+                the MapView (below). MapKit drops attached annotations
+                during touch gestures (even with data-uri image + tracksView-
+                Changes={false}), which is the "marker disappears when I
+                touch the screen" symptom the user re-confirmed. Overlay is
+                outside MapKit's annotation pool, so MapKit can't drop it.
+                Coord-keyed so a center change forces a fresh annotation
+                rather than relying on react-native-maps to propagate the
+                updated `coordinate` prop. */}
+          {Marker && Platform.OS === 'android' && centerResolved && pinImages['address-pin'] && (
+            <Marker
+              key={`address-pin-${center.latitude.toFixed(4)}-${center.longitude.toFixed(4)}`}
+              identifier="address-pin"
+              coordinate={center}
+              anchor={{ x: 0.5, y: 0.5 }}
+              zIndex={9999}
+              image={{ uri: pinImages['address-pin'] }}
+            />
+          )}
         </MapView>
 
-        {/* Android-only off-screen rendering layer for view-shot snapshots.
-            iOS skips this entirely — its rich markers render natively inside
-            the MapView above. `collapsable={false}` ensures Android wraps each
-            pin in its own native view (otherwise captureRef would fail). */}
-        {Platform.OS === 'android' && (
-          <View
+        {/* iOS-ONLY address-pin overlay — see the block comment above for
+            why we don't use a <Marker> on iOS. Position is computed in JS by
+            `projectPinPosition` whenever the camera region OR `center` moves,
+            then written to two Animated.Values via setValue. The pin stays
+            in sync with the radius <Circle> by sharing the SAME center and
+            re-projecting on the same region updates the native MapKit
+            renderer uses. `pointerEvents="none"` so it doesn't intercept
+            map gestures. */}
+        {Platform.OS === 'ios' && centerResolved && (
+          <Animated.View
             pointerEvents="none"
-            style={{ position: 'absolute', top: -10000, left: 0, opacity: 0 }}
-            collapsable={false}
-          >
-            {(() => {
+            style={{
+              position: 'absolute',
+              left: 0,
+              top: 0,
+              width: 22,
+              height: 22,
+              borderRadius: 11,
+              backgroundColor: '#3b82f6',
+              borderWidth: 3,
+              borderColor: '#fff',
+              shadowColor: '#000',
+              shadowOpacity: 0.25,
+              shadowRadius: 3,
+              shadowOffset: { width: 0, height: 1 },
+              opacity: pinProjected ? 1 : 0,
+              transform: [
+                { translateX: pinTranslateX },
+                { translateY: pinTranslateY },
+              ],
+              // zIndex sits between the map (no zIndex) and the floating UI
+              // (radius card = 10, bottom sheet = 20, back/search = 30) so
+              // the dot paints OVER the map but is covered by the bottom
+              // sheet when the user drags it up. The previous value (100)
+              // put the dot above every overlay including the sheet — so
+              // the blue circle was visible bleeding through the sheet card.
+              zIndex: 5,
+            }}
+          />
+        )}
+
+        {/* Off-screen rendering layer for view-shot snapshots.
+            · The address pin renders here on BOTH platforms — it's the one
+              marker that goes through view-shot on iOS too (see the
+              comment in `captureMarkerForKey` for why).
+            · Business / cluster pins still render here ANDROID-ONLY because
+              iOS handles their native custom-children markers fine.
+            `collapsable={false}` ensures Android wraps each pin in its own
+            native view (otherwise captureRef would fail). */}
+        <View
+          pointerEvents="none"
+          style={{ position: 'absolute', top: -10000, left: 0, opacity: 0 }}
+          collapsable={false}
+        >
+          {/* Address pin (user's saved address / GPS) — rendered off-screen
+              on both iOS and Android, snapshotted once to PNG, then reused
+              by the on-map Marker via the `image` prop.
+              `alignSelf: 'flex-start'` stops the platform from stretching
+              the wrapping View to the parent's full width when no explicit
+              width is set, otherwise the captured PNG comes back
+              horizontally elongated and the marker would offset to the
+              left of its lat/lng. */}
+          {!pinImages['address-pin'] && (
+            <View
+              key="address-pin"
+              ref={(r) => { pinRefs.current['address-pin'] = r; }}
+              onLayout={() => captureMarkerForKey('address-pin')}
+              collapsable={false}
+              style={{
+                alignSelf: 'flex-start',
+                width: 22,
+                height: 22,
+                borderRadius: 11,
+                backgroundColor: '#3b82f6',
+                borderWidth: 3,
+                borderColor: '#fff',
+              }}
+            />
+          )}
+          {/* Business + cluster off-screen renderers — Android only. iOS
+              handles those markers' native custom children fine; only the
+              ADDRESS pin needed to switch to the view-shot path on iOS. */}
+          {Platform.OS === 'android' && (() => {
               // Dedupe by cache key — multiple clusters with the same count share
               // one cluster|N cache entry, so React would otherwise see duplicate
               // sibling keys. We only need to render+snapshot each unique design
@@ -1082,7 +1295,6 @@ export default function MapViewScreen() {
               });
             })()}
           </View>
-        )}
         </>
       ) : (
         <MapFallback markers={markers} radius={radius} style={StyleSheet.absoluteFillObject} />
@@ -1092,7 +1304,7 @@ export default function MapViewScreen() {
       {!searchFullScreen && (
         <TouchableOpacity
           onPress={openSearch}
-          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}
           style={{
             position: 'absolute', top: insets.top + 8, right: 16, zIndex: 30,
             width: 44, height: 44, backgroundColor: theme.colors.surface, borderRadius: 22,
@@ -1109,7 +1321,7 @@ export default function MapViewScreen() {
           {/* Search header */}
           <View style={{ paddingTop: insets.top + 8, paddingHorizontal: 16, paddingBottom: 12, backgroundColor: theme.colors.surface, borderBottomWidth: 1, borderBottomColor: theme.colors.divider }}>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-              <TouchableOpacity onPress={closeSearch} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+              <TouchableOpacity onPress={closeSearch} hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}>
                 <ChevronLeft size={22} color={theme.colors.textPrimary} />
               </TouchableOpacity>
               <View style={{ flex: 1, height: 44, backgroundColor: theme.colors.bg, borderRadius: 12, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12 }}>
@@ -1140,7 +1352,7 @@ export default function MapViewScreen() {
               {t('home.categories.all', { defaultValue: 'Categories' })}
             </Text>
             <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 20 }}>
-              {['bakery', 'restaurant', 'supermarket', 'cafe', 'fastfood', 'fresh'].map((cat) => (
+              {availableCategories.map((cat) => (
                 <TouchableOpacity
                   key={cat}
                   onPress={() => setSearchCategory(searchCategory === cat ? null : cat)}
@@ -1236,7 +1448,7 @@ export default function MapViewScreen() {
           contentContainerStyle={{ gap: 8, paddingVertical: 4, paddingRight: 8 }}
           style={{ marginBottom: 8 }}
         >
-          {['bakery', 'restaurant', 'supermarket', 'cafe', 'fastfood', 'fresh'].map((cat) => {
+          {availableCategories.map((cat) => {
             const on = mapCategory === cat;
             return (
               <TouchableOpacity
@@ -1292,33 +1504,60 @@ export default function MapViewScreen() {
             >
               <MapPin size={13} color={theme.colors.primary} />
               <Text style={{ color: theme.colors.textPrimary, fontSize: 12, fontWeight: '600', flex: 1 }} numberOfLines={1}>
-                {selectedAddr ? selectedAddr.label : t('map.chooseLocation', { defaultValue: 'Choisir un emplacement' })}
+                {selectedAddr ? resolveAddressLabel(selectedAddr.label, t) : t('map.chooseLocation', { defaultValue: 'Choisir un emplacement' })}
               </Text>
               <ChevronRight size={14} color={theme.colors.muted} />
             </TouchableOpacity>
           </View>
         ) : (
-          <TouchableOpacity
-            ref={mapRadiusPillRef as any}
-            onLayout={(e) => {
-              // Same step!=null + demoCustomerActive race-proof check as
-              // the category row above — see comment there.
-              const s = useWalkthroughStore.getState();
-              if (s.step !== null && s.demoCustomerActive) return;
-              (e.target as any)?.measureInWindow?.((x: number, y: number, w: number, h: number) => {
-                if (w > 0 && h > 0) useWalkthroughStore.getState().setMeasuredRect('mapRadiusPill', { x, y, w, h });
-              });
-            }}
-            onPress={() => setRadiusExpanded(true)}
-            activeOpacity={0.8}
-            style={{ alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: theme.colors.surface, borderRadius: theme.radii.pill, paddingHorizontal: 12, paddingVertical: 8, ...theme.shadows.shadowMd }}
-          >
-            <MapPin size={14} color={theme.colors.primary} />
-            <Text style={{ color: theme.colors.primary, ...theme.typography.bodySm, fontWeight: '700' }}>
-              {radius} {t('home.km')}
-            </Text>
-            <ChevronRight size={13} color={theme.colors.muted} style={{ transform: [{ rotate: '90deg' }] }} />
-          </TouchableOpacity>
+          <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 8 }}>
+            <TouchableOpacity
+              ref={mapRadiusPillRef as any}
+              onLayout={(e) => {
+                // Same step!=null + demoCustomerActive race-proof check as
+                // the category row above — see comment there.
+                const s = useWalkthroughStore.getState();
+                if (s.step !== null && s.demoCustomerActive) return;
+                (e.target as any)?.measureInWindow?.((x: number, y: number, w: number, h: number) => {
+                  if (w > 0 && h > 0) useWalkthroughStore.getState().setMeasuredRect('mapRadiusPill', { x, y, w, h });
+                });
+              }}
+              onPress={() => setRadiusExpanded(true)}
+              activeOpacity={0.8}
+              style={{ flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: theme.colors.surface, borderRadius: theme.radii.pill, paddingHorizontal: 12, paddingVertical: 8, ...theme.shadows.shadowMd }}
+            >
+              <MapPin size={14} color={theme.colors.primary} />
+              <Text style={{ color: theme.colors.primary, ...theme.typography.bodySm, fontWeight: '700' }}>
+                {radius} {t('home.km')}
+              </Text>
+              <ChevronRight size={13} color={theme.colors.muted} style={{ transform: [{ rotate: '90deg' }] }} />
+            </TouchableOpacity>
+            {showLocationToast && (
+              // Transient white-bg / barakeat-green toast that sits to the
+              // RIGHT of the pill. flex:1 fills the remaining horizontal
+              // space inside the parent row, so it can never overflow the
+              // floatingRadius wrapper (which itself has marginHorizontal
+              // 16). Text wraps onto up to 3 lines so the full sentence
+              // stays visible at small screen widths.
+              <View style={{
+                flex: 1,
+                backgroundColor: theme.colors.surface,
+                borderRadius: 12,
+                paddingHorizontal: 10,
+                paddingVertical: 8,
+                borderWidth: 1,
+                borderColor: theme.colors.primary + '40',
+                flexDirection: 'row',
+                alignItems: 'center',
+                ...theme.shadows.shadowSm,
+              }}>
+                <MapPin size={12} color={theme.colors.primary} style={{ marginTop: 1 }} />
+                <Text style={{ color: theme.colors.primary, fontSize: 11, marginLeft: 6, flex: 1, fontFamily: 'Poppins_500Medium', lineHeight: 14 }} numberOfLines={3}>
+                  {t('map.tunisCenterToast', { defaultValue: 'Résultats basés sur le centre de Tunis. Veuillez activer la localisation pour utiliser votre position actuelle.' })}
+                </Text>
+              </View>
+            )}
+          </View>
         )}
       </View>
       )}
@@ -1327,7 +1566,7 @@ export default function MapViewScreen() {
       <TouchableOpacity
         style={[styles.locationButton, { bottom: COLLAPSED_HEIGHT + 16, right: 16, backgroundColor: theme.colors.surface, borderRadius: 28, width: 48, height: 48, ...theme.shadows.shadowLg }]}
         onPress={handleRecenter}
-        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+        hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}
         accessibilityLabel="Re-center map"
       >
         {locationStatus === 'loading' ? (
@@ -1338,13 +1577,12 @@ export default function MapViewScreen() {
       </TouchableOpacity>
 
 
-      {/* ── Location denied banner ── */}
-      {locationStatus === 'denied' && (
-        <View style={{ position: 'absolute', top: 140 + insets.top, left: 16, right: 16, backgroundColor: 'rgba(220,80,60,0.92)', borderRadius: 12, paddingHorizontal: 14, paddingVertical: 8, flexDirection: 'row', alignItems: 'center' }}>
-          <MapPin size={14} color="#fff" />
-          <Text style={{ color: '#fff', fontSize: 12, marginLeft: 6, flex: 1, fontFamily: 'Poppins_500Medium' }}>{t('map.locationDeniedBanner', { defaultValue: 'Localisation refusée — résultats basés sur le centre de Tunis' })}</Text>
-        </View>
-      )}
+      {/* The persistent red "Localisation refusée" banner that used to live
+          here was removed at the user's request. The same explanation is now
+          surfaced via the transient toast that sits next to the radius pill
+          (see `showLocationToast`), shown on mount when permission is denied
+          and again whenever the re-center button is tapped without a usable
+          target. The toast auto-dismisses after 4 s. */}
 
       {/* ── Easter egg ── */}
       {showConstellationBanner && (
@@ -1365,7 +1603,7 @@ export default function MapViewScreen() {
               <View>
                 <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3 }}>
                   {nearbyBaskets.length > 0
-                    ? `${nearbyBaskets.length} ${t('home.nearbySpots', { defaultValue: 'spots nearby' })}`
+                    ? t('home.nearbySpots', { count: nearbyBaskets.length, defaultValue: '{{count}} endroits à proximité' })
                     : t('map.noSpotsRadius', { radius, defaultValue: `No spots within ${radius} km` })}
                 </Text>
                 {nearbyBaskets.length === 0 && (
@@ -1376,7 +1614,7 @@ export default function MapViewScreen() {
                   </Text>
                 )}
               </View>
-              <TouchableOpacity onPress={toggleSheet} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+              <TouchableOpacity onPress={toggleSheet} hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}>
                 <ChevronUp size={20} color={theme.colors.muted} style={{ transform: [{ rotate: isExpanded ? '180deg' : '0deg' }] }} />
               </TouchableOpacity>
             </View>

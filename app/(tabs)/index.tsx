@@ -5,7 +5,7 @@ import { useTranslation } from 'react-i18next';
 import { Search, X, RefreshCw, Settings, Bell, MapPin, ChevronDown, Hand, Store, ChevronRight } from 'lucide-react-native';
 
 import { useRouter, useFocusEffect } from 'expo-router';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { BasketCard } from '@/src/components/BasketCard';
 import { SkeletonLoader } from '@/src/components/SkeletonLoader';
@@ -18,14 +18,16 @@ import { useReviewMapStore } from '@/src/stores/reviewMapStore';
 import { normalizeLocationToBasket } from '@/src/utils/normalizeRestaurant';
 import { useHeroStore } from '@/src/stores/heroStore';
 import { useAddressStore } from '@/src/stores/addressStore';
+import { useSplashStore } from '@/src/stores/splashStore';
+import { resolveAddressLabel } from '@/src/utils/addressLabel';
 import { useNotificationStore } from '@/src/stores/notificationStore';
 import { useWalkthroughStore } from '@/src/stores/walkthroughStore';
 import { buildDemoListingBasket, DEMO_LOCATION_ID } from '@/src/lib/demoData';
 import { fetchHeroSlides, type HeroSlide } from '@/src/services/heroSlides';
 import { isPickupExpiredInTz } from '@/src/utils/timezone';
-import { StatusBar } from 'expo-status-bar';
 import { useSwipeToDismiss } from '@/src/hooks/useSwipeToDismiss';
 import { sharedScrollY, HERO_HEIGHT as SHARED_HERO_HEIGHT } from '@/src/lib/topBarScroll';
+import { useStatusBarStyleOnFocus } from '@/src/hooks/useStatusBarStyleOnFocus';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
 
@@ -59,7 +61,10 @@ export default function HomeScreen() {
   const carouselRef = useRef<ScrollView>(null);
   // Address picker is now a full-page route
   const { addresses, selectedId, hydrate: hydrateAddresses } = useAddressStore();
-  const selectedAddress = addresses.find((a) => a.id === selectedId) ?? null;
+  // Prefer the transient demo location (e.g. Grand Tunis) while demo mode is
+  // active so cards/map show a distance even without a real saved address.
+  const demoAddress = useAddressStore((s) => s.demoAddress);
+  const selectedAddress = demoAddress ?? addresses.find((a) => a.id === selectedId) ?? null;
   const unreadCount = useNotificationStore((s) => s.unreadCount);
 
 
@@ -88,9 +93,37 @@ export default function HomeScreen() {
   // Settings / Bell icons. See src/lib/topBarScroll.ts for the rationale.
   const HERO_HEIGHT = SHARED_HERO_HEIGHT;
   const scrollY = sharedScrollY;
+  // On a fresh (re)mount / app reload the native list always starts at the top,
+  // but `scrollY` is a module singleton that can still hold a stale, collapsed
+  // value from a previous mount — which makes heroOpacity/containerBg paint the
+  // hero all white until the user scrolls a little. Snap it back to 0 on the
+  // FIRST render (synchronously, before the interpolations read it) so the hero
+  // is correct from the very first frame. The ref guard means it runs once per
+  // mount, so a screen that stays mounted across tab switches keeps its scroll.
+  // One-shot scroll-position reset for this HomeScreen instance. Moved into
+  // a useEffect (was inline during render) because `sharedScrollY.setValue`
+  // synchronously notifies every Animated.Value listener — including this
+  // component's own listener below — which then calls setState. Doing that
+  // during render is what triggers React's "Cannot update a component while
+  // rendering a different component" warning, especially during the rapid
+  // navigate-back from the cancel-reservation popup where two HomeScreen
+  // instances overlap for a frame. The ref guarantees this only runs once
+  // per fresh mount.
+  const didInitScrollRef = useRef(false);
+  useEffect(() => {
+    if (didInitScrollRef.current) return;
+    didInitScrollRef.current = true;
+    sharedScrollY.setValue(0);
+  }, []);
   const [heroVisible, setHeroVisible] = useState(true);
   const heroVisibleRef = useRef(true);
   const setHeroVisibleGlobal = useHeroStore((s) => s.setHeroVisible);
+  // Drive the OS status bar from the same `heroVisible` flag the page uses for
+  // its hero theming. Hook-based (not <StatusBar/>) so the style re-asserts on
+  // every focus event — tabs stay mounted, and a one-shot useEffect push from
+  // the declarative component would leave the bar stuck on whatever style the
+  // last-visited tab set the next time the user returns here.
+  useStatusBarStyleOnFocus(heroVisible ? 'light' : 'dark');
 
   useEffect(() => {
     const id = scrollY.addListener(({ value }) => {
@@ -162,13 +195,54 @@ export default function HomeScreen() {
   // `refetchOnReconnect` since a stale list on the home feed after a
   // network blip is visible to the user. Dropped `refetchOnMount:
   // 'always'` — the global staleTime now handles freshness on entry.
+  //
+  // `enabled: !showSplash` defers this fetch until the splash dismisses.
+  // The (tabs) tree mounts UNDER the splash, so without this gate the
+  // request fires while BarakeatHaloSplash's rAF loop is still driving the
+  // bouncing-B animation on the JS thread — JSON parse + normaliseLocation
+  // for N locations is heavy enough to drop animation frames on Expo Go
+  // and slow Android. The root layout's prefetch (app/_layout.tsx) is
+  // already gated the same way and uses the same query key, so when the
+  // splash dismisses the cache is populated and this hook re-renders
+  // with data instantly — no second network round-trip.
+  const showSplash = useSplashStore((s) => s.showSplash);
+  // Stable RQ client handle — used by the useFocusEffect below to invalidate
+  // ['locations'] on tab focus without putting the unstable locationsQuery
+  // object in the callback deps (which caused an infinite refetch loop).
+  const queryClient = useQueryClient();
   const locationsQuery = useQuery({
     queryKey: ['locations'],
     queryFn: fetchLocations,
     staleTime: 5 * 60_000,
     refetchOnReconnect: true,
     retry: 2,
+    enabled: !showSplash,
   });
+
+  // Stuck-loading watchdog. Symptom (rare, intermittent): the home tab shows
+  // category chips but the basket list never populates — React Query's fetch
+  // promise has gone silent (network glitch / connection dropped mid-request
+  // / axios interceptor stalled / etc.) and the user has to manually
+  // pull-to-refresh. Guard against it by force-refetching ONCE if we've been
+  // fetching for >12 s without data ever arriving. Tight guard:
+  //   - Only fires when there's NEVER been data (initial load). A refetch
+  //     that takes 12 s with stale data on screen is annoying-but-fine;
+  //     this only saves the "blank screen forever" case.
+  //   - 12 s is well past the typical fetch (1-2 s) but below the user's
+  //     pain threshold (~30 s before they manually refresh).
+  //   - Single force-refetch, no loop. If the refetch ALSO hangs, the user
+  //     will pull-to-refresh — we don't want a runaway recovery loop.
+  React.useEffect(() => {
+    if (!locationsQuery.isFetching) return;
+    if (locationsQuery.data !== undefined) return;
+    const t = setTimeout(() => {
+      if (locationsQuery.isFetching && locationsQuery.data === undefined) {
+        console.warn('[home] locations fetch stuck > 12s — forcing refetch');
+        void locationsQuery.refetch();
+      }
+    }, 12_000);
+    return () => clearTimeout(t);
+  }, [locationsQuery.isFetching, locationsQuery.data, locationsQuery.refetch]);
 
   // Reviews are fetched per-location via /api/reviews/restaurant/:id with
   // concurrency capped to 3 inside fetchReviewMap (the platform-wide
@@ -221,7 +295,15 @@ export default function HomeScreen() {
   // green hero) until the user touches the scroll view.
   useFocusEffect(
     useCallback(() => {
-      locationsQuery.refetch();
+      // CRITICAL: do NOT put `locationsQuery` (the whole RQ query object)
+      // in deps — RQ returns a new object on every render, so it would
+      // make the callback identity change on every render, useFocusEffect
+      // would re-fire on every change while focused, and refetch() would
+      // trigger a state update → re-render → new callback → re-fetch.
+      // Infinite refetch loop. Use queryClient.invalidateQueries instead;
+      // queryClient is a stable context value and the invalidate triggers
+      // exactly one refetch per focus event.
+      void queryClient.invalidateQueries({ queryKey: ['locations'] });
       // Consume a pending hero-scroll reset (set after placing/cancelling an
       // order). This is the fix for the "hero is white after I order and come
       // back to search" case: snap the list + shared scroll value to the top.
@@ -234,7 +316,7 @@ export default function HomeScreen() {
         setHeroVisible(shouldBeVisible);
         setHeroVisibleGlobal(shouldBeVisible);
       }
-    }, [locationsQuery, scrollY, setHeroVisibleGlobal, resetHeroScroll])
+    }, [queryClient, scrollY, setHeroVisibleGlobal, resetHeroScroll])
   );
 
   // Build card data: one card per location.
@@ -549,8 +631,12 @@ export default function HomeScreen() {
 
   return (
     <Animated.View style={[styles.container, { backgroundColor: containerBg }]}>
-      {/* Status bar: white icons on dark green hero, black icons on light content */}
-      <StatusBar style={heroVisible ? 'light' : 'dark'} />
+      {/* Status bar style is managed by useStatusBarStyleOnFocus at the top
+          of the component — using the focus-aware hook instead of the
+          declarative <StatusBar/> so the style re-asserts whenever the user
+          returns to this tab (tabs stay mounted, so a one-shot useEffect
+          push from <StatusBar/> would otherwise be overwritten by the last
+          tab the user visited). */}
 
       {/* Fixed top bar — always visible, colors shift as hero collapses */}
       <View style={{
@@ -599,13 +685,13 @@ export default function HomeScreen() {
                 style={{ color: '#fff', fontSize: 13, fontWeight: '600', fontFamily: 'Poppins_600SemiBold', opacity: colorProgressInv }}
                 numberOfLines={1}
               >
-                {selectedAddress?.label ?? t('home.chooseLocation')}
+                {selectedAddress ? resolveAddressLabel(selectedAddress.label, t) : t('home.chooseLocation')}
               </Animated.Text>
               <Animated.Text
                 style={{ position: 'absolute', color: theme.colors.textPrimary, fontSize: 13, fontWeight: '600', fontFamily: 'Poppins_600SemiBold', opacity: colorProgress }}
                 numberOfLines={1}
               >
-                {selectedAddress?.label ?? t('home.chooseLocation')}
+                {selectedAddress ? resolveAddressLabel(selectedAddress.label, t) : t('home.chooseLocation')}
               </Animated.Text>
             </View>
             <View style={{ width: 13, height: 13 }}>
@@ -713,7 +799,16 @@ export default function HomeScreen() {
       <Animated.ScrollView
         ref={mainScrollRef as any}
         style={{ flex: 1 }}
-        contentContainerStyle={{ paddingBottom: 120, flexGrow: 1 }}
+        // paddingBottom moved INTO the cards section View below. Was here on
+        // the contentContainer, which left a 120 px gap between the cards View's
+        // light bottom edge and the contentContainer's bottom edge. That gap
+        // showed the Animated parent's containerBg interpolation — green at
+        // the top of the scroll, light only after scrolling past the hero —
+        // producing a green strip above the tab bar on short lists / partial
+        // scrolls. With paddingBottom now inside the cards View, its light
+        // background covers all the way down to the tab bar regardless of
+        // scrollY.
+        contentContainerStyle={{ flexGrow: 1 }}
         showsVerticalScrollIndicator={false}
         scrollEventThrottle={16}
         stickyHeaderIndices={[1]}
@@ -913,7 +1008,7 @@ export default function HomeScreen() {
                 <TouchableOpacity
                   onPress={() => setSearchQuery('')}
                   style={{ padding: 4 }}
-                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                  hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}
                   accessibilityLabel={t('common.clear', { defaultValue: 'Clear search' })}
                   accessibilityRole="button"
                 >
@@ -939,7 +1034,7 @@ export default function HomeScreen() {
             devices were exposing — the root container's dark-green tint
             was bleeding through there as a thin horizontal line between
             the search bar and the category pills. */}
-        <View style={{ backgroundColor: theme.colors.bg, paddingHorizontal: theme.spacing.xl, paddingTop: theme.spacing.sm, marginTop: -1, flexGrow: 1 }}>
+        <View style={{ backgroundColor: theme.colors.bg, paddingHorizontal: theme.spacing.xl, paddingTop: theme.spacing.sm, paddingBottom: 120, marginTop: -1, flexGrow: 1 }}>
           <View style={[styles.categoriesSection, { marginBottom: theme.spacing.lg }]}>
             <ScrollView
               horizontal

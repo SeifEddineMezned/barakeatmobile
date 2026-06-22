@@ -18,6 +18,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { CheckCheck, ArrowLeft, ShoppingBag, Star, XCircle, Bell, CheckCircle, Clock, MapPin, Navigation, User, MoreHorizontal, EyeOff, X, Check, MessageCircle, Zap } from 'lucide-react-native';
+import { adminBroadcastContent } from '@/src/utils/adminBroadcast';
 import { DeleteIcon8 } from '@/src/components/ui/Icon8';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useTheme } from '@/src/theme/ThemeProvider';
@@ -26,12 +27,27 @@ import {
   fetchNotifications,
   markNotificationRead,
   deleteNotification,
+  bulkDeleteNotifications,
+  bulkMarkNotificationsRead,
   NotificationFromAPI,
 } from '@/src/services/notifications';
 import { useAuthStore } from '@/src/stores/authStore';
 import { useBusinessStore } from '@/src/stores/businessStore';
 import { DelayedLoader } from '@/src/components/DelayedLoader';
 import { NotificationDetail } from '@/src/components/NotificationDetail';
+import { useCustomAlert } from '@/src/components/CustomAlert';
+
+// Hard cap on how many notifications a single batch action will touch the
+// backend with. The bulk endpoints execute a single SQL statement so they
+// comfortably handle the page's LIMIT 50, but we cap here to keep behaviour
+// predictable under load and to give the user a clear "X traités, recommencez"
+// message instead of a silent-feeling op if the selection ever balloons.
+const BATCH_CAP = 25;
+
+// Bulk operations route through dedicated /bulk-delete and /bulk-mark-read
+// endpoints — one HTTP request per batch, one atomic SQL operation per request.
+// The earlier per-id fan-out (with retry+throttle) still left a few survivors
+// when the rate limiter dropped retries; the bulk path eliminates that window.
 
 function timeAgo(dateStr: string, t: (key: string, opts?: Record<string, unknown>) => string): string {
   const now = Date.now();
@@ -74,6 +90,16 @@ function resolveNotifText(
       if (!params.location) {
         params.location = params.locationName ?? params.restaurant ?? params.restaurantName ?? '';
       }
+      // Prepend the org name to the location whenever the backend sent it
+      // in the params. Mirrors what NotificationDetail does with a React-
+      // Query org lookup; here we use what's already on the payload so
+      // the list rows stay zero-query. Older notifs that don't carry
+      // `org_name` fall through to plain location — no regression.
+      const orgName = String(params.org_name ?? '').trim();
+      const locName = String(params.location ?? '').trim();
+      if (orgName && locName && orgName !== locName) {
+        params.location = `${orgName} - ${locName}`;
+      }
       // Backfill `count` from the legacy field names so old notifications (saved
       // before the i18next plural conversion) still pick the right _one/_other
       // variant instead of falling through to the missing base key.
@@ -98,14 +124,27 @@ function resolveNotifText(
 
 function getNotifIcon(type?: string | null, title?: string | null): { Icon: any; color: string; bg: string } {
   const key = type ?? title ?? '';
+  if (key.includes('admin_broadcast') || key.includes('broadcast') || key.includes('announcement')) {
+    // Admin/platform announcement — brand green accent. The card/popup render
+    // the Barakeat logo as the avatar instead of this icon.
+    return { Icon: Bell, color: '#114b3c', bg: '#114b3c18' };
+  }
   if (key.includes('order_confirmed') || key.includes('new_reservation')) {
     return { Icon: ShoppingBag, color: '#114b3c', bg: '#114b3c18' };
   }
   if (key.includes('basket_picked_up')) {
     return { Icon: CheckCircle, color: '#22c55e', bg: '#22c55e18' };
   }
+  if (key.includes('low_stock')) {
+    // "Bientôt épuisé" — a time-ticker (clock) signals urgency.
+    return { Icon: Clock, color: '#f59e0b', bg: '#f59e0b18' };
+  }
   if (key.includes('pickup_confirmed') || key.includes('collected')) {
     return { Icon: CheckCircle, color: '#22c55e', bg: '#22c55e18' };
+  }
+  if (key.includes('pickup_reminder') || key.includes('pickup_closing')) {
+    // Time-based pickup nudge (opening soon / closing soon) — clock = urgency.
+    return { Icon: Clock, color: '#f59e0b', bg: '#f59e0b18' };
   }
   if (key.includes('cancelled')) {
     return { Icon: XCircle, color: '#ef4444', bg: '#ef444418' };
@@ -135,10 +174,21 @@ function NotifCard({ item, theme, t, onPress, onHide, getReservationImage, selec
 }) {
   const translateX = useRef(new Animated.Value(0)).current;
   const { Icon, color, bg } = getNotifIcon(item.type, item.title);
+  // Admin/platform broadcasts store the admin-authored title/message as PLAIN
+  // text (not an i18n {key, params} blob), so resolveNotifText would treat them
+  // as unknown keys and blank them out. Render the raw text directly, and show
+  // the Barakeat logo as the avatar instead of the generic bell icon.
+  const isAdminBroadcast = (item.type ?? '').includes('admin_broadcast') || (item.type ?? '').includes('broadcast') || (item.type ?? '').includes('announcement');
+  // Computed inline (not memoized) so it re-resolves to the CURRENT app language
+  // when the user switches languages and the screen re-renders.
+  const adminContent = isAdminBroadcast ? adminBroadcastContent(item) : null;
+  const titleText = isAdminBroadcast ? (adminContent?.title ?? '') : resolveNotifText(item.title, t);
+  const bodyText = isAdminBroadcast ? (adminContent?.body ?? '') : resolveNotifText(item.message, t);
   const selModeRef = useRef(selectionMode);
   selModeRef.current = selectionMode;
 
   const notifImage = React.useMemo(() => {
+    if (isAdminBroadcast) return adminContent?.image ?? null;
     try {
       const parsed = JSON.parse(item.message);
       const p = parsed?.params ?? {};
@@ -154,7 +204,7 @@ function NotifCard({ item, theme, t, onPress, onHide, getReservationImage, selec
       if (fromParams) return fromParams;
     } catch {}
     return getReservationImage(item.reference_id) ?? null;
-  }, [item.message, item.reference_id, getReservationImage, isBusiness]);
+  }, [item.message, item.reference_id, getReservationImage, isBusiness, isAdminBroadcast, adminContent?.image]);
 
   const panResponder = useRef(PanResponder.create({
     onStartShouldSetPanResponder: () => false,
@@ -224,22 +274,25 @@ function NotifCard({ item, theme, t, onPress, onHide, getReservationImage, selec
               // Notifications without org context (streak, wallet credit, etc.)
               // keep the colored typed icon below so the inbox stays scannable.
               <Image source={{ uri: notifImage }} style={{ width: 36, height: 36, borderRadius: 18, marginRight: theme.spacing.md }} resizeMode="cover" />
+            ) : isAdminBroadcast ? (
+              // Platform announcement → Barakeat logo avatar (not a generic bell).
+              <Image source={require('@/assets/images/barakeat_halo_logo_ios.png')} style={{ width: 36, height: 36, borderRadius: 18, marginRight: theme.spacing.md }} resizeMode="cover" />
             ) : (
               <View style={{ width: 36, alignItems: 'center', marginRight: theme.spacing.md }}>
                 <Icon size={20} color={color} />
               </View>
             )}
             <View style={{ flex: 1 }}>
-              {item.title ? (
+              {titleText ? (
                 <Text style={{ color: theme.colors.textPrimary, fontSize: 14, lineHeight: 19, fontFamily: item.is_read ? 'Poppins_400Regular' : 'Poppins_600SemiBold', fontWeight: item.is_read ? ('400' as const) : ('600' as const) }} numberOfLines={1}>
-                  {resolveNotifText(item.title, t)}
+                  {titleText}
                 </Text>
               ) : null}
               <Text
-                style={{ color: item.title ? theme.colors.textSecondary : theme.colors.textPrimary, fontSize: 13, lineHeight: 18, fontFamily: (!item.title && !item.is_read) ? 'Poppins_600SemiBold' : 'Poppins_400Regular', fontWeight: !item.title && !item.is_read ? ('600' as const) : ('400' as const), marginTop: item.title ? 2 : 0 }}
+                style={{ color: titleText ? theme.colors.textSecondary : theme.colors.textPrimary, fontSize: 13, lineHeight: 18, fontFamily: (!titleText && !item.is_read) ? 'Poppins_600SemiBold' : 'Poppins_400Regular', fontWeight: !titleText && !item.is_read ? ('600' as const) : ('400' as const), marginTop: titleText ? 2 : 0 }}
                 numberOfLines={2}
               >
-                {resolveNotifText(item.message, t)}
+                {bodyText}
               </Text>
             </View>
             {!selectionMode && (
@@ -259,6 +312,7 @@ export default function NotificationsScreen() {
   const theme = useTheme();
   const router = useRouter();
   const queryClient = useQueryClient();
+  const customAlert = useCustomAlert();
   const { user } = useAuthStore();
   const isBusiness = user?.role === 'business';
   // Get cached reservations to find location images for notifications
@@ -354,13 +408,19 @@ export default function NotificationsScreen() {
 
   const filteredData = React.useMemo(() => {
     return (notificationsQuery.data ?? []).filter(n => {
+      // Chat / reply notifications are surfaced through the speech-bubble popup
+      // and the conversation screens — NEVER the bell list, for ALL users. They
+      // still arrive as OS push notifications; they just don't clutter the
+      // notifications page (which stays focused on order/pickup/review events).
+      const tp = (n.type ?? '').toLowerCase();
+      if (tp.includes('message') || tp.includes('reply')) return false;
       const isHiddenOrMasked = hiddenIds.has(n.id) || isAutoMasked(n);
       if (filter === 'hidden') return isHiddenOrMasked;
       if (isHiddenOrMasked) return false;
       if (filter === 'unread' && n.is_read) return false;
       return true;
     });
-  }, [notificationsQuery.data, filter, hiddenIds, isAutoMasked]);
+  }, [notificationsQuery.data, filter, hiddenIds, isAutoMasked, isBusiness]);
 
   // Auto-delete sweep — once per app session per fresh data arrival, delete
   // notifications older than 30 days from the backend. Gated by a ref so it
@@ -379,7 +439,7 @@ export default function NotificationsScreen() {
     }
     deleteSweepRunRef.current = true;
     console.log('[Notifications] Auto-delete sweep — removing', toDelete.length, 'notifications older than', RETENTION_DELETE_DAYS, 'days');
-    Promise.allSettled(toDelete.map((n) => deleteNotification(n.id))).then(() => {
+    bulkDeleteNotifications(toDelete.map((n) => n.id)).catch(() => {}).then(() => {
       void queryClient.invalidateQueries({ queryKey: ['notifications'] });
       void queryClient.refetchQueries({ queryKey: ['unread-count'] });
     });
@@ -394,45 +454,75 @@ export default function NotificationsScreen() {
     setSelectedIds(new Set());
   }, []);
 
+  // Helper: cap a selection at BATCH_CAP and surface a "X traités à la fois,
+  // recommencez pour les autres" notice when the selection overflows the cap.
+  // Returns the ids slice that the caller should process this round (preserves
+  // the original Set's insertion order — newest-first, since selectAll iterates
+  // filteredData which is sorted DESC by created_at on the backend).
+  const sliceForBatch = useCallback((all: number[], total: number) => {
+    if (total <= BATCH_CAP) return all;
+    customAlert.showAlert(
+      t('notifications.batchCapTitle', { defaultValue: 'Trop d\'éléments sélectionnés' }),
+      t('notifications.batchCapBody', {
+        cap: BATCH_CAP,
+        total,
+        defaultValue: 'Pour éviter de surcharger le serveur, seuls {{cap}} éléments sur {{total}} seront traités à la fois. Recommencez pour les éléments restants.',
+      }),
+    );
+    return all.slice(0, BATCH_CAP);
+  }, [customAlert, t]);
+
   const batchMarkRead = useCallback(async () => {
+    const all = [...selectedIds];
+    const ids = sliceForBatch(all, all.length);
     try {
-      await Promise.all([...selectedIds].map(id => markNotificationRead(id)));
+      await bulkMarkNotificationsRead(ids);
       void queryClient.invalidateQueries({ queryKey: ['notifications'] });
       void queryClient.refetchQueries({ queryKey: ['unread-count'] });
     } catch {}
     exitSelectionMode();
-  }, [selectedIds, queryClient, exitSelectionMode]);
+  }, [selectedIds, queryClient, exitSelectionMode, sliceForBatch]);
 
   const batchHide = useCallback(async () => {
+    const all = [...selectedIds];
+    const ids = sliceForBatch(all, all.length);
     setHiddenIds(prev => {
       const next = new Set(prev);
-      selectedIds.forEach(id => next.add(id));
+      ids.forEach(id => next.add(id));
       AsyncStorage.setItem(HIDDEN_KEY, JSON.stringify([...next])).catch(() => {});
       return next;
     });
     try {
-      await Promise.all([...selectedIds].map(id => markNotificationRead(id)));
+      await bulkMarkNotificationsRead(ids);
       void queryClient.invalidateQueries({ queryKey: ['notifications'] });
       void queryClient.refetchQueries({ queryKey: ['unread-count'] });
     } catch {}
     exitSelectionMode();
-  }, [selectedIds, exitSelectionMode, queryClient]);
+  }, [selectedIds, exitSelectionMode, queryClient, sliceForBatch]);
 
   const batchDelete = useCallback(async () => {
-    try {
-      await Promise.all([...selectedIds].map(id => deleteNotification(id)));
-      // Remove from hidden set too
-      setHiddenIds(prev => {
-        const next = new Set(prev);
-        selectedIds.forEach(id => next.delete(id));
-        AsyncStorage.setItem(HIDDEN_KEY, JSON.stringify([...next])).catch(() => {});
-        return next;
-      });
-      void queryClient.invalidateQueries({ queryKey: ['notifications'] });
-      void queryClient.invalidateQueries({ queryKey: ['unread-count'] });
-    } catch {}
+    // Single bulk DELETE (one HTTP, one atomic SQL DELETE … WHERE id = ANY($ids))
+    // instead of N per-id DELETEs. The fan-out version tripped the rate limiter
+    // on a few requests and — because the shared 429-retry layer skips
+    // non-idempotent verbs — those failed silently, leaving a handful of
+    // notifications behind on "tout sélectionner → Supprimer". The BATCH_CAP
+    // additionally bounds each request so behaviour stays predictable on very
+    // large selections; the alert tells the user when their selection was
+    // sliced so they know to repeat the action.
+    const all = [...selectedIds];
+    const ids = sliceForBatch(all, all.length);
+    try { await bulkDeleteNotifications(ids); } catch {}
+    setHiddenIds(prev => {
+      const next = new Set(prev);
+      ids.forEach(id => next.delete(id));
+      AsyncStorage.setItem(HIDDEN_KEY, JSON.stringify([...next])).catch(() => {});
+      return next;
+    });
+    void queryClient.invalidateQueries({ queryKey: ['notifications'] });
+    void queryClient.refetchQueries({ queryKey: ['notifications'] });
+    void queryClient.invalidateQueries({ queryKey: ['unread-count'] });
     exitSelectionMode();
-  }, [selectedIds, exitSelectionMode, queryClient]);
+  }, [selectedIds, exitSelectionMode, queryClient, sliceForBatch]);
 
   // Restore masked notifications to their normal feed (inverse of batchHide).
   // Masking is client-side only (AsyncStorage set), so unmasking is just a set-removal.
@@ -494,24 +584,30 @@ export default function NotificationsScreen() {
                 </Text>
               )}
             </View>
-            <TouchableOpacity onPress={exitSelectionMode} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+            <TouchableOpacity onPress={exitSelectionMode} hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}>
               <X size={22} color={theme.colors.textPrimary} />
             </TouchableOpacity>
           </>
         ) : (
-          <>
-            <View style={styles.headerLeft}>
-              <TouchableOpacity onPress={() => router.back()} style={{ marginRight: theme.spacing.md }} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-                <ArrowLeft size={24} color={theme.colors.textPrimary} />
-              </TouchableOpacity>
-              <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h2 }]}>
-                {t('notifications.title')}
-              </Text>
-            </View>
-            <TouchableOpacity onPress={() => setSelectionMode(true)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+          <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', minHeight: 36 }}>
+            <TouchableOpacity
+              onPress={() => router.back()}
+              hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}
+              style={{ position: 'absolute', left: 0 }}
+            >
+              <ArrowLeft size={24} color={theme.colors.textPrimary} />
+            </TouchableOpacity>
+            <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h2 }]}>
+              {t('notifications.title')}
+            </Text>
+            <TouchableOpacity
+              onPress={() => setSelectionMode(true)}
+              hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}
+              style={{ position: 'absolute', right: 0 }}
+            >
               <MoreHorizontal size={22} color={theme.colors.textSecondary} />
             </TouchableOpacity>
-          </>
+          </View>
         )}
       </View>
 
@@ -690,10 +786,38 @@ export default function NotificationsScreen() {
               }
               if (isNewReservation || isCancelled) {
                 if (isBusiness) {
+                  // Business: setTargetOrder + the incoming-orders screen
+                  // auto-switches to the "issues" tab when the target's
+                  // status is cancelled. Path is the same for both new
+                  // reservations and cancellations.
                   useBusinessStore.getState().setTargetOrder(String(detailNotif.reference_id ?? ''), msgParams.location_id ?? null);
                   router.push('/(business)/incoming-orders' as never);
+                } else if (isCancelled) {
+                  // Customer cancelled notif → "issues" (problems) tab so
+                  // the cancelled order is visible instead of the empty
+                  // "upcoming" tab where it would no longer appear.
+                  // `target` carries the cancelled reservation id; the
+                  // orders screen scrolls + highlights it (red border) on arrival.
+                  router.push({
+                    pathname: '/(tabs)/orders',
+                    params: { tab: 'issues', target: String(detailNotif.reference_id ?? '') },
+                  } as never);
                 } else {
-                  router.push('/(tabs)/orders' as never);
+                  // Customer order-confirmed / new-reservation notif → mirror
+                  // the post-reservation "Voir la commande" popup behaviour:
+                  // land on the upcoming tab with target=<id> so the orders
+                  // screen scrolls to + auto-expands the freshly confirmed
+                  // card. tab=upcoming (NOT issues) tells the orders screen
+                  // to skip the red border — this is a positive landing.
+                  const refId = String(detailNotif.reference_id ?? '');
+                  if (refId) {
+                    router.push({
+                      pathname: '/(tabs)/orders',
+                      params: { tab: 'upcoming', target: refId },
+                    } as never);
+                  } else {
+                    router.push('/(tabs)/orders' as never);
+                  }
                 }
                 return;
               }

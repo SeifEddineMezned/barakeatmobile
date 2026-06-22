@@ -15,6 +15,7 @@ import {
 } from '@/src/services/teams';
 import { useCustomAlert } from '@/src/components/CustomAlert';
 import { getErrorMessage } from '@/src/lib/api';
+import { verifyOrAlarm } from '@/src/hooks/useVerifyOnError';
 import { formatLocationName } from '@/src/utils/formatLocation';
 
 type PermissionKey = 'confirm_pickup' | 'edit_quantities' | 'edit_basket_info' | 'create_delete_baskets' | 'view_history' | 'messaging' | 'cancel_order';
@@ -120,6 +121,11 @@ export default function AddMemberScreen() {
   const canSubmit = name.trim() && email.trim() && password && (isOrgAdminSelected || locationIds.size > 0 || locations.length === 0);
 
   const mutation = useMutation({
+    onMutate: () => {
+      const existing = ((queryClient.getQueryData<any>(['org-details', orgId])?.members ?? []) as any[]);
+      const preIds = new Set(existing.map((m: any) => String(m.user_id ?? m.membership_id ?? m.id)));
+      return { preIds, expectedEmail: email.trim().toLowerCase() };
+    },
     mutationFn: async () => {
       if (!orgId) throw new Error(t('business.team.noOrg', { defaultValue: 'Organisation introuvable' }));
       const permsPayload: Record<string, string> = {
@@ -189,12 +195,9 @@ export default function AddMemberScreen() {
         [{ text: 'OK', onPress: () => router.back() }],
       );
     },
-    onError: (err: any) => {
-      // Backend rejects cross-org partner adds with a typed 409. Surface a
-      // dedicated alert that names the conflicting org so the admin knows
-      // exactly why the email was refused. The apiClient interceptor
-      // unwraps the axios error to { status, message, data, isApiError },
-      // so the payload lives at err.data (not err.response.data).
+    onError: async (err: any, _vars, context) => {
+      // 409 cross-org refusal short-circuits BEFORE verify — it's a
+      // deterministic deny, so the member definitely wasn't added.
       if (err?.data?.error === 'email_already_partner_elsewhere') {
         const otherOrg =
           err.data.other_org_name
@@ -208,18 +211,61 @@ export default function AddMemberScreen() {
         );
         return;
       }
-      alert.showAlert(t('common.error'), getErrorMessage(err));
+      // Otherwise: verify before alarming. The add-member endpoint
+      // does inline notification fan-out (welcome email, etc.) so it's
+      // slower than average and more vulnerable to timeouts.
+      await verifyOrAlarm<any>({
+        error: err,
+        queryClient,
+        verifyKey: ['org-details', orgId],
+        verify: (fresh: any) => {
+          const members = ((fresh as any)?.members ?? []) as any[];
+          return members.some((m: any) => {
+            const id = String(m.user_id ?? m.membership_id ?? m.id);
+            const isNew = !context?.preIds?.has(id);
+            const emailMatch = String(m.email ?? '').toLowerCase() === context?.expectedEmail;
+            return isNew && emailMatch;
+          });
+        },
+        onConfirmed: () => {
+          void queryClient.invalidateQueries({ queryKey: ['org-details'] });
+          void queryClient.invalidateQueries({ queryKey: ['my-context'] });
+          alert.showAlert(
+            t('common.success'),
+            `${t('business.profile.memberAdded')}\n\n${t('business.team.fieldEmail', { defaultValue: 'Email' })}: ${email.trim()}\n${t('business.team.fieldPassword', { defaultValue: 'Mot de passe' })}: ${password}`,
+            [{ text: 'OK', onPress: () => router.back() }],
+          );
+        },
+        onUnconfirmed: () => alert.showAlert(t('common.error'), getErrorMessage(err)),
+      });
     },
   });
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]}>
-      {/* Header */}
-      <View style={[styles.header, { borderBottomColor: theme.colors.divider }]}>
-        <TouchableOpacity onPress={() => router.back()} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+      {/* Header — back chevron pinned to the left via absolute
+          positioning so the title can center horizontally over the row.
+          The previous layout had the title with flex:1 + marginLeft:12,
+          which left it unbalanced against an empty right edge. */}
+      <View
+        style={[
+          styles.header,
+          {
+            borderBottomColor: theme.colors.divider,
+            justifyContent: 'center',
+            alignItems: 'center',
+            minHeight: 48,
+          },
+        ]}
+      >
+        <TouchableOpacity
+          onPress={() => router.back()}
+          hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}
+          style={{ position: 'absolute', left: 16, top: 12 }}
+        >
           <ChevronLeft size={24} color={theme.colors.textPrimary} />
         </TouchableOpacity>
-        <Text style={[theme.typography.h2, { color: theme.colors.textPrimary, flex: 1, marginLeft: 12 }]}>
+        <Text style={[theme.typography.h2, { color: theme.colors.textPrimary }]}>
           {t('business.team.addMemberTitle', { defaultValue: 'Ajouter un membre' })}
         </Text>
       </View>
@@ -279,6 +325,7 @@ export default function AddMemberScreen() {
         {/* ── Role ── */}
         <Text style={[styles.sectionLabel, { marginTop: 24 }]}>
           {t('business.team.fieldRole', { defaultValue: 'R\u00f4le' })}
+          <Text style={{ color: theme.colors.error }}> *</Text>
         </Text>
         {ROLE_PRESETS.map((preset) => {
           const isSelected = selectedPreset === preset.id;
@@ -355,7 +402,8 @@ export default function AddMemberScreen() {
         {locations.length > 0 && !isOrgAdminSelected && (
           <>
             <Text style={[styles.sectionLabel, { marginTop: 20 }]}>
-              {t('business.team.assignLocations', { defaultValue: 'Assigner aux emplacements *' })}
+              {t('business.team.assignLocations', { defaultValue: 'Assigner aux emplacements' })}
+              <Text style={{ color: theme.colors.error }}> *</Text>
             </Text>
             <Text style={{ color: theme.colors.textSecondary, fontSize: 11, marginBottom: 8 }}>
               {t('business.team.assignLocationsHint', { defaultValue: 'Sélectionnez un ou plusieurs emplacements' })}

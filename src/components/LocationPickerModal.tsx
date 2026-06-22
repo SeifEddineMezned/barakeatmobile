@@ -7,6 +7,7 @@ import { MapPin, Home, Briefcase, Plus, ChevronLeft, X, Check, Trash2 } from 'lu
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { useTranslation } from 'react-i18next';
 import { useAddressStore } from '@/src/stores/addressStore';
+import { resolveAddressLabel, defaultAddressKey } from '@/src/utils/addressLabel';
 
 let MapView: any = null;
 if (Platform.OS !== 'web') {
@@ -105,8 +106,8 @@ export function LocationPickerModal({ visible, onClose }: Props) {
                   </Text>
                   {addresses.filter(a => !searchText.trim() || a.label.toLowerCase().includes(searchText.toLowerCase())).map((addr) => {
                     const isSelected = addr.id === selectedId;
-                    const labelLower = addr.label.toLowerCase();
-                    const Icon = labelLower === 'home' ? Home : labelLower === 'work' ? Briefcase : MapPin;
+                    const dk = defaultAddressKey(addr.label);
+                    const Icon = dk === 'home' ? Home : dk === 'work' ? Briefcase : MapPin;
                     return (
                       <TouchableOpacity
                         key={addr.id}
@@ -121,7 +122,7 @@ export function LocationPickerModal({ visible, onClose }: Props) {
                           ]}
                           numberOfLines={1}
                         >
-                          {addr.label}
+                          {resolveAddressLabel(addr.label, t)}
                         </Text>
                         {isSelected && <Check size={18} color={theme.colors.primary} />}
                         <TouchableOpacity
@@ -173,10 +174,16 @@ export function LocationPickerModal({ visible, onClose }: Props) {
                 </View>
               )}
 
-              {/* Fixed center pin — purely visual, no touch */}
+              {/* Fixed center pin — brighter Material blue (#2196F3)
+                  with a white core dot for precision. Larger and
+                  crisper than the old design so the user can see
+                  exactly which pixel they're picking. Mirrors the
+                  customer-side address-picker geometry. */}
               <View style={styles.centerPin} pointerEvents="none">
-                <View style={[styles.pinDot, { backgroundColor: theme.colors.primary }]} />
-                <View style={[styles.pinStem, { backgroundColor: theme.colors.primary }]} />
+                <View style={[styles.pinDot, { backgroundColor: '#2196F3' }]}>
+                  <View style={styles.pinCore} />
+                </View>
+                <View style={[styles.pinStem, { backgroundColor: '#2196F3' }]} />
               </View>
 
               {/* Instruction tooltip */}
@@ -327,18 +334,36 @@ const styles = StyleSheet.create({
     top: '50%',
     left: '50%',
     alignItems: 'center',
-    marginLeft: -8,
-    marginTop: -30,
+    // Composite (22 dot + 14 stem = 36 tall). Offset by half-width
+    // and full-height so the stem TIP — the actual geographic pick
+    // point — sits exactly on the map's center pixel.
+    marginLeft: -11,
+    marginTop: -36,
   },
   pinDot: {
-    width: 16,
-    height: 16,
-    borderRadius: 8,
-    borderWidth: 2,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    borderWidth: 2.5,
     borderColor: '#fff',
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.25,
+    shadowRadius: 2,
+    elevation: 4,
+  },
+  // White inner core — precision indicator. Tiny dot the user's eye
+  // locks onto so they can see EXACTLY which pixel is being picked.
+  pinCore: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#fff',
   },
   pinStem: {
-    width: 2,
+    width: 3,
     height: 14,
   },
   tooltip: {

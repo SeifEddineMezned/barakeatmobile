@@ -20,7 +20,7 @@ import type { NativeSyntheticEvent, TextLayoutEventData } from 'react-native';
 import { useLocalSearchParams, useRouter, useFocusEffect } from 'expo-router';
 import { useQuery } from '@tanstack/react-query';
 import { ChevronLeft, MapPin, ShoppingBag, Clock, Star, Tag, Flag, X, ChevronRight, TimerOff, Navigation, Heart } from 'lucide-react-native';
-import { isPickupExpiredInTz } from '@/src/utils/timezone';
+import { isPickupExpiredInTz, effectiveLocationHours } from '@/src/utils/timezone';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { useTranslation } from 'react-i18next';
 import { getErrorMessage } from '@/src/lib/api';
@@ -33,7 +33,8 @@ import { fetchMyReservations } from '@/src/services/reservations';
 import { useFavoritesStore } from '@/src/stores/favoritesStore';
 import { normalizeRawBasketToBasket, mapCategory } from '@/src/utils/normalizeRestaurant';
 import { DelayedLoader } from '@/src/components/DelayedLoader';
-import * as ImagePicker from 'expo-image-picker';
+import { useImageCropper } from '@/src/components/ImageCropper';
+import { PrimaryCTAButton } from '@/src/components/PrimaryCTAButton';
 import { submitReport as submitReportApi } from '@/src/services/reports';
 import { useWalkthroughStore } from '@/src/stores/walkthroughStore';
 import { SubScreenWalkthroughOverlay } from '@/src/components/SubScreenWalkthroughOverlay';
@@ -53,7 +54,7 @@ import {
 const DESC_COLLAPSED_LINES = 3;
 
 // ── Report flow types ──────────────────────────────────────────────────────────
-type ReportReason = 'food_quality' | 'wrong_info' | 'hygiene' | 'behavior' | 'other';
+type ReportReason = 'food_quality' | 'wrong_info' | 'insufficient_quantity' | 'behavior' | 'other';
 
 interface ReportState {
   reason: ReportReason | null;
@@ -71,7 +72,7 @@ interface ReportState {
 const REPORT_REASON_API_MAP: Record<ReportReason, string> = {
   food_quality: 'quality',
   wrong_info: 'other',
-  hygiene: 'hygiene',
+  insufficient_quantity: 'quantity',
   behavior: 'rude',
   other: 'other',
 };
@@ -123,7 +124,7 @@ function CategoryRatingRow({
           />
         ))}
         <Text style={[catStyles.value, { color: theme.colors.textPrimary, ...theme.typography.caption, fontWeight: '700' as const }]}>
-          {value != null ? value.toFixed(1) : '—'}
+          {value != null ? value.toFixed(1) : 'N/A'}
         </Text>
       </View>
     </View>
@@ -156,6 +157,7 @@ export default function RestaurantScreen() {
   const router = useRouter();
   const theme = useTheme();
   const { t } = useTranslation();
+  const { pickPhoto } = useImageCropper();
   const [descExpanded, setDescExpanded] = useState(false);
   const [descNeedsSeeMore, setDescNeedsSeeMore] = useState(false);
   const [ratingsPopupVisible, setRatingsPopupVisible] = useState(false);
@@ -166,6 +168,14 @@ export default function RestaurantScreen() {
   // animation (which controls expand/collapse) decoupled from the
   // slide-down animation that closes the sheet.
   const ratingsTranslateY = useRef(new Animated.Value(0)).current;
+  // Manually-driven backdrop opacity. With animationType="none" the Modal
+  // unmounts instantly, so without this the dim layer would pop in/out hard
+  // — exactly the snap the user was complaining about on close.
+  const ratingsBackdropOpacity = useRef(new Animated.Value(0)).current;
+  // Guards against a re-entrant close: once a close animation starts, further
+  // gesture handling is ignored until cleanup runs. Without this, a second
+  // flick during the slide-out could leave the sheet stuck off-screen.
+  const ratingsClosingRef = useRef(false);
 
   const expandRatings = useCallback(() => {
     setRatingsExpanded(true);
@@ -178,16 +188,37 @@ export default function RestaurantScreen() {
         Animated.spring(ratingsHeight, { toValue: screenHeight * 0.55, friction: 10, tension: 60, useNativeDriver: false }).start();
         return false;
       }
-      setRatingsPopupVisible(false);
+      // Closing (not expanded) — animate slide-down + backdrop-fade in parallel
+      // and only unmount on finish. Routes X-button / backdrop-tap / Android-back
+      // through the same animation the swipe-dismiss uses, so every close source
+      // looks identical (no snap/jitter on unmount).
+      if (ratingsClosingRef.current) return false;
+      ratingsClosingRef.current = true;
+      Animated.parallel([
+        Animated.timing(ratingsTranslateY, { toValue: screenHeight, duration: 220, useNativeDriver: true }),
+        Animated.timing(ratingsBackdropOpacity, { toValue: 0, duration: 200, useNativeDriver: true }),
+      ]).start(() => {
+        setRatingsPopupVisible(false);
+        ratingsTranslateY.setValue(0);
+        ratingsHeight.setValue(screenHeight * 0.55);
+        ratingsClosingRef.current = false;
+      });
       return false;
     });
-  }, [ratingsHeight, screenHeight]);
+  }, [ratingsHeight, ratingsTranslateY, ratingsBackdropOpacity, screenHeight]);
 
   // Reset the dismiss slide whenever the popup is re-opened so a previous
-  // mid-drag value can't leave it pre-translated.
+  // mid-drag value can't leave it pre-translated. Also fade the backdrop in
+  // here (it's manually driven — see ratingsBackdropOpacity above).
   useEffect(() => {
-    if (ratingsPopupVisible) ratingsTranslateY.setValue(0);
-  }, [ratingsPopupVisible, ratingsTranslateY]);
+    if (ratingsPopupVisible) {
+      ratingsTranslateY.setValue(0);
+      ratingsClosingRef.current = false;
+      Animated.timing(ratingsBackdropOpacity, { toValue: 1, duration: 200, useNativeDriver: true }).start();
+    } else {
+      ratingsBackdropOpacity.setValue(0);
+    }
+  }, [ratingsPopupVisible, ratingsTranslateY, ratingsBackdropOpacity]);
 
   // Dynamic dismiss + expand gesture. Drags follow the finger 1:1
   // going down; going up while collapsed pre-pulls the height toward
@@ -204,6 +235,7 @@ export default function RestaurantScreen() {
       onMoveShouldSetPanResponderCapture: (_, g) => Math.abs(g.dy) > 4 && Math.abs(g.dy) > Math.abs(g.dx),
       onPanResponderTerminationRequest: () => false,
       onPanResponderMove: (_, g) => {
+        if (ratingsClosingRef.current) return;
         if (g.dy >= 0) {
           // Drag DOWN — slide the popup down following the finger.
           ratingsTranslateY.setValue(g.dy);
@@ -217,26 +249,40 @@ export default function RestaurantScreen() {
         }
       },
       onPanResponderRelease: (_, g) => {
+        if (ratingsClosingRef.current) return;
         const projection = g.dy + g.vy * 60;
         // Pick an outcome ordered by clarity of intent:
         if (projection > 80 || g.vy > 0.6) {
-          // Close.
+          // Close. Slide fully off-screen, then ALWAYS clean up — even if the
+          // animation was interrupted — so the sheet can never get stuck
+          // off-screen-but-visible (an invisible touch-blocking overlay, which
+          // was the "app froze after I closed the ratings" symptom).
+          ratingsClosingRef.current = true;
           const duration = Math.max(120, Math.min(280, 220 - g.vy * 50));
-          Animated.timing(ratingsTranslateY, { toValue: 800, duration, useNativeDriver: false }).start(({ finished }) => {
-            if (!finished) return;
+          // translateY is native-driven (it lives on its own outer node, away
+          // from the JS-driven `height`), so the slide-out runs on the UI thread
+          // and stays smooth — no jitter/snap even under the close re-render.
+          // Fade the backdrop in parallel so the swipe-close matches X-button close.
+          Animated.parallel([
+            Animated.timing(ratingsTranslateY, { toValue: screenHeight, duration, useNativeDriver: true }),
+            Animated.timing(ratingsBackdropOpacity, { toValue: 0, duration, useNativeDriver: true }),
+          ]).start(() => {
             setRatingsPopupVisible(false);
             setRatingsExpanded(false);
             ratingsTranslateY.setValue(0);
             ratingsHeight.setValue(screenHeight * 0.55);
+            ratingsClosingRef.current = false;
           });
         } else if (!expandedRef.current && g.dy < -40) {
           // Confirmed upward swipe — expand.
-          Animated.spring(ratingsTranslateY, { toValue: 0, friction: 10, tension: 80, useNativeDriver: false }).start();
+          Animated.spring(ratingsTranslateY, { toValue: 0, friction: 10, tension: 80, useNativeDriver: true }).start();
           expandRatings();
         } else {
-          // Spring back to whatever resting size the sheet is in.
+          // Spring back to whatever resting size the sheet is in. translateY is
+          // native, height is JS-driven — they're separate nodes/values, so a
+          // mixed-driver parallel is fine.
           Animated.parallel([
-            Animated.spring(ratingsTranslateY, { toValue: 0, friction: 10, tension: 80, useNativeDriver: false }),
+            Animated.spring(ratingsTranslateY, { toValue: 0, friction: 10, tension: 80, useNativeDriver: true }),
             Animated.spring(ratingsHeight, {
               toValue: expandedRef.current ? screenHeight * 0.92 : screenHeight * 0.55,
               friction: 10,
@@ -281,7 +327,7 @@ export default function RestaurantScreen() {
   const REPORT_REASONS: { key: ReportReason; label: string }[] = [
     { key: 'food_quality', label: t('report.reasons.food_quality', { defaultValue: 'Food quality issue' }) },
     { key: 'wrong_info', label: t('report.reasons.wrong_info', { defaultValue: 'Wrong information' }) },
-    { key: 'hygiene', label: t('report.reasons.hygiene', { defaultValue: 'Hygiene concern' }) },
+    { key: 'insufficient_quantity', label: t('report.reasons.insufficient_quantity', { defaultValue: 'Quantité insuffisante' }) },
     { key: 'behavior', label: t('report.reasons.behavior', { defaultValue: 'Inappropriate behavior' }) },
     { key: 'other', label: t('report.reasons.other', { defaultValue: 'Other' }) },
   ];
@@ -415,14 +461,20 @@ export default function RestaurantScreen() {
     : null;
 
   const restaurant = isDemoLocation ? demoLocation : locationQuery.data;
+  // Location's effective pickup window for TODAY (per-day weekly_schedule wins
+  // over the flat widest-span times). Used for the header chip and as the
+  // inheritance fallback for baskets with NULL pickup times.
+  const restEff = effectiveLocationHours(restaurant as any);
 
   const rawBaskets = isDemoLocation ? buildDemoRawBaskets({ restaurantName: demoLocationName }) : (basketsQuery.data ?? []);
   const baskets = rawBaskets.map((b: any) =>
     normalizeRawBasketToBasket(b as any, restaurant?.name, {
       // Pass the location's hours so baskets with NULL pickup times
       // inherit them (matches the backend's NULL-means-inherit convention).
+      // weekly_schedule lets inheriting baskets resolve TODAY's location hours.
       start: (restaurant as any)?.pickup_start_time,
       end: (restaurant as any)?.pickup_end_time,
+      weekly_schedule: (restaurant as any)?.weekly_schedule,
     }),
   );
   // True when the location has at least one basket AND every basket is
@@ -478,25 +530,10 @@ export default function RestaurantScreen() {
   // Swipe-down dismiss for the report sheet.
   const reportSwipe = useSwipeToDismiss(closeReport);
 
-  const assetToDataUrl = (asset: ImagePicker.ImagePickerAsset): string | null => {
-    if (!asset.base64) return null;
-    const mime = asset.mimeType || 'image/jpeg';
-    return `data:${mime};base64,${asset.base64}`;
-  };
-
   const pickReportPhoto = async () => {
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== 'granted') return;
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: 'images',
-      allowsEditing: true,
-      quality: 0.7,
-      base64: true,
-    });
-    if (!result.canceled && result.assets?.[0]) {
-      const dataUrl = assetToDataUrl(result.assets[0]);
-      if (dataUrl) setReport((prev) => ({ ...prev, imageDataUrl: dataUrl }));
-    }
+    // Limited-access-aware grid (handles its own permission popup) → data URL.
+    const res = await pickPhoto({ base64: true });
+    if (res?.dataUrl) setReport((prev) => ({ ...prev, imageDataUrl: res.dataUrl as string }));
   };
 
   const submitReport = async () => {
@@ -534,7 +571,7 @@ export default function RestaurantScreen() {
         <TouchableOpacity
           style={[styles.backBtn, { backgroundColor: 'rgba(255,255,255,0.9)', position: 'absolute', top: 52, left: 16 }]}
           onPress={() => router.back()}
-          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}
         >
           <ChevronLeft size={22} color={theme.colors.textPrimary} />
         </TouchableOpacity>
@@ -562,7 +599,7 @@ export default function RestaurantScreen() {
           <TouchableOpacity
             style={[styles.backBtn, { backgroundColor: 'rgba(255,255,255,0.9)', ...theme.shadows.shadowMd }]}
             onPress={() => router.back()}
-            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}
           >
             <ChevronLeft size={22} color={theme.colors.textPrimary} />
           </TouchableOpacity>
@@ -581,7 +618,7 @@ export default function RestaurantScreen() {
               },
             ]}
             onPress={() => { if (id) toggleBasketFavorite(String(id)); }}
-            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}
             accessibilityLabel={isFavorited
               ? t('favorites.removeFromFavorites', { defaultValue: 'Retirer des favoris' })
               : t('favorites.addToFavorites', { defaultValue: 'Ajouter aux favoris' })}
@@ -632,33 +669,43 @@ export default function RestaurantScreen() {
               {restaurant?.name ?? ''}
             </Text>
           </View>
-          {restaurant?.category ? (
-            <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 4 }}>
-              <Tag size={12} color={theme.colors.textSecondary} />
-              <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, marginLeft: 4 }]}>
-                {t(`home.categories.${mapCategory(restaurant.category)}`, { defaultValue: restaurant.category })}
-              </Text>
-            </View>
-          ) : null}
           {locationFullyExpired ? (
             <View style={{ marginTop: 8, alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', backgroundColor: '#88888822', borderRadius: theme.radii.pill, paddingHorizontal: 10, paddingVertical: 4, gap: 4 }}>
               <TimerOff size={11} color="#666" />
               <Text style={{ color: '#555', fontSize: 11, fontWeight: '600', fontFamily: 'Poppins_600SemiBold' }}>
-                {t('basket.allUnavailable', { defaultValue: 'Tous les paniers sont indisponibles' })}
+                {t('basket.allUnavailable', { defaultValue: "Aucun panier n'est disponible" })}
               </Text>
             </View>
           ) : null}
 
-          {/* Info: pickup time + address (aligned icons) → rating */}
+          {/* Info: category + pickup time + address (aligned icons) → rating */}
           <View style={{ marginTop: 14, gap: 8 }}>
-            {/* Pickup time + Rating on same row */}
+            {/* Category — aligned (same icon size + indent) with pickup time & address below */}
+            {restaurant?.category ? (
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingLeft: 10 }}>
+                <Tag size={12} color={theme.colors.textSecondary} />
+                <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, flex: 1 }} numberOfLines={1}>
+                  {t(`categories.${mapCategory(restaurant.category)}`, { defaultValue: t(`home.categories.${mapCategory(restaurant.category)}`, { defaultValue: restaurant.category }) })}
+                </Text>
+              </View>
+            ) : null}
+            {/* Pickup time + Rating on same row. When the location is closed
+                for today, swap the time chip for a "Fermé aujourd'hui" chip
+                so the customer sees the reason instead of a blank space. */}
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-              {restaurant?.pickup_start_time ? (
+              {restEff.closed ? (
+                <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: theme.colors.bg, borderRadius: theme.radii.pill, paddingHorizontal: 10, paddingVertical: 6 }}>
+                  <Clock size={12} color={theme.colors.error} />
+                  <Text style={{ color: theme.colors.error, ...theme.typography.caption, marginLeft: 4, fontWeight: '600' }}>
+                    {t('basket.closedToday', { defaultValue: 'Fermé aujourd\'hui' })}
+                  </Text>
+                </View>
+              ) : restEff.start ? (
                 <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: theme.colors.bg, borderRadius: theme.radii.pill, paddingHorizontal: 10, paddingVertical: 6 }}>
                   <Clock size={12} color={theme.colors.textSecondary} />
                   <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, marginLeft: 4 }}>
-                    {restaurant.pickup_start_time.substring(0, 5)}
-                    {restaurant.pickup_end_time ? ` - ${restaurant.pickup_end_time.substring(0, 5)}` : ''}
+                    {restEff.start}
+                    {restEff.end ? ` - ${restEff.end}` : ''}
                   </Text>
                 </View>
               ) : null}
@@ -727,9 +774,20 @@ export default function RestaurantScreen() {
             </View>
           ) : (
             baskets.map((basket) => {
+              // When the location is closed today, force EVERY basket card
+              // to render in the unavailable/expired state regardless of
+              // its own stock or pickup window — even one sold-out basket
+              // on a closed-today location should read as "Expiré" so the
+              // customer doesn't get a mixed signal.
+              const locationClosedToday = restEff.closed;
               const soldOut = basket.quantityLeft <= 0;
-              const pickupExpired = !soldOut && isPickupExpiredInTz(basket.pickupWindow?.end);
-              const unavailable = soldOut || pickupExpired;
+              // pickupExpired is independent of stock — a sold-out basket
+              // whose pickup time has also passed is FIRST AND FOREMOST
+              // expired (the time-window miss is the real story; the
+              // stockout is a side-detail). The badge below displays
+              // pickupExpired before soldOut for the same reason.
+              const pickupExpired = locationClosedToday || isPickupExpiredInTz(basket.pickupWindow?.end);
+              const unavailable = locationClosedToday || soldOut || pickupExpired;
               const isDemoBasketCard = isDemoLocation && String(basket.id) === DEMO_BASKET_ID;
 
               return (
@@ -754,14 +812,19 @@ export default function RestaurantScreen() {
                 activeOpacity={0.8}
               >
                 {/* Basket quantity badge — top right */}
-              <View style={{ position: 'absolute', top: 8, right: 8, zIndex: 2, backgroundColor: soldOut ? theme.colors.error : pickupExpired ? '#888' : theme.colors.primary, borderRadius: 10, paddingHorizontal: 8, paddingVertical: 3, flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                {pickupExpired && !soldOut ? (
+              {/* Status badge — pickupExpired wins over soldOut so a basket
+                  that's both expired AND sold out surfaces the more
+                  actionable "expired" state. Grey background + TimerOff
+                  icon for expired; red + ShoppingBag for sold-out only;
+                  primary + count otherwise. */}
+              <View style={{ position: 'absolute', top: 8, right: 8, zIndex: 2, backgroundColor: pickupExpired ? '#888' : soldOut ? theme.colors.error : theme.colors.primary, borderRadius: 10, paddingHorizontal: 8, paddingVertical: 3, flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                {pickupExpired ? (
                   <TimerOff size={12} color="#fff" />
                 ) : (
                   <ShoppingBag size={12} color="#fff" />
                 )}
                 <Text style={{ color: '#fff', fontSize: 11, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
-                  {soldOut ? t('basket.soldOut') : pickupExpired ? t('orders.pickupEnded', { defaultValue: 'Expired' }) : (basket.quantityLeft >= 10 ? '9+' : basket.quantityLeft)}
+                  {pickupExpired ? t('orders.pickupEnded', { defaultValue: 'Expired' }) : soldOut ? t('basket.soldOut') : (basket.quantityLeft >= 10 ? '9+' : basket.quantityLeft)}
                 </Text>
               </View>
               <View style={{ flex: 1, padding: 14, justifyContent: 'center' }}>
@@ -779,34 +842,22 @@ export default function RestaurantScreen() {
                     )}
                   </View>
                   <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 6, gap: 8 }}>
-                    {(() => {
-                      const locStart = restaurant?.pickup_start_time?.substring(0, 5) ?? '';
-                      const locEnd = restaurant?.pickup_end_time?.substring(0, 5) ?? '';
-                      const bStart = basket.pickupWindow?.start ?? '';
-                      const bEnd = basket.pickupWindow?.end ?? '';
-                      // Treat empty / "00:00" as "uses commerce hours" — the
-                      // backend stores NULL columns to signal inheritance, but
-                      // legacy/stale rows may carry sentinel zeros. Don't
-                      // surface a "personnalisé" badge for those.
-                      const isPlaceholder = (v: string) => !v || v === '00:00' || v === '00:00:00';
-                      const isCustom = (
-                        !isPlaceholder(bStart) && !isPlaceholder(bEnd) &&
-                        !isPlaceholder(locStart) && !isPlaceholder(locEnd) &&
-                        (bStart !== locStart || bEnd !== locEnd)
-                      );
-                      if (!isCustom) return null;
-                      return (
-                        <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: '#e3ff5c22', borderRadius: 8, paddingHorizontal: 6, paddingVertical: 2 }}>
-                          <Clock size={11} color="#b8a600" />
-                          <Text style={{ color: '#8a7d00', fontSize: 11, fontWeight: '600', fontFamily: 'Poppins_600SemiBold', marginLeft: 3 }}>
-                            {basket.pickupWindow.start}-{basket.pickupWindow.end}
-                          </Text>
-                          <Text style={{ color: '#a89800', fontSize: 9, fontFamily: 'Poppins_400Regular', marginLeft: 4 }}>
-                            (personnalisé)
-                          </Text>
-                        </View>
-                      );
-                    })()}
+                    {/* Yellow "horaires personnalisés" chip — driven by the
+                        normaliser's `hasCustomPickup` flag (true when the
+                        basket row's pickup_start_time / pickup_end_time
+                        column is non-null). The previous in-line string
+                        comparison against location hours suppressed the chip
+                        whenever the location's own hours came back empty
+                        / sentinel, which is why some locations' baskets
+                        showed the badge and others didn't. */}
+                    {basket.hasCustomPickup ? (
+                      <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: '#e3ff5c22', borderRadius: 8, paddingHorizontal: 6, paddingVertical: 2 }}>
+                        <Clock size={11} color="#b8a600" />
+                        <Text style={{ color: '#8a7d00', fontSize: 11, fontWeight: '600', fontFamily: 'Poppins_600SemiBold', marginLeft: 3 }}>
+                          {basket.pickupWindow.start}-{basket.pickupWindow.end}
+                        </Text>
+                      </View>
+                    ) : null}
                   </View>
                 </View>
                 {basket.imageUrl ? (
@@ -844,6 +895,10 @@ export default function RestaurantScreen() {
       </ScrollView>
 
       {/* ── Ratings popup modal ────────────────────────────────────── */}
+      {/* animationType="none": RN's native fade was layering an opacity tween
+          over our manual slide-down, which produced the close-snap. With "none"
+          the modal unmounts only after the slide finishes; the backdrop opacity
+          is faded manually in parallel so it doesn't pop. */}
       <Modal
         visible={ratingsPopupVisible}
         transparent
@@ -851,19 +906,27 @@ export default function RestaurantScreen() {
         statusBarTranslucent
         onRequestClose={collapseOrCloseRatings}
       >
-        <View style={styles.reportOverlay}>
+        <Animated.View style={[styles.reportOverlay, { opacity: ratingsBackdropOpacity }]}>
           <TouchableOpacity
             style={StyleSheet.absoluteFillObject}
             activeOpacity={1}
             onPress={collapseOrCloseRatings}
           />
+          {/* OUTER node — only the dismiss/drag translateY (native driver). */}
           <Animated.View
             style={{
               position: 'absolute', bottom: 0, left: 0, right: 0,
+              transform: [{ translateY: ratingsTranslateY }],
+            }}
+          >
+          {/* INNER node — the expand/collapse height (JS driver). Separating the
+              two means the native translateY never gets forced onto the JS
+              thread, so closing the sheet is smooth (no jitter/snap). */}
+          <Animated.View
+            style={{
               height: ratingsHeight,
               backgroundColor: theme.colors.surface,
               borderTopLeftRadius: 26, borderTopRightRadius: 26,
-              transform: [{ translateY: ratingsTranslateY }],
               ...theme.shadows.shadowLg,
             }}
           >
@@ -898,22 +961,21 @@ export default function RestaurantScreen() {
                 </Text>
                 {reviewCount > 0 && (
                   <Text style={{ color: theme.colors.muted, ...theme.typography.bodySm, marginLeft: 8 }}>
-                    ({reviewCount} {t('review.reviewCount', { defaultValue: 'avis' })})
+                    ({t('review.reviewCount', { count: reviewCount, defaultValue: '{{count}} avis' })})
                   </Text>
                 )}
               </View>
-              {catAvgs != null ? (
-                <>
-                  <CategoryRatingRow label={t('review.service', { defaultValue: 'Service' })} value={catAvgs.serviceAvg} />
-                  <CategoryRatingRow label={t('review.quality', { defaultValue: 'Qualité' })} value={catAvgs.qualityAvg} />
-                  <CategoryRatingRow label={t('review.quantity', { defaultValue: 'Quantité' })} value={catAvgs.quantityAvg} />
-                  <CategoryRatingRow label={t('review.variety', { defaultValue: 'Variété' })} value={catAvgs.varietyAvg} />
-                </>
-              ) : (
-                <Text style={{ color: theme.colors.muted, ...theme.typography.bodySm, textAlign: 'center', marginBottom: 12 }}>
-                  {t('review.noReviews', { defaultValue: 'Pas encore d\'avis' })}
-                </Text>
-              )}
+              <View style={{ backgroundColor: theme.colors.surfaceMuted, borderRadius: 14, padding: 14, marginBottom: 4 }}>
+                <CategoryRatingRow label={t('review.service', { defaultValue: 'Service' })} value={catAvgs?.serviceAvg ?? null} />
+                <CategoryRatingRow label={t('review.quality', { defaultValue: 'Qualité' })} value={catAvgs?.qualityAvg ?? null} />
+                <CategoryRatingRow label={t('review.quantity', { defaultValue: 'Quantité' })} value={catAvgs?.quantityAvg ?? null} />
+                <CategoryRatingRow label={t('review.variety', { defaultValue: 'Variété' })} value={catAvgs?.varietyAvg ?? null} />
+                {catAvgs == null && (
+                  <Text style={{ color: theme.colors.muted, ...theme.typography.caption, textAlign: 'center', marginTop: 8 }}>
+                    {t('review.noReviewsYet', { defaultValue: "Aucun avis pour le moment" })}
+                  </Text>
+                )}
+              </View>
             </View>
 
             {/* Divider */}
@@ -959,6 +1021,11 @@ export default function RestaurantScreen() {
                         <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, lineHeight: 20 }} numberOfLines={2}>
                           {first.comment}
                         </Text>
+                        {first.basket_name ? (
+                          <Text style={{ color: theme.colors.muted, ...theme.typography.caption, textAlign: 'right', marginTop: 4 }} numberOfLines={1}>
+                            {first.basket_name}
+                          </Text>
+                        ) : null}
                       </View>
                       {commentsWithText.length > 1 && (
                         <TouchableOpacity onPress={() => { expandRatings(); }} style={{ alignItems: 'center', paddingVertical: 8 }}>
@@ -998,6 +1065,11 @@ export default function RestaurantScreen() {
                         <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, lineHeight: 20 }}>
                           {r.comment}
                         </Text>
+                        {r.basket_name ? (
+                          <Text style={{ color: theme.colors.muted, ...theme.typography.caption, textAlign: 'right', marginTop: 4 }} numberOfLines={1}>
+                            {r.basket_name}
+                          </Text>
+                        ) : null}
                       </View>
                     ))}
                   </ScrollView>
@@ -1005,7 +1077,8 @@ export default function RestaurantScreen() {
               })()}
             </View>
           </Animated.View>
-        </View>
+          </Animated.View>
+        </Animated.View>
       </Modal>
 
       {/* ── Report modal ─────────────────────────────────────────── */}
@@ -1133,6 +1206,7 @@ export default function RestaurantScreen() {
                   keyboardShouldPersistTaps="handled"
                   showsVerticalScrollIndicator={false}
                   contentContainerStyle={styles.sheetScrollContent}
+                  style={{ flex: 1 }}
                 >
                   {/* ── Motif section ── */}
                   <Text style={[styles.sectionLabel, { color: theme.colors.textSecondary }]}>
@@ -1294,44 +1368,26 @@ export default function RestaurantScreen() {
                   </Text>
                 </ScrollView>
 
-                {/* ── Fixed CTA footer ── */}
+                {/* ── Fixed CTA footer ── matches the leave-review form
+                    (app/review.tsx): same PrimaryCTAButton (pill, white
+                    text on primary bg, larger typography, generous padding)
+                    so both forms feel like part of the same family. The
+                    hairline border above this footer is intentional — it
+                    only appears at the screen's bottom now that the sheet
+                    is rigid-height (was floating mid-screen previously). */}
                 <View
                   style={[
                     styles.sheetFooter,
-                    { borderTopColor: theme.colors.divider },
+                    { borderTopColor: theme.colors.divider, backgroundColor: theme.colors.surface, ...theme.shadows.shadowLg },
                   ]}
                 >
-                  <TouchableOpacity
+                  <PrimaryCTAButton
                     onPress={submitReport}
-                    disabled={!report.reason || !report.comment.trim() || !!report.submitting}
-                    activeOpacity={report.reason && report.comment.trim() && !report.submitting ? 0.82 : 1}
-                    style={[
-                      styles.submitBtn,
-                      {
-                        backgroundColor: report.reason && report.comment.trim()
-                          ? theme.colors.primary
-                          : theme.colors.divider,
-                        borderRadius: 14,
-                        opacity: report.reason && report.comment.trim() && !report.submitting ? 1 : 0.6,
-                      },
-                    ]}
-                  >
-                    {report.submitting ? (
-                      <ActivityIndicator color="#fff" />
-                    ) : (
-                      <Text
-                        style={{
-                          color: report.reason && report.comment.trim() ? '#fff' : theme.colors.muted,
-                          fontSize: 15,
-                          fontWeight: '600',
-                          textAlign: 'center',
-                          letterSpacing: 0.1,
-                        }}
-                      >
-                        {t('report.submit')}
-                      </Text>
-                    )}
-                  </TouchableOpacity>
+                    title={t('report.submit')}
+                    loading={!!report.submitting}
+                    disabled={!report.reason || !report.comment.trim()}
+                    fullWidth
+                  />
                 </View>
               </>
             )}
@@ -1454,11 +1510,15 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
   },
   reportSheet: {
-    // maxHeight in concrete px so inner ScrollView can size correctly
-    maxHeight: Dimensions.get('window').height * 0.85,
+    // Rigid 85% screen height (was maxHeight) so the sheet always extends
+    // to a fixed band at the bottom of the screen — matching the leave-
+    // review form's full-page sticky-footer feel. Without this, a short
+    // form caused the sheet to hug its content, leaving the submit button
+    // floating mid-screen and pulling the footer divider close to the
+    // title (which read as "title bar has a divider underneath").
+    height: Dimensions.get('window').height * 0.85,
     borderTopLeftRadius: 26,
     borderTopRightRadius: 26,
-    // No overflow:hidden — clips children; no flex:1 — let content size the sheet
   },
   sheetHandle: {
     width: 36,

@@ -16,6 +16,9 @@ export interface BusinessProfileFromAPI {
   original_price?: string | null;
   pickup_start_time?: string | null;
   pickup_end_time?: string | null;
+  // Per-day pickup schedule ({ mon: { start, end, closed }, … }) — JSONB on the
+  // backend. Used to resolve TODAY's effective hours for display.
+  weekly_schedule?: Record<string, { start?: string; end?: string; closed?: boolean }> | string | null;
   available_quantity?: number;
   default_daily_quantity?: number;
   availability_status?: string | null;
@@ -97,10 +100,17 @@ export async function fetchMyBaskets(locationId?: number | string | null): Promi
   return baskets;
 }
 
-export async function createBasket(formData: FormData): Promise<BusinessBasketFromAPI> {
+export async function createBasket(formData: FormData, idempotencyKey?: string): Promise<BusinessBasketFromAPI> {
   console.log('[Business] Creating basket (multipart)');
+  const key = idempotencyKey && idempotencyKey.length > 0 ? idempotencyKey : undefined;
+  // Form-data path: append the key as a regular field so the multer parser
+  // populates req.body.client_request_id, matching the JSON path's shape.
+  if (key) formData.append('client_request_id', key);
   const res = await apiClient.post<BusinessBasketFromAPI | { basket: BusinessBasketFromAPI }>('/api/baskets', formData, {
-    headers: { 'Content-Type': 'multipart/form-data' },
+    headers: {
+      'Content-Type': 'multipart/form-data',
+      ...(key ? { 'Idempotency-Key': key } : {}),
+    },
   });
   const data = res.data;
   if (data && typeof data === 'object' && 'basket' in data) return (data as any).basket;
@@ -120,9 +130,14 @@ export async function createBasketJSON(payload: {
   show_menu_items?: boolean;
   pickup_instructions?: string;
   location_id?: number;
-}): Promise<BusinessBasketFromAPI> {
+}, idempotencyKey?: string): Promise<BusinessBasketFromAPI> {
   console.log('[Business] Creating basket (JSON):', JSON.stringify(payload));
-  const res = await apiClient.post<BusinessBasketFromAPI | { basket: BusinessBasketFromAPI }>('/api/baskets', payload);
+  const key = idempotencyKey && idempotencyKey.length > 0 ? idempotencyKey : undefined;
+  const res = await apiClient.post<BusinessBasketFromAPI | { basket: BusinessBasketFromAPI }>(
+    '/api/baskets',
+    { ...payload, client_request_id: key },
+    key ? { headers: { 'Idempotency-Key': key } } : undefined
+  );
   const data = res.data;
   if (data && typeof data === 'object' && 'basket' in data) return (data as any).basket;
   return data as BusinessBasketFromAPI;
@@ -206,7 +221,7 @@ export async function updateAvailability(data: {
 export async function updatePickupHours(
   locationId: number | string,
   orgId: number | string | undefined,
-  data: { pickup_start_time: string; pickup_end_time: string },
+  data: { pickup_start_time: string; pickup_end_time: string; confirm_pickup_change?: boolean },
   userId?: number
 ): Promise<void> {
   const adminHeaders: Record<string, string> = {};
@@ -274,7 +289,11 @@ export async function updatePickupHours(
   throw lastError;
 }
 
-// Update location — handles pickup times via cascade, other fields via direct PUT
+// Update location — handles pickup times via cascade, other fields via direct PUT.
+// `confirm_pickup_change` (when true) is forwarded to the backend pickup-time
+// protection so an already-ordered basket's window expand can proceed. Same
+// flag shape as the basket-form's PUT /api/baskets/:id — see the matching
+// 409 pickup_change_needs_confirm flow there.
 export async function updateLocationById(
   locationId: number | string,
   data: Record<string, any>,
@@ -286,12 +305,14 @@ export async function updateLocationById(
     await updatePickupHours(locationId, orgId, {
       pickup_start_time: data.pickup_start_time ?? '',
       pickup_end_time: data.pickup_end_time ?? '',
+      ...(data.confirm_pickup_change ? { confirm_pickup_change: true } : {}),
     }, userId);
   }
   // Other fields (pickup_instructions, etc.) go directly to teams endpoint
   const extraFields = { ...data };
   delete extraFields.pickup_start_time;
   delete extraFields.pickup_end_time;
+  delete extraFields.confirm_pickup_change;
   if (Object.keys(extraFields).length > 0 && orgId) {
     const adminHeaders: Record<string, string> = {};
     if (userId) adminHeaders['x-admin-token'] = getAdminToken(userId);
@@ -352,7 +373,23 @@ export async function confirmPickup(reservationId: number | string, pickupCode: 
   await apiClient.post(`/api/reservations/${reservationId}/confirm-pickup`, payload);
 }
 
-export async function verifyQR(qrData: string): Promise<{ valid: boolean; reservation_id?: string; buyer_id?: number; buyer_name?: string; quantity?: number; pickup_code?: string; status?: string }> {
+export interface VerifyQRResult {
+  valid: boolean;
+  reservation_id?: string;
+  buyer_id?: number;
+  buyer_name?: string;
+  quantity?: number;
+  pickup_code?: string;
+  status?: string;
+  // Pickup-summary fields (so the business can review before confirming).
+  basket_name?: string | null;
+  total?: number;           // full order value (TND)
+  credit_amount?: number;   // wallet credits the customer applied (TND)
+  amount_to_collect?: number; // cash/card to collect at pickup = total − credits
+  payment_method?: 'cash' | 'card' | 'credits';
+}
+
+export async function verifyQR(qrData: string): Promise<VerifyQRResult> {
   console.log('[Business] Verifying QR code');
   // Backend expects { reservation_id, pickup_code } parsed from the QR JSON
   let reservation_id: string | undefined;
@@ -371,7 +408,7 @@ export async function verifyQR(qrData: string): Promise<{ valid: boolean; reserv
   // verify-qr only READS (looks up + validates the reservation), so it's safe
   // to auto-retry on a transient network failure — e.g. the first scan after
   // the backend dyno woke from idle, which was surfacing as "Network Error".
-  const res = await apiClient.post<{ valid: boolean; reservation_id?: string; buyer_id?: number; buyer_name?: string; quantity?: number; pickup_code?: string; status?: string }>(
+  const res = await apiClient.post<VerifyQRResult>(
     '/api/reservations/verify-qr',
     { reservation_id, pickup_code },
     { retryOnNetworkError: true } as any,

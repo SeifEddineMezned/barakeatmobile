@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Modal, TextInput, Switch, ActivityIndicator, Animated, Image } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Modal, TextInput, Switch, ActivityIndicator, Animated, Image, PanResponder, Platform } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import { useRouter, useFocusEffect } from 'expo-router';
@@ -21,9 +21,13 @@ import {
   updateMember,
   addLocation,
   sendMemberEmail,
+  fetchDeletedMembers,
+  hideDeletedMember,
   type OrgDetailsFromAPI,
+  type DeletedMemberFromAPI,
 } from '@/src/services/teams';
 import { getErrorMessage } from '@/src/lib/api';
+import { verifyOrAlarm, createVerifyDisappeared } from '@/src/hooks/useVerifyOnError';
 import { FeatureFlags } from '@/src/lib/featureFlags';
 import { LOCATION_CATEGORIES } from '@/src/lib/locationCategories';
 import { useAuthStore } from '@/src/stores/authStore';
@@ -520,8 +524,18 @@ export default function TeamScreen() {
     },
     [],
   );
+  // True between the moment a team step's entry effect clears the
+  // measured rect and the moment its deferred remeasure (post-scroll-
+  // settle) publishes the new one. While the flag is set, onLayout-
+  // driven measureTeamRect calls are dropped — that prevents the mid-
+  // scroll onLayout rect from "publishing then snapping" the halo when
+  // the deferred remeasure lands. The deferred remeasure itself calls
+  // measureTeamRect AFTER clearing the flag, so the authoritative final
+  // rect still goes through.
+  const suppressTeamMeasureRef = useRef(false);
   const measureTeamRect = useCallback(
     (key: 'teamOrgCard' | 'teamLocationsSection' | 'teamMembersSection' | 'teamAddLocationBtn' | 'teamAddMemberBtn', ref: React.RefObject<View | null>) => () => {
+      if (suppressTeamMeasureRef.current) return;
       requestAnimationFrame(() => {
         ref.current?.measureInWindow((x: number, y: number, w: number, h: number) => {
           if (w > 0 && h > 0) {
@@ -553,6 +567,12 @@ export default function TeamScreen() {
     // wrong spot, then snaps once the post-scroll re-measure lands — the team
     // "halos jump around while scrolling" jitter.
     setMeasuredRect(k, null);
+    // Mute onLayout-driven publishes for the duration of this step's
+    // scroll-then-remeasure cycle (see measureTeamRect's guard). Re-armed
+    // for every team step entry; the deferred remeasure below clears it
+    // immediately before doing the authoritative measure so the final
+    // rect still gets through.
+    suppressTeamMeasureRef.current = true;
     const timers: ReturnType<typeof setTimeout>[] = [];
     const scrollToSection = (sectionKey: string) => {
       const y = teamSectionYRef.current[sectionKey];
@@ -561,6 +581,9 @@ export default function TeamScreen() {
       }
     };
     const remeasure = () => {
+      // Authoritative post-scroll measure — bypass the mute flag so this
+      // one is allowed to publish.
+      suppressTeamMeasureRef.current = false;
       if (k === 'teamOrgCard') measureTeamRect('teamOrgCard', teamOrgCardRef)();
       else if (k === 'teamLocationsSection') measureTeamRect('teamLocationsSection', teamLocationsSectionRef)();
       else if (k === 'teamAddLocationBtn') measureTeamRect('teamAddLocationBtn', teamAddLocationBtnRef)();
@@ -577,7 +600,12 @@ export default function TeamScreen() {
       timers.push(setTimeout(() => { scrollToSection('teamMembers'); }, 60));
       timers.push(setTimeout(remeasure, 450));
     }
-    return () => { timers.forEach(clearTimeout); };
+    return () => {
+      timers.forEach(clearTimeout);
+      // Step changed before the deferred remeasure ran — un-mute so the
+      // next step's onLayout publishes aren't strangled.
+      suppressTeamMeasureRef.current = false;
+    };
   }, [teamWalkthroughCurrentStep?.measureKey, measureTeamRect, setMeasuredRect]);
 
   const [viewMode, setViewMode] = useState<'list' | 'chart'>('list');
@@ -656,6 +684,21 @@ export default function TeamScreen() {
     }, [hasOrg, orgId])
   );
 
+  // 30-day archive of members who self-deleted. Empty array hides the section
+  // entirely. Visible to org-admins and the owner; location-admins don't see
+  // their location's deleted members here — that's a future scoping decision.
+  const deletedMembersQuery = useQuery({
+    queryKey: ['deleted-members', orgId],
+    queryFn: () => fetchDeletedMembers(orgId!),
+    enabled: hasOrg && isOrgAdmin,
+    staleTime: 60_000,
+  });
+  const deletedMembers: DeletedMemberFromAPI[] = deletedMembersQuery.data ?? [];
+  const hideDeletedMemberMutation = useMutation({
+    mutationFn: (deletedUserId: number) => hideDeletedMember(orgId!, deletedUserId),
+    onSuccess: () => { void deletedMembersQuery.refetch(); },
+  });
+
   const orgDetails: OrgDetailsFromAPI | undefined = orgDetailsQuery.data;
   const org = orgDetails?.organization;
   const members = orgDetails?.members ?? [];
@@ -699,12 +742,38 @@ export default function TeamScreen() {
       setNewOrgName('');
       alert.showAlert(t('common.success'), t('business.team.orgCreated', { defaultValue: 'Organization created!' }));
     },
-    onError: (err: any) => {
-      alert.showAlert(t('common.error'), getErrorMessage(err));
+    onError: async (err: any) => {
+      // Verify before alarming: if the response was lost but the org
+      // was actually created, my-context refetch will surface it. The
+      // user is then sent to the post-create flow without seeing a
+      // misleading failure popup.
+      const expectedName = newOrgName.trim();
+      await verifyOrAlarm<any>({
+        error: err,
+        queryClient,
+        verifyKey: ['my-context'],
+        verify: (fresh: any) => {
+          if (!fresh?.organization_id) return false;
+          return String(fresh?.organization_name ?? '').trim() === expectedName;
+        },
+        onConfirmed: () => {
+          void queryClient.invalidateQueries({ queryKey: ['my-context'] });
+          void queryClient.invalidateQueries({ queryKey: ['org-details'] });
+          setShowCreateOrgModal(false);
+          setNewOrgName('');
+          alert.showAlert(t('common.success'), t('business.team.orgCreated', { defaultValue: 'Organization created!' }));
+        },
+        onUnconfirmed: () => alert.showAlert(t('common.error'), getErrorMessage(err)),
+      });
     },
   });
 
   const addMemberMutation = useMutation({
+    onMutate: () => {
+      const existing = ((queryClient.getQueryData<any>(['org-details', orgId])?.members ?? []) as any[]);
+      const preIds = new Set(existing.map((m: any) => String(m.user_id ?? m.membership_id ?? m.id)));
+      return { preIds, expectedEmail: newMemberEmail.trim().toLowerCase() };
+    },
     mutationFn: async () => {
       if (!orgId) throw new Error(t('business.team.noOrg', { defaultValue: 'Organisation introuvable' }));
       // Org admin: no location constraint. Others: MUST have explicit location
@@ -740,8 +809,35 @@ export default function TeamScreen() {
         `${t('business.profile.memberAdded')}\n\n${t('business.profile.memberEmail')}: ${newMemberEmail.trim()}\n${t('business.team.tempPasswordLabel', { defaultValue: 'Password' })}: ${tempPw}`
       );
     },
-    onError: (err: any) => {
-      alert.showAlert(t('common.error'), getErrorMessage(err));
+    onError: async (err: any, _vars, context) => {
+      // Verify before alarming. The member-add endpoint also fires an
+      // email with credentials inline — a re-tap on timeout would
+      // produce a duplicate-email outcome that's hard to undo.
+      await verifyOrAlarm<any>({
+        error: err,
+        queryClient,
+        verifyKey: ['org-details', orgId],
+        verify: (fresh: any) => {
+          const members = ((fresh as any)?.members ?? []) as any[];
+          return members.some((m: any) => {
+            const id = String(m.user_id ?? m.membership_id ?? m.id);
+            const isNew = !context?.preIds?.has(id);
+            const emailMatch = String(m.email ?? '').toLowerCase() === context?.expectedEmail;
+            return isNew && emailMatch;
+          });
+        },
+        onConfirmed: () => {
+          void queryClient.invalidateQueries({ queryKey: ['org-details'] });
+          void queryClient.invalidateQueries({ queryKey: ['my-context'] });
+          setShowAddMemberModal(false);
+          resetAddMemberForm();
+          alert.showAlert(
+            t('common.success'),
+            `${t('business.profile.memberAdded')}\n\n${t('business.profile.memberEmail')}: ${context?.expectedEmail ?? newMemberEmail.trim()}\n${t('business.team.tempPasswordLabel', { defaultValue: 'Password' })}: ${newMemberPassword}`
+          );
+        },
+        onUnconfirmed: () => alert.showAlert(t('common.error'), getErrorMessage(err)),
+      });
     },
   });
 
@@ -753,8 +849,23 @@ export default function TeamScreen() {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['org-details'] });
     },
-    onError: (err: any) => {
-      alert.showAlert(t('common.error'), getErrorMessage(err));
+    onError: async (err: any, memberId) => {
+      // Verify by checking the member is gone from the org-details list.
+      await verifyOrAlarm<any>({
+        error: err,
+        queryClient,
+        verifyKey: ['org-details', orgId],
+        verify: (fresh: any) => {
+          const members = ((fresh as any)?.members ?? []) as any[];
+          return !members.some((m: any) =>
+            String(m.user_id ?? m.membership_id ?? m.id) === String(memberId),
+          );
+        },
+        onConfirmed: () => {
+          void queryClient.invalidateQueries({ queryKey: ['org-details'] });
+        },
+        onUnconfirmed: () => alert.showAlert(t('common.error'), getErrorMessage(err)),
+      });
     },
   });
 
@@ -766,12 +877,41 @@ export default function TeamScreen() {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['org-details'] });
     },
-    onError: (err: any) => {
-      alert.showAlert(t('common.error'), getErrorMessage(err));
+    onError: async (err: any, { memberId, role, permissions }) => {
+      // Verify the member now has the requested role / permissions.
+      await verifyOrAlarm<any>({
+        error: err,
+        queryClient,
+        verifyKey: ['org-details', orgId],
+        verify: (fresh: any) => {
+          const members = ((fresh as any)?.members ?? []) as any[];
+          const live = members.find((m: any) =>
+            String(m.user_id ?? m.membership_id ?? m.id) === String(memberId),
+          );
+          if (!live) return false;
+          if (role && String(live.role ?? '') !== String(role)) return false;
+          if (permissions) {
+            const livePerms = (live.permissions ?? {}) as Record<string, string>;
+            for (const [k, v] of Object.entries(permissions)) {
+              if (String(livePerms[k] ?? '') !== String(v)) return false;
+            }
+          }
+          return true;
+        },
+        onConfirmed: () => {
+          void queryClient.invalidateQueries({ queryKey: ['org-details'] });
+        },
+        onUnconfirmed: () => alert.showAlert(t('common.error'), getErrorMessage(err)),
+      });
     },
   });
 
   const addLocationMutation = useMutation({
+    onMutate: () => {
+      const existing = ((queryClient.getQueryData<any>(['org-details', orgId])?.locations ?? []) as any[]);
+      const preIds = new Set(existing.map((l: any) => l?.id));
+      return { preIds, expectedName: newLocationName.trim() };
+    },
     mutationFn: async () => {
       if (!orgId) throw new Error('No organization');
       return addLocation(orgId, {
@@ -791,8 +931,32 @@ export default function TeamScreen() {
         t('business.team.locationAdded', { defaultValue: 'Location added successfully.' })
       );
     },
-    onError: (err: any) => {
-      alert.showAlert(t('common.error'), getErrorMessage(err));
+    onError: async (err: any, _vars, context) => {
+      await verifyOrAlarm<any>({
+        error: err,
+        queryClient,
+        verifyKey: ['org-details', orgId],
+        verify: (fresh: any) => {
+          const locations = ((fresh as any)?.locations ?? []) as any[];
+          return locations.some((l: any) => {
+            const isNew = l?.id != null && !context?.preIds?.has(l.id);
+            const nameMatch = String(l?.name ?? '').trim() === String(context?.expectedName ?? '').trim();
+            return isNew && nameMatch;
+          });
+        },
+        onConfirmed: () => {
+          void queryClient.invalidateQueries({ queryKey: ['org-details'] });
+          setShowAddLocationModal(false);
+          setNewLocationName('');
+          setNewLocationAddress('');
+          setNewLocationCategory('');
+          alert.showAlert(
+            t('common.success'),
+            t('business.team.locationAdded', { defaultValue: 'Location added successfully.' })
+          );
+        },
+        onUnconfirmed: () => alert.showAlert(t('common.error'), getErrorMessage(err)),
+      });
     },
   });
 
@@ -808,15 +972,40 @@ export default function TeamScreen() {
       void queryClient.invalidateQueries({ queryKey: ['my-profile'] });
       if (selectedLocation) setSelectedLocation(null);
     },
-    onError: (err: any) => {
-      // The server's raw `err.message` may be English ("Failed to remove
-      // location"); surface the translated equivalent instead. The console
-      // log inside the API client still captures the raw text for debugging.
+    onError: async (err: any, locationId) => {
       console.error('[Team] Delete location failed:', err?.status, err?.message);
-      alert.showAlert(
-        t('common.error'),
-        t('business.team.deleteLocationFailed', { defaultValue: "Impossible de masquer l'emplacement. Veuillez réessayer." }),
-      );
+      // 409 settlement guard short-circuits BEFORE verify — it's a
+      // deterministic deny, not a timeout, so the location is still
+      // there and we want to surface the deferred-deletion explanation.
+      if (err?.status === 409 && err?.data?.code === 'pending_settlement') {
+        alert.showAlert(
+          t('business.team.deleteLocationBlockedTitle', { defaultValue: 'Suppression différée' }),
+          err?.data?.message ?? err?.message,
+        );
+        return;
+      }
+      // Otherwise: verify-before-alarming. If the location is gone from
+      // the refetched org-details, the DELETE succeeded server-side and
+      // we trigger the standard onSuccess UX silently.
+      await verifyOrAlarm<any>({
+        error: err,
+        queryClient,
+        verifyKey: ['org-details', orgId],
+        verify: createVerifyDisappeared(
+          (cache) => ((cache as any)?.locations ?? []),
+          locationId,
+        ),
+        onConfirmed: () => {
+          void queryClient.invalidateQueries({ queryKey: ['org-details'] });
+          void queryClient.invalidateQueries({ queryKey: ['my-baskets'] });
+          void queryClient.invalidateQueries({ queryKey: ['my-profile'] });
+          if (selectedLocation) setSelectedLocation(null);
+        },
+        onUnconfirmed: () => alert.showAlert(
+          t('common.error'),
+          t('business.team.deleteLocationFailed', { defaultValue: "Impossible de masquer l'emplacement. Veuillez réessayer." }),
+        ),
+      });
     },
   });
 
@@ -825,7 +1014,6 @@ export default function TeamScreen() {
   const [locationMenuId, setLocationMenuId] = useState<number | null>(null);
   const [deleteLocationTarget, setDeleteLocationTarget] = useState<{ id: number; name: string } | null>(null);
   // Per-row expand toggle for long addresses — keyed by location id.
-  const [expandedAddressId, setExpandedAddressId] = useState<number | null>(null);
   const handleEditLocation = useCallback((locationId: number) => {
     setLocationMenuId(null);
     router.push({ pathname: '/business/edit-location', params: { id: String(locationId) } } as never);
@@ -1296,7 +1484,7 @@ export default function TeamScreen() {
                       {!isOwner && canAccessTeam && (
                         <TouchableOpacity
                           onPress={(e) => { e.stopPropagation?.(); setMemberMenuId(memberMenuId === menuKey ? null : menuKey); }}
-                          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                          hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}
                           style={{ padding: 4 }}
                         >
                           <MoreVertical size={18} color={theme.colors.textSecondary} />
@@ -1453,43 +1641,44 @@ export default function TeamScreen() {
                     <MapPin size={18} color={isSelected ? '#fff' : theme.colors.primary} />
                   </View>
                   <View style={{ flex: 1, marginLeft: 12 }}>
-                    <Text style={{ color: isSelected ? '#fff' : theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '500' }}>
-                      {loc.name ?? loc.address ?? `Location ${index + 1}`}
-                    </Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                      <Text style={{ color: isSelected ? '#fff' : theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '500' }}>
+                        {loc.name ?? loc.address ?? `Location ${index + 1}`}
+                      </Text>
+                      {/* Per-location category chip — sits next to the
+                          location name so the user can see the value
+                          they just changed in the edit-location form
+                          reflected immediately. The team screen's top
+                          header still shows the ORG's category (mirrored
+                          server-side on every location-category save —
+                          see teams.js PUT location). */}
+                      {loc.category ? (
+                        <View style={{
+                          backgroundColor: isSelected ? 'rgba(255,255,255,0.22)' : theme.colors.primary + '12',
+                          borderRadius: 8,
+                          paddingHorizontal: 7,
+                          paddingVertical: 1,
+                        }}>
+                          <Text style={{
+                            color: isSelected ? '#fff' : theme.colors.primary,
+                            fontSize: 10,
+                            fontWeight: '700',
+                          }}>
+                            {t(`categories.${String(loc.category).toLowerCase()}`, { defaultValue: loc.category })}
+                          </Text>
+                        </View>
+                      ) : null}
+                    </View>
                     {loc.address && loc.name && (
-                      (() => {
-                        const isExpanded = expandedAddressId === loc.id;
-                        // Use the first comma-delimited chunk as the compact form;
-                        // fall back to char truncation if there's no comma.
-                        const parts = String(loc.address).split(',');
-                        const firstLine = parts[0]?.trim() ?? '';
-                        const hasMore = parts.length > 1 || (loc.address.length > firstLine.length);
-                        return (
-                          <View style={{ marginTop: 1 }}>
-                            <Text
-                              style={{ color: isSelected ? 'rgba(255,255,255,0.85)' : theme.colors.textSecondary, ...theme.typography.caption }}
-                              numberOfLines={isExpanded ? undefined : 1}
-                            >
-                              {isExpanded ? loc.address : firstLine}
-                            </Text>
-                            {hasMore && (
-                              <TouchableOpacity
-                                onPress={(e) => {
-                                  e.stopPropagation?.();
-                                  setExpandedAddressId(isExpanded ? null : loc.id);
-                                }}
-                                hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-                              >
-                                <Text style={{ color: isSelected ? '#e3ff5c' : theme.colors.primary, ...theme.typography.caption, fontWeight: '600', marginTop: 2 }}>
-                                  {isExpanded
-                                    ? t('common.seeLess', { defaultValue: 'voir moins' })
-                                    : t('common.seeMore', { defaultValue: 'voir plus...' })}
-                                </Text>
-                              </TouchableOpacity>
-                            )}
-                          </View>
-                        );
-                      })()
+                      // Full address, no truncation. The previous version
+                      // collapsed it to the first comma-chunk with a "Voir
+                      // plus / Voir moins" toggle; user wanted the toggle
+                      // gone and the address shown as-is.
+                      <Text
+                        style={{ color: isSelected ? 'rgba(255,255,255,0.85)' : theme.colors.textSecondary, ...theme.typography.caption, marginTop: 1 }}
+                      >
+                        {loc.address}
+                      </Text>
                     )}
                   </View>
                   {/* Member-count pill — icon + number, mirroring the basket
@@ -1774,7 +1963,7 @@ export default function TeamScreen() {
                           e.stopPropagation?.();
                           router.push({ pathname: '/message/[id]', params: { id: `internal-${member.user_id ?? member.id}`, recipientId: String(member.user_id ?? member.id), recipientName: memberName } } as never);
                         }}
-                        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                        hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}
                         style={{ padding: 4, marginRight: 8 }}
                       >
                         <MessageCircle size={18} color={theme.colors.primary} />
@@ -1783,7 +1972,7 @@ export default function TeamScreen() {
                     {!isOwner && canAccessTeam && (
                       <TouchableOpacity
                         onPress={(e) => { e.stopPropagation?.(); setMemberMenuId(memberMenuId === userIdKey ? null : userIdKey); }}
-                        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                        hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}
                         style={{ padding: 4 }}
                       >
                         <MoreVertical size={18} color={theme.colors.textSecondary} />
@@ -1934,6 +2123,95 @@ export default function TeamScreen() {
                       <Text style={{ color: '#fff', ...theme.typography.caption, fontWeight: '700' }}>
                         {t('business.team.assignLocationCta', { defaultValue: 'Assigner' })}
                       </Text>
+                    </TouchableOpacity>
+                  </View>
+                );
+              })}
+            </View>
+          )}
+
+          {/* Deleted-member archive — only shown to org admins when at least
+              one row exists. Cards auto-disappear after the cron purges 30
+              days post-deletion, but an admin can dismiss earlier with the X. */}
+          {isOrgAdmin && deletedMembers.length > 0 && (
+            <View
+              style={{
+                backgroundColor: theme.colors.surface,
+                borderRadius: theme.radii.r16,
+                marginTop: theme.spacing.lg,
+                borderWidth: 1,
+                borderColor: theme.colors.divider,
+                ...theme.shadows.shadowSm,
+              }}
+            >
+              <View style={{
+                flexDirection: 'row', alignItems: 'center', gap: 8,
+                padding: theme.spacing.lg, paddingBottom: theme.spacing.sm,
+              }}>
+                <Trash2 size={18} color={theme.colors.textSecondary} />
+                <View style={{ flex: 1 }}>
+                  <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3 }}>
+                    {t('team.deletedMembersTitle', { defaultValue: 'Comptes membres supprimés' })} ({deletedMembers.length})
+                  </Text>
+                </View>
+              </View>
+
+              {deletedMembers.map((dm) => {
+                const purgeMs = new Date(dm.purge_at).getTime() - Date.now();
+                const daysLeft = Math.max(0, Math.ceil(purgeMs / (1000 * 60 * 60 * 24)));
+                const memberName = dm.name || dm.email || `#${dm.id}`;
+                const initials = getInitials(memberName);
+                const roleLabel = dm.was_org_owner
+                  ? t('team.roleOwner', { defaultValue: 'Propriétaire' })
+                  : dm.role === 'admin'
+                    ? (dm.location_id
+                        ? t('team.roleLocationAdmin', { defaultValue: 'Admin emplacement' })
+                        : t('team.roleOrgAdmin', { defaultValue: "Admin d'organisation" }))
+                    : t('team.roleMember', { defaultValue: 'Membre' });
+
+                return (
+                  <View
+                    key={dm.id}
+                    style={{
+                      paddingHorizontal: theme.spacing.lg,
+                      paddingVertical: theme.spacing.lg,
+                      borderTopWidth: 1,
+                      borderTopColor: theme.colors.divider,
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                    }}
+                  >
+                    <View style={{
+                      backgroundColor: theme.colors.surfaceMuted,
+                      borderRadius: 22, width: 44, height: 44,
+                      justifyContent: 'center', alignItems: 'center', flexShrink: 0,
+                    }}>
+                      <Text style={{ color: theme.colors.textSecondary, fontSize: 16, fontWeight: '700', lineHeight: 20, textDecorationLine: 'line-through' }}>
+                        {initials}
+                      </Text>
+                    </View>
+                    <View style={{ flex: 1, marginLeft: 12 }}>
+                      <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '600' }} numberOfLines={1}>
+                        {memberName}
+                      </Text>
+                      <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, marginTop: 2 }} numberOfLines={1}>
+                        {roleLabel}
+                        {dm.location_name ? ` · ${dm.location_name}` : ''}
+                      </Text>
+                      <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, marginTop: 2 }}>
+                        {t('team.deletedMembersPurgeIn', { defaultValue: 'Suppression définitive dans {{days}} j', days: daysLeft })}
+                      </Text>
+                    </View>
+                    <TouchableOpacity
+                      onPress={() => hideDeletedMemberMutation.mutate(dm.id)}
+                      disabled={hideDeletedMemberMutation.isPending}
+                      style={{
+                        padding: 8, borderRadius: 8,
+                        opacity: hideDeletedMemberMutation.isPending ? 0.5 : 1,
+                      }}
+                      accessibilityLabel={t('common.dismiss', { defaultValue: 'Ignorer' })}
+                    >
+                      <X size={18} color={theme.colors.textSecondary} />
                     </TouchableOpacity>
                   </View>
                 );
@@ -2115,8 +2393,12 @@ export default function TeamScreen() {
                             setSelectedPreset(null);
                           }}
                           disabled={isNewMemberOrgAdmin}
-                          trackColor={{ false: theme.colors.divider, true: theme.colors.primary + '50' }}
-                          thumbColor={permissionsState[key] ? theme.colors.primary : theme.colors.muted}
+                          // Matches the Switch styling in /settings — solid
+                          // primary track on, white thumb on, surface thumb
+                          // off (Android only; iOS keeps the native default).
+                          trackColor={{ false: theme.colors.divider, true: theme.colors.primary }}
+                          thumbColor={permissionsState[key] ? '#fff' : (Platform.OS === 'android' ? theme.colors.surface : undefined)}
+                          ios_backgroundColor={theme.colors.divider}
                         />
                       </View>
                       <Text style={{ color: permissionsState[key] ? theme.colors.textSecondary : theme.colors.muted, fontSize: 11, lineHeight: 15, marginTop: 3 }}>
@@ -2353,44 +2635,23 @@ export default function TeamScreen() {
         );
       })()}
 
-      {/* ── Delete Location Confirmation ────────────────────────────────────── */}
-      <Modal visible={!!deleteLocationTarget} transparent animationType="slide" onRequestClose={() => setDeleteLocationTarget(null)}>
-        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'flex-end' }}>
-          <PaperSurface radius={24} shadow="lg" style={{ width: '100%', borderBottomLeftRadius: 0, borderBottomRightRadius: 0, paddingTop: 10, paddingHorizontal: 24, paddingBottom: insets.bottom + 20, alignItems: 'center' }}>
-            <View style={{ width: 40, height: 5, borderRadius: 3, backgroundColor: theme.colors.divider, marginBottom: 16 }} />
-            <View style={{ backgroundColor: theme.colors.surfaceMuted, width: 56, height: 56, borderRadius: 28, justifyContent: 'center', alignItems: 'center', marginBottom: 16 }}>
-              <Trash2 size={26} color={theme.colors.textSecondary} />
-            </View>
-            <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3, textAlign: 'center', marginBottom: 8 }}>
-              {t('business.team.deleteLocation', { defaultValue: "Supprimer l'emplacement" })}
-            </Text>
-            <Text style={{ color: theme.colors.textSecondary, ...theme.typography.body, textAlign: 'center', lineHeight: 22, marginBottom: 12 }}>
-              {t('business.team.deleteLocationConfirm', { defaultValue: 'Êtes-vous sûr de vouloir supprimer' })} <Text style={{ fontWeight: '700' }}>{deleteLocationTarget?.name}</Text> ?
-            </Text>
-            <Text style={{ color: theme.colors.muted, ...theme.typography.caption, textAlign: 'center', lineHeight: 18, marginBottom: 24 }}>
-              {t('business.team.deleteLocationNote', { defaultValue: "L'emplacement et ses paniers seront masqués. Les commandes passées et les conversations clients restent accessibles à des fins d'historique." })}
-            </Text>
-            <View style={{ flexDirection: 'row', gap: 10, width: '100%' }}>
-              <TouchableOpacity
-                onPress={() => setDeleteLocationTarget(null)}
-                style={{ flex: 1, backgroundColor: theme.colors.bg, borderRadius: 12, paddingVertical: 14, alignItems: 'center', borderWidth: 1, borderColor: theme.colors.divider }}
-              >
-                <Text style={{ color: theme.colors.textPrimary, ...theme.typography.body, fontWeight: '600' }}>
-                  {t('common.cancel', { defaultValue: 'Annuler' })}
-                </Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                onPress={() => { if (deleteLocationTarget) deleteLocationMutation.mutate(deleteLocationTarget.id); setDeleteLocationTarget(null); }}
-                style={{ flex: 1, backgroundColor: theme.colors.error, borderRadius: 12, paddingVertical: 14, alignItems: 'center' }}
-              >
-                <Text style={{ color: '#fff', ...theme.typography.body, fontWeight: '600' }}>
-                  {t('common.delete', { defaultValue: 'Supprimer' })}
-                </Text>
-              </TouchableOpacity>
-            </View>
-          </PaperSurface>
-        </View>
-      </Modal>
+      {/* ── Delete Location Confirmation ──────────────────────────────────
+          Bottom-sheet pattern with decoupled animations: the backdrop just
+          FADES (no slide), the sheet slides up. The grab-handle bar is
+          pan-responsive — drag down to dismiss — and tapping anywhere on
+          the dimmed backdrop also dismisses. Same affordances the rest of
+          the app's bottom sheets use, just rolled into this one inline. */}
+      <DeleteLocationSheet
+        target={deleteLocationTarget}
+        onClose={() => setDeleteLocationTarget(null)}
+        onConfirm={() => {
+          if (deleteLocationTarget) deleteLocationMutation.mutate(deleteLocationTarget.id);
+          setDeleteLocationTarget(null);
+        }}
+        insetsBottom={insets.bottom}
+        theme={theme}
+        t={t}
+      />
 
       {/* Shared remove dialog — scope comes from the location filter the admin
           is currently viewing. When filtered, only that membership is removed
@@ -2522,6 +2783,171 @@ export default function TeamScreen() {
           stack push so it'd otherwise be invisible here). */}
       <SubScreenWalkthroughOverlay keys={['teamOrgCard', 'teamLocationsSection', 'teamMembersSection', 'teamAddLocationBtn', 'teamAddMemberBtn']} />
     </SafeAreaView>
+  );
+}
+
+/**
+ * Bottom-sheet variant of the delete-location confirm.
+ *
+ * Decoupled animations: the backdrop fades to 0.45 alpha without sliding,
+ * the sheet rides an `Animated.spring` translateY from off-screen to 0.
+ * Built on Modal animationType="none" because RN's slide preset slides
+ * the WHOLE Modal (backdrop included) — the user noticed the dim mask
+ * crawling up with the sheet and asked for the standard "fade-in scrim
+ * + slide-up sheet" combo.
+ *
+ * Dismiss affordances:
+ *   • Tap the dim backdrop → close.
+ *   • Drag the grab-handle (or anywhere in the sheet header area) down
+ *     past a small threshold OR with a downward fling velocity → close.
+ *   • Cancel / Supprimer buttons → close (with the appropriate action).
+ *   • OS back / swipe-from-edge → close.
+ *
+ * The `target` prop drives mount. When it becomes null we play the exit
+ * animation, then unmount the Modal one beat later so the slide-down
+ * actually plays instead of the Modal vanishing instantly.
+ */
+function DeleteLocationSheet({
+  target,
+  onClose,
+  onConfirm,
+  insetsBottom,
+  theme,
+  t,
+}: {
+  target: { id: number; name: string } | null;
+  onClose: () => void;
+  onConfirm: () => void;
+  insetsBottom: number;
+  theme: any;
+  t: (k: string, opts?: any) => string;
+}) {
+  // SHEET_OFFSCREEN is just a generous off-screen offset — the sheet's
+  // own height takes over once the spring lands at 0.
+  const SHEET_OFFSCREEN = 600;
+  const [mounted, setMounted] = React.useState(false);
+  const backdropOpacity = React.useRef(new Animated.Value(0)).current;
+  const sheetTranslateY = React.useRef(new Animated.Value(SHEET_OFFSCREEN)).current;
+
+  // Sync `mounted` with `target`. On open we mount + animate in. On close
+  // we animate out first, then unmount one beat later so the slide-down
+  // is visible (unmounting immediately would just blink the sheet away).
+  React.useEffect(() => {
+    if (target) {
+      setMounted(true);
+      backdropOpacity.setValue(0);
+      sheetTranslateY.setValue(SHEET_OFFSCREEN);
+      Animated.parallel([
+        Animated.timing(backdropOpacity, { toValue: 1, duration: 180, useNativeDriver: true }),
+        Animated.spring(sheetTranslateY, { toValue: 0, friction: 12, tension: 80, useNativeDriver: true }),
+      ]).start();
+    } else if (mounted) {
+      Animated.parallel([
+        Animated.timing(backdropOpacity, { toValue: 0, duration: 160, useNativeDriver: true }),
+        Animated.timing(sheetTranslateY, { toValue: SHEET_OFFSCREEN, duration: 220, useNativeDriver: true }),
+      ]).start(() => setMounted(false));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [target]);
+
+  // Pan-down-to-dismiss. The handle area + the sheet's top region
+  // capture the gesture; the buttons further down still receive taps
+  // because the responder only claims movement gestures (dy > 8).
+  const panResponder = React.useMemo(() => PanResponder.create({
+    onStartShouldSetPanResponder: () => true,
+    onMoveShouldSetPanResponder: (_e, g) => g.dy > 8 && Math.abs(g.dy) > Math.abs(g.dx),
+    onPanResponderMove: (_e, g) => {
+      if (g.dy > 0) sheetTranslateY.setValue(g.dy);
+    },
+    onPanResponderRelease: (_e, g) => {
+      // Generous dismiss thresholds: 90 px drop OR a downward fling.
+      if (g.dy > 90 || g.vy > 0.8) {
+        onClose();
+      } else {
+        Animated.spring(sheetTranslateY, { toValue: 0, friction: 12, tension: 80, useNativeDriver: true }).start();
+      }
+    },
+    onPanResponderTerminate: () => {
+      Animated.spring(sheetTranslateY, { toValue: 0, friction: 12, tension: 80, useNativeDriver: true }).start();
+    },
+  }), [sheetTranslateY, onClose]);
+
+  if (!mounted) return null;
+
+  return (
+    <Modal visible transparent animationType="none" onRequestClose={onClose} statusBarTranslucent>
+      <View style={{ flex: 1 }}>
+        {/* Backdrop — fades in, no slide. Tap to dismiss. */}
+        <Animated.View
+          pointerEvents="auto"
+          style={{
+            ...StyleSheet.absoluteFillObject,
+            backgroundColor: 'rgba(0,0,0,0.45)',
+            opacity: backdropOpacity,
+          }}
+        >
+          <TouchableOpacity activeOpacity={1} onPress={onClose} style={{ flex: 1 }} />
+        </Animated.View>
+
+        {/* Sheet — slides up via animated translateY, sits at the bottom. */}
+        <Animated.View
+          {...panResponder.panHandlers}
+          style={{
+            position: 'absolute',
+            left: 0,
+            right: 0,
+            bottom: 0,
+            transform: [{ translateY: sheetTranslateY }],
+          }}
+        >
+          <PaperSurface
+            radius={24}
+            shadow="lg"
+            style={{
+              width: '100%',
+              borderBottomLeftRadius: 0,
+              borderBottomRightRadius: 0,
+              paddingTop: 10,
+              paddingHorizontal: 24,
+              paddingBottom: insetsBottom + 20,
+              alignItems: 'center',
+            }}
+          >
+            <View style={{ width: 40, height: 5, borderRadius: 3, backgroundColor: theme.colors.divider, marginBottom: 16 }} />
+            <View style={{ backgroundColor: theme.colors.surfaceMuted, width: 56, height: 56, borderRadius: 28, justifyContent: 'center', alignItems: 'center', marginBottom: 16 }}>
+              <Trash2 size={26} color={theme.colors.textSecondary} />
+            </View>
+            <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3, textAlign: 'center', marginBottom: 8 }}>
+              {t('business.team.deleteLocation', { defaultValue: "Supprimer l'emplacement" })}
+            </Text>
+            <Text style={{ color: theme.colors.textSecondary, ...theme.typography.body, textAlign: 'center', lineHeight: 22, marginBottom: 12 }}>
+              {t('business.team.deleteLocationConfirm', { defaultValue: 'Êtes-vous sûr de vouloir supprimer' })} <Text style={{ fontWeight: '700' }}>{target?.name}</Text> ?
+            </Text>
+            <Text style={{ color: theme.colors.muted, ...theme.typography.caption, textAlign: 'center', lineHeight: 18, marginBottom: 24 }}>
+              {t('business.team.deleteLocationNote', { defaultValue: "L'emplacement et ses paniers seront masqués. Les commandes passées et les conversations clients restent accessibles à des fins d'historique." })}
+            </Text>
+            <View style={{ flexDirection: 'row', gap: 10, width: '100%' }}>
+              <TouchableOpacity
+                onPress={onClose}
+                style={{ flex: 1, backgroundColor: theme.colors.bg, borderRadius: 12, paddingVertical: 14, alignItems: 'center', borderWidth: 1, borderColor: theme.colors.divider }}
+              >
+                <Text style={{ color: theme.colors.textPrimary, ...theme.typography.body, fontWeight: '600' }}>
+                  {t('common.cancel', { defaultValue: 'Annuler' })}
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={onConfirm}
+                style={{ flex: 1, backgroundColor: theme.colors.error, borderRadius: 12, paddingVertical: 14, alignItems: 'center' }}
+              >
+                <Text style={{ color: '#fff', ...theme.typography.body, fontWeight: '600' }}>
+                  {t('common.delete', { defaultValue: 'Supprimer' })}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </PaperSurface>
+        </Animated.View>
+      </View>
+    </Modal>
   );
 }
 

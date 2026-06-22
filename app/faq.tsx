@@ -5,6 +5,7 @@ import { useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import { ChevronLeft, ChevronDown, Info, ShoppingBag, CreditCard, Store } from 'lucide-react-native';
 import { useTheme } from '@/src/theme/ThemeProvider';
+import { useAuthStore } from '@/src/stores/authStore';
 import { StatusBar } from 'expo-status-bar';
 
 interface FAQItem { q: string; a: string; }
@@ -14,31 +15,38 @@ interface FAQCategory { title: string; icon: any; items: FAQItem[]; }
 // the dedicated FAQ screen displays in the user's current language
 // instead of always rendering French. The list of question keys lives
 // here; the strings live in the locale JSONs.
-const FAQ_KEYS: { title: string; icon: any; items: string[] }[] = [
-  {
-    title: 'faq.general.title',
-    icon: Info,
-    items: ['surprise', 'why', 'region', 'impact'],
-  },
+//
+// The FAQ is split by audience: a buyer (customer interface) sees the
+// "Général" concept questions plus the order/payment questions that
+// concern them; a business user sees the same "Général" block plus the
+// merchant-operations questions instead. The split is driven by the
+// signed-in user's role (see `useAuthStore` below).
+const GENERAL_CATEGORY = {
+  title: 'faq.general.title',
+  icon: Info,
+  items: ['surprise', 'knowContent', 'why', 'region', 'impact'],
+};
+
+const CUSTOMER_FAQ_KEYS: { title: string; icon: any; items: string[] }[] = [
+  GENERAL_CATEGORY,
   {
     title: 'faq.orders.title',
     icon: ShoppingBag,
-    items: ['knowContent', 'whyUnknown', 'stillGood', 'pickup', 'cancel'],
+    items: ['pickup', 'delivery', 'notifications', 'someoneElse', 'cancel', 'contact', 'whyUnknown', 'stillGood'],
   },
   {
     title: 'faq.payment.title',
     icon: CreditCard,
-    // `howToPay` was rewritten to spell out the three accepted methods
-    // (online card / Barakeat credits / cash on pickup) per the launch
-    // checklist. Old text only mentioned cash on pickup.
-    items: ['howToPay', 'credits'],
+    items: ['howToPay', 'secure', 'credits'],
   },
+];
+
+const BUSINESS_FAQ_KEYS: { title: string; icon: any; items: string[] }[] = [
+  GENERAL_CATEGORY,
   {
     title: 'faq.merchants.title',
     icon: Store,
-    // `manage` was removed — the customer FAQ has no business reason
-    // to surface partner-only how-to.
-    items: ['become'],
+    items: ['register', 'types', 'cost', 'howItWorks', 'equipment', 'noSurplus'],
   },
 ];
 
@@ -71,6 +79,12 @@ export default function FAQScreen() {
   const { t } = useTranslation();
   const theme = useTheme();
   const router = useRouter();
+  const user = useAuthStore((s) => s.user);
+
+  // Business users get the merchant-operations FAQ; everyone else gets the
+  // customer order/payment FAQ. Both share the "Général" concept block.
+  const isBusiness = user?.role === 'business';
+  const FAQ_KEYS = isBusiness ? BUSINESS_FAQ_KEYS : CUSTOMER_FAQ_KEYS;
 
   const categories: FAQCategory[] = FAQ_KEYS.map((cat) => ({
     title: t(cat.title, { defaultValue: cat.title }),
@@ -87,11 +101,15 @@ export default function FAQScreen() {
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: theme.colors.bg }}>
       <StatusBar style="dark" />
-      <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: theme.colors.divider }}>
-        <TouchableOpacity onPress={() => router.back()} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: theme.colors.divider, minHeight: 52 }}>
+        <TouchableOpacity
+          onPress={() => router.back()}
+          hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}
+          style={{ position: 'absolute', left: 16, top: 14 }}
+        >
           <ChevronLeft size={24} color={theme.colors.textPrimary} />
         </TouchableOpacity>
-        <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h2, flex: 1, marginLeft: 12 }}>
+        <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h2 }}>
           {t('profile.faq', { defaultValue: 'FAQ' })}
         </Text>
       </View>

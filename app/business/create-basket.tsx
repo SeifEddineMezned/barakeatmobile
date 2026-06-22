@@ -1,13 +1,17 @@
 import React, { useState, useRef, useEffect } from 'react';
 import {
-  View, Text, StyleSheet, ScrollView, TextInput, Image, Alert,
-  TouchableOpacity, KeyboardAvoidingView, Platform, ActivityIndicator, Modal,
+  View, Text, StyleSheet, ScrollView, TextInput, Image,
+  TouchableOpacity, KeyboardAvoidingView, Platform, ActivityIndicator, Modal, Animated,
+  Dimensions,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import { X, AlertCircle, Clock, Minus, Plus, Sparkles, SquareCheck, Square, Camera } from 'lucide-react-native';
+import { BarakeatErrorIcon } from '@/src/components/ui/BarakeatErrorIcon';
 import * as ImagePicker from 'expo-image-picker';
+import { ensureCameraAccess } from '@/src/lib/photoPermission';
+import { useImageCropper } from '@/src/components/ImageCropper';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { TimePicker } from '@/src/components/TimePicker';
 import { useBusinessStore } from '@/src/stores/businessStore';
@@ -19,11 +23,12 @@ import {
   duplicateBasketToLocations,
   type MenuItemFromAPI,
 } from '@/src/services/business';
-import { getErrorMessage, apiClient } from '@/src/lib/api';
+import { getErrorMessage, apiClient, makeAttemptKey } from '@/src/lib/api';
+import { verifyOrAlarm, createVerifyAppeared } from '@/src/hooks/useVerifyOnError';
 import { FeatureFlags } from '@/src/lib/featureFlags';
 import { useCustomAlert } from '@/src/components/CustomAlert';
 import { fetchMyContext, fetchOrganizationDetails, type OrgDetailsFromAPI } from '@/src/services/teams';
-import { validateBizDayWindow } from '@/src/utils/timezone';
+import { validateBizDayWindow, effectiveLocationHours } from '@/src/utils/timezone';
 import { effectiveDailyReinit } from '@/src/utils/dailyReinit';
 import { useWalkthroughStore } from '@/src/stores/walkthroughStore';
 import { DEMO_BASKET_PHOTOS } from '@/src/lib/demoData';
@@ -32,6 +37,7 @@ import { SubScreenWalkthroughOverlay } from '@/src/components/SubScreenWalkthrou
 export default function CreateBasketScreen() {
   const { editId } = useLocalSearchParams<{ editId?: string }>();
   const { t } = useTranslation();
+  const { pickAndCrop } = useImageCropper();
   const theme = useTheme();
   const router = useRouter();
   const alert = useCustomAlert();
@@ -112,18 +118,80 @@ export default function CreateBasketScreen() {
       ? String(apiBasket.selling_price)
       : storeBasket?.discountedPrice?.toString() ?? ''
   );
-  const [quantity, setQuantity] = useState(
-    apiBasket?.quantity ?? storeBasket?.quantityTotal ?? 5
-  );
+  // Initial value covers two cases:
+  //   • New basket → user starts at 0 and dials it up via +/− or text input.
+  //   • Resumed create (cached store) → the in-progress quantityTotal.
+  // EDIT mode is intentionally NOT seeded here from `apiBasket.quantity` —
+  // that column is the LIVE inventory (decrements as orders come in), not
+  // the saved daily reinit value. Edit mode is populated from
+  // `effectiveDailyReinit(apiBasket)` in the useEffect below once the API
+  // basket lands, so the value the merchant sees in the "Réinit. journalière"
+  // field matches what the cron will reset to each morning.
+  const [quantity, setQuantity] = useState(storeBasket?.quantityTotal ?? 0);
   const [maxPerCustomer, setMaxPerCustomer] = useState<number>(
     (apiBasket as any)?.max_per_customer ?? (storeBasket as any)?.maxPerCustomer ?? 5
   );
 
-  // ── Daily reinit schedule (edit mode only)
+  // ── Daily reinit schedule (shown in BOTH create and edit modes so the
+  // forms render identically — the user explicitly asked for parity).
   const DAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'] as const;
   const DAY_LABELS: Record<string, string> = { mon: 'LUN', tue: 'MAR', wed: 'MER', thu: 'JEU', fri: 'VEN', sat: 'SAM', sun: 'DIM' };
   const [sameAllDays, setSameAllDays] = useState(true);
   const [daySchedule, setDaySchedule] = useState<Record<string, number>>({ mon: 0, tue: 0, wed: 0, thu: 0, fri: 0, sat: 0, sun: 0 });
+  // Flag set in handleSave when the merchant confirms the "all per-day
+  // values are identical — collapse to single value?" warning. After the
+  // state collapse (setSameAllDays(true) + setQuantity(commonValue))
+  // commits, the effect below fires the actual save. We can't call the
+  // mutation directly inside the warning's onPress because the mutation's
+  // mutationFn captures sameAllDays/quantity via closure at render time;
+  // those captures wouldn't see the just-issued setState updates without
+  // a re-render in between.
+  const pendingCollapseSaveRef = useRef(false);
+  // Fade the global quantity picker when the user unchecks "Même pour tous
+  // les jours" — at that point the per-day schedule below is the source of
+  // truth and the global counter no longer drives anything, so dimming it
+  // (and disabling its touch surface) signals "this control is inactive
+  // right now". 180 ms easing roughly matches the schedule row's mount.
+  const qtyPickerOpacity = useRef(new Animated.Value(1)).current;
+  useEffect(() => {
+    Animated.timing(qtyPickerOpacity, {
+      toValue: sameAllDays ? 1 : 0.35,
+      duration: 180,
+      useNativeDriver: true,
+    }).start();
+  }, [sameAllDays, qtyPickerOpacity]);
+
+  // Fires the save after the per-day → single-value collapse confirmed by the
+  // warning popup in handleSave has actually committed to state. Trigger is
+  // a sameAllDays false → true transition driven only by that warning's
+  // onPress (the ref guards against any other path flipping the same flag).
+  useEffect(() => {
+    if (!pendingCollapseSaveRef.current) return;
+    if (!sameAllDays) return;
+    pendingCollapseSaveRef.current = false;
+    if (isEditing) {
+      updateMutation.mutate({});
+    } else {
+      createMutation.mutate();
+    }
+    // updateMutation / createMutation / isEditing intentionally omitted from
+    // deps — the effect must only react to the sameAllDays transition; the
+    // mutations are stable refs from useMutation and the editing mode is set
+    // once at mount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sameAllDays]);
+
+  // Same fade pattern as the quantity picker — used by the pickup-time
+  // pickers and the pickup-instructions editor, both of which now sit ABOVE
+  // their "use location values" checkbox. When the box is checked we still
+  // render the control (pre-filled with the location's values) but dim +
+  // lock it, so the user can see what they're inheriting at a glance.
+  // The matching useEffects that drive these values live AFTER the two
+  // checkbox state declarations (search "pickupPickerOpacity sync effect").
+  const pickupPickerOpacity = useRef(new Animated.Value(1)).current;
+  const instructionsOpacity = useRef(new Animated.Value(1)).current;
+  // "Voir plus" toggle for the location-default pickup instructions preview.
+  const [defaultInstructionsExpanded, setDefaultInstructionsExpanded] = useState(false);
 
   // ── Menu items for selection
   const menuItemsQuery = useQuery({
@@ -177,14 +245,21 @@ export default function CreateBasketScreen() {
     );
   };
 
-  // Pickup times: use basket-specific times if editing, else profile-level defaults
+  // The location's effective hours for TODAY (per-day weekly_schedule wins over
+  // the flat widest span). Drives the "use business hours" default text and the
+  // custom-picker seed so the form reflects the current day's window. Resolved
+  // client-side because /my/profile returns the RAW flat hours (the editors that
+  // read it save it back, so the backend must not pre-resolve them).
+  const todayLocHours = effectiveLocationHours(profileQuery.data as any);
+
+  // Pickup times: use basket-specific times if editing, else today's location hours
   const defaultStart =
     apiBasket?.pickup_start_time?.substring(0, 5) ??
-    profileQuery.data?.pickup_start_time?.substring(0, 5) ??
+    (todayLocHours.start || undefined) ??
     '18:00';
   const defaultEnd =
     apiBasket?.pickup_end_time?.substring(0, 5) ??
-    profileQuery.data?.pickup_end_time?.substring(0, 5) ??
+    (todayLocHours.end || undefined) ??
     '19:00';
 
   const [pickupStart, setPickupStart] = useState(defaultStart);
@@ -193,8 +268,8 @@ export default function CreateBasketScreen() {
   const [showZeroQtyWarning, setShowZeroQtyWarning] = useState(false);
 
   // Custom pickup time toggle — if OFF, basket uses location's default pickup times
-  const locationDefaultStart = profileQuery.data?.pickup_start_time?.substring(0, 5) ?? '18:00';
-  const locationDefaultEnd = profileQuery.data?.pickup_end_time?.substring(0, 5) ?? '19:00';
+  const locationDefaultStart = todayLocHours.start || '18:00';
+  const locationDefaultEnd = todayLocHours.end || '19:00';
   // Inverted from the old `useCustomPickupTime`: when true, the basket
   // inherits the location's hours and the custom pickers are hidden; when
   // false, the user is editing a custom window and the pickers are shown.
@@ -267,10 +342,26 @@ export default function CreateBasketScreen() {
         // produce 0.5-1px misalignment between the SVG cutout path (drawn
         // via floating-point coordinates) and the border View ring, which
         // the user perceives as the halo not hugging the element.
-        // Give the pickup-time card halo a touch more breathing room (slightly
-        // bigger than flush) per design request; other form steps stay flush.
-        const pad = key === 'formPickupTime' ? 8 : 0;
-        if (w > 0 && h > 0) setMeasuredRect(key, {
+        // Per design request, the pickup-time and daily-reset card
+        // halos both want VISIBLE breathing room — they don't trace
+        // the element border, they highlight the whole control area
+        // around it. 28 px clears the TimePicker / quantity-stepper
+        // edges with a clear visible margin all the way around. The
+        // confirm-button step stays flush (pad 0) — its halo is the
+        // pill cutout that already hugs the CTA.
+        const pad = (key === 'formPickupTime' || key === 'formDailyReset') ? 28 : 0;
+        // Reject mid-push measurements that land off-screen — the form is
+        // pushed onto the Stack with a slide-in animation, and the first
+        // onLayout can fire while the screen is still translating in from
+        // the right edge (so x ≈ SW). Persisting that captured-mid-slide
+        // rect makes the next step's overlay paint its cutout off-screen,
+        // leaving the user with full dim and no visible halo. The form's
+        // step-entry effect runs a second measurement pass that publishes
+        // the correct on-screen rect once the push settles.
+        const SW = Dimensions.get('window').width;
+        const SH = Dimensions.get('window').height;
+        const onScreen = x + w > 0 && y + h > 0 && x < SW && y < SH;
+        if (w > 0 && h > 0 && onScreen) setMeasuredRect(key, {
           x: Math.round(x - pad),
           y: Math.round(y - pad),
           w: Math.round(w + pad * 2),
@@ -308,7 +399,20 @@ export default function CreateBasketScreen() {
     const stepAtFire = key;
     // Invalidate the previous rect so the overlay falls back to dim-only
     // mode while we scroll — prevents a "halo at the old position" flash.
-    setMeasuredRect(stepAtFire as any, null);
+    //
+    // EXCEPTION: formConfirmBtn lives in a fixed footer that DOESN'T scroll
+    // or move between steps. Wiping its rect just creates a 500 ms window
+    // where the overlay paints dim-only + falls back to the bottom-of-
+    // screen target — which the user perceives as "the form clears and the
+    // halo covers the navbar" because the form behind goes dark and the
+    // fallback pill lands where the (business) tab bar would sit if they
+    // were back on /my-baskets. For this step we KEEP the existing valid
+    // rect so the overlay paints continuously at the right position; the
+    // re-measure pass below still runs as cheap insurance against a stale
+    // initial onLayout (push-animation transient y).
+    if (stepAtFire !== 'formConfirmBtn') {
+      setMeasuredRect(stepAtFire as any, null);
+    }
 
     // Re-measure with retry. measureInWindow can return 0×0 if the view
     // hasn't finished laying out / scrolling; we retry up to 8 times at
@@ -325,7 +429,19 @@ export default function CreateBasketScreen() {
         return;
       }
       node.measureInWindow((x: number, y: number, w: number, h: number) => {
-        if (w > 0 && h > 0) {
+        // Reject measurements that land outside the visible viewport —
+        // those typically come from a mid-push frame where the screen is
+        // still translating in from the right edge. Without this guard,
+        // an off-screen rect (e.g. x ≈ SW because the screen hasn't
+        // finished sliding) gets persisted in the store, and on the next
+        // step entry the overlay paints its cutout off-screen — leaving
+        // the user with full dim and no visible halo (the "form clears"
+        // symptom for the confirm-button step). Retry until the screen
+        // settles into its on-screen frame.
+        const SW = Dimensions.get('window').width;
+        const SH = Dimensions.get('window').height;
+        const onScreen = x + w > 0 && y + h > 0 && x < SW && y < SH;
+        if (w > 0 && h > 0 && onScreen) {
           setMeasuredRect(stepAtFire as any, {
             x: Math.round(x),
             y: Math.round(y),
@@ -355,33 +471,67 @@ export default function CreateBasketScreen() {
       }
       // Wait for the scroll animation to settle (~250ms default + slack)
       // before re-measuring; otherwise we capture an intermediate frame.
-      timers.push(setTimeout(() => tryMeasure(0), 350));
+      // EXCEPTION: formConfirmBtn doesn't scroll, so the 350 ms wait just
+      // delays the corrected rect from landing — leaving the overlay
+      // staring at a stale (push-transient, possibly off-screen) rect
+      // for half a second. Fire immediately for it.
+      const measureDelay = stepAtFire === 'formConfirmBtn' ? 0 : 350;
+      timers.push(setTimeout(() => tryMeasure(0), measureDelay));
     };
 
-    // Brief delay so any pending layout flush completes.
-    timers.push(setTimeout(scrollAndMeasure, 150));
+    // Brief delay so any pending layout flush completes — also reduced to
+    // 0 for formConfirmBtn so the first measure attempt lands within a
+    // frame of step entry, before the SubScreen overlay's displayedStep
+    // swap completes. Other steps still get the 150 ms beat because they
+    // need to wait for the scroll to begin before measuring.
+    const initialDelay = stepAtFire === 'formConfirmBtn' ? 0 : 150;
+    timers.push(setTimeout(scrollAndMeasure, initialDelay));
     return () => { timers.forEach(clearTimeout); };
   }, [walkthroughCurrentStep?.measureKey]);
 
+  // Clear the form's published measureRects on unmount. Without this, the
+  // confirm-button submit's `router.replace('/(business)/my-baskets')`
+  // pops this screen — but its `formConfirmBtn` rect lingers in the
+  // walkthrough store, and the underlying BizOverlay (which has been
+  // mounted underneath the pushed Stack screen the whole time) takes
+  // over the display still on `displayedStep = formConfirmBtn`, then
+  // paints a halo at that stale rect over the tab bar at the bottom of
+  // /my-baskets — reading as "step 8 flashes again before advancing".
+  // Clearing the rects forces BizOverlay's render to the dim-only
+  // fallback during the ~180 ms it takes for `advanceOnPath` to fire
+  // and the displayedStep to flip to step 9 (demoBasketCard).
+  useEffect(() => {
+    return () => {
+      setMeasuredRect('formPickupTime', null);
+      setMeasuredRect('formDailyReset', null);
+      setMeasuredRect('formConfirmBtn', null);
+    };
+  }, [setMeasuredRect]);
+
+  // Brand-styled sheet for "take photo / choose from gallery", same UX as
+  // the review + report-business forms — replaces the generic OS
+  // `Alert.alert` action sheet which felt off-brand. Both new-basket and
+  // edit-basket flows funnel through this one component, so swapping it
+  // here covers both surfaces.
+  const launchBasketCamera = async () => {
+    if (!(await ensureCameraAccess())) return;
+    const result = await ImagePicker.launchCameraAsync({ allowsEditing: true, quality: 0.7 });
+    if (!result.canceled && result.assets?.[0]) setBasketImageUri(result.assets[0].uri);
+  };
+  const launchBasketGallery = async () => {
+    // Limited-access-aware grid → crop. Handles its own permission popup.
+    const uri = await pickAndCrop({ aspect: [4, 3], quality: 0.7 });
+    if (uri) setBasketImageUri(uri);
+  };
   const pickBasketImage = () => {
-    Alert.alert(
+    alert.showAlert(
       t('common.addPhoto', { defaultValue: 'Photo du panier' }),
       undefined,
       [
-        { text: t('common.takePhoto', { defaultValue: 'Prendre une photo' }), onPress: async () => {
-          const { status } = await ImagePicker.requestCameraPermissionsAsync();
-          if (status !== 'granted') return;
-          const result = await ImagePicker.launchCameraAsync({ allowsEditing: true, quality: 0.7 });
-          if (!result.canceled && result.assets?.[0]) setBasketImageUri(result.assets[0].uri);
-        }},
-        { text: t('common.chooseFromGallery', { defaultValue: 'Choisir depuis la galerie' }), onPress: async () => {
-          const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-          if (status !== 'granted') return;
-          const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: 'images', allowsEditing: true, quality: 0.7 });
-          if (!result.canceled && result.assets?.[0]) setBasketImageUri(result.assets[0].uri);
-        }},
-        { text: t('common.cancel', { defaultValue: 'Annuler' }), style: 'cancel' },
-      ]
+        { text: t('common.takePhoto', { defaultValue: 'Prendre une photo' }), onPress: launchBasketCamera },
+        { text: t('common.chooseFromGallery', { defaultValue: 'Choisir depuis la galerie' }), onPress: launchBasketGallery },
+      ],
+      { layout: 'sheet' },
     );
   };
 
@@ -407,10 +557,9 @@ export default function CreateBasketScreen() {
   // Update pickup times when profile/baskets load (only if not yet modified by user)
   React.useEffect(() => {
     if (!isEditing && profileQuery.data) {
-      const s = profileQuery.data.pickup_start_time?.substring(0, 5);
-      const e = profileQuery.data.pickup_end_time?.substring(0, 5);
-      if (s) setPickupStart(s);
-      if (e) setPickupEnd(e);
+      const eff = effectiveLocationHours(profileQuery.data as any);
+      if (eff.start) setPickupStart(eff.start);
+      if (eff.end) setPickupEnd(eff.end);
     }
   }, [profileQuery.data, isEditing]);
 
@@ -424,11 +573,33 @@ export default function CreateBasketScreen() {
   //      via another tab / invalidation) → effect re-syncs.
   React.useEffect(() => {
     if (!useBusinessHours) return;
-    const s = profileQuery.data?.pickup_start_time?.substring(0, 5);
-    const e = profileQuery.data?.pickup_end_time?.substring(0, 5);
-    if (s && s !== pickupStart) setPickupStart(s);
-    if (e && e !== pickupEnd) setPickupEnd(e);
-  }, [useBusinessHours, profileQuery.data?.pickup_start_time, profileQuery.data?.pickup_end_time]);
+    const eff = effectiveLocationHours(profileQuery.data as any);
+    if (eff.start && eff.start !== pickupStart) setPickupStart(eff.start);
+    if (eff.end && eff.end !== pickupEnd) setPickupEnd(eff.end);
+  }, [useBusinessHours, profileQuery.data?.pickup_start_time, profileQuery.data?.pickup_end_time, (profileQuery.data as any)?.weekly_schedule]);
+
+  // pickupPickerOpacity sync effect — fades the time-picker row when the
+  // "Utiliser les horaires du commerce" checkbox is on. The pickers stay
+  // mounted (pre-filled with the inherited values) so the user sees what
+  // they'll inherit at a glance; the dim + pointerEvents lock signals
+  // "read-only right now". Lives down here (not next to the Animated.Value
+  // ref above) because it depends on `useBusinessHours`, which is declared
+  // further down in the component body and would be in the TDZ up top.
+  useEffect(() => {
+    Animated.timing(pickupPickerOpacity, {
+      toValue: useBusinessHours ? 0.35 : 1,
+      duration: 180,
+      useNativeDriver: true,
+    }).start();
+  }, [useBusinessHours, pickupPickerOpacity]);
+  // Same pattern for the pickup-instructions editor.
+  useEffect(() => {
+    Animated.timing(instructionsOpacity, {
+      toValue: useDefaultPickupInstructions ? 0.4 : 1,
+      duration: 180,
+      useNativeDriver: true,
+    }).start();
+  }, [useDefaultPickupInstructions, instructionsOpacity]);
 
   React.useEffect(() => {
     if (isEditing && apiBasket) {
@@ -441,8 +612,14 @@ export default function CreateBasketScreen() {
       // number matches what the baskets page and cron will use; fall back
       // to the flat daily_reinitialization_quantity otherwise. Never use the
       // live `quantity` — that decrements as orders come in during the day.
+      //
+      // Apply the value even when it's 0 — a merchant who paused daily
+      // replenishment for this basket explicitly saved 0 and re-opening
+      // the form should surface that 0, not the live (today's-remaining)
+      // count. The previous `initQty > 0` guard silently dropped the
+      // legitimate 0 and the useState initializer's stale value won.
       const initQty = effectiveDailyReinit(apiBasket);
-      if (Number.isFinite(initQty) && initQty > 0) setQuantity(initQty);
+      if (Number.isFinite(initQty)) setQuantity(initQty);
       if (apiBasket.pickup_start_time) setPickupStart(apiBasket.pickup_start_time.substring(0, 5));
       if (apiBasket.pickup_end_time) setPickupEnd(apiBasket.pickup_end_time.substring(0, 5));
       // Re-sync the "use business hours" checkbox from the canonical NULL
@@ -457,7 +634,14 @@ export default function CreateBasketScreen() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [apiBasket?.id, apiBasket?.pickup_start_time, apiBasket?.pickup_end_time]);
 
-  // Populate daily reinit schedule from API basket when editing
+  // Populate daily reinit schedule from API basket when editing.
+  //
+  // For the "same all days" fallback we read straight from
+  // `daily_reinitialization_quantity` — NEVER the live `quantity` (which
+  // decrements as orders come in) and NEVER a hardcoded 5. A value of 0
+  // is a legitimate saved state (merchant paused daily replenishment) and
+  // is preserved; if the column itself is missing/null we land on 0 too
+  // (no replenishment) instead of a misleading "5".
   React.useEffect(() => {
     if (isEditing && apiBasket) {
       const schedule = (apiBasket as any)?.daily_reinit_schedule;
@@ -466,8 +650,10 @@ export default function CreateBasketScreen() {
         setDaySchedule({ mon: schedule.mon ?? 0, tue: schedule.tue ?? 0, wed: schedule.wed ?? 0, thu: schedule.thu ?? 0, fri: schedule.fri ?? 0, sat: schedule.sat ?? 0, sun: schedule.sun ?? 0 });
       } else {
         setSameAllDays(true);
-        const qty = Number((apiBasket as any).daily_reinitialization_quantity ?? apiBasket.quantity ?? 5);
-        setDaySchedule({ mon: qty, tue: qty, wed: qty, thu: qty, fri: qty, sat: qty, sun: qty });
+        const rawDaily = (apiBasket as any).daily_reinitialization_quantity;
+        const qty = rawDaily == null ? 0 : Number(rawDaily);
+        const safeQty = Number.isFinite(qty) ? qty : 0;
+        setDaySchedule({ mon: safeQty, tue: safeQty, wed: safeQty, thu: safeQty, fri: safeQty, sat: safeQty, sun: safeQty });
       }
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -493,6 +679,19 @@ export default function CreateBasketScreen() {
   const toTimeField = (hhmm: string) =>
     hhmm.includes(':') && hhmm.split(':').length === 2 ? `${hhmm}:00` : hhmm;
 
+  // Live validation of the EFFECTIVE pickup window — re-evaluated on every
+  // pickupStart / pickupEnd / useBusinessHours flip. Status drives:
+  //   - the hint text below the pickers (muted-grey default OR red error)
+  //   - the Save button's disabled state (fades it the same way priceError
+  //     does, matching the price-discount pattern the user requested).
+  // When "use business hours" is checked we trust the location's already-
+  // validated times and skip — the local pickers reflect those values but
+  // aren't authoritative; the backend resolves NULL columns via COALESCE.
+  const pickupWindowStatus = React.useMemo(
+    () => (useBusinessHours ? 'ok' : validateBizDayWindow(pickupStart, pickupEnd)),
+    [useBusinessHours, pickupStart, pickupEnd],
+  );
+
   // ── Mutations
 
   const validatePickupTime = (start: string, end: string): { valid: boolean; error?: string; start: string; end: string } => {
@@ -509,7 +708,15 @@ export default function CreateBasketScreen() {
     //     includes 03:30 would refill mid-window — incoherent).
     const status = validateBizDayWindow(start, end);
     if (status === 'zero') {
-      return { valid: false, error: t('business.baskets.endBeforeStart', { defaultValue: 'End time must be after start time' }), start, end };
+      return { valid: false, error: t('business.baskets.endBeforeStart', { defaultValue: "L'heure de fin doit être différente de l'heure de début." }), start, end };
+    }
+    if (status === 'too-short') {
+      return {
+        valid: false,
+        error: t('business.availability.tooShort', { defaultValue: 'Le créneau de retrait doit durer au moins 15 minutes.' }),
+        start,
+        end,
+      };
     }
     if (status === 'crosses-reset') {
       return {
@@ -524,6 +731,16 @@ export default function CreateBasketScreen() {
     return { valid: true, start, end };
   };
 
+  // Per-attempt idempotency key for the create POST. Minted lazily inside the
+  // mutationFn on first submit; cleared on success so a follow-up "create
+  // another basket" gets a fresh key. The form-state-change reset that
+  // reserve.tsx uses isn't needed here because the create-basket form has
+  // many inputs — a stale key surviving a typo edit and a re-submit would
+  // ALWAYS resolve to the same row (which is the correct behavior: same
+  // attempt, same target). The reset happens on submit-success and on a
+  // genuine error you can recover from.
+  const createAttemptKeyRef = useRef<string | null>(null);
+
   const createMutation = useMutation({
     mutationFn: async () => {
       const effectiveStart = useBusinessHours ? locationDefaultStart : pickupStart;
@@ -532,6 +749,8 @@ export default function CreateBasketScreen() {
       if (!result.valid) {
         return Promise.reject(new Error(result.error));
       }
+      if (!createAttemptKeyRef.current) createAttemptKeyRef.current = makeAttemptKey();
+      const attemptKey = createAttemptKeyRef.current;
       // When the user picked a photo for a new basket, we need multipart —
       // the JSON endpoint can't carry the file. Mirror the edit-mode branch
       // a few lines below. Without this branch the photo state was silently
@@ -550,6 +769,13 @@ export default function CreateBasketScreen() {
         if (originalPrice) formData.append('original_price', String(parseFloat(originalPrice)));
         formData.append('selling_price', String(parseFloat(sellingPrice)));
         formData.append('quantity', String(quantity));
+        // Send the daily reinit fields on CREATE too so the form behaves
+        // identically to edit-mode — the user explicitly asked for parity.
+        // The per-day schedule is serialized when "Même pour tous les jours"
+        // is off, NULL otherwise (matches the edit-mode contract at line ~698).
+        formData.append('daily_reinitialization_quantity', String(quantity));
+        formData.append('daily_reinit_schedule', sameAllDays ? 'null' : JSON.stringify(daySchedule));
+        formData.append('max_per_customer', String(maxPerCustomer));
         // Multipart can't carry a real null. Append nothing → backend sees
         // undefined → basket column stays NULL (= inherit). Send the value
         // only when the user opted into a custom time.
@@ -564,7 +790,7 @@ export default function CreateBasketScreen() {
         const filename = basketImageUri!.split('/').pop() ?? 'basket.jpg';
         formData.append('image', { uri: basketImageUri, name: filename, type: 'image/jpeg' } as any);
         const { createBasket } = await import('@/src/services/business');
-        return createBasket(formData);
+        return createBasket(formData, attemptKey);
       }
       return createBasketJSON({
         name: name.trim(),
@@ -572,6 +798,14 @@ export default function CreateBasketScreen() {
         original_price: originalPrice ? parseFloat(originalPrice) : undefined,
         selling_price: parseFloat(sellingPrice),
         quantity,
+        // Parity with edit-mode: send the daily reinit quantity, the per-day
+        // schedule (object when active, null when "Même pour tous les jours"
+        // is checked), and the max-per-customer cap. The backend already
+        // accepts these on POST /api/baskets — they were just missing from
+        // the create payload while the form hid the controls.
+        daily_reinitialization_quantity: quantity,
+        daily_reinit_schedule: sameAllDays ? null : JSON.stringify(daySchedule),
+        max_per_customer: maxPerCustomer,
         // JSON path: pass the field through with the actual value or omit /
         // pass undefined. createBasketJSON's type signature requires string,
         // so when sendStart is null we omit the field (column will be NULL
@@ -582,9 +816,12 @@ export default function CreateBasketScreen() {
         show_menu_items: showMenuItems,
         pickup_instructions: useDefaultPickupInstructions ? undefined : pickupInstructions.trim() || undefined,
         location_id: selectedLocationId ? Number(selectedLocationId) : undefined,
-      } as any);
+      } as any, attemptKey);
     },
     onSuccess: async (created: any) => {
+      // Basket is durably committed; clear the attempt key so any next
+      // create on this screen mints a fresh one.
+      createAttemptKeyRef.current = null;
       // "Use for all locations" — after the canonical basket is created at
       // the user's currently-selected location, replicate it into every
       // other org location via the existing /duplicate endpoint. The
@@ -618,13 +855,62 @@ export default function CreateBasketScreen() {
       }
       setTimeout(() => router.back(), 300);
     },
-    onError: (err: any) => {
-      alert.showAlert(t('common.error'), getErrorMessage(err));
+    onMutate: () => {
+      // Snapshot the current list of basket ids BEFORE the server call.
+      // The error path uses this to detect "a new basket matching my
+      // form actually got created" even if the response was lost — so
+      // we never tell the merchant it failed when it didn't, and they
+      // never re-tap and end up with duplicates.
+      const existing = queryClient.getQueryData<any[]>(['my-baskets']) ?? [];
+      const preIds = new Set(existing.map((b: any) => b?.id).filter((id: any) => id != null));
+      return { preIds, expectedName: name.trim() };
+    },
+    onError: async (err: any, _vars, context) => {
+      // Local-validation reject — see the matching guard in updateMutation
+      // below for the rationale. Without this, validatePickupTime's thrown
+      // Error falls into verifyOrAlarm and surfaces "Connexion instable".
+      const isLocalValidation = !err?.status && !err?.response && !err?.isApiError && typeof err?.message === 'string' && err.message.length > 0;
+      if (isLocalValidation) {
+        alert.showAlert(t('common.error'), err.message);
+        return;
+      }
+      await verifyOrAlarm<any[]>({
+        error: err,
+        queryClient,
+        verifyKey: ['my-baskets'],
+        verify: createVerifyAppeared<any>(
+          (cache) => cache,
+          context?.preIds ?? new Set(),
+          (item) => String(item?.name ?? '').trim() === String(context?.expectedName ?? '').trim(),
+        ),
+        onConfirmed: () => {
+          console.log('[CreateBasket] Recovered ghost-create — basket appeared in list');
+          void queryClient.invalidateQueries({ queryKey: ['my-baskets'] });
+          void queryClient.invalidateQueries({ queryKey: ['my-profile'] });
+          void queryClient.invalidateQueries({ queryKey: ['locations'] });
+          setTimeout(() => router.back(), 300);
+        },
+        onUnconfirmed: () => alert.showAlert(t('common.error'), getErrorMessage(err)),
+      });
     },
   });
 
+  // Silent retry on transient network failures — mirrors my-baskets.tsx save.
+  // The first attempt to save a basket edit can drop on a Railway hiccup /
+  // SSL handshake glitch / cellular dead air, and the user then sees a hard
+  // "Une erreur est survenue" popup for what's actually a transient blip
+  // that resolves on a second tap. Retry ONCE after a short backoff before
+  // letting onError fire. Only retried for "no response" / 502 / 503 / 504
+  // shapes — real 4xx/5xx are deterministic and bypass the retry.
+  const isTransient = (e: any) => {
+    if (!e) return false;
+    const status = Number(e?.status ?? e?.response?.status ?? 0);
+    if (!status) return true;
+    return status === 502 || status === 503 || status === 504;
+  };
+
   const updateMutation = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (vars?: { confirmPickupChange?: boolean }) => {
       const effectiveStart = useBusinessHours ? locationDefaultStart : pickupStart;
       const effectiveEnd = useBusinessHours ? locationDefaultEnd : pickupEnd;
       const result = validatePickupTime(effectiveStart, effectiveEnd);
@@ -642,53 +928,71 @@ export default function CreateBasketScreen() {
       // an explicit `null` on JSON.
       const sendStart = useBusinessHours ? null : toTimeField(result.start);
       const sendEnd = useBusinessHours ? null : toTimeField(result.end);
-      if (isNewImage) {
-        const formData = new FormData();
-        formData.append('name', name.trim());
-        if (description.trim()) formData.append('description', description.trim());
-        if (originalPrice) formData.append('original_price', String(parseFloat(originalPrice)));
-        formData.append('selling_price', String(parseFloat(sellingPrice)));
-        if (!isEditing) formData.append('quantity', String(quantity));
-        formData.append('daily_reinitialization_quantity', String(quantity));
-        // Empty string signals "clear" to the backend's clearOrKeep helper.
-        formData.append('pickup_start_time', sendStart ?? '');
-        formData.append('pickup_end_time', sendEnd ?? '');
-        if (selectedMenuItemIds.length) formData.append('menu_item_ids', JSON.stringify(selectedMenuItemIds));
-        // Pickup instructions: same inherit contract via the existing clear handler.
-        formData.append('pickup_instructions', useDefaultPickupInstructions ? '' : (pickupInstructions.trim() || ''));
-        // Per-day schedule: always send when editing so per-day changes land
-        // even during an image update, and so toggling back to "same all days"
-        // explicitly clears the schedule column (null string → NULL on server).
-        if (isEditing) {
-          formData.append('daily_reinit_schedule', sameAllDays ? 'null' : JSON.stringify(daySchedule));
+      // Build the actual send action as a closure so the silent-retry layer
+      // below can call it twice. Anything ABOVE this (validation, payload
+      // construction) is pure and must not retry.
+      const performSend = async () => {
+        if (isNewImage) {
+          const formData = new FormData();
+          formData.append('name', name.trim());
+          if (description.trim()) formData.append('description', description.trim());
+          if (originalPrice) formData.append('original_price', String(parseFloat(originalPrice)));
+          formData.append('selling_price', String(parseFloat(sellingPrice)));
+          if (!isEditing) formData.append('quantity', String(quantity));
+          formData.append('daily_reinitialization_quantity', String(quantity));
+          // Empty string signals "clear" to the backend's clearOrKeep helper.
+          formData.append('pickup_start_time', sendStart ?? '');
+          formData.append('pickup_end_time', sendEnd ?? '');
+          if (selectedMenuItemIds.length) formData.append('menu_item_ids', JSON.stringify(selectedMenuItemIds));
+          // Pickup instructions: same inherit contract via the existing clear handler.
+          formData.append('pickup_instructions', useDefaultPickupInstructions ? '' : (pickupInstructions.trim() || ''));
+          // Per-day schedule: always send when editing so per-day changes land
+          // even during an image update, and so toggling back to "same all days"
+          // explicitly clears the schedule column (null string → NULL on server).
+          if (isEditing) {
+            formData.append('daily_reinit_schedule', sameAllDays ? 'null' : JSON.stringify(daySchedule));
+          }
+          // Merchant confirmed the pickup-window change despite a live order.
+          if (vars?.confirmPickupChange) formData.append('confirm_pickup_change', 'true');
+          const filename = basketImageUri.split('/').pop() ?? 'basket.jpg';
+          formData.append('image', { uri: basketImageUri, name: filename, type: 'image/jpeg' } as any);
+          const { updateBasketWithImage } = await import('@/src/services/business');
+          return updateBasketWithImage(editId!, formData);
         }
-        const filename = basketImageUri.split('/').pop() ?? 'basket.jpg';
-        formData.append('image', { uri: basketImageUri, name: filename, type: 'image/jpeg' } as any);
-        const { updateBasketWithImage } = await import('@/src/services/business');
-        return updateBasketWithImage(editId!, formData);
+        return updateBasketAPI(editId!, {
+          name: name.trim(),
+          description: description.trim() || null,
+          original_price: originalPrice ? parseFloat(originalPrice) : undefined,
+          selling_price: parseFloat(sellingPrice),
+          ...(isEditing ? {} : { quantity }),
+          max_per_customer: maxPerCustomer,
+          daily_reinitialization_quantity: quantity,
+          // Always send when editing: object when per-day is active, null to
+          // clear the column otherwise. Omitted on first creation so the
+          // default NULL sticks for newly-created baskets.
+          ...(isEditing ? { daily_reinit_schedule: sameAllDays ? null : JSON.stringify(daySchedule) } : {}),
+          // null clears (inherits from location); a value overrides.
+          pickup_start_time: sendStart,
+          pickup_end_time: sendEnd,
+          menu_item_ids: selectedMenuItemIds,
+          show_menu_items: showMenuItems,
+          // null clears; non-empty string overrides. Sending null instead of
+          // undefined lets the user explicitly switch back to "inherit" after
+          // having set a custom value previously.
+          pickup_instructions: useDefaultPickupInstructions ? null : pickupInstructions.trim() || null,
+          // Merchant confirmed the pickup-window change despite a live order.
+          ...(vars?.confirmPickupChange ? { confirm_pickup_change: true } : {}),
+        });
+      };
+
+      try {
+        return await performSend();
+      } catch (firstErr: any) {
+        if (!isTransient(firstErr)) throw firstErr;
+        console.log('[CreateBasket] First save attempt failed transiently, retrying once...');
+        await new Promise((r) => setTimeout(r, 800));
+        return performSend();
       }
-      return updateBasketAPI(editId!, {
-        name: name.trim(),
-        description: description.trim() || null,
-        original_price: originalPrice ? parseFloat(originalPrice) : undefined,
-        selling_price: parseFloat(sellingPrice),
-        ...(isEditing ? {} : { quantity }),
-        max_per_customer: maxPerCustomer,
-        daily_reinitialization_quantity: quantity,
-        // Always send when editing: object when per-day is active, null to
-        // clear the column otherwise. Omitted on first creation so the
-        // default NULL sticks for newly-created baskets.
-        ...(isEditing ? { daily_reinit_schedule: sameAllDays ? null : JSON.stringify(daySchedule) } : {}),
-        // null clears (inherits from location); a value overrides.
-        pickup_start_time: sendStart,
-        pickup_end_time: sendEnd,
-        menu_item_ids: selectedMenuItemIds,
-        show_menu_items: showMenuItems,
-        // null clears; non-empty string overrides. Sending null instead of
-        // undefined lets the user explicitly switch back to "inherit" after
-        // having set a custom value previously.
-        pickup_instructions: useDefaultPickupInstructions ? null : pickupInstructions.trim() || null,
-      });
     },
     onSuccess: async () => {
       // Edit-mode "use for all locations" — same intent as on create,
@@ -723,8 +1027,128 @@ export default function CreateBasketScreen() {
       }
       setTimeout(() => router.back(), 300);
     },
-    onError: (err: any) => {
-      alert.showAlert(t('common.error'), getErrorMessage(err));
+    onError: async (err: any) => {
+      const code = err?.data?.error;
+      // Pickup-window change rejected outright (later start / earlier end while
+      // an order is live). Show the clear, translated reason — getErrorMessage
+      // would otherwise collapse it to a generic "une erreur est survenue".
+      if (code === 'pickup_window_too_restrictive') {
+        alert.showAlert(
+          t('business.createBasket.pickupBlockedTitle', { defaultValue: 'Modification impossible' }),
+          t('business.createBasket.pickupBlockedMsg', {
+            defaultValue: "Une commande est déjà en cours pour ce panier. Vous pouvez avancer l'heure de début ou prolonger l'heure de fin, mais pas retarder le début ni raccourcir la fin du créneau.",
+          }),
+        );
+        return;
+      }
+      // Pickup-window change is allowed but an order is live → confirm, then
+      // re-save with the confirm flag. The customer will be notified.
+      if (code === 'pickup_change_needs_confirm') {
+        const window = err?.data?.window;
+        alert.showAlert(
+          t('business.createBasket.pickupConfirmTitle', { defaultValue: 'Une commande est en cours' }),
+          t('business.createBasket.pickupConfirmMsg', {
+            window,
+            defaultValue: window
+              ? `Un client a déjà réservé ce panier. Assurez-vous que le nouveau créneau de retrait (${window}) reste compatible avec sa commande. Voulez-vous vraiment le modifier ? Le client sera notifié.`
+              : 'Un client a déjà réservé ce panier. Assurez-vous que le nouveau créneau de retrait reste compatible avec sa commande. Voulez-vous vraiment le modifier ? Le client sera notifié.',
+          }),
+          [
+            { text: t('common.cancel', { defaultValue: 'Annuler' }), style: 'cancel' },
+            {
+              text: t('business.createBasket.pickupConfirmCta', { defaultValue: 'Oui, modifier' }),
+              style: 'default',
+              onPress: () => updateMutation.mutate({ confirmPickupChange: true }),
+            },
+          ],
+        );
+        return;
+      }
+      // LOCAL validation reject (e.g. validatePickupTime threw a plain
+      // Error before the API was even called). The promise rejected with
+      // an Error instance — no HTTP status, no `.data` — so the 4xx
+      // branch and the verify-before-alarming branch both treat it as a
+      // network failure and surface "Connexion instable". Catch it here
+      // and show the actual error message the local check produced.
+      // Symptom this fixes: picking 18:05-18:05 (start = end) used to
+      // fall to "Connexion instable" even though the local rule clearly
+      // identified the problem.
+      const isLocalValidation = !err?.status && !err?.response && !err?.isApiError && typeof err?.message === 'string' && err.message.length > 0;
+      if (isLocalValidation) {
+        alert.showAlert(t('common.error'), err.message);
+        return;
+      }
+      // 4xx with a specific backend error string → surface it directly. This
+      // is a user-correctable validation issue (e.g. price-too-high, invalid
+      // pickup time format, location-out-of-hours), NOT a network problem,
+      // and hiding it behind "Connexion instable" trained the user to ignore
+      // the popup (or worse: blame the network for a backend rejection). The
+      // verify-before-alarming path below is the right call only for 5xx /
+      // network failures where the server might have committed the change
+      // despite the response getting lost.
+      const httpStatus = Number(err?.status ?? err?.response?.status ?? 0);
+      const backendErrCode = err?.data?.error ?? err?.response?.data?.error;
+      const isClientValidation = httpStatus >= 400 && httpStatus < 500 && typeof backendErrCode === 'string' && backendErrCode.length > 0;
+      if (isClientValidation) {
+        alert.showAlert(t('common.error'), getErrorMessage(err));
+        return;
+      }
+      // Verify-before-alarming. The save can fail with a transient network
+      // error AFTER the server already committed the change (Railway slowness
+      // past axios's 30 s timeout, cellular packet drop on the response).
+      // Before showing "Une erreur est survenue" — which is a lie when the
+      // change actually persisted — refetch the basket list and check whether
+      // a basket matching editId now has the fields we requested. If yes,
+      // treat as success silently and navigate back like onSuccess would. If
+      // no, surface the soft "couldn't save, refresh and retry" copy
+      // (matching my-baskets.tsx's onError pattern) instead of getErrorMessage.
+      if (!editId) {
+        alert.showAlert(t('common.error'), getErrorMessage(err));
+        return;
+      }
+      const expectedName = name.trim();
+      const expectedSellingPrice = parseFloat(sellingPrice);
+      await verifyOrAlarm<any[]>({
+        error: err,
+        queryClient,
+        verifyKey: ['my-baskets'],
+        verify: (fresh) => {
+          if (!Array.isArray(fresh)) return false;
+          const live = fresh.find((b: any) => String(b?.id) === String(editId));
+          if (!live) return false;
+          // Lightweight diff on two stable, user-visible fields — that's
+          // enough signal that the update reached the row.
+          if (String(live.name ?? '').trim() !== expectedName) return false;
+          if (Number(live.selling_price) !== expectedSellingPrice) return false;
+          return true;
+        },
+        onConfirmed: () => {
+          console.log('[CreateBasket] Edit save SUCCEEDED silently — server committed, response was lost');
+          void queryClient.invalidateQueries({ queryKey: ['my-baskets'] });
+          void queryClient.invalidateQueries({ queryKey: ['my-profile'] });
+          void queryClient.invalidateQueries({ queryKey: ['locations'] });
+          if (editId) void queryClient.invalidateQueries({ queryKey: ['basket', String(editId)] });
+          setTimeout(() => router.back(), 300);
+        },
+        onUnconfirmed: () => {
+          // Soft, brand-protective copy. Raw getErrorMessage(err) would yield
+          // "Une erreur est survenue" / "Network Error" which alarms the
+          // merchant for a transient flake; this calmer copy points them at
+          // the actual recovery (refresh + retry, no data lost).
+          const status = Number(err?.status ?? err?.response?.status ?? 0);
+          const isNetwork = !status || status === 502 || status === 503 || status === 504;
+          alert.showAlert(
+            t('business.baskets.saveErrorTitle', { defaultValue: 'Connexion instable' }),
+            isNetwork
+              ? t('business.baskets.saveErrorRetry', {
+                  defaultValue: 'Un petit souci de connexion. Veuillez actualiser l’application puis réessayer.',
+                })
+              : t('business.baskets.saveErrorGeneric', {
+                  defaultValue: 'Modification non enregistrée. Veuillez actualiser l’application puis réessayer.',
+                }),
+          );
+        },
+      });
     },
   });
 
@@ -760,7 +1184,7 @@ export default function CreateBasketScreen() {
     if (!validatePrice(originalPrice, sellingPrice)) return;
     const doSave = () => {
       if (isEditing) {
-        updateMutation.mutate();
+        updateMutation.mutate({});
       } else {
         createMutation.mutate();
       }
@@ -777,9 +1201,57 @@ export default function CreateBasketScreen() {
       );
       return;
     }
-    if (quantity === 0) {
+    // Zero-reinit warning fires only when the EFFECTIVE reinit value (the
+    // one the cron will use) is 0. In sameAllDays mode that's the global
+    // `quantity` field. In per-day mode the global field is faded/inactive
+    // and `daySchedule` is the source of truth — only warn if EVERY day is
+    // 0 (i.e. the basket would never restock). The previous check looked
+    // at `quantity` alone and fired the warning even when per-day mode had
+    // valid non-zero values, because the global field is initialised to 0.
+    const effectiveAllZero = sameAllDays
+      ? quantity === 0
+      : Object.values(daySchedule).every((v) => v === 0);
+    if (effectiveAllZero) {
       setShowZeroQtyWarning(true);
       return;
+    }
+    // Per-day mode collapse warning. If the merchant picked "different value
+    // for each day" but typed the SAME value into all seven, save would
+    // persist a per-day schedule that's behaviourally identical to the
+    // single-value mode — and the availability page would then render the
+    // "réinit. par jour" calendar card for a basket whose values are all
+    // the same. Surface a one-step confirm: keep going as a per-day save,
+    // OR collapse to the single-value mode and save that instead.
+    if (!sameAllDays) {
+      const values = Object.values(daySchedule);
+      const common = values[0];
+      const allEqual = values.every((v) => v === common);
+      if (allEqual && common > 0) {
+        alert.showAlert(
+          t('business.createBasket.sameValueCollapseTitle', {
+            defaultValue: 'Quantités identiques',
+          }),
+          t('business.createBasket.sameValueCollapseBody', {
+            value: common,
+            defaultValue: 'Vous avez activé une réinitialisation différente par jour, mais vous avez entré le même nombre de paniers ({{value}}) pour tous les jours. Voulez-vous plutôt utiliser une réinitialisation unique pour tous les jours ?',
+          }),
+          [
+            { text: t('common.cancel', { defaultValue: 'Annuler' }), style: 'cancel' },
+            {
+              text: t('common.confirm', { defaultValue: 'Confirmer' }),
+              onPress: () => {
+                // Collapse state, then let the useEffect upstream fire the
+                // actual mutation once the new sameAllDays/quantity values
+                // are visible to the mutationFn's closure.
+                setQuantity(common);
+                pendingCollapseSaveRef.current = true;
+                setSameAllDays(true);
+              },
+            },
+          ],
+        );
+        return;
+      }
     }
     doSave();
   };
@@ -795,7 +1267,7 @@ export default function CreateBasketScreen() {
   if (!hasPermission && !ctxQuery.isLoading) {
     return (
       <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg, justifyContent: 'center', alignItems: 'center', padding: 32 }]}>
-        <AlertCircle size={48} color={theme.colors.muted} />
+        <BarakeatErrorIcon size={48} color={theme.colors.muted} />
         <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3, marginTop: 16, textAlign: 'center' }}>
           {t('business.profile.noPermission', { defaultValue: "Vous n'avez pas la permission d'accéder à cette page." })}
         </Text>
@@ -810,7 +1282,7 @@ export default function CreateBasketScreen() {
     <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]}>
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1 }}>
         <View style={[styles.header, { paddingHorizontal: theme.spacing.xl, paddingVertical: theme.spacing.lg }]}>
-          <TouchableOpacity onPress={() => router.back()}>
+          <TouchableOpacity onPress={() => router.back()} hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}>
             <X size={24} color={theme.colors.textPrimary} />
           </TouchableOpacity>
           <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h2 }]}>
@@ -850,7 +1322,7 @@ export default function CreateBasketScreen() {
           <View style={[styles.field, { marginBottom: theme.spacing.xl }]}>
             <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: theme.spacing.sm }}>
               <Text style={{ color: theme.colors.primary, ...theme.typography.body, fontWeight: '700' }}>
-                {t('business.createBasket.name')} *
+                {t('business.createBasket.name')}<Text style={{ color: theme.colors.error }}> *</Text>
               </Text>
               {FeatureFlags.ENABLE_AI_BASKET_SUGGESTIONS && (
                 <TouchableOpacity
@@ -893,7 +1365,7 @@ export default function CreateBasketScreen() {
           {/* Description */}
           <View style={[styles.field, { marginBottom: theme.spacing.xl }]}>
             <Text style={{ color: theme.colors.primary, ...theme.typography.body, fontWeight: '700', marginBottom: theme.spacing.sm }}>
-              {t('business.createBasket.description')} *
+              {t('business.createBasket.description')}<Text style={{ color: theme.colors.error }}> *</Text>
             </Text>
             <TextInput
               style={[styles.textArea, { backgroundColor: theme.colors.surface, borderColor: descError ? theme.colors.error : theme.colors.divider, borderRadius: theme.radii.r12, color: theme.colors.textPrimary, ...theme.typography.body, ...theme.shadows.shadowSm }]}
@@ -908,11 +1380,27 @@ export default function CreateBasketScreen() {
             {descError !== '' && <Text style={{ color: theme.colors.error, fontSize: 12, marginTop: 4 }}>{descError}</Text>}
           </View>
 
-          {/* Prices */}
+          {/* Prices.
+              Both price-row labels reserve enough vertical space for
+              the label to occupy TWO lines, regardless of which
+              language is active. Without this, English's "Discounted
+              Price (TND)" wraps to 2 lines while "Original Price
+              (TND)" stays on 1, and the two TextInputs land at
+              different Y positions — the visible misalignment the
+              user reported.
+              The reserved height MUST be derived from the body
+              typography's lineHeight, not fontSize. An earlier draft
+              used `fontSize * 1.4 * 2`, which evaluated to 42 px on
+              the body token (`fontSize: 15`); the actual rendered
+              two-line height is `lineHeight * 2 = 44 px`. The 2-px
+              gap was the residual slip the user kept seeing — the
+              minHeight wasn't quite reserving enough for the
+              wrapped label, so the one-line side rendered 2 px
+              taller than the wrapped side and the inputs offset. */}
           <View style={[styles.row, { marginBottom: theme.spacing.xl }]}>
             <View style={[styles.halfField, { marginRight: theme.spacing.md }]}>
-              <Text style={{ color: theme.colors.primary, ...theme.typography.body, fontWeight: '700', marginBottom: theme.spacing.sm }}>
-                {t('business.createBasket.originalPrice')} *
+              <Text style={{ color: theme.colors.primary, ...theme.typography.body, fontWeight: '700', marginBottom: theme.spacing.sm, minHeight: (theme.typography.body.lineHeight ?? 22) * 2 }}>
+                {t('business.createBasket.originalPrice')}<Text style={{ color: theme.colors.error }}> *</Text>
               </Text>
               <TextInput
                 style={[styles.input, { backgroundColor: theme.colors.surface, borderColor: origPriceError ? theme.colors.error : theme.colors.divider, borderRadius: theme.radii.r12, color: theme.colors.textPrimary, ...theme.typography.body, ...theme.shadows.shadowSm }]}
@@ -930,8 +1418,8 @@ export default function CreateBasketScreen() {
               {origPriceError !== '' && <Text style={{ color: theme.colors.error, fontSize: 12, marginTop: 4 }}>{origPriceError}</Text>}
             </View>
             <View style={styles.halfField}>
-              <Text style={{ color: theme.colors.primary, ...theme.typography.body, fontWeight: '700', marginBottom: theme.spacing.sm }}>
-                {t('business.createBasket.discountedPrice')} *
+              <Text style={{ color: theme.colors.primary, ...theme.typography.body, fontWeight: '700', marginBottom: theme.spacing.sm, minHeight: (theme.typography.body.lineHeight ?? 22) * 2 }}>
+                {t('business.createBasket.discountedPrice')}<Text style={{ color: theme.colors.error }}> *</Text>
               </Text>
               <TextInput
                 style={[styles.input, {
@@ -957,21 +1445,20 @@ export default function CreateBasketScreen() {
             </View>
           </View>
 
+          {/* Single notice element for the 50%-discount rule. Two states:
+              - Default (hint): muted text + warm icon. Always visible so the
+                merchant knows the rule before they enter anything.
+                - Error: same row, swap to red text + red icon, and replace
+                copy with the violation message. Previously this was TWO
+                stacked rows (hint + error) which looked duplicative. */}
           <View style={{ flexDirection: 'row', alignItems: 'flex-start', marginBottom: theme.spacing.sm, marginTop: -theme.spacing.sm, paddingHorizontal: 2 }}>
-            <AlertCircle size={12} color={theme.colors.accentWarm} style={{ marginTop: 1 }} />
-            <Text style={{ color: theme.colors.textSecondary, fontSize: 11, marginLeft: 6, flex: 1, lineHeight: 15 }}>
-              {t('business.createBasket.priceHint', { defaultValue: 'Le prix réduit doit être au moins 50% inférieur au prix original.' })}
+            <AlertCircle size={12} color={priceError ? theme.colors.error : theme.colors.accentWarm} style={{ marginTop: 1 }} />
+            <Text style={{ color: priceError ? theme.colors.error : theme.colors.textSecondary, fontSize: 11, marginLeft: 6, flex: 1, lineHeight: 15 }}>
+              {priceError
+                ? priceError
+                : t('business.createBasket.priceHint', { defaultValue: 'Le prix réduit doit être au moins 50% inférieur au prix original.' })}
             </Text>
           </View>
-
-          {priceError !== '' && (
-            <View style={[styles.errorRow, { marginBottom: theme.spacing.lg, marginTop: -theme.spacing.xs }]}>
-              <AlertCircle size={14} color={theme.colors.error} />
-              <Text style={[{ color: theme.colors.error, ...theme.typography.caption, marginLeft: 6, flex: 1 }]}>
-                {priceError}
-              </Text>
-            </View>
-          )}
 
           {/* Quantity / daily reset. The walkthrough highlight wraps only
               the +/- + input row (not the label or the optional per-day
@@ -983,9 +1470,7 @@ export default function CreateBasketScreen() {
             onLayout={captureFieldY('formDailyReset')}
           >
             <Text style={{ color: theme.colors.primary, ...theme.typography.body, fontWeight: '700', marginBottom: theme.spacing.sm }}>
-              {isEditing
-                ? t('business.baskets.defaultQty', { defaultValue: 'Réinit. journalière' })
-                : t('business.availability.quantity', { defaultValue: 'Quantité' })}{!isEditing ? ' *' : ''}
+              {t('business.baskets.defaultQty', { defaultValue: 'Réinit. journalière' })}
             </Text>
             {/* NOTE: deliberately NO `onLayout={measureRect(...)}` here.
                 The form mounts with the qty row potentially below the fold
@@ -994,9 +1479,10 @@ export default function CreateBasketScreen() {
                 there for one frame before the auto-scroll effect re-measures.
                 The auto-scroll effect (tryMeasure) is the sole publisher for
                 this rect, AFTER scrolling has landed. */}
-            <View
+            <Animated.View
               ref={reinitCardRef as any}
-              style={{ flexDirection: 'row', alignItems: 'center' }}
+              pointerEvents={sameAllDays ? 'auto' : 'none'}
+              style={{ flexDirection: 'row', alignItems: 'center', opacity: qtyPickerOpacity }}
             >
               <TouchableOpacity
                 onPress={() => setQuantity(Math.max(0, quantity - 1))}
@@ -1010,6 +1496,14 @@ export default function CreateBasketScreen() {
                   borderRadius: theme.radii.r12, color: theme.colors.textPrimary,
                   ...theme.typography.h3, height: 42, marginHorizontal: 12,
                   borderWidth: 1, borderColor: theme.colors.divider,
+                  // Android's default TextInput padding (~8px top/bottom) plus
+                  // Poppins's includeFontPadding glyph-bound padding biased
+                  // the digit upward inside the 42px-tall input and clipped
+                  // its top. Zero the vertical padding + drop the font
+                  // padding so the number sits exactly centered.
+                  paddingVertical: 0,
+                  textAlignVertical: 'center',
+                  includeFontPadding: false,
                 }]}
                 value={String(quantity)}
                 onChangeText={(v) => { const n = parseInt(v); if (!isNaN(n) && n >= 0) setQuantity(n); }}
@@ -1021,10 +1515,10 @@ export default function CreateBasketScreen() {
               >
                 <Plus size={16} color={theme.colors.textPrimary} />
               </TouchableOpacity>
-            </View>
+            </Animated.View>
 
-            {/* Same for all days checkbox + per-day schedule — only when editing */}
-            {isEditing && (
+            {/* Same for all days checkbox + per-day schedule — rendered in
+                BOTH create and edit modes so the two forms look identical. */}
             <View style={{ marginTop: theme.spacing.md }}>
               <TouchableOpacity
                 onPress={() => {
@@ -1089,11 +1583,11 @@ export default function CreateBasketScreen() {
                 </View>
               )}
             </View>
-            )}
           </View>
 
-          {/* Max Per Customer — only shown when editing */}
-          {isEditing && FeatureFlags.ENABLE_MAX_PER_CUSTOMER && (
+          {/* Max Per Customer — gated only by the feature flag so it
+              renders identically in create and edit modes. */}
+          {FeatureFlags.ENABLE_MAX_PER_CUSTOMER && (
           <View style={[styles.field, { marginBottom: theme.spacing.xl }]}>
             <Text style={{ color: theme.colors.primary, ...theme.typography.body, fontWeight: '700', marginBottom: theme.spacing.sm }}>
               {t('business.baskets.maxPerCustomer', { defaultValue: 'Max par client' })}
@@ -1111,6 +1605,12 @@ export default function CreateBasketScreen() {
                   borderRadius: theme.radii.r12, color: theme.colors.textPrimary,
                   ...theme.typography.h3, height: 42, marginHorizontal: 12,
                   borderWidth: 1, borderColor: theme.colors.divider,
+                  // Vertical-centering fix — see the matching daily-reinit
+                  // picker above for the rationale (Android default padding
+                  // + Poppins font-padding cropping the top of the digit).
+                  paddingVertical: 0,
+                  textAlignVertical: 'center',
+                  includeFontPadding: false,
                 }]}
                 value={String(maxPerCustomer)}
                 onChangeText={(v) => { const n = parseInt(v); if (!isNaN(n) && n >= 1) setMaxPerCustomer(n); }}
@@ -1144,31 +1644,76 @@ export default function CreateBasketScreen() {
               </Text>
             </View>
 
-            {/* Toggle: use custom pickup times. The walkthrough ref lives on
-                a View WRAPPER (not the TouchableOpacity itself) because
-                measureInWindow is only guaranteed on native View refs;
-                TouchableOpacity's forwarded ref didn't reliably expose it,
-                so the cutout never received a measurement.
-                NOTE: deliberately NO `onLayout={measureRect(...)}` here —
-                the auto-scroll effect is the sole publisher for this rect,
-                AFTER scrolling has landed (otherwise the initial below-fold
-                position would leak into the cutout for one frame). */}
-            <View
+            {/* Time pickers FIRST, always rendered. When the "Utiliser les
+                horaires du commerce" checkbox below is on, the pickers stay
+                visible (pre-filled with the location's hours via the sync
+                effect upstream) but dim and ignore touches, so the user can
+                see the inherited times at a glance without un-checking the
+                box. When the box is off, the pickers are fully editable.
+
+                Walkthrough ref lives on THIS wrapper (the row that
+                contains the two TimePicker boxes), not on the
+                checkbox wrapper below — the demo's halo is supposed
+                to draw attention to the time-of-day entry, not to
+                the "use business hours" toggle. measureInWindow is
+                guaranteed on native View refs; Animated.View
+                forwards the ref through to its underlying View, so
+                the cutout receives a measurement just like before. */}
+            <Animated.View
               ref={pickupCardRef as any}
+              style={{ opacity: pickupPickerOpacity, marginBottom: theme.spacing.md }}
+              pointerEvents={useBusinessHours ? 'none' : 'auto'}
             >
+              <View style={styles.row}>
+                {/* Start */}
+                <View style={[styles.halfField, { marginRight: theme.spacing.md }]}>
+                  <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, marginBottom: 4 }}>
+                    {t('business.availability.pickupStart')}
+                  </Text>
+                  <TimePicker
+                    value={pickupStart}
+                    onChange={setPickupStart}
+                    primaryColor={theme.colors.primary}
+                    textColor={theme.colors.textPrimary}
+                    bgColor={theme.colors.surface}
+                    mutedColor={theme.colors.muted}
+                  />
+                </View>
+                {/* End */}
+                <View style={styles.halfField}>
+                  <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, marginBottom: 4 }}>
+                    {t('business.availability.pickupEnd')}
+                  </Text>
+                  <TimePicker
+                    value={pickupEnd}
+                    onChange={setPickupEnd}
+                    primaryColor={theme.colors.primary}
+                    textColor={theme.colors.textPrimary}
+                    bgColor={theme.colors.surface}
+                    mutedColor={theme.colors.muted}
+                  />
+                </View>
+              </View>
+            </Animated.View>
+
+            {/* Toggle: use custom pickup times. No walkthrough ref
+                here — the halo target moved up to the time-pickers
+                wrapper so the demo highlights the actual time entry
+                rather than the toggle below. */}
+            <View>
               <TouchableOpacity
                 onPress={() => {
                   const next = !useBusinessHours;
                   setUseBusinessHours(next);
                   if (next) {
                     // Snapping back to the location's hours when the user
-                    // re-checks "use location hours" so the displayed default
-                    // line under the checkbox shows fresh values.
+                    // re-checks "use location hours" so the pickers above
+                    // immediately reflect the inherited values.
                     setPickupStart(locationDefaultStart);
                     setPickupEnd(locationDefaultEnd);
                   }
                 }}
-                style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: useBusinessHours ? 0 : theme.spacing.md }}
+                style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}
               >
                 {useBusinessHours ? (
                   <SquareCheck size={20} color={theme.colors.primary} />
@@ -1180,86 +1725,142 @@ export default function CreateBasketScreen() {
                 </Text>
               </TouchableOpacity>
             </View>
-            {useBusinessHours && (
-              <Text style={{ color: theme.colors.muted, ...theme.typography.caption, marginTop: 4 }}>
-                {t('business.createBasket.usingLocationDefault', { defaultValue: 'Créneau par défaut du commerce' })}: {locationDefaultStart} - {locationDefaultEnd}
-              </Text>
-            )}
 
-            {/* Daily-reset notice — visible in BOTH inherited and custom
-                hours branches. The merchant needs to know that 03:30 is
-                when their basket stock refills back to the daily reinit
-                quantity; it's the rationale for the cross-reset rule
-                below AND the answer to "why is my basket suddenly full
-                again at 3am?". */}
-            <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 6, marginTop: 8 }}>
-              <Clock size={11} color={theme.colors.muted} style={{ marginTop: 2 }} />
-              <Text style={{ color: theme.colors.muted, ...theme.typography.caption, flex: 1, lineHeight: 15 }}>
-                {t('business.createBasket.dailyResetNotice', {
-                  time: '03:30',
-                  defaultValue: 'Les paniers sont réinitialisés à leur quantité quotidienne chaque jour à {{time}} (heure tunisienne).',
-                })}
-              </Text>
-            </View>
-
-            {/* Pickup time pickers — only when the checkbox is UNchecked
-                (i.e. user has opted out of inheriting the location's hours). */}
-            {!useBusinessHours && (
-            <>
-            <Text style={{ ...theme.typography.caption, marginBottom: 6, color: theme.colors.muted, marginTop: theme.spacing.md }}>
-              {t('business.baskets.shopHoursReference', { defaultValue: 'Horaires du commerce' })}: {locationDefaultStart} - {locationDefaultEnd}
-            </Text>
-            {/* Cross-reset hint — same copy as the location-hours editors. */}
-            <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 6, marginBottom: 8 }}>
-              <Clock size={11} color={theme.colors.muted} style={{ marginTop: 2 }} />
-              <Text style={{ color: theme.colors.muted, ...theme.typography.caption, flex: 1, lineHeight: 15 }}>
-                {t('business.availability.crossResetHint', {
-                  defaultValue: 'Le créneau ne doit pas traverser 03:30 (réinitialisation quotidienne). Commencez ≥ 03:30 ou terminez ≤ 03:29.',
-                })}
-              </Text>
-            </View>
-            <View style={styles.row}>
-              {/* Start */}
-              <View style={[styles.halfField, { marginRight: theme.spacing.md }]}>
-                <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, marginBottom: 4 }}>
-                  {t('business.availability.pickupStart')}
-                </Text>
-                <TimePicker
-                  value={pickupStart}
-                  onChange={setPickupStart}
-                  primaryColor={theme.colors.primary}
-                  textColor={theme.colors.textPrimary}
-                  bgColor={theme.colors.surface}
-                  mutedColor={theme.colors.muted}
-                />
-              </View>
-              {/* End */}
-              <View style={styles.halfField}>
-                <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, marginBottom: 4 }}>
-                  {t('business.availability.pickupEnd')}
-                </Text>
-                <TimePicker
-                  value={pickupEnd}
-                  onChange={setPickupEnd}
-                  primaryColor={theme.colors.primary}
-                  textColor={theme.colors.textPrimary}
-                  bgColor={theme.colors.surface}
-                  mutedColor={theme.colors.muted}
-                />
-              </View>
-            </View>
-            </>
-            )}
+            {/* Two-state hint — default (muted-grey, explains the 03:30 reset
+                rule) or error (red, swaps in the specific violation: zero
+                window, < 15 min, or crosses 03:30). Same single-element
+                pattern as the price-discount notice and the location-hours
+                editor — keeps the form from stacking duplicate messages. */}
+            {(() => {
+              const isError = pickupWindowStatus !== 'ok';
+              const hintColor = isError ? theme.colors.error : theme.colors.muted;
+              const message = !isError
+                ? t('business.createBasket.pickupWindowResetHint', {
+                    defaultValue: 'Le créneau de retrait ne doit pas coïncider avec 03:30 (réinitialisation quotidienne des paniers).',
+                  })
+                : pickupWindowStatus === 'zero'
+                  ? t('business.baskets.endBeforeStart', { defaultValue: "L'heure de fin doit être différente de l'heure de début." })
+                  : pickupWindowStatus === 'too-short'
+                    ? t('business.availability.tooShort', { defaultValue: 'Le créneau de retrait doit durer au moins 15 minutes.' })
+                    : t('business.availability.crossReset', { defaultValue: "Le créneau ne peut pas traverser la réinitialisation quotidienne (03:30). Choisissez un début ≥ 03:30, ou une fin ≤ 03:29." });
+              return (
+                <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 6, marginTop: 8 }}>
+                  <Clock size={11} color={hintColor} style={{ marginTop: 2 }} />
+                  <Text style={{ color: hintColor, ...theme.typography.caption, flex: 1, lineHeight: 15 }}>
+                    {message}
+                  </Text>
+                </View>
+              );
+            })()}
           </View>
 
-          {/* Pickup Instructions */}
+          {/* Pickup Instructions — same structure as the pickup-time block:
+              the editable / preview surface sits ABOVE the checkbox. When
+              "Utiliser celles du commerce" is checked the location's actual
+              instructions are previewed (truncated to 2 lines with a
+              "Voir plus" expander) and the surface is dimmed + locked.
+              When unchecked the user's own TextInput renders in the same
+              slot, fully editable. */}
           <View style={[styles.field, { marginBottom: theme.spacing.xl }]}>
             <Text style={{ color: theme.colors.primary, ...theme.typography.body, fontWeight: '700', marginBottom: theme.spacing.sm }}>
               {t('business.createBasket.pickupInstructions', { defaultValue: 'Instructions de retrait' })}
             </Text>
+            {/* Wrapper deliberately keeps `pointerEvents` at its default ('auto')
+                — when the checkbox is checked and the preview shows, the only
+                interactive child is the "Voir plus / Voir moins" expander, and
+                the user explicitly wanted that to remain tappable even while
+                the rest of the surface is visually faded. The earlier
+                `pointerEvents="none"` was killing the toggle. */}
+            <Animated.View
+              style={{ opacity: instructionsOpacity, marginBottom: theme.spacing.md }}
+            >
+              {useDefaultPickupInstructions ? (
+                profileQuery.data?.pickup_instructions ? (
+                  // Read-only preview of the location's instructions. Same
+                  // surface/border treatment as the editable TextInput
+                  // below so the slot doesn't jump dimensions on toggle.
+                  // Truncation cutoff at ~120 chars is a "is this worth
+                  // collapsing?" heuristic — shorter strings render fully
+                  // with no Voir plus affordance, longer ones get clipped
+                  // to 2 lines with the standard ... ellipsis + tap-to-
+                  // expand toggle below.
+                  <View
+                    style={{
+                      backgroundColor: theme.colors.surface,
+                      borderWidth: 1,
+                      borderColor: theme.colors.divider,
+                      borderRadius: theme.radii.r12,
+                      padding: 12,
+                      minHeight: 80,
+                    }}
+                  >
+                    <Text
+                      numberOfLines={defaultInstructionsExpanded ? undefined : 2}
+                      style={{ color: theme.colors.textPrimary, ...theme.typography.body }}
+                    >
+                      {profileQuery.data.pickup_instructions as string}
+                    </Text>
+                    {String(profileQuery.data.pickup_instructions).length > 120 && (
+                      <TouchableOpacity onPress={() => setDefaultInstructionsExpanded((v) => !v)} style={{ marginTop: 6 }}>
+                        <Text style={{ color: theme.colors.primary, ...theme.typography.caption, fontWeight: '600' }}>
+                          {defaultInstructionsExpanded
+                            ? t('common.seeLess', { defaultValue: 'Voir moins' })
+                            : t('common.seeMore', { defaultValue: 'Voir plus' })}
+                        </Text>
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                ) : (
+                  // No location-side instructions configured — show a
+                  // placeholder so the slot doesn't collapse and the user
+                  // understands "inheriting from location" means "nothing"
+                  // for this particular merchant.
+                  <View
+                    style={{
+                      backgroundColor: theme.colors.surface,
+                      borderWidth: 1,
+                      borderColor: theme.colors.divider,
+                      borderRadius: theme.radii.r12,
+                      padding: 12,
+                      minHeight: 80,
+                      justifyContent: 'center',
+                    }}
+                  >
+                    <Text style={{ color: theme.colors.muted, ...theme.typography.bodySm, fontStyle: 'italic' }}>
+                      {t('business.createBasket.noDefaultInstructions', { defaultValue: 'Aucune instruction de retrait définie sur le commerce.' })}
+                    </Text>
+                  </View>
+                )
+              ) : (
+                <TextInput
+                  style={[
+                    styles.textArea,
+                    {
+                      color: theme.colors.textPrimary,
+                      backgroundColor: theme.colors.surface,
+                      borderColor: theme.colors.divider,
+                      borderRadius: theme.radii.r12,
+                      ...theme.typography.body,
+                      minHeight: 80,
+                    },
+                  ]}
+                  value={pickupInstructions}
+                  onChangeText={setPickupInstructions}
+                  placeholder={t('business.createBasket.pickupInstructionsPlaceholder', { defaultValue: 'Ex: Sonnez à l\'entrée arrière' })}
+                  placeholderTextColor={theme.colors.muted}
+                  multiline
+                  textAlignVertical="top"
+                />
+              )}
+            </Animated.View>
             <TouchableOpacity
-              onPress={() => setUseDefaultPickupInstructions((v) => !v)}
-              style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: theme.spacing.md }}
+              onPress={() => {
+                setUseDefaultPickupInstructions((v) => !v);
+                // Collapse the preview each time the user re-checks so the
+                // next un-check → re-check cycle starts from the truncated state.
+                setDefaultInstructionsExpanded(false);
+              }}
+              style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}
             >
               {useDefaultPickupInstructions ? (
                 <SquareCheck size={20} color={theme.colors.primary} />
@@ -1270,32 +1871,6 @@ export default function CreateBasketScreen() {
                 {t('business.createBasket.useDefaultInstructions', { defaultValue: 'Utiliser celles du commerce' })}
               </Text>
             </TouchableOpacity>
-            {!useDefaultPickupInstructions && (
-              <TextInput
-                style={[
-                  styles.textArea,
-                  {
-                    color: theme.colors.textPrimary,
-                    backgroundColor: theme.colors.surface,
-                    borderColor: theme.colors.divider,
-                    borderRadius: theme.radii.r12,
-                    ...theme.typography.body,
-                    minHeight: 80,
-                  },
-                ]}
-                value={pickupInstructions}
-                onChangeText={setPickupInstructions}
-                placeholder={t('business.createBasket.pickupInstructionsPlaceholder', { defaultValue: 'Ex: Sonnez à l\'entrée arrière' })}
-                placeholderTextColor={theme.colors.muted}
-                multiline
-                textAlignVertical="top"
-              />
-            )}
-            {useDefaultPickupInstructions && profileQuery.data?.pickup_instructions ? (
-              <Text style={{ color: theme.colors.muted, ...theme.typography.caption, fontStyle: 'italic', marginTop: 4 }}>
-                {profileQuery.data.pickup_instructions as string}
-              </Text>
-            ) : null}
           </View>
 
           {/* Menu Items — yes/no toggle (feature-flagged) */}
@@ -1428,15 +2003,12 @@ export default function CreateBasketScreen() {
             )}
           </View>}
 
-          {/* "Use for all locations" — surfaces for any admin/owner.
-              Rendered as a TOP-LEVEL section (not nested under the
-              feature-flagged menu-items block) so its visibility is
-              independent of ENABLE_MENU_ITEMS. Wrapped in a bordered
-              card so it reads as a distinct section, but with NO
-              extra horizontal margin (the ScrollView's padding is the
-              only outer offset) and the inner checkbox row keeps the
-              same row/gap rhythm as the other checkboxes above. */}
-          {showAllLocationsToggle && (
+          {/* "Use for all locations" — only surfaces when CREATING a basket.
+              The toggle's behavior is to clone this basket into every
+              location of the organization, which has no meaning when
+              editing an existing basket (it's already in place at one
+              specific location), so it's suppressed in edit mode. */}
+          {showAllLocationsToggle && !isEditing && (
             <>
               {/* Divider — marks this toggle as a distinct section while
                   keeping the checkbox row at the SAME left edge as every other
@@ -1483,7 +2055,7 @@ export default function CreateBasketScreen() {
             onPress={handleSave}
             title={isEditing ? t('business.createBasket.save') : t('business.createBasket.create')}
             loading={isPending}
-            disabled={(!!priceError || isPending) && !demoBasketActive}
+            disabled={(!!priceError || isPending || pickupWindowStatus !== 'ok') && !demoBasketActive}
           />
         </View>
       </KeyboardAvoidingView>
@@ -1492,7 +2064,7 @@ export default function CreateBasketScreen() {
       <Modal visible={showZeroQtyWarning} transparent animationType="fade" onRequestClose={() => setShowZeroQtyWarning(false)}>
         <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', alignItems: 'center', padding: 24 }}>
           <View style={{ backgroundColor: theme.colors.surface, borderRadius: 20, padding: 24, width: '100%', maxWidth: 340, alignItems: 'center', ...theme.shadows.shadowLg }}>
-            <View style={{ backgroundColor: '#eff35c22', width: 56, height: 56, borderRadius: 28, justifyContent: 'center', alignItems: 'center', marginBottom: 16 }}>
+            <View style={{ backgroundColor: '#e3ff5c22', width: 56, height: 56, borderRadius: 28, justifyContent: 'center', alignItems: 'center', marginBottom: 16 }}>
               <AlertCircle size={28} color="#b8a600" />
             </View>
             <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3, textAlign: 'center', marginBottom: 8 }}>
@@ -1511,7 +2083,7 @@ export default function CreateBasketScreen() {
                 </Text>
               </TouchableOpacity>
               <TouchableOpacity
-                onPress={() => { setShowZeroQtyWarning(false); if (isEditing) updateMutation.mutate(); else createMutation.mutate(); }}
+                onPress={() => { setShowZeroQtyWarning(false); if (isEditing) updateMutation.mutate({}); else createMutation.mutate(); }}
                 style={{ flex: 1, backgroundColor: theme.colors.primary, borderRadius: 12, paddingVertical: 14, alignItems: 'center' }}
               >
                 <Text style={{ color: '#fff', ...theme.typography.body, fontWeight: '600' }}>

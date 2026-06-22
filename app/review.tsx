@@ -14,14 +14,20 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
-import { X, Star, Camera, XCircle, CheckCircle2 } from 'lucide-react-native';
+import { X, Star, Camera, CheckCircle2 } from 'lucide-react-native';
+import { BarakeatErrorIcon } from '@/src/components/ui/BarakeatErrorIcon';
 import * as ImagePicker from 'expo-image-picker';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { ensureCameraAccess } from '@/src/lib/photoPermission';
+import { useImageCropper } from '@/src/components/ImageCropper';
+import { useMutation, useQueryClient, useQuery } from '@tanstack/react-query';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { StatusBar } from 'expo-status-bar';
 import { PrimaryCTAButton } from '@/src/components/PrimaryCTAButton';
 import { submitReview } from '@/src/services/reviews';
+import { fetchMyReservations } from '@/src/services/reservations';
 import { useCustomAlert } from '@/src/components/CustomAlert';
+import { OrderSummaryCard } from '@/src/components/OrderSummaryCard';
+import { isActionAlreadyDoneError } from '@/src/lib/api';
 
 function StarRatingRow({
   label,
@@ -41,8 +47,8 @@ function StarRatingRow({
       style={[
         starStyles.row,
         {
-          marginBottom: theme.spacing.lg,
-          paddingVertical: theme.spacing.md,
+          marginBottom: theme.spacing.sm,
+          paddingVertical: theme.spacing.xs,
         },
       ]}
     >
@@ -50,7 +56,7 @@ function StarRatingRow({
         style={[
           {
             color: theme.colors.textPrimary,
-            ...theme.typography.body,
+            ...theme.typography.bodySm,
             flex: 1,
           },
         ]}
@@ -68,7 +74,7 @@ function StarRatingRow({
             style={{ paddingHorizontal: 2 }}
           >
             <Star
-              size={28}
+              size={22}
               color={theme.colors.accentWarm}
               fill={star <= value ? theme.colors.accentWarm : 'transparent'}
             />
@@ -115,6 +121,7 @@ export default function ReviewScreen() {
     total?: string;
   }>();
   const { t } = useTranslation();
+  const { pickPhoto } = useImageCropper();
   const theme = useTheme();
   const router = useRouter();
   const queryClient = useQueryClient();
@@ -128,6 +135,64 @@ export default function ReviewScreen() {
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const [toastMsg, setToastMsg] = useState<{ type: 'success' | 'error'; text: string; onDismiss?: () => void } | null>(null);
 
+  // The deep-link route from the pickup-confirmed notification only carries
+  // whatever fields the notification payload happened to stamp — and several
+  // of those (basket_image, basket_name, location_logo) are absent on older
+  // notifications. To always show a real basket photo in the order-summary
+  // card, fall back to the user's reservation list cache and pull the
+  // matching row's image/name/logo from there. Cheap: this query is the
+  // same key the /orders tab uses, so we typically get the cached array
+  // for free without hitting the network.
+  const reservationsQuery = useQuery({
+    queryKey: ['reservations'],
+    queryFn: fetchMyReservations,
+    enabled: !!reservationId,
+    staleTime: 60_000,
+  });
+  const matchedReservation = React.useMemo(() => {
+    if (!reservationId) return null;
+    return (reservationsQuery.data ?? []).find((r: any) => String(r.id) === String(reservationId)) ?? null;
+  }, [reservationsQuery.data, reservationId]);
+  const r: any = matchedReservation ?? {};
+  // Resolved image / name / logo — prefer the deep-link param, fall back
+  // through every common shape the reservation row can carry. Without
+  // these fallbacks the customer saw the placeholder `ShoppingBag` icon
+  // because `basketImage` came in as an empty string from the notif.
+  // basket_image_url is the field the /reservations/my endpoint actually
+  // returns (joined from baskets.image_url) — the old chain checked
+  // r.basket_image (no _url) and missed it, which is why the card kept
+  // falling back to the ShoppingBag placeholder even when the reservation
+  // had a perfectly good basket photo cached.
+  const resolvedBasketImage =
+    (basketImage && basketImage.trim()) ||
+    r?.basket_image_url ||
+    r?.basketImageUrl ||
+    r?.basket?.imageUrl ||
+    r?.basket?.image_url ||
+    r?.basket?.cover_image_url ||
+    r?.basket?.coverImageUrl ||
+    r?.basket_image ||
+    r?.image_url ||
+    null;
+  const resolvedBasketName =
+    (basketName && basketName.trim())
+    || r?.basket?.name
+    || r?.basket_name
+    || null;
+  const resolvedLocationName =
+    (locationName && locationName.trim())
+    || r?.restaurant?.name
+    || r?.location_name
+    || r?.basket?.merchantName
+    || r?.basket?.merchant_name
+    || null;
+  const resolvedLocationLogo =
+    (locationLogo && locationLogo.trim())
+    || r?.restaurant?.image_url
+    || r?.basket?.merchantLogo
+    || r?.basket?.merchant_logo
+    || null;
+
   // We store the picked image as a data URL (data:image/jpeg;base64,…) so it can
   // be submitted directly to the backend, which uploads data URLs to Cloudinary.
   // The data URL also works as <Image source={{ uri }} /> input, so we reuse the
@@ -139,18 +204,13 @@ export default function ReviewScreen() {
   };
 
   const launchLibrary = async () => {
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== 'granted') { setToastMsg({ type: 'error', text: t('common.noPermission', { defaultValue: 'Permission refusée.' }) }); return; }
-    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: 'images', allowsEditing: true, quality: 0.7, base64: true });
-    if (!result.canceled && result.assets?.[0]) {
-      const dataUrl = assetToDataUrl(result.assets[0]);
-      if (dataUrl) setSelectedImage(dataUrl);
-    }
+    // Custom limited-access-aware grid (handles its own permission popup).
+    const res = await pickPhoto({ base64: true });
+    if (res?.dataUrl) setSelectedImage(res.dataUrl);
   };
 
   const launchCamera = async () => {
-    const { status } = await ImagePicker.requestCameraPermissionsAsync();
-    if (status !== 'granted') { setToastMsg({ type: 'error', text: t('common.noPermission', { defaultValue: 'Permission refusée.' }) }); return; }
+    if (!(await ensureCameraAccess())) return;
     const result = await ImagePicker.launchCameraAsync({ allowsEditing: true, quality: 0.7, base64: true });
     if (!result.canceled && result.assets?.[0]) {
       const dataUrl = assetToDataUrl(result.assets[0]);
@@ -159,16 +219,16 @@ export default function ReviewScreen() {
   };
 
   const pickImage = () => {
-    // Replaced the native `Alert.alert` ActionSheet — it looks generic on
-    // both iOS and Android and breaks the brand feel — with the Barakeat
-    // CustomAlert in its sheet layout. Same three options, branded UI.
+    // Branded Barakeat sheet popup (was a native Alert.alert ActionSheet
+    // that looked generic on both platforms). Cancel row removed per the
+    // user — the sheet's backdrop tap + swipe-down already serve as a
+    // dismiss path, so a third "Annuler" button was redundant.
     customAlert.showAlert(
       t('common.addPhoto', { defaultValue: 'Ajouter une photo' }),
       undefined,
       [
         { text: t('common.takePhoto', { defaultValue: 'Prendre une photo' }), onPress: launchCamera },
         { text: t('common.chooseFromGallery', { defaultValue: 'Choisir depuis la galerie' }), onPress: launchLibrary },
-        { text: t('common.cancel', { defaultValue: 'Annuler' }), style: 'cancel' },
       ],
       { layout: 'sheet' },
     );
@@ -204,7 +264,15 @@ export default function ReviewScreen() {
       void queryClient.invalidateQueries({ queryKey: ['reservations'] });
       setToastMsg({ type: 'success', text: t('review.success'), onDismiss: () => router.back() });
     },
-    onError: () => {
+    onError: (err) => {
+      // Ghost-success: if the backend says "you already reviewed this", the
+      // user's first attempt actually committed and the second hit landed on
+      // the dup guard. Show success copy — the review IS saved server-side.
+      if (isActionAlreadyDoneError(err, 'review')) {
+        void queryClient.invalidateQueries({ queryKey: ['reservations'] });
+        setToastMsg({ type: 'success', text: t('review.success'), onDismiss: () => router.back() });
+        return;
+      }
       setToastMsg({ type: 'error', text: t('review.error') });
     },
   });
@@ -225,7 +293,7 @@ export default function ReviewScreen() {
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       >
         <View style={[styles.header, { padding: theme.spacing.xl }]}>
-          <TouchableOpacity onPress={() => router.back()} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+          <TouchableOpacity onPress={() => router.back()} hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}>
             <X size={24} color={theme.colors.textPrimary} />
           </TouchableOpacity>
           <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h2 }]}>
@@ -239,82 +307,30 @@ export default function ReviewScreen() {
           contentContainerStyle={[{ padding: theme.spacing.xl }]}
           keyboardShouldPersistTaps="handled"
         >
-          {/* Order details card */}
-          {(basketImage || locationLogo || basketName || locationName) && (
-            <View
-              style={{
-                backgroundColor: theme.colors.surface,
-                borderRadius: theme.radii.r16,
-                padding: theme.spacing.lg,
-                marginBottom: theme.spacing.xl,
-                ...theme.shadows.shadowSm,
-              }}
-            >
-              {/* Basket image */}
-              {basketImage ? (
-                <Image
-                  source={{ uri: basketImage }}
-                  style={{
-                    width: '100%',
-                    height: 160,
-                    borderRadius: theme.radii.r16,
-                    marginBottom: theme.spacing.md,
-                  }}
-                  resizeMode="cover"
-                />
-              ) : null}
+          {/* Order summary — single card. Image on the left; basket
+              name on top of the right column with the org logo + name
+              tucked underneath as a small caption row (so the user's
+              eye lands on the basket first, with the venue as context).
+              Resolved fields come from a fallback chain that falls
+              back to the cached reservation row when the deep-link
+              params are empty (older notifs miss basket_image etc). */}
+          <OrderSummaryCard
+            basketImage={resolvedBasketImage}
+            basketName={resolvedBasketName}
+            locationLogo={resolvedLocationLogo}
+            locationName={resolvedLocationName}
+            quantity={quantity ? Number(quantity) : undefined}
+            total={total ? Number(total) : undefined}
+            orderId={reservationId ?? null}
+          />
 
-              {/* Location row */}
-              <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: theme.spacing.sm }}>
-                {locationLogo ? (
-                  <Image
-                    source={{ uri: locationLogo }}
-                    style={{
-                      width: 36,
-                      height: 36,
-                      borderRadius: 18,
-                      marginRight: theme.spacing.sm,
-                      backgroundColor: theme.colors.divider,
-                    }}
-                  />
-                ) : null}
-                {locationName ? (
-                  <Text
-                    style={{
-                      color: theme.colors.textPrimary,
-                      ...theme.typography.body, fontWeight: '700' as const,
-                      flex: 1,
-                    }}
-                    numberOfLines={1}
-                  >
-                    {locationName}
-                  </Text>
-                ) : null}
-              </View>
-
-              {/* Basket name, quantity, total */}
-              {basketName ? (
-                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-                  <Text style={{ color: theme.colors.textSecondary, ...theme.typography.body, flex: 1 }}>
-                    {basketName}
-                    {quantity && Number(quantity) > 0 ? ` x${quantity}` : ''}
-                  </Text>
-                  {total ? (
-                    <Text style={{ color: theme.colors.primary, ...theme.typography.body, fontWeight: '700' as const }}>
-                      {Number(total).toFixed(2)} TND
-                    </Text>
-                  ) : null}
-                </View>
-              ) : null}
-            </View>
-          )}
 
           <Text
             style={[
               {
                 color: theme.colors.textPrimary,
                 ...theme.typography.h3,
-                marginBottom: theme.spacing.xl,
+                marginBottom: theme.spacing.md,
               },
             ]}
           >
@@ -326,8 +342,8 @@ export default function ReviewScreen() {
               {
                 backgroundColor: theme.colors.surface,
                 borderRadius: theme.radii.r16,
-                padding: theme.spacing.xl,
-                marginBottom: theme.spacing.xl,
+                padding: theme.spacing.lg,
+                marginBottom: theme.spacing.lg,
                 ...theme.shadows.shadowSm,
               },
             ]}
@@ -398,6 +414,10 @@ export default function ReviewScreen() {
             <Text style={{ color: theme.colors.textPrimary, ...theme.typography.body, fontWeight: '600', marginBottom: 8 }}>
               {t('review.addPhotoLabel', { defaultValue: 'Ajouter une photo (optionnel)' })}
             </Text>
+            {/* Ghost-style photo button — light surface + primary-coloured icon
+                and label, with a subtle primary-tinted border. Distinct from
+                the filled dark-green submit CTA at the bottom of the form so
+                the user can tell "optional attachment" apart from "send". */}
             <TouchableOpacity
               onPress={pickImage}
               style={{
@@ -405,17 +425,18 @@ export default function ReviewScreen() {
                 alignItems: 'center',
                 justifyContent: 'center',
                 gap: 10,
-                backgroundColor: '#114b3c',
+                backgroundColor: theme.colors.surface,
+                borderWidth: 1.5,
+                borderColor: theme.colors.primary + '40',
                 borderRadius: theme.radii.r16,
                 paddingVertical: 16,
                 paddingHorizontal: 16,
-                ...theme.shadows.shadowSm,
               }}
             >
-              <Camera size={20} color="#e3ff5c" />
+              <Camera size={20} color={theme.colors.primary} />
               <Text
                 style={{
-                  color: '#e3ff5c',
+                  color: theme.colors.primary,
                   ...theme.typography.body,
                   fontWeight: '600',
                 }}
@@ -493,7 +514,7 @@ export default function ReviewScreen() {
         <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 24 }}>
           <View style={{ backgroundColor: '#fff', borderRadius: 24, padding: 28, width: '100%', maxWidth: 340, alignItems: 'center' }}>
             <View style={{ backgroundColor: toastMsg?.type === 'success' ? '#114b3c18' : '#ef444418', width: 56, height: 56, borderRadius: 28, justifyContent: 'center', alignItems: 'center', marginBottom: 16 }}>
-              {toastMsg?.type === 'success' ? <CheckCircle2 size={28} color="#114b3c" /> : <XCircle size={28} color="#ef4444" />}
+              {toastMsg?.type === 'success' ? <CheckCircle2 size={28} color="#114b3c" /> : <BarakeatErrorIcon size={28} color="#ef4444" />}
             </View>
             <Text style={{ color: '#1a1a1a', fontSize: 18, fontWeight: '700', fontFamily: 'Poppins_700Bold', textAlign: 'center', marginBottom: 10 }}>
               {toastMsg?.type === 'success' ? t('common.success') : t('auth.error')}

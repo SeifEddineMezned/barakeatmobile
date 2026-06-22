@@ -5,11 +5,11 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import Svg, { Path } from 'react-native-svg';
 import { DemoTapHintToast } from '@/src/components/DemoTapHintToast';
 import { useTranslation } from 'react-i18next';
-import { CheckCircle, XCircle, QrCode, ClipboardList, ChevronDown, ChevronUp, AlertTriangle, MessageCircle, Star, User, Banknote, Wallet, HelpCircle, Hand } from 'lucide-react-native';
+import { CheckCircle, XCircle, QrCode, ClipboardList, ChevronDown, ChevronUp, AlertTriangle, MessageCircle, Star, User, Banknote, Wallet, HelpCircle, Hand, Info, CreditCard, ShoppingBag, MapPin, Navigation, Clock } from 'lucide-react-native';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { useTheme } from '@/src/theme/ThemeProvider';
-import { isPickupExpiredInTz } from '@/src/utils/timezone';
-import { StatusBar } from 'expo-status-bar';
+import { isPickupExpiredInTz, getBusinessDayDateStr } from '@/src/utils/timezone';
+import { useStatusBarStyleOnFocus } from '@/src/hooks/useStatusBarStyleOnFocus';
 import { useBusinessStore } from '@/src/stores/businessStore';
 import { useWalkthroughStore } from '@/src/stores/walkthroughStore';
 import { useNotificationStore } from '@/src/stores/notificationStore';
@@ -80,6 +80,14 @@ interface NormalizedOrder {
   status: CanonicalStatus;
   createdAt: string;
   updatedAt: string;
+  // YYYY-MM-DD of the day this order is meant to be picked up. Set on
+  // creation by the customer — `reservation_date` on the backend. Used
+  // by the incoming-tab filter to ignore stale rows whose pickup day
+  // has already passed: a 5-day-old 'confirmed' order whose cron
+  // expiry never ran was leaking into the En cours tab because the
+  // pickup_end TIME alone said "still within today's window" even
+  // though the DATE had long passed. Null on legacy pre-column rows.
+  reservationDate?: string;
   customerName: string;
   customerPhone?: string;
   confirmedByName?: string;
@@ -93,8 +101,59 @@ interface NormalizedOrder {
   // Carried through from the backend so we can show a "Payé en crédits" badge
   // and pass the right ids to cache-invalidation after a cancel.
   payment_method?: 'cash' | 'card' | 'credits';
+  // Wallet credits (TND) the customer applied. > 0 means they'll pay less cash
+  // at pickup and Barakeat reimburses this slice at settlement.
+  creditAmount: number;
   location_id?: number;
   basket_id?: number;
+}
+
+// Money formatter — integers stay clean ("5 TND"), fractions show millimes.
+const fmtMoney = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(2));
+
+/**
+ * Status-aware merchant credits-info copy. Replaces the old single
+ * `business.scan.creditsReimburseNote` (present-imperative — "ne lui
+ * réclamez pas ce montant. Barakeat vous le rembourse lors de votre
+ * prochain versement") which was wrong for vendus (transaction closed,
+ * past tense needed) and issues (the merchant won't be reimbursed for
+ * cancelled / expired orders).
+ *
+ * Per product decision, the merchant-side dialog stays focused on
+ * SETTLEMENT — what THE MERCHANT will or won't get. Doesn't get into
+ * the customer's credit-loss / refund story (that's the customer
+ * interface's job, not the merchant's).
+ */
+function buildMerchantCreditsInfo(
+  displayStatus: string,
+  isPendingTab: boolean,
+  creditAmount: number,
+  t: (key: string, opts?: Record<string, unknown>) => string,
+): string {
+  const credits = fmtMoney(creditAmount);
+  if (isPendingTab) {
+    return t('business.orders.creditsInfoIncoming', {
+      credits,
+      defaultValue: 'Le client a payé {{credits}} TND avec des crédits Barakeat — ne lui réclamez pas ce montant. Barakeat vous le remboursera lors de votre prochain versement.',
+    });
+  }
+  if (displayStatus === 'picked_up') {
+    return t('business.orders.creditsInfoCompleted', {
+      credits,
+      defaultValue: 'Le client avait payé {{credits}} TND avec des crédits Barakeat. Ce montant vous a été (ou vous sera) remboursé sur votre versement.',
+    });
+  }
+  if (displayStatus === 'expired') {
+    return t('business.orders.creditsInfoExpired', {
+      credits,
+      defaultValue: 'Le client avait payé {{credits}} TND avec des crédits Barakeat sur cette commande expirée. Vous ne serez pas remboursé pour cette commande.',
+    });
+  }
+  // cancelled (by buyer or business)
+  return t('business.orders.creditsInfoCancelled', {
+    credits,
+    defaultValue: 'Le client avait payé {{credits}} TND avec des crédits Barakeat sur cette commande annulée. Vous ne serez pas remboursé pour cette commande.',
+  });
 }
 
 /**
@@ -123,7 +182,21 @@ function formatMotif(raw: string, t: (k: string, opts?: any) => string, author: 
 }
 
 /** Map any legacy backend status string into the canonical UI status. */
-function normalizeStatus(raw: string | undefined): CanonicalStatus {
+function normalizeStatus(raw: string | undefined, cancelledBy?: string, cancellationReason?: string): CanonicalStatus {
+  // System-expired rows are stored on the DB as `status='cancelled'` with
+  // `cancelled_by='system'` + `cancellation_reason='expired_no_pickup'`
+  // (cron sweep, snapshot-expire on location hours change, etc.). They
+  // are displayed as EXPIRED, not cancelled, so the merchant sees the
+  // orange "Expiré" badge instead of the red "Annulée". Anything else
+  // (cancelled_by='buyer' or 'business', or no reason) stays a genuine
+  // cancellation.
+  if (
+    raw === 'cancelled'
+    && String(cancelledBy ?? '').toLowerCase() === 'system'
+    && String(cancellationReason ?? '').toLowerCase() === 'expired_no_pickup'
+  ) {
+    return 'expired';
+  }
   switch (raw) {
     case 'confirmed':
     case 'reserved':   // legacy fallback
@@ -145,6 +218,7 @@ function normalizeStatus(raw: string | undefined): CanonicalStatus {
 }
 
 export default function IncomingOrdersScreen() {
+  useStatusBarStyleOnFocus('dark');
   const { t } = useTranslation();
   const theme = useTheme();
   const router = useRouter();
@@ -156,6 +230,11 @@ export default function IncomingOrdersScreen() {
   const [activeTab, setActiveTab] = useState<'incoming' | 'completed' | 'issues'>('incoming');
   const [dateFilter, setDateFilter] = useState<'today' | 'month' | 'all'>('all');
   const [issueTypeFilter, setIssueTypeFilter] = useState<'all' | 'expired' | 'cancelled'>('all');
+  // Partial order-code search — applies to all three tabs. The user types
+  // any substring of the BK-XXXXX code shown in the expanded card / notifs
+  // and we filter the list to matching orders only. Lives in the filter
+  // modal alongside the date / issue-type filters.
+  const [orderIdSearch, setOrderIdSearch] = useState('');
   const [showBizFilterModal, setShowBizFilterModal] = useState(false);
   const queryClient = useQueryClient();
   const selectedLocationId = useBusinessStore((s) => s.selectedLocationId);
@@ -268,7 +347,12 @@ export default function IncomingOrdersScreen() {
     staleTime: 300_000,
   });
   const isOrgAdminScope = isAdminOrOwner && !ctxQuery.data?.location_id;
-  const hasNoLocation = isOrgAdminScope
+  // Suppressed during the walkthrough — see [_layout.tsx:206] for the
+  // rationale (demo runs over a populated UI; the dashboard popup fires
+  // immediately after the walkthrough ends).
+  const ordersWalkthroughStep = useWalkthroughStore((s) => s.step);
+  const hasNoLocation = ordersWalkthroughStep === null
+    && isOrgAdminScope
     && !!orgIdForNoLoc
     && !orgDetailsQuery.isLoading
     && (orgDetailsQuery.data?.locations?.length ?? 0) === 0;
@@ -308,6 +392,15 @@ export default function IncomingOrdersScreen() {
       });
     });
   }, [setMeasuredRect]);
+  // Re-measure both demo cutout targets whenever the verify-error text
+  // appears or clears. The error swaps a 12 px spacer for a multi-line Text,
+  // which grows the bottom sheet upward — that shifts the TextInput's
+  // absolute window position but does NOT fire its onLayout (only the
+  // sibling spacer/error changed, not the input itself). Without this
+  // effect the halo stays at the stale window coords and visibly drifts off
+  // the input/confirm button until the user dismisses the modal. We measure
+  // on the next two frames to let RN/Yoga commit the new layout before we
+  // ask for the window coords.
   const setVerifyModalOpenFlag = useWalkthroughStore((s) => s.setVerifyModalOpen);
   const setExpandedDemoCardFlag = useWalkthroughStore((s) => s.setExpandedDemoCard);
   const setDemoScanCode = useWalkthroughStore((s) => s.setDemoScanCode);
@@ -375,13 +468,26 @@ export default function IncomingOrdersScreen() {
       buyerId: o.buyer_id,
       basketName,
       quantity: o.quantity ?? 1,
-      total: Number(o.price_tier ?? 0) * (o.quantity ?? 1),
+      // Prefer the authoritative settlement amount; fall back to the location
+      // price tier × qty for older rows with no transaction.
+      total: (oa.txn_amount != null ? Number(oa.txn_amount) : Number(o.price_tier ?? 0) * (o.quantity ?? 1)),
       pickupWindow: { start: pickupStart, end: pickupEnd },
-      pickupCode: o.pickup_code ?? '',
-      status: normalizeStatus(o.status),
+      pickupCode: String(o.pickup_code ?? '').substring(0, 6).toUpperCase(),
+      status: normalizeStatus(o.status, (o as any).cancelled_by, (o as any).cancellation_reason),
       createdAt: o.created_at ?? new Date().toISOString(),
       updatedAt: (o as any).updated_at ?? o.created_at ?? new Date().toISOString(),
-      customerName: o.buyer_name ?? t('business.orders.customer'),
+      reservationDate: typeof (o as any).reservation_date === 'string'
+        ? String((o as any).reservation_date).substring(0, 10)
+        : undefined,
+      // Backend returns null when both the live user row and the
+      // deleted_users archive row are gone (30+ days post-deletion).
+      // For the buyer name we always substitute the localized "Compte
+      // supprimé" label so business UIs never render an empty name.
+      // confirmedByName / cancelledByName stay nullable — the JSX uses them
+      // as conditional render gates ("Confirmé par X" line is skipped when
+      // there's nothing to show), so passing a stub label here would
+      // incorrectly add the line for orders that were never confirmed.
+      customerName: o.buyer_name ?? t('orders.deletedAccountName', { defaultValue: 'Compte supprimé' }),
       customerPhone: o.buyer_phone ?? undefined,
       confirmedByName: (o as any).confirmed_by_name ?? undefined,
       review: (o as any).review ?? null,
@@ -389,6 +495,7 @@ export default function IncomingOrdersScreen() {
       cancelledBy: (o as any).cancelled_by ?? null,
       cancelledByName: (o as any).cancelled_by_name ?? null,
       payment_method: (o as any).payment_method ?? 'cash',
+      creditAmount: Number((o as any).credit_amount ?? 0),
       location_id: (o as any).location_id ?? undefined,
       basket_id: (o as any).basket_id ?? undefined,
     };
@@ -425,12 +532,13 @@ export default function IncomingOrdersScreen() {
       quantity: 2,
       total: 10,
       pickupWindow: { start: pickupStart, end: pickupEnd },
-      pickupCode: 'DEMO1',
+      pickupCode: 'DEMO',
       status: 'confirmed',
       createdAt: now.toISOString(),
       updatedAt: now.toISOString(),
       customerName: t('walkthrough.biz.demoOrderCustomer', { defaultValue: 'Sami (démo)' }),
       payment_method: 'cash',
+      creditAmount: 0,
     };
   }, [t]);
 
@@ -500,18 +608,68 @@ export default function IncomingOrdersScreen() {
   // The demo order is always live — its pickup window is synthetic and
   // shouldn't drop it into the issues tab when the user runs the demo late
   // at night.
-  const isOrderExpired = (o: NormalizedOrder) =>
-    o.id !== 'demo-order-1' &&
-    o.status === 'confirmed' && o.pickupWindow.end && isPickupExpiredInTz(o.pickupWindow.end);
+  //
+  // Two-stage check:
+  //   1. Calendar day — pickup-day before today's business day → expired
+  //      regardless of time. Without this, 5-day-old 'confirmed' rows
+  //      that the cron expiry never reaped were leaking into the
+  //      En cours tab because the time-of-day check was the ONLY
+  //      gate and "18:00" < now=14:00 looked unexpired.
+  //      Effective pickup day = reservationDate when set, else
+  //      createdAt's biz day (legacy rows pre-reservation_date column).
+  //   2. Time-of-day — only checked when the pickup day IS today.
+  //      A future-dated pickup (Monday-for-Tuesday flow) is never
+  //      flagged expired by the time check.
+  const todayBizDateStr = getBusinessDayDateStr(new Date());
+  const isOrderExpired = (o: NormalizedOrder) => {
+    if (o.id === 'demo-order-1') return false;
+    if (o.status !== 'confirmed') return false;
+    const effectiveDay = o.reservationDate
+      ?? (o.createdAt ? getBusinessDayDateStr(new Date(o.createdAt)) : null);
+    if (effectiveDay && effectiveDay < todayBizDateStr) return true;
+    if (effectiveDay && effectiveDay > todayBizDateStr) return false;
+    return !!(o.pickupWindow.end && isPickupExpiredInTz(o.pickupWindow.end));
+  };
 
   const incomingOrders = useMemo(
     () => orders.filter((o) => o.status === 'confirmed' && !isOrderExpired(o)),
     [orders, timeTick]
   );
 
+  // Event-time helper for Vendus / Problèmes sorting. Same shape as the
+  // customer side: cancelled / picked_up read updated_at directly (the
+  // backend bumps it on both transitions), client-side "expired" rows
+  // synthesise their event instant from the day of createdAt + the
+  // basket's pickup_end_time so the moment the window actually closed
+  // is what ranks. createdAt is the final fallback.
+  const eventTimeMs = useCallback((o: NormalizedOrder): number => {
+    if (o.status === 'cancelled' || o.status === 'picked_up') {
+      const ts = o.updatedAt ? new Date(o.updatedAt).getTime() : NaN;
+      if (!isNaN(ts)) return ts;
+    }
+    if (o.status === 'confirmed' || o.status === 'expired') {
+      const dayBasis = o.createdAt ? new Date(o.createdAt) : null;
+      if (dayBasis && !isNaN(dayBasis.getTime()) && o.pickupWindow?.end) {
+        const yyyy = dayBasis.getFullYear();
+        const mm = String(dayBasis.getMonth() + 1).padStart(2, '0');
+        const dd = String(dayBasis.getDate()).padStart(2, '0');
+        const timePart = String(o.pickupWindow.end).substring(0, 5);
+        const ts = new Date(`${yyyy}-${mm}-${dd}T${timePart}:00`).getTime();
+        if (!isNaN(ts)) return ts;
+      }
+    }
+    const fallback = o.createdAt ? new Date(o.createdAt).getTime() : 0;
+    return isNaN(fallback) ? 0 : fallback;
+  }, []);
+
   const completedOrders = useMemo(
-    () => allOrders.filter((o) => o.status === 'picked_up'),
-    [allOrders]
+    () =>
+      allOrders
+        .filter((o) => o.status === 'picked_up')
+        // Most recent pickup at the top — Vendus reads as "I just sold
+        // this", not "this order was placed an hour ago".
+        .sort((a, b) => eventTimeMs(b) - eventTimeMs(a)),
+    [allOrders, eventTimeMs]
   );
 
   const issueOrders = useMemo(
@@ -529,9 +687,12 @@ export default function IncomingOrdersScreen() {
         }
         return false;
       });
-      return [...todayExpired, ...historicalIssues];
+      // Sort by event time so the cancellation that came in 3 minutes
+      // ago tops the one that came in 3 hours ago, regardless of when
+      // the original orders were placed.
+      return [...todayExpired, ...historicalIssues].sort((a, b) => eventTimeMs(b) - eventTimeMs(a));
     },
-    [orders, allOrders, timeTick]
+    [orders, allOrders, timeTick, eventTimeMs]
   );
 
   const filteredIssueOrders = useMemo(() => {
@@ -540,7 +701,17 @@ export default function IncomingOrdersScreen() {
     return issueOrders.filter((o) => o.status === 'cancelled');
   }, [issueOrders, issueTypeFilter]);
 
-  const displayedOrders = activeTab === 'incoming' ? incomingOrders : activeTab === 'completed' ? completedOrders : filteredIssueOrders;
+  const tabDisplayedOrders = activeTab === 'incoming' ? incomingOrders : activeTab === 'completed' ? completedOrders : filteredIssueOrders;
+
+  // Apply the order-code search on top of the tab-specific list. Substring
+  // match against the displayed BK-XXXXX code, case-insensitive — the user
+  // can type just "K7X3" or "BK-K7X3" and both work. Empty query is a
+  // no-op so the unfiltered list shows by default.
+  const displayedOrders = useMemo(() => {
+    const q = orderIdSearch.trim().toUpperCase();
+    if (!q) return tabDisplayedOrders;
+    return tabDisplayedOrders.filter((o) => orderIdToCode(o.id).toUpperCase().includes(q));
+  }, [tabDisplayedOrders, orderIdSearch]);
 
   // ── Deep-link: navigate to exact order from activity log / notifications ──
   // Deep-link: find, expand, AND scroll to the target order. The scroll
@@ -552,15 +723,45 @@ export default function IncomingOrdersScreen() {
   const orderCardYRef = useRef<Map<string, number>>(new Map());
   const pendingScrollIdRef = useRef<string | null>(null);
   const lastOrderTsRef = useRef(0);
+  // Reset scroll to top THE MOMENT any demo arms (under the welcome cover).
+  // Tab screens preserve scroll across navigation, so without this an
+  // incoming-orders halo (`demoOrderCard`) would land offset by whatever
+  // scroll position the user had before they triggered the demo.
+  const demoSequencePending = useWalkthroughStore((s) => s.demoSequencePending);
+  useEffect(() => {
+    if (!demoSequencePending) return;
+    ordersScrollRef.current?.scrollTo({ y: 0, animated: false });
+  }, [demoSequencePending]);
   useEffect(() => {
     // Read fresh values from store every time
     const { targetOrderId: tid, targetOrderLocationId: tLocId, targetOrderTs: tTs } = useBusinessStore.getState();
     if (!tid || tTs <= lastOrderTsRef.current) return;
     lastOrderTsRef.current = tTs;
 
-    // Switch location if needed
-    if (tLocId && String(tLocId) !== String(selectedLocationId)) {
-      setSelectedLocationId(tLocId);
+    // Resolve the target's location. The notification handlers
+    // (InAppNotification + notifications.tsx) try to pull
+    // location_id out of the notif's message params, but some
+    // upstream pushes don't include it — and even when they do, the
+    // payload can be stripped by Android's collapsible-FCM coalescing.
+    // So we fall back to scanning the shared all-locations cache
+    // (`['today-orders-count']`, populated by both this layout's
+    // badge query and the dashboard dropdown) to look up the
+    // location_id of the target reservation. That way "View order"
+    // ALWAYS lands the user on the correct venue regardless of which
+    // location they had selected, even if the notification payload
+    // omitted the field.
+    let resolvedLocId: number | string | null = tLocId ?? null;
+    if (!resolvedLocId) {
+      const all: any[] = queryClient.getQueryData(['today-orders-count']) ?? [];
+      const match = all.find((o) => String(o.id) === String(tid));
+      if (match?.location_id != null) resolvedLocId = match.location_id;
+    }
+
+    // Switch location if needed (only when we have a resolved id AND
+    // it differs from the current selection — otherwise we'd
+    // trigger an unnecessary refetch of the badge / orders queries).
+    if (resolvedLocId && String(resolvedLocId) !== String(selectedLocationId)) {
+      setSelectedLocationId(resolvedLocId);
     }
     // Force "Tout" — without this, a review for an order outside the
     // current date filter (today / this month) would never appear in
@@ -569,6 +770,8 @@ export default function IncomingOrdersScreen() {
     // regardless of which date filter they had selected.
     setDateFilter('all');
     setIssueTypeFilter('all');
+    // Clear any stale search so the deep-linked order isn't filtered out.
+    setOrderIdSearch('');
     void queryClient.invalidateQueries({ queryKey: ['today-orders'] });
     void queryClient.invalidateQueries({ queryKey: ['location-orders'] });
 
@@ -576,13 +779,26 @@ export default function IncomingOrdersScreen() {
     let attempts = 0;
     const loc = useBusinessStore.getState().selectedLocationId;
     const tryExpand = () => {
-      // Read fresh data from query cache each attempt
+      // Read fresh data from query cache each attempt. Three sources
+      // in priority order so the deep-link can resolve quickly even
+      // mid-refetch:
+      //   1. today-orders (per-location, fastest after a location
+      //      switch — but empty until the per-location query refetches)
+      //   2. location-orders (historical per-location cache)
+      //   3. today-orders-count (the SHARED all-locations cache used by
+      //      the nav-bar badge + dashboard chips). Always has fresh
+      //      data because it's polled by the always-mounted layout.
+      //      Critical for the fresh-location-switch case: without it,
+      //      a "View order" tap from a notification that switches the
+      //      user to a never-before-visited location would have to
+      //      wait the full refetch round-trip before finding the row.
       const todayData: any[] = queryClient.getQueryData(['today-orders', loc]) ?? [];
       const histData: any[] = queryClient.getQueryData(['location-orders', loc, 'all']) ?? queryClient.getQueryData(['location-orders', loc, dateFilter]) ?? [];
-      const all = [...todayData, ...histData];
+      const allLocsData: any[] = queryClient.getQueryData(['today-orders-count']) ?? [];
+      const all = [...todayData, ...histData, ...allLocsData];
       const found = all.find((o: any) => String(o.id) === String(tid));
       if (found) {
-        const status = normalizeStatus(found.status);
+        const status = normalizeStatus(found.status, found.cancelled_by, found.cancellation_reason);
         if (status === 'picked_up') setActiveTab('completed');
         else if (status === 'cancelled' || status === 'expired') setActiveTab('issues');
         else setActiveTab('incoming');
@@ -616,6 +832,25 @@ export default function IncomingOrdersScreen() {
   const [verifySuccess, setVerifySuccess] = useState(false);
   const [verifyLoading, setVerifyLoading] = useState(false);
 
+  // Re-measure the verify-modal input + confirm button whenever the
+  // verifyError state flips. The error swaps a fixed 12 px spacer for a
+  // multi-line Text below the TextInput, growing the bottom sheet upward —
+  // which shifts the input's WINDOW position (the halo lives in window
+  // coords) without firing the TextInput's own onLayout (only siblings
+  // moved). This effect refreshes both rects after the layout commit so
+  // the halo follows the shifted positions instead of drifting off-target.
+  // The double-RAF gives Yoga + the native layout commit time to settle
+  // before we ask for window coords.
+  useEffect(() => {
+    if (verifyModalOrderId !== 'demo-order-1') return;
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        measureVerifyInput();
+        measureVerifyConfirm();
+      });
+    });
+  }, [verifyError, verifyModalOrderId, measureVerifyInput, measureVerifyConfirm]);
+
   // Cancel flow — mirrors the customer experience: a warning bottom-sheet
   // first, then the shared full-page reason picker (/cancel-reservation in
   // ?mode=business). The reason picker performs the DELETE + cache refresh,
@@ -624,25 +859,30 @@ export default function IncomingOrdersScreen() {
   const [cancelWarning, setCancelWarning] = useState<{
     id: string; customerName?: string; quantity: number; locationId?: string; paymentMethod?: string;
   } | null>(null);
-  // Entrance is staged so the dim backdrop FADES IN (in place — it never
-  // slides) and only then does the sheet SLIDE UP. animationType is "none" so
-  // RN doesn't slide the whole modal (backdrop + sheet) up together.
-  const CANCEL_SHEET_OFFSET = 420;
+  // Entrance: backdrop fade-in + sheet slide-up fire IN PARALLEL so the
+  // user sees one continuous motion. The offset uses the device screen
+  // height (not a fixed 420px) so the sheet TOP starts fully BELOW the
+  // viewport — the old 420px offset wasn't enough for tall sheets, so the
+  // top edge of the card was visible at translateY: 420 for the 200ms
+  // backdrop-fade window, which the user called out as "shows the tip
+  // real quick and then slides up". Both fixes together make a single
+  // smooth slide from off-screen, in parallel with the backdrop fading.
+  const CANCEL_SHEET_OFFSET = Dimensions.get('window').height;
   const cancelBackdropOpacity = useRef(new Animated.Value(0)).current;
   const cancelSheetY = useRef(new Animated.Value(CANCEL_SHEET_OFFSET)).current;
   useEffect(() => {
     if (!cancelWarning) return;
     cancelBackdropOpacity.setValue(0);
     cancelSheetY.setValue(CANCEL_SHEET_OFFSET);
-    Animated.sequence([
-      Animated.timing(cancelBackdropOpacity, { toValue: 1, duration: 200, useNativeDriver: true }),
+    Animated.parallel([
+      Animated.timing(cancelBackdropOpacity, { toValue: 1, duration: 220, useNativeDriver: true }),
       // Deterministic slide (not an underdamped spring). With useNativeDriver
       // the button's touch target sits at the settled position while the sheet
       // is still visually moving/overshooting, so a tap during that window
       // missed and the user had to tap "Continuer" twice. A short, non-
       // overshooting slide settles the hit area almost immediately. (Same fix
       // as the customer reserve sheet.)
-      Animated.timing(cancelSheetY, { toValue: 0, duration: 220, useNativeDriver: true }),
+      Animated.timing(cancelSheetY, { toValue: 0, duration: 260, useNativeDriver: true }),
     ]).start();
   }, [cancelWarning, cancelBackdropOpacity, cancelSheetY]);
   // Reverse the order on the way out: sheet slides down while the backdrop
@@ -735,7 +975,11 @@ export default function IncomingOrdersScreen() {
     const order = orders.find((o) => o.id === verifyModalOrderId);
     if (!order) return;
 
-    const expected = (order.pickupCode ?? '').trim().toUpperCase();
+    // Backend codes may still be 8 chars on legacy orders; the customer
+    // and the manual input on this screen are both clipped to the first
+    // 6 characters, so the verify check must also compare on a 6-char
+    // prefix or "ABCDEF" would never equal "ABCDEFGH".
+    const expected = (order.pickupCode ?? '').trim().toUpperCase().substring(0, 6);
     const entered = typedCode.trim().toUpperCase();
 
     if (!entered) {
@@ -767,60 +1011,17 @@ export default function IncomingOrdersScreen() {
       return;
     }
 
-    setVerifyLoading(true);
-    try {
-      // Pass buyerId so backend can send pickup notification to the buyer
-      await confirmPickup(order.id, order.pickupCode, order.buyerId);
-
-      // Optimistic: flip the just-confirmed order's status in the today-orders
-      // cache so it disappears from the "en cours" tab the instant the server
-      // returns 200. The deferred invalidation + refetch below then syncs
-      // ground truth; if confirmPickup had thrown we'd never reach this block,
-      // so we won't optimistically remove an order whose confirm actually
-      // failed.
-      queryClient.setQueryData<TodayReservationFromAPI[]>(
-        ['today-orders', selectedLocationId],
-        (prev) => (prev ?? []).map((r) =>
-          String(r.id) === String(verifyModalOrderId) ? { ...r, status: 'picked_up' } : r
-        )
-      );
-
-      setVerifySuccess(true);
-
-      // Invalidate + refetch after a brief pause to let the DB settle.
-      // Both caches matter: today-orders drives the "incoming" tab, location-orders
-      // drives the "finished"/"issues" tabs. Without the second invalidation the
-      // picked-up order stays invisible on the finished tab until the stale window
-      // (15s) passes or the tab remounts.
-      setTimeout(async () => {
-        await Promise.all([
-          queryClient.invalidateQueries({ queryKey: ['today-orders'] }),
-          queryClient.invalidateQueries({ queryKey: ['today-orders-count'] }),
-          queryClient.invalidateQueries({ queryKey: ['location-orders'] }),
-          // Dashboard tiles read from business-stats / business-analytics —
-          // without these the revenue counters stay at 0 until app reload.
-          queryClient.invalidateQueries({ queryKey: ['business-stats'] }),
-          queryClient.invalidateQueries({ queryKey: ['business-analytics'] }),
-        ]);
-        await Promise.all([
-          queryClient.refetchQueries({ queryKey: ['today-orders', selectedLocationId] }),
-          queryClient.refetchQueries({ queryKey: ['location-orders', selectedLocationId, dateFilter] }),
-          queryClient.refetchQueries({ queryKey: ['business-stats', selectedLocationId] }),
-          queryClient.refetchQueries({ queryKey: ['business-analytics', selectedLocationId] }),
-        ]);
-      }, 500);
-
-      // Close after showing the success state
-      setTimeout(() => {
-        closeVerifyModal();
-      }, 2000);
-    } catch (err) {
-      setVerifySuccess(false);
-      setVerifyError(getErrorMessage(err));
-    } finally {
-      setVerifyLoading(false);
-    }
-  }, [verifyModalOrderId, typedCode, orders, closeVerifyModal, selectedLocationId, dateFilter, queryClient, t]);
+    // Unified confirmation flow: instead of calling confirmPickup inline
+    // (which left the user with a tiny ✓ in a bottom sheet), hand off to
+    // /business/scan-qr with the code pre-filled. That screen owns the
+    // RICH review (basket photo, address, pickup window, à-encaisser
+    // breakdown) and the FULL-PAGE success animation — same UX whether
+    // the merchant scanned the QR or typed the code by hand. The code
+    // validation we just did is a fast-fail; scan-qr re-runs verifyQR
+    // server-side before confirming, so there's no security regression.
+    closeVerifyModal();
+    router.push({ pathname: '/business/scan-qr', params: { prefillCode: entered } } as never);
+  }, [verifyModalOrderId, typedCode, orders, closeVerifyModal, router, t]);
 
   const [expandedOrderId, setExpandedOrderId] = useState<string | null>(null);
   const toggleExpand = useCallback((id: string) => {
@@ -953,7 +1154,6 @@ export default function IncomingOrdersScreen() {
   if (todayQuery.isLoading && !todayQuery.data && !demoOrderActive) {
     return (
       <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]} edges={[]}>
-        <StatusBar style="dark" />
         <DelayedLoader />
       </SafeAreaView>
     );
@@ -961,7 +1161,6 @@ export default function IncomingOrdersScreen() {
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]} edges={[]}>
-      <StatusBar style="dark" />
       <View style={[styles.header, { paddingHorizontal: theme.spacing.xl, paddingTop: theme.spacing.xs, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }]}>
         <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h1 }]}>
           {t('business.orders.title')}
@@ -973,19 +1172,29 @@ export default function IncomingOrdersScreen() {
             reliable because flex-row + justify-content:'space-between' was
             collapsing it when there was no child content. */}
         {(() => {
-          const chipVisible = canViewHistory && (activeTab === 'completed' || activeTab === 'issues');
+          // Always show the chip on every tab — it now also opens the
+          // order-code search input, which is useful on incoming too
+          // (the merchant may need to look up a specific reservation by
+          // its code). Date / issue-type sections of the modal are still
+          // contextual but the chip itself is now universal.
+          const chipVisible = canViewHistory;
+          // Chip label priority:
+          //   1. Active search → show the query
+          //   2. Incoming tab (no date filter exposed) → "Filtrer"
+          //   3. Other tabs → the current date-filter label
+          const chipLabel = orderIdSearch.trim()
+            ? orderIdSearch.trim()
+            : activeTab === 'incoming'
+              ? t('common.filter', { defaultValue: 'Filtrer' })
+              : dateFilter === 'today' ? t('business.orders.filterToday', { defaultValue: "Auj." })
+              : dateFilter === 'month' ? t('business.orders.filterMonth', { defaultValue: 'Mois' })
+              : t('business.orders.filterAll', { defaultValue: 'Tout' });
           return (
             <View style={{ opacity: chipVisible ? 1 : 0 }} pointerEvents={chipVisible ? 'auto' : 'none'}>
               <FilterChip
                 icon={ClipboardList}
-                // Always render filled-green so the chip stays branded
-                // regardless of whether any filter is currently applied.
                 active
-                label={
-                  dateFilter === 'today' ? t('business.orders.filterToday', { defaultValue: "Auj." })
-                    : dateFilter === 'month' ? t('business.orders.filterMonth', { defaultValue: 'Mois' })
-                    : t('business.orders.filterAll', { defaultValue: 'Tout' })
-                }
+                label={chipLabel}
                 onPress={() => setShowBizFilterModal(true)}
               />
             </View>
@@ -1099,8 +1308,12 @@ export default function IncomingOrdersScreen() {
         showsVerticalScrollIndicator={false}
       >
         {hasNoLocation ? (
-          <View style={{ marginTop: 40 }}>
-            <NoLocationCTA />
+          // Compact variant + tight top margin so the empty-state card
+          // sits just under the tabs strip instead of floating 100+px
+          // below it (the old default-mode `<NoLocationCTA />` added
+          // its own 60 px paddingTop on top of the 40 px marginTop here).
+          <View style={{ marginTop: 8 }}>
+            <NoLocationCTA compact />
           </View>
         ) : displayedOrders.length === 0 ? (
           <View style={styles.emptyState}>
@@ -1125,12 +1338,16 @@ export default function IncomingOrdersScreen() {
                   <ClipboardList size={40} color={theme.colors.primary} />
                 </View>
                 <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h2, textAlign: 'center' }}>
-                  {activeTab === 'incoming'
+                  {orderIdSearch.trim()
+                    ? t('business.orders.noMatchingOrders', { defaultValue: 'Aucune commande trouvée' })
+                    : activeTab === 'incoming'
                     ? t('business.orders.noOrdersToday', { defaultValue: 'No orders yet today' })
                     : t('business.orders.noCompletedOrders', { defaultValue: 'No completed orders' })}
                 </Text>
                 <Text style={{ color: theme.colors.textSecondary, ...theme.typography.body, marginTop: 10, textAlign: 'center', lineHeight: 22 }}>
-                  {activeTab === 'incoming'
+                  {orderIdSearch.trim()
+                    ? t('business.orders.noMatchingOrdersDesc', { defaultValue: 'Aucune commande ne correspond à votre recherche. Effacez le filtre pour revoir la liste complète.' })
+                    : activeTab === 'incoming'
                     ? t('business.orders.noOrdersDesc', { defaultValue: 'Orders will appear here when customers reserve your surprise bags.' })
                     : t('business.orders.noCompletedDesc', { defaultValue: 'Completed and cancelled orders will show up here.' })}
                 </Text>
@@ -1181,15 +1398,25 @@ export default function IncomingOrdersScreen() {
                 activeOpacity={0.85}
                 onPress={() => {
                   // During the demo, only the demoOrderCard step asks the
-                  // user to expand this card. After that step the card must
-                  // stay expanded (subsequent steps highlight buttons inside
-                  // it), so any tap on the card body — which would toggle
-                  // it shut — is silenced with a hint toast.
+                  // user to expand this card. After that step the card
+                  // must stay expanded (subsequent steps highlight inner
+                  // buttons), so card-body taps just no-op.
+                  //
+                  // The previous version fired `notifyTapHint` from this
+                  // outer handler whenever the step wasn't demoOrderCard,
+                  // but on some devices the touch responder hands the
+                  // press to BOTH the inner button (chat / confirm /
+                  // Suivant) AND this outer TouchableOpacity for the same
+                  // tap — so the user saw the "Suivez les instructions"
+                  // toast flash *right after* a perfectly correct button
+                  // tap. The inner per-button gates already show the
+                  // toast when a wrong button is tapped, so dropping the
+                  // outer trigger is harmless and stops the spurious
+                  // flashes. See the user report about the second half
+                  // of the demo throwing the hint constantly.
                   if (isDemoOrder) {
                     if (walkthroughCurrentStep?.measureKey === 'demoOrderCard') {
                       toggleExpand(order.id);
-                    } else {
-                      useWalkthroughStore.getState().notifyTapHint();
                     }
                     return;
                   }
@@ -1208,30 +1435,54 @@ export default function IncomingOrdersScreen() {
               >
                 {/* Compact header — always visible */}
                 <View style={styles.orderTop}>
-                  <View style={{ flex: 1 }}>
-                    <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3 }]} numberOfLines={1}>
+                  {/* `minWidth: 0` + `marginRight: 8` is the canonical fix for
+                      the "long text refuses to shrink inside a flex row" gotcha
+                      on RN: without minWidth the text would push the right
+                      column (pill + chevron + chat icon) off the right edge
+                      instead of truncating. With minWidth: 0 the column
+                      collapses to whatever room remains, and numberOfLines={1}
+                      ellipsizes the customer / basket names cleanly. */}
+                  <View style={{ flex: 1, minWidth: 0, marginRight: 8 }}>
+                    <Text
+                      style={[{ color: theme.colors.textPrimary, ...theme.typography.h3 }]}
+                      // Show full name when expanded — collapsed truncates to
+                      // one line, expanded wraps so the merchant sees the
+                      // whole customer name (matches the customer-side card).
+                      numberOfLines={isExpanded ? undefined : 1}
+                    >
                       {order.customerName}
                     </Text>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 4, gap: 8 }}>
-                      <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.bodySm, flexShrink: 1 }]} numberOfLines={1}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 4 }}>
+                      <Text
+                        style={[{ color: theme.colors.textSecondary, ...theme.typography.bodySm, flex: 1, minWidth: 0 }]}
+                        numberOfLines={isExpanded ? undefined : 1}
+                      >
                         {order.basketName}
                       </Text>
-                      {/* Quantity pill — mirrors the badge styling in my-baskets.tsx */}
-                      <View style={{
-                        backgroundColor: theme.colors.primary,
-                        borderRadius: theme.radii.pill,
-                        minWidth: 24,
-                        height: 22,
-                        justifyContent: 'center',
-                        alignItems: 'center',
-                        paddingHorizontal: 7,
-                      }}>
-                        <Text style={{ color: '#fff', fontSize: 11, fontFamily: 'Poppins_700Bold' }}>
-                          {order.quantity}
-                        </Text>
-                      </View>
+                      {/* Status badge is no longer rendered here — it lives
+                          directly UNDER the pill + chevron in the right
+                          column (see below) so it sits vertically aligned
+                          with them on the right edge of the card. */}
                     </View>
+                    {/* Price line moved out of the upper section — see the
+                        unified bottom row below (price + payment icon on the
+                        LEFT, time + order ID on the RIGHT). The bottom row
+                        is tab-aware: incoming/en-attente shows "À encaisser"
+                        and the credits chip; vendus/issues just show the
+                        total price (credits info lives in the expanded
+                        view's payment row). */}
                   </View>
+                  {/* Right column — outer wrapper is a COLUMN so the
+                      [chat / pill / chevron] inner row sits on top and the
+                      issues-tab status badge stacks directly underneath them,
+                      right-aligned. `alignItems: 'flex-end'` keeps the status
+                      dot tight against the card's right edge.
+                      `flexShrink: 0` guarantees the right column keeps its
+                      natural width — so even with a very long customer name,
+                      the icons stay at the right edge instead of being
+                      squeezed. The text column's `minWidth: 0` does the
+                      corresponding shrink work. */}
+                  <View style={{ flexDirection: 'column', alignItems: 'flex-end', gap: 4, flexShrink: 0 }}>
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                     {isIncoming && canMessage && (
                       <TouchableOpacity
@@ -1242,13 +1493,15 @@ export default function IncomingOrdersScreen() {
                           // During the demo, only allow the chat tap when
                           // the walkthrough is on the orderChat step — that
                           // step asks the user to open the chat. Other taps
-                          // would derail the demo, so they're no-op'd with
-                          // a hint toast.
+                          // are silently no-op'd (no hint toast) — the
+                          // halo already tells the user where to tap, and
+                          // the previous "fire toast" branch could double-
+                          // fire on a correct tap when RN's responder
+                          // system handed the gesture to both this button
+                          // AND the outer card.
                           if (isDemoOrder) {
                             if (walkthroughCurrentStep?.measureKey === 'orderCardChat') {
                               router.push({ pathname: '/message/[id]', params: { id: `res-${order.id}`, reservationId: String(order.id), buyerId: String(order.buyerId ?? ''), locationId: String(selectedLocationId ?? ''), demo: '1' } } as never);
-                            } else {
-                              useWalkthroughStore.getState().notifyTapHint();
                             }
                             return;
                           }
@@ -1265,38 +1518,88 @@ export default function IncomingOrdersScreen() {
                         )}
                       </TouchableOpacity>
                     )}
-                    {!isIncoming && (
-                      <StatusDot
-                        tone={statusChip.tone}
-                        label={statusChip.label}
-                        // Orange-tint specifically for "Expiré" so it reads
-                        // distinct from the amber "Ready for pickup" warn
-                        // and the red "Annulé" danger.
-                        dotColor={displayStatus === 'expired' ? '#ee7b3c' : undefined}
-                      />
-                    )}
+                    {/* Quantity pill was here — moved to the expanded card
+                        only per product feedback. Collapsed right column is
+                        just [chat (incoming only) + chevron]. */}
                     {isExpanded
                       ? <ChevronUp size={16} color={theme.colors.textSecondary} />
                       : <ChevronDown size={16} color={theme.colors.textSecondary} />}
                   </View>
+                  {/* Issues-tab status badge — stacks directly UNDER the
+                      pill + chevron row, right-aligned (via the parent
+                      column's `alignItems: 'flex-end'`). Vendus / Incoming
+                      tabs skip it entirely. */}
+                  {!isIncoming && displayStatus !== 'picked_up' && (
+                    <StatusDot
+                      tone={statusChip.tone}
+                      label={statusChip.label}
+                      dotColor={displayStatus === 'expired' ? '#ee7b3c' : undefined}
+                    />
+                  )}
+                  </View>
                 </View>
 
-                {/* Order ID + time-since-order — bottom-right when collapsed,
-                    hidden when expanded. The relative timestamp mirrors the
-                    notification-card cadence (timeAgo) and ticks via the
-                    same `timeTick` interval the rest of this screen uses. */}
-                {!isExpanded && (
-                  <View style={{ alignItems: 'flex-end', marginTop: 4 }}>
-                    {order.createdAt ? (
-                      <Text style={[{ color: theme.colors.muted, ...theme.typography.caption }]}>
-                        {timeAgo(order.createdAt, t)}
-                      </Text>
-                    ) : null}
-                    <Text style={[{ color: theme.colors.muted, ...theme.typography.caption }]}>
-                      {orderIdToCode(order.id)}
-                    </Text>
-                  </View>
-                )}
+                {/* Collapsed-card bottom row — matches the customer
+                    ReservationCard's compact shape:
+                      LEFT  → payment-method icon + price + basket count
+                              · incoming → cash-to-collect (or "Déjà payé"
+                                for card and full-credit cases)
+                              · completed / issues → order total
+                      RIGHT → time-since-event only (order code removed —
+                              it lives in the expanded view, and the user
+                              can also search by code in the filter modal)
+                    The bold action sentence on issues ("Annulée par le
+                    client" etc.) is gone — it duplicates info already
+                    shown in the expanded card and the status badge. The
+                    ⓘ credits tap-target is also gone from collapsed; it
+                    still exists on the expanded "Crédits utilisés" row. */}
+                {!isExpanded && (() => {
+                  const pm = order.payment_method ?? 'cash';
+                  const isPendingTab = activeTab === 'incoming';
+                  // Always cash or card icon — never wallet.
+                  const isCard = pm === 'card';
+                  const PMIcon = isCard ? CreditCard : Banknote;
+                  const cashToCollect = Math.max(0, order.total - order.creditAmount);
+                  let priceText: string;
+                  if (isPendingTab) {
+                    if (isCard || cashToCollect === 0) {
+                      priceText = t('business.orders.alreadyPaid', { defaultValue: 'Déjà payé' });
+                    } else {
+                      priceText = t('business.orders.toCollectShort', { amount: fmtMoney(cashToCollect), defaultValue: 'À encaisser : {{amount}} TND' });
+                    }
+                  } else {
+                    priceText = `${fmtMoney(order.total)} TND`;
+                  }
+                  return (
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 6, gap: 8 }}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexShrink: 1 }}>
+                        <PMIcon size={13} color={theme.colors.textSecondary} />
+                        <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '700' as const, fontFamily: 'Poppins_700Bold' }]}>
+                          {priceText}
+                        </Text>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginLeft: 4 }}>
+                          {/* Basket icon (ShoppingBag) — was ClipboardList,
+                              which read as a "todo / clipboard" glyph and
+                              didn't match the customer collapsed card. The
+                              quantity is a count of BASKETS so the bag icon
+                              matches the meaning directly. */}
+                          <ShoppingBag size={14} color={theme.colors.textSecondary} />
+                          <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm, fontWeight: '700' as const, fontFamily: 'Poppins_700Bold' }}>
+                            {order.quantity}
+                          </Text>
+                        </View>
+                      </View>
+                      {(() => {
+                        const evTime = isPendingTab ? order.createdAt : (order.updatedAt || order.createdAt);
+                        return evTime ? (
+                          <Text style={[{ color: theme.colors.muted, ...theme.typography.caption }]}>
+                            {timeAgo(evTime, t)}
+                          </Text>
+                        ) : null;
+                      })()}
+                    </View>
+                  );
+                })()}
 
                 {/* Expanded details */}
                 {isExpanded && (
@@ -1311,31 +1614,97 @@ export default function IncomingOrdersScreen() {
                           {orderIdToCode(order.id)}
                         </Text>
                       </View>
+                      {/* Quantity — basket count for this order. Was missing
+                          from the expanded business card before; the
+                          collapsed view shows a small number next to the
+                          basket icon but the expanded view skipped the
+                          explicit row, so on completed/issues orders the
+                          merchant couldn't see at a glance how many bags
+                          were involved. Mirrors the "N paniers" row the
+                          customer ReservationCard already has. */}
+                      <View style={[styles.detailRow, { marginTop: 4 }]}>
+                        <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption }]}>
+                          {t('business.orders.quantityLabel', { defaultValue: 'Quantité' })}
+                        </Text>
+                        <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '600' as const }]}>
+                          {order.quantity} {order.quantity > 1
+                            ? t('basket.baskets', { defaultValue: 'paniers' })
+                            : t('basket.basket', { defaultValue: 'panier' })}
+                        </Text>
+                      </View>
                       <View style={[styles.detailRow, { marginTop: 4 }]}>
                         <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption }]}>
                           {t('reserve.total')}
                         </Text>
                         <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.body, fontWeight: '600' as const }]}>
-                          {order.total} TND
+                          {fmtMoney(order.total)} TND
                         </Text>
                       </View>
-                      {/* Payment method — credits orders are prepaid and
-                          shouldn't collect cash on pickup, so credits get a
-                          success-green dot. Cash reads as neutral copy. */}
-                      <View style={[styles.detailRow, { marginTop: 4 }]}>
-                        <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption }]}>
+                      {/* Payment method — ALWAYS rendered now, regardless of
+                          whether the customer used credits. Previously the
+                          credit-amount split was visible on the collapsed
+                          card via the in-card credits chip, so the expanded
+                          view skipped this row for credit orders. With the
+                          collapsed card on the vendus / issues tabs now
+                          hiding the credits chip (per the product rule that
+                          credits/À-encaisser detail belongs ONLY to the
+                          incoming tab), the expanded view becomes the
+                          authoritative place to see "how much did this
+                          customer use credits for". */}
+                      {/* Combined Paiement row. Was two separate rows
+                          (Paiement → method label, then Crédits utilisés →
+                          credit chip). Now stacks both pieces of info in
+                          one row's value column so the expanded card
+                          carries less duplicate visual weight. The credit
+                          chip + ⓘ are gated on creditAmount > 0; for cash/
+                          card-only orders the second line is dropped and
+                          this collapses back to the one-line "Paiement"
+                          row it used to be. */}
+                      <View style={[styles.detailRow, { marginTop: 4, alignItems: 'flex-start' }]}>
+                        <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, paddingTop: 2 }]}>
                           {t('business.orders.paymentMethod', { defaultValue: 'Paiement' })}
                         </Text>
-                        {order.payment_method === 'credits' ? (
-                          <StatusDot tone="success" label={t('business.orders.paymentCredits', { defaultValue: 'Payé en crédits' })} />
-                        ) : (
-                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                            <Banknote size={13} color={theme.colors.textSecondary} />
-                            <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.bodySm }]}>
-                              {t('business.orders.paymentCash', { defaultValue: 'Espèces' })}
-                            </Text>
-                          </View>
-                        )}
+                        {(() => {
+                          const pm = order.payment_method ?? 'cash';
+                          const isCard = pm === 'card';
+                          const PMIcon = isCard ? CreditCard : Banknote;
+                          const label = isCard
+                            ? t('business.orders.paymentByCardShort', { defaultValue: 'En carte' })
+                            : t('business.orders.paymentInCashShort', { defaultValue: 'En espèces' });
+                          return (
+                            <View style={{ flex: 1, alignItems: 'flex-end' }}>
+                              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                                <PMIcon size={13} color={theme.colors.textSecondary} />
+                                <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.bodySm }]}>{label}</Text>
+                              </View>
+                              {order.creditAmount > 0 ? (
+                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 6 }}>
+                                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3, backgroundColor: theme.colors.primary + '14', borderRadius: theme.radii.pill, paddingHorizontal: 7, height: 20 }}>
+                                    <Wallet size={11} color={theme.colors.primary} />
+                                    <Text style={{ color: theme.colors.primary, fontSize: 10, fontFamily: 'Poppins_600SemiBold' }}>
+                                      {t('business.orders.creditsChip', { amount: fmtMoney(order.creditAmount), defaultValue: '{{amount}} TND en crédits' })}
+                                    </Text>
+                                  </View>
+                                  <TouchableOpacity
+                                    onPress={(e) => {
+                                      e.stopPropagation?.();
+                                      alert.showAlert(
+                                        t('business.orders.creditsInfoTitle', { defaultValue: 'Paiement en crédits Barakeat' }),
+                                        buildMerchantCreditsInfo(displayStatus, activeTab === 'incoming', order.creditAmount, t),
+                                        undefined,
+                                        { type: 'info', layout: 'sheet' }
+                                      );
+                                    }}
+                                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                                    style={{ width: 20, height: 20, borderRadius: 10, backgroundColor: theme.colors.primary + '14', justifyContent: 'center', alignItems: 'center' }}
+                                  >
+                                    <Info size={12} color={theme.colors.primary} />
+                                  </TouchableOpacity>
+                                </View>
+                              ) : null}
+                            </View>
+                          );
+                        })()}
                       </View>
                       <View style={[styles.detailRow, { marginTop: 4 }]}>
                         <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption }]}>
@@ -1406,8 +1775,6 @@ export default function IncomingOrdersScreen() {
                                   {order.cancelledByName ? (
                                     <Text
                                       style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, textAlign: 'right', marginTop: 2 }]}
-                                      numberOfLines={1}
-                                      ellipsizeMode="tail"
                                     >
                                       {t('business.orders.cancelledByMemberSub', { name: order.cancelledByName, defaultValue: `— ${order.cancelledByName}` })}
                                     </Text>
@@ -1492,14 +1859,13 @@ export default function IncomingOrdersScreen() {
                             e.stopPropagation?.();
                             // During the demo, only the orderCardConfirmBtn
                             // step opens the verify modal. Earlier steps
-                            // (demoOrderCard / orderCardChat) shouldn't let
-                            // a stray tap skip ahead, so they no-op with a
-                            // hint toast.
+                            // (demoOrderCard / orderCardChat) silently
+                            // no-op so accidental taps don't flash the
+                            // "Suivez les instructions" toast when the
+                            // user is doing the right thing elsewhere.
                             if (isDemoOrder) {
                               if (walkthroughCurrentStep?.measureKey === 'orderCardConfirmBtn') {
                                 openVerifyModal(order.id);
-                              } else {
-                                useWalkthroughStore.getState().notifyTapHint();
                               }
                               return;
                             }
@@ -1663,10 +2029,12 @@ export default function IncomingOrdersScreen() {
             activeOpacity={1}
             onPress={() => {
               // During the verifyModalInput demo step, the backdrop tap
-              // must not close the sheet — flash the hint toast so the
-              // user knows to follow the popup instead.
+              // is silently absorbed — the inline instruction popup at
+              // the top of the screen is enough cue. Firing the hint
+              // toast here used to flood the user with "Suivez les
+              // instructions" notifications when the modal sheet sat
+              // close to the screen edges.
               if (walkthroughCurrentStep?.measureKey === 'verifyModalInput') {
-                useWalkthroughStore.getState().notifyTapHint();
                 return;
               }
               closeVerifyModal();
@@ -1716,7 +2084,7 @@ export default function IncomingOrdersScreen() {
                   </Text>
                   <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm, marginBottom: 20, lineHeight: 20 }}>
                     {verifyModalOrderId === 'demo-order-1'
-                      ? t('business.orders.verifyDescDemo', { defaultValue: 'Mode démo : tapez le code DEMO1 ci-dessous puis « Confirmer le code » pour valider — ou appuyez sur Suivant dans l\'aide pour continuer la visite.' })
+                      ? t('business.orders.verifyDescDemo', { defaultValue: 'Mode démo : tapez le code DEMO ci-dessous puis « Confirmer le code » pour valider — ou appuyez sur Suivant dans l\'aide pour continuer la visite.' })
                       : t('business.orders.verifyDesc', { defaultValue: 'Ask the customer for their pickup code and enter it below, or use the QR scanner.' })}
                   </Text>
 
@@ -1724,6 +2092,14 @@ export default function IncomingOrdersScreen() {
                       demo) so the walkthrough can introduce the input. For
                       the demo order, handleVerifyCode short-circuits when
                       DEMO1 is entered — no backend call. */}
+                  {/* Demo input is fully editable — the walkthrough copy
+                      tells the user "Tapez DEMO01" and the verify handler's
+                      demo short-circuit (line ~984) accepts the typed code
+                      and advances the walkthrough. The earlier non-editable
+                      wrapper was a UX dead-end (user reads "type DEMO01"
+                      but the input refuses focus). The soft keyboard
+                      shifting the modal sheet on Android is acceptable —
+                      the halos re-measure after the keyboard settles. */}
                   <TextInput
                     ref={verifyInputRef}
                     onLayout={verifyModalOrderId === 'demo-order-1' ? measureVerifyInput : undefined}
@@ -1741,11 +2117,24 @@ export default function IncomingOrdersScreen() {
                       marginBottom: 8,
                     }}
                     value={typedCode}
-                    onChangeText={(v) => { setTypedCode(v); setVerifyError(''); }}
-                    placeholder={verifyModalOrderId === 'demo-order-1' ? 'DEMO1' : 'ABCD1234'}
+                    // Strip non-digits defensively for real orders (Android
+                    // hardware keyboards / quirky keyboard skins can still
+                    // inject letters past the number-pad hint). Demo order
+                    // keeps its alphanumeric "DEMO01" code so the user can
+                    // type exactly what the walkthrough prompt shows.
+                    onChangeText={(v) => {
+                      const next = verifyModalOrderId === 'demo-order-1'
+                        ? v.toUpperCase().slice(0, 6)
+                        : v.replace(/\D/g, '').slice(0, 6);
+                      setTypedCode(next);
+                      setVerifyError('');
+                    }}
+                    placeholder={verifyModalOrderId === 'demo-order-1' ? 'DEMO' : '123456'}
                     placeholderTextColor={theme.colors.muted}
-                    autoCapitalize="characters"
+                    keyboardType={verifyModalOrderId === 'demo-order-1' ? 'default' : 'number-pad'}
+                    autoCapitalize={verifyModalOrderId === 'demo-order-1' ? 'characters' : 'none'}
                     autoCorrect={false}
+                    maxLength={6}
                   />
                   {verifyError ? (
                     <Text style={{ color: theme.colors.error, ...theme.typography.caption, textAlign: 'center', marginBottom: 12 }}>
@@ -1793,17 +2182,18 @@ export default function IncomingOrdersScreen() {
                       }
                     }}
                     onPress={() => {
-                      // During the verifyModalInput demo step we don't want
-                      // the user to escape into /business/scan-qr — flash
-                      // the hint toast so they know to use the code input
-                      // or Suivant instead.
+                      // During the verifyModalInput demo step the Scan QR
+                      // shortcut is silently disabled — the inline
+                      // instruction popup already tells the user to type
+                      // DEMO1 or tap Suivant. No hint toast: the previous
+                      // version flooded the user with "Suivez les
+                      // instructions" the moment they brushed this button.
                       if (walkthroughCurrentStep?.measureKey === 'verifyModalInput') {
-                        useWalkthroughStore.getState().notifyTapHint();
                         return;
                       }
                       // Demo order: hand the scan-qr screen the demo pickup code
                       // so it boots in mocked-success mode instead of hitting the API.
-                      if (verifyModalOrderId === 'demo-order-1') setDemoScanCode('DEMO1');
+                      if (verifyModalOrderId === 'demo-order-1') setDemoScanCode('DEMO');
                       closeVerifyModal();
                       router.push('/business/scan-qr' as never);
                     }}
@@ -1923,7 +2313,7 @@ export default function IncomingOrdersScreen() {
                   }}>
                     <Hand size={16} color="#114b3c" style={{ marginRight: 8 }} />
                     <Text style={{ color: '#114b3c', fontSize: 14, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
-                      {t('walkthrough.biz.verifyInput.short', { defaultValue: 'Tapez DEMO1' })}
+                      {t('walkthrough.biz.verifyInput.short', { defaultValue: 'Tapez DEMO' })}
                     </Text>
                   </View>
                 ) : (
@@ -1953,7 +2343,7 @@ export default function IncomingOrdersScreen() {
                     </Text>
                   </View>
                   <Text style={{ color: '#666', fontSize: 13, fontFamily: 'Poppins_400Regular', lineHeight: 19, marginBottom: 14 }}>
-                    {t('walkthrough.biz.verifyInput.desc', { defaultValue: 'Le client vous montre son code de retrait. Tapez-le ici, par exemple DEMO1, puis appuyez sur « Confirmer le code » pour valider la commande — ou appuyez sur Suivant pour continuer la démo.' })}
+                    {t('walkthrough.biz.verifyInput.desc', { defaultValue: 'Le client vous montre son code de retrait. Tapez-le ici, par exemple DEMO, puis appuyez sur « Confirmer le code » pour valider la commande — ou appuyez sur Suivant pour continuer la démo.' })}
                   </Text>
                   <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
                     <TouchableOpacity onPress={() => {
@@ -1993,27 +2383,52 @@ export default function IncomingOrdersScreen() {
       {/* Filter Modal */}
       <Modal visible={showBizFilterModal} transparent animationType="fade" onRequestClose={() => setShowBizFilterModal(false)}>
         <TouchableOpacity style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.4)' }} activeOpacity={1} onPress={() => setShowBizFilterModal(false)}>
-          <View style={{ position: 'absolute', top: 60, right: 20, backgroundColor: theme.colors.surface, borderRadius: 16, padding: 16, minWidth: 220, ...theme.shadows.shadowLg }} onStartShouldSetResponder={() => true}>
+          <View style={{ position: 'absolute', top: 60, right: 20, backgroundColor: theme.colors.surface, borderRadius: 16, padding: 16, minWidth: 240, ...theme.shadows.shadowLg }} onStartShouldSetResponder={() => true}>
             <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3, marginBottom: 12 }}>
               {t('common.filter', { defaultValue: 'Filtrer' })}
             </Text>
+            {/* Order code search — replaces the order code we removed from
+                the collapsed bottom row. Substring match; runs on the
+                currently-active tab's list. */}
             <Text style={{ color: theme.colors.textSecondary, fontSize: 11, fontWeight: '600', textTransform: 'none', letterSpacing: 0.5, marginBottom: 8 }}>
-              {t('business.orders.period', { defaultValue: 'Période' })}
+              {t('business.orders.orderCode', { defaultValue: 'Code commande' })}
             </Text>
-            {(['today', 'month', 'all'] as const).map((f) => {
-              const label = f === 'today' ? t('business.orders.filterToday', { defaultValue: "Aujourd'hui" })
-                : f === 'month' ? t('business.orders.filterMonth', { defaultValue: 'Ce mois' })
-                : t('business.orders.filterAll', { defaultValue: 'Tout' });
-              const active = dateFilter === f;
-              return (
-                <TouchableOpacity key={f} onPress={() => setDateFilter(f)} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: theme.colors.divider }}>
-                  <View style={{ width: 18, height: 18, borderRadius: 9, borderWidth: 2, borderColor: active ? theme.colors.primary : theme.colors.muted, backgroundColor: active ? theme.colors.primary : 'transparent', justifyContent: 'center', alignItems: 'center', marginRight: 10 }}>
-                    {active && <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: '#fff' }} />}
-                  </View>
-                  <Text style={{ color: active ? theme.colors.textPrimary : theme.colors.textSecondary, fontSize: 14, fontWeight: active ? '600' : '400' }}>{label}</Text>
-                </TouchableOpacity>
-              );
-            })}
+            <TextInput
+              value={orderIdSearch}
+              onChangeText={setOrderIdSearch}
+              placeholder={t('business.orders.orderCodePlaceholder', { defaultValue: 'BK-...' })}
+              placeholderTextColor={theme.colors.muted}
+              autoCapitalize="characters"
+              autoCorrect={false}
+              style={{ borderWidth: 1, borderColor: theme.colors.divider, borderRadius: 10, paddingHorizontal: 10, paddingVertical: 8, color: theme.colors.textPrimary, fontSize: 13, marginBottom: 12 }}
+            />
+            {/* Période — only relevant on completed / issues tabs. The
+                en-attente tab feeds from today-orders, so every row is
+                already today and the date filter would be a no-op
+                (worse: setting it to "Mois" or "Tout" would just
+                reshape the FUTURE completed/issues queries, confusing
+                the user). Hidden on incoming. */}
+            {activeTab !== 'incoming' && (
+              <>
+                <Text style={{ color: theme.colors.textSecondary, fontSize: 11, fontWeight: '600', textTransform: 'none', letterSpacing: 0.5, marginBottom: 8 }}>
+                  {t('business.orders.period', { defaultValue: 'Période' })}
+                </Text>
+                {(['today', 'month', 'all'] as const).map((f) => {
+                  const label = f === 'today' ? t('business.orders.filterToday', { defaultValue: "Aujourd'hui" })
+                    : f === 'month' ? t('business.orders.filterMonth', { defaultValue: 'Ce mois' })
+                    : t('business.orders.filterAll', { defaultValue: 'Tout' });
+                  const active = dateFilter === f;
+                  return (
+                    <TouchableOpacity key={f} onPress={() => setDateFilter(f)} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: theme.colors.divider }}>
+                      <View style={{ width: 18, height: 18, borderRadius: 9, borderWidth: 2, borderColor: active ? theme.colors.primary : theme.colors.muted, backgroundColor: active ? theme.colors.primary : 'transparent', justifyContent: 'center', alignItems: 'center', marginRight: 10 }}>
+                        {active && <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: '#fff' }} />}
+                      </View>
+                      <Text style={{ color: active ? theme.colors.textPrimary : theme.colors.textSecondary, fontSize: 14, fontWeight: active ? '600' : '400' }}>{label}</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </>
+            )}
             {activeTab === 'issues' && (
               <>
                 <View style={{ height: 1, backgroundColor: theme.colors.divider, marginVertical: 12 }} />
@@ -2105,7 +2520,7 @@ export default function IncomingOrdersScreen() {
                   </View>
                 )}
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-                  <ClipboardList size={14} color={theme.colors.textSecondary} />
+                  <ShoppingBag size={14} color={theme.colors.textSecondary} />
                   <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, flex: 1 }}>
                     {t('business.orders.cancelWarnBasketReturned', { defaultValue: 'Le panier retourne en stock' })}
                   </Text>

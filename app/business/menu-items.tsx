@@ -6,6 +6,8 @@ import { useTranslation } from 'react-i18next';
 import { X, Trash2, Plus, Camera, ImageIcon, SquareCheck, Square } from 'lucide-react-native';
 import { DeleteIcon8 } from '@/src/components/ui/Icon8';
 import * as ImagePicker from 'expo-image-picker';
+import { ensureCameraAccess } from '@/src/lib/photoPermission';
+import { useImageCropper } from '@/src/components/ImageCropper';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { fetchMyMenuItems, addMenuItem, deleteMenuItem, type MenuItemFromAPI } from '@/src/services/business';
@@ -16,6 +18,7 @@ import { useCustomAlert } from '@/src/components/CustomAlert';
 
 export default function MenuItemsScreen() {
   const { t } = useTranslation();
+  const { pickPhoto, pickAndCrop } = useImageCropper();
   const theme = useTheme();
   const router = useRouter();
   const alert = useCustomAlert();
@@ -88,21 +91,12 @@ export default function MenuItemsScreen() {
 
   const pickItemImage = async (source: 'camera' | 'gallery') => {
     if (source === 'camera') {
-      const { status } = await ImagePicker.requestCameraPermissionsAsync();
-      if (status !== 'granted') {
-        alert.showAlert(t('common.error'), t('business.menuItems.cameraPermRequired', { defaultValue: 'Camera permission required.' }));
-        return;
-      }
+      if (!(await ensureCameraAccess())) return;
       const result = await ImagePicker.launchCameraAsync({ mediaTypes: ['images'], quality: 0.8, allowsEditing: true, aspect: [1, 1] });
       if (!result.canceled && result.assets[0]) setNewItemImageUri(result.assets[0].uri);
     } else {
-      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (status !== 'granted') {
-        alert.showAlert(t('common.error'), t('business.menuItems.photoPermRequired'));
-        return;
-      }
-      const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 0.8, allowsEditing: true, aspect: [1, 1] });
-      if (!result.canceled && result.assets[0]) setNewItemImageUri(result.assets[0].uri);
+      const uri = await pickAndCrop({ aspect: [1, 1], quality: 0.8 });
+      if (uri) setNewItemImageUri(uri);
     }
   };
 
@@ -134,22 +128,14 @@ export default function MenuItemsScreen() {
   };
 
   const handleScanMenu = async () => {
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== 'granted') {
-      alert.showAlert(t('common.error'), t('business.menuItems.photoPermRequired'));
-      return;
-    }
-    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 0.8, allowsEditing: false });
-    if (result.canceled || !result.assets[0]) return;
-    await processImageForScan(result.assets[0].uri);
+    // No crop — a menu photo must stay whole for the OCR scan. The grid still
+    // honors Limited Access (shows only allowed photos), unlike the old picker.
+    const res = await pickPhoto();
+    if (res?.uri) await processImageForScan(res.uri);
   };
 
   const handleCameraScan = async () => {
-    const { status } = await ImagePicker.requestCameraPermissionsAsync();
-    if (status !== 'granted') {
-      alert.showAlert(t('common.error'), t('business.menuItems.cameraPermRequired', { defaultValue: 'Camera permission is required.' }));
-      return;
-    }
+    if (!(await ensureCameraAccess())) return;
     const result = await ImagePicker.launchCameraAsync({ mediaTypes: ['images'], quality: 0.8, allowsEditing: false });
     if (result.canceled || !result.assets[0]) return;
     await processImageForScan(result.assets[0].uri);
@@ -177,7 +163,7 @@ export default function MenuItemsScreen() {
     <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]} edges={['top', 'bottom']}>
       {/* Header */}
       <View style={[styles.header, { paddingHorizontal: theme.spacing.xl, paddingTop: theme.spacing.lg, paddingBottom: theme.spacing.md }]}>
-        <TouchableOpacity onPress={() => router.back()} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+        <TouchableOpacity onPress={() => router.back()} hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}>
           <X size={24} color={theme.colors.textPrimary} />
         </TouchableOpacity>
         <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h2, flex: 1, textAlign: 'center' as const }]}>
@@ -405,7 +391,7 @@ export default function MenuItemsScreen() {
                 <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, flex: 1 }]}>
                   {t('business.menuItems.scannedItems')}
                 </Text>
-                <TouchableOpacity onPress={() => setShowScanModal(false)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                <TouchableOpacity onPress={() => setShowScanModal(false)} hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}>
                   <X size={22} color={theme.colors.textPrimary} />
                 </TouchableOpacity>
               </View>

@@ -1,0 +1,54 @@
+{
+  "project_info": {
+    "project_number": "347897166718",
+    "project_id": "barakeat-cfcf4",
+    "storage_bucket": "barakeat-cfcf4.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:347897166718:android:2039ed1db5125bd93a912f",
+        "android_client_info": {
+          "package_name": "tn.barakeat.app"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "347897166718-plm8sjn9msohoinn9hgsvrtb0v4ts69t.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "tn.barakeat.app",
+            "certificate_hash": "ee3e16c3517e74994f2b88a16c72ed7ed1bc1d8a"
+          }
+        },
+        {
+          "client_id": "347897166718-fms7s6phli6l0qh8ajs4i1edrqk3jkct.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDsBryp3xq6V1WroWPRx5qAPb-eygd1C_M"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "347897166718-fms7s6phli6l0qh8ajs4i1edrqk3jkct.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "347897166718-e65j3461423p2c7loofv7c4cb3p6193r.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "tn.barakeat.app"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

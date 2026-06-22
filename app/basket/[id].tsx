@@ -4,10 +4,12 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import { useQuery } from '@tanstack/react-query';
 import { isPickupExpiredInTz } from '@/src/utils/timezone';
-import { MapPin, Clock, Navigation, ChevronLeft, Star, ShoppingBag, RefreshCw, Flag, X, Tag, Package, Bookmark, AlertTriangle, Camera } from 'lucide-react-native';
+import { MapPin, Clock, Navigation, ChevronLeft, Star, ShoppingBag, RefreshCw, Flag, X, Package, Bookmark, AlertTriangle, Camera } from 'lucide-react-native';
 import { useFavoritesStore } from '@/src/stores/favoritesStore';
 import { useAuthStore } from '@/src/stores/authStore';
 import * as ImagePicker from 'expo-image-picker';
+import { ensureCameraAccess } from '@/src/lib/photoPermission';
+import { useImageCropper } from '@/src/components/ImageCropper';
 import { useCustomAlert } from '@/src/components/CustomAlert';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { StatusBar } from 'expo-status-bar';
@@ -105,6 +107,7 @@ export default function BasketDetailsScreen() {
   const { id, businessPreview } = useLocalSearchParams<{ id: string; businessPreview?: string }>();
   const isBizPreview = businessPreview === 'true';
   const { t } = useTranslation();
+  const { pickPhoto } = useImageCropper();
   const theme = useTheme();
   const router = useRouter();
   const customAlert = useCustomAlert();
@@ -301,15 +304,24 @@ export default function BasketDetailsScreen() {
   // Pull whichever shape the basket OR the parallel location query exposes,
   // so future backend changes that DO embed location data on the basket
   // payload still work without a code change.
+  // The basket detail (GET /api/baskets/:id, refetched fresh — staleTime 0)
+  // ships the location's TODAY-resolved hours as `location_pickup_start` /
+  // `location_pickup_end`. Prefer those over the separately-cached location
+  // query so the displayed window is always the current day's. (The old chain
+  // looked for `location_pickup_start_time` WITH a `_time` suffix, which never
+  // matched the real field name — so it silently fell through to the 5-minute-
+  // cached location query and could show stale/wrong hours.)
   const locDefaultStart =
-    rawBasketForLoc?.location?.pickup_start_time
+    rawBasketForLoc?.location_pickup_start
+    ?? rawBasketForLoc?.location?.pickup_start_time
     ?? rawBasketForLoc?.location_pickup_start_time
     ?? rawBasketForLoc?.restaurant?.pickup_start_time
     ?? rawBasketForLoc?.restaurant_pickup_start_time
     ?? (locationDefaultsQuery.data as any)?.pickup_start_time
     ?? null;
   const locDefaultEnd =
-    rawBasketForLoc?.location?.pickup_end_time
+    rawBasketForLoc?.location_pickup_end
+    ?? rawBasketForLoc?.location?.pickup_end_time
     ?? rawBasketForLoc?.location_pickup_end_time
     ?? rawBasketForLoc?.restaurant?.pickup_end_time
     ?? rawBasketForLoc?.restaurant_pickup_end_time
@@ -321,6 +333,11 @@ export default function BasketDetailsScreen() {
         ? normalizeRawBasketToBasket(restaurantQuery.data as any, undefined, {
             start: locDefaultStart,
             end: locDefaultEnd,
+            // Pass the location's per-day schedule so an inheriting basket shows
+            // TODAY's location hours (resolved client-side), not the widest span.
+            weekly_schedule:
+              (restaurantQuery.data as any)?.location_weekly_schedule
+              ?? (locationDefaultsQuery.data as any)?.weekly_schedule,
           })
         : null);
 
@@ -396,7 +413,7 @@ export default function BasketDetailsScreen() {
         <TouchableOpacity
           style={[styles.backButton, { backgroundColor: 'rgba(255,255,255,0.9)', position: 'absolute', top: 52, left: 16, zIndex: 10 }]}
           onPress={() => router.back()}
-          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}
         >
           <ChevronLeft size={22} color={theme.colors.textPrimary} />
         </TouchableOpacity>
@@ -411,7 +428,7 @@ export default function BasketDetailsScreen() {
         <TouchableOpacity
           style={[styles.backButton, { backgroundColor: 'rgba(255,255,255,0.9)', position: 'absolute', top: 52, left: 16, zIndex: 10 }]}
           onPress={() => router.back()}
-          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}
         >
           <ChevronLeft size={22} color={theme.colors.textPrimary} />
         </TouchableOpacity>
@@ -466,12 +483,6 @@ export default function BasketDetailsScreen() {
     }
   };
 
-  const categoryKey = basket.category?.toLowerCase() ?? '';
-  const isGenericCategory = !categoryKey || categoryKey === 'all' || categoryKey === 'tous' || categoryKey === 'all' || categoryKey === 'كل';
-  const categoryLabel = !isGenericCategory
-    ? t(`categories.${categoryKey}`, { defaultValue: basket.category ?? '' })
-    : null;
-
   return (
     <View style={[styles.container, { backgroundColor: theme.colors.bg }]}>
       <StatusBar style="dark" />
@@ -488,9 +499,16 @@ export default function BasketDetailsScreen() {
         )}
         <View style={styles.heroOverlay} />
 
-        {/* Quantity / category badges — bottom-right of photo. The
-            quantity pill STAYS HERE through the whole scroll (it is
-            NOT docked into the bag) per the latest design call. */}
+        {/* Quantity badge — bottom-right of photo. STAYS through the whole
+            scroll (it is NOT docked into the bag) per the latest design call.
+            The category badge that used to sit next to it was removed: the
+            location's category is already shown on the basket card and on
+            the restaurant page above this view, so duplicating it here read
+            as noise. The prior implementation only hid GENERIC categories
+            (all/tous/كل), so a basket with a real category (restaurant,
+            café, etc.) still showed a stray badge that the other surfaces
+            had already dropped — that's the "one basket still shows it"
+            you noticed. */}
         <View style={{ position: 'absolute', bottom: 12, right: theme.spacing.lg, flexDirection: 'row', gap: 6 }}>
           <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: basket.quantityLeft <= 0 ? theme.colors.error : NEON, borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4 }}>
             <ShoppingBag size={12} color={basket.quantityLeft <= 0 ? '#fff' : BRAND_GREEN} />
@@ -498,14 +516,6 @@ export default function BasketDetailsScreen() {
               {basket.quantityLeft}
             </Text>
           </View>
-          {categoryLabel ? (
-            <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.55)', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4 }}>
-              <Tag size={11} color="#fff" />
-              <Text style={{ color: '#fff', fontSize: 11, fontWeight: '600', marginLeft: 4 }}>
-                {categoryLabel}
-              </Text>
-            </View>
-          ) : null}
         </View>
       </Animated.View>
 
@@ -638,7 +648,7 @@ export default function BasketDetailsScreen() {
       <TouchableOpacity
         style={[styles.backButton, { backgroundColor: 'rgba(255,255,255,0.9)', ...theme.shadows.shadowMd, zIndex: 20 }]}
         onPress={() => router.back()}
-        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+        hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}
       >
         <ChevronLeft size={22} color={theme.colors.textPrimary} />
       </TouchableOpacity>
@@ -765,15 +775,19 @@ export default function BasketDetailsScreen() {
               marginTop: theme.spacing.md,
               ...theme.shadows.shadowSm,
             }}>
-            {/* Left: pickup window */}
+            {/* Left: pickup window. When the location is closed today, swap
+                the time for "Fermé aujourd'hui" so the customer sees the
+                reason there's no window instead of yesterday's stale hours. */}
             <View style={{ flexDirection: 'row', alignItems: 'center', paddingRight: 12 }}>
-              <Clock size={14} color={theme.colors.primary} />
+              <Clock size={14} color={basket.closedToday ? theme.colors.error : theme.colors.primary} />
               <View style={{ marginLeft: 6 }}>
                 <Text style={{ color: theme.colors.muted, fontSize: 10, fontFamily: 'Poppins_400Regular' }}>
                   {t('basket.pickup', { defaultValue: 'Retrait' })}
                 </Text>
-                <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '700' as const }}>
-                  {basket.pickupWindow.start} – {basket.pickupWindow.end}
+                <Text style={{ color: basket.closedToday ? theme.colors.error : theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '700' as const }}>
+                  {basket.closedToday
+                    ? t('basket.closedToday', { defaultValue: 'Fermé aujourd\'hui' })
+                    : `${basket.pickupWindow.start} – ${basket.pickupWindow.end}`}
                 </Text>
               </View>
             </View>
@@ -848,13 +862,13 @@ export default function BasketDetailsScreen() {
                 style={{
                   flexDirection: 'row',
                   alignItems: 'flex-start',
-                  backgroundColor: '#eff35c18',
+                  backgroundColor: '#e3ff5c18',
                   borderRadius: theme.radii.r12,
                   padding: theme.spacing.md,
                   marginTop: theme.spacing.md,
                   gap: 10,
                   borderWidth: 1,
-                  borderColor: '#eff35c40',
+                  borderColor: '#e3ff5c40',
                 }}>
                 <AlertTriangle size={16} color="#b8a600" style={{ marginTop: 2 }} />
                 <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, flex: 1, lineHeight: 18 }} numberOfLines={warningExpanded ? undefined : 2}>
@@ -1011,7 +1025,9 @@ export default function BasketDetailsScreen() {
               compact
               borderRadius={16}
               title={
-                basket.quantityLeft <= 0
+                basket.closedToday
+                  ? t('basket.closedToday', { defaultValue: 'Fermé aujourd\'hui' })
+                  : basket.quantityLeft <= 0
                   ? t('basket.soldOut')
                   : isPickupExpiredInTz(basket.pickupWindow?.end)
                   ? t('orders.status.expired')
@@ -1021,7 +1037,7 @@ export default function BasketDetailsScreen() {
               // walkthrough's reserve step can always be tapped — otherwise
               // a real pickup window that's already closed would freeze the
               // demo at this step.
-              disabled={!isDemoBasket && (basket.quantityLeft <= 0 || isPickupExpiredInTz(basket.pickupWindow?.end))}
+              disabled={!isDemoBasket && (basket.closedToday === true || basket.quantityLeft <= 0 || isPickupExpiredInTz(basket.pickupWindow?.end))}
             />
           </View>
         </View>
@@ -1033,7 +1049,7 @@ export default function BasketDetailsScreen() {
           <View style={{ width: '100%', maxWidth: 340, backgroundColor: theme.colors.surface, borderRadius: theme.radii.r24, padding: theme.spacing.xl, ...theme.shadows.shadowLg }} onStartShouldSetResponder={() => true}>
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: theme.spacing.md }}>
               <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3, flex: 1 }}>{selectedMenuItem?.name}</Text>
-              <TouchableOpacity onPress={() => setSelectedMenuItem(null)} style={{ marginLeft: 8 }} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+              <TouchableOpacity onPress={() => setSelectedMenuItem(null)} style={{ marginLeft: 8 }} hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}>
                 <X size={20} color={theme.colors.textSecondary} />
               </TouchableOpacity>
             </View>
@@ -1076,18 +1092,14 @@ export default function BasketDetailsScreen() {
                   undefined,
                   [
                     { text: t('common.takePhoto', { defaultValue: 'Prendre une photo' }), onPress: async () => {
-                      const { status } = await ImagePicker.requestCameraPermissionsAsync();
-                      if (status !== 'granted') return;
+                      if (!(await ensureCameraAccess())) return;
                       const result = await ImagePicker.launchCameraAsync({ allowsEditing: true, quality: 0.7 });
                       if (!result.canceled && result.assets?.[0]) setReportImage(result.assets[0].uri);
                     }},
                     { text: t('common.chooseFromGallery', { defaultValue: 'Choisir depuis la galerie' }), onPress: async () => {
-                      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-                      if (status !== 'granted') return;
-                      const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: 'images', allowsEditing: true, quality: 0.7 });
-                      if (!result.canceled && result.assets?.[0]) setReportImage(result.assets[0].uri);
+                      const res = await pickPhoto();
+                      if (res?.uri) setReportImage(res.uri);
                     }},
-                    { text: t('common.cancel', { defaultValue: 'Annuler' }), style: 'cancel' },
                   ]
                 );
               }}
@@ -1101,7 +1113,7 @@ export default function BasketDetailsScreen() {
             {reportImage && (
               <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 8, gap: 8 }}>
                 <Image source={{ uri: reportImage }} style={{ width: 60, height: 60, borderRadius: 10 }} />
-                <TouchableOpacity onPress={() => setReportImage(null)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                <TouchableOpacity onPress={() => setReportImage(null)} hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}>
                   <X size={16} color={theme.colors.error} />
                 </TouchableOpacity>
               </View>

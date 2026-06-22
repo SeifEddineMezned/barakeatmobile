@@ -188,7 +188,7 @@ export default function ImpactScreen() {
           },
         ]}
       >
-        <TouchableOpacity onPress={() => router.back()} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }} style={styles.backButton}>
+        <TouchableOpacity onPress={() => router.back()} hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }} style={styles.backButton}>
           <ArrowLeft size={24} color={theme.colors.textPrimary} />
         </TouchableOpacity>
         <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h2, flex: 1, textAlign: 'center' }]}>
@@ -668,7 +668,7 @@ export default function ImpactScreen() {
                           ...theme.typography.bodySm,
                         }}
                       >
-                        {entry.meals_saved} {t('impact.meals')}
+                        {entry.meals_saved} {entry.meals_saved === 1 ? t('impact.basket', { defaultValue: 'panier' }) : t('impact.baskets', { defaultValue: 'paniers' })}
                       </Text>
                     </View>
                   );

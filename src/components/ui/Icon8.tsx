@@ -15,7 +15,7 @@
  * `fill="currentColor"` + a `color` prop — no svg-transformer dependency needed.
  */
 import React from 'react';
-import { Image } from 'react-native';
+import { Image, View } from 'react-native';
 import { SvgXml } from 'react-native-svg';
 
 const editPng = require('@/assets/images/icons8-edit-96.png');
@@ -60,4 +60,36 @@ export function FlagIcon8({ size = 18, tintColor }: PngIconProps) {
 
 export function DeleteIcon8({ size = 18, color = '#b94545' }: { size?: number; color?: string }) {
   return <SvgXml xml={DELETE_XML} width={size} height={size} color={color} />;
+}
+
+/**
+ * Mount this once at a screen's top level to warm the PNG icon cache BEFORE
+ * the user taps a 3-dots button. The action menu only mounts on-tap, so its
+ * <Image> children would otherwise pay the first-render PNG decode + GPU
+ * upload cost in-place — visible as "icons appear a second after the menu
+ * opens, except for delete (which is an inline SVG)".
+ *
+ * Renders one 1×1 invisible <Image> per Icon8 source. opacity:0 + absolute
+ * offscreen placement keeps the asset pipeline running (display:'none' would
+ * skip the load on some RN versions, defeating the point) while having zero
+ * visual or layout impact.
+ */
+const ICON8_SOURCES = [editPng, rolePng, approvalPng, playPng, pausePng, flagPng];
+export function Icon8Preloader() {
+  return (
+    <View
+      pointerEvents="none"
+      accessibilityElementsHidden
+      importantForAccessibility="no-hide-descendants"
+      style={{ position: 'absolute', top: -10, left: -10, width: 1, height: 1, opacity: 0 }}
+    >
+      {ICON8_SOURCES.map((src, i) => (
+        <Image
+          key={i}
+          source={src}
+          style={{ position: 'absolute', width: 1, height: 1 }}
+        />
+      ))}
+    </View>
+  );
 }

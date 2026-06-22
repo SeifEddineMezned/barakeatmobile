@@ -27,10 +27,16 @@ export const useNotificationStore = create(
       // waiting for the next 30 s tick (the bell-vs-popup desync the user
       // reported).
       popupPoller: null as null | (() => Promise<void>),
+      // Window-space position of the chat icon (used as the spring origin
+      // for the SpeechBubblePopup that fires on chat / message notifs).
+      // The business header's chat icon onLayout writes its measured rect
+      // here; null = unknown, popup falls back to default top-right spawn.
+      chatIconOrigin: null as null | { x: number; y: number },
     },
     (set, get) => ({
       setUnreadCount: (count: number) => set({ unreadCount: count }),
       setPopupPoller: (fn: () => Promise<void>) => set({ popupPoller: fn }),
+      setChatIconOrigin: (point: { x: number; y: number } | null) => set({ chatIconOrigin: point }),
       triggerPopupPoll: async () => {
         const { popupPoller } = get();
         if (popupPoller) {

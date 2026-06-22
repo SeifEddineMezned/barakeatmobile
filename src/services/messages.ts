@@ -16,7 +16,17 @@ export interface Conversation {
   unread_count: number;
   last_message?: string;
   last_message_at?: string;
+  /** Sticky flag — true once the merchant has reported this customer thread. */
+  reported_by_business?: boolean;
+  /** When the merchant reported it, the reason key, and any free-text detail
+   *  they typed (used when the reason is "other"). */
+  reported_at?: string | null;
+  reported_reason?: string | null;
+  reported_details?: string | null;
 }
+
+/** Reasons accepted by POST /conversations/:id/report — mirror the backend. */
+export type ConversationReportReason = 'abuse' | 'harassment' | 'spam' | 'fraud' | 'dispute' | 'other';
 
 export interface Message {
   id: number;
@@ -48,13 +58,55 @@ export async function fetchMessages(conversationId: number): Promise<{ conversat
   return res.data;
 }
 
-export async function sendMessage(conversationId: number, text: string): Promise<Message> {
-  const res = await apiClient.post<any>(`/api/messages/conversations/${conversationId}`, { text });
+export async function sendMessage(conversationId: number, text: string, idempotencyKey?: string): Promise<Message> {
+  // idempotencyKey: per-tap UUID minted by the chat screen. Sent as the
+  // Idempotency-Key header AND as `client_request_id` in the body so a proxy
+  // that strips custom headers still gets the dedup signal through. When the
+  // backend sees a (sender_id, key) pair it has already processed, it returns
+  // the original message row instead of inserting a duplicate.
+  const key = idempotencyKey && idempotencyKey.length > 0 ? idempotencyKey : undefined;
+  const res = await apiClient.post<any>(
+    `/api/messages/conversations/${conversationId}`,
+    { text, client_request_id: key },
+    key ? { headers: { 'Idempotency-Key': key } } : undefined
+  );
   return res.data;
 }
 
 export async function updateConversationStatus(conversationId: number, status: 'open' | 'closed' | 'blocked'): Promise<void> {
   await apiClient.put(`/api/messages/conversations/${conversationId}/status`, { status });
+}
+
+/**
+ * Archive a conversation from the BUSINESS-side list. One-way: once a
+ * conversation is archived it disappears from the merchant's /conversations
+ * response (any team member with access — the flag is conversation-scoped
+ * not user-scoped). The buyer's view is intentionally unaffected.
+ *
+ * Backed by PUT /api/messages/conversations/:id/archive on the server.
+ * Refuses if the requester is the conversation's buyer (the buyer cannot
+ * archive a thread from under the merchant's feet).
+ */
+export async function archiveConversation(conversationId: number): Promise<void> {
+  await apiClient.put(`/api/messages/conversations/${conversationId}/archive`);
+}
+
+/**
+ * Report a customer conversation (merchant-side only). The backend emails the
+ * full chat transcript to the support inbox and sets a sticky flag on the
+ * conversation so its card shows it was reported. Returns whether the thread
+ * had already been reported before this call.
+ */
+export async function reportConversation(
+  conversationId: number,
+  reason: ConversationReportReason,
+  details?: string,
+): Promise<{ alreadyReported: boolean }> {
+  const res = await apiClient.post<any>(`/api/messages/conversations/${conversationId}/report`, {
+    reason,
+    ...(details ? { details } : {}),
+  });
+  return { alreadyReported: !!res.data?.already_reported };
 }
 
 export async function fetchUnreadMessageCount(): Promise<number> {

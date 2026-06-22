@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { combine } from 'zustand/middleware';
 import { User } from '@/src/types';
-import { getToken, getUser, clearSession, saveUser } from '@/src/lib/session';
+import { getToken, getUser, clearSession, saveUser, purgeStaleKeychainSession } from '@/src/lib/session';
 import { saveToken } from '@/src/lib/session';
 
 export const useAuthStore = create(
@@ -14,16 +14,41 @@ export const useAuthStore = create(
       isRestoringSession: true,
     },
     (set) => ({
-      signIn: (user: User, token: string) => {
+      signIn: async (user: User, token: string): Promise<void> => {
         console.log('[AuthStore] signIn:', user.name, user.role);
-        // Persist user + token so session restore has the correct role
-        void saveUser(user);
-        void saveToken(token);
+        // Persist user + token BEFORE updating in-memory state, so callers
+        // that immediately navigate (sign-in screen → router.replace into
+        // tabs/dashboard) can `await` this and know the SecureStore writes
+        // committed. The previous fire-and-forget version raced the very
+        // first reload after sign-in — if SecureStore's write hadn't landed
+        // yet (or the keystore threw silently — see session.ts) the user
+        // would re-launch into the sign-in screen and assume the session
+        // had been wiped.
+        try {
+          await saveUser(user);
+          await saveToken(token);
+        } catch (err) {
+          // saveToken/saveUser now throw on failure. Surface a console error
+          // so it's visible in the logs the next time this happens, but
+          // still flip the in-memory state so the current session works
+          // until the user reloads.
+          console.error('[AuthStore] signIn: SecureStore persistence FAILED — session will not survive reload:', err);
+        }
         set({ user, token, isAuthenticated: true });
       },
 
       signOut: async () => {
         console.log('[AuthStore] signOut');
+        // Detach this device's push token on the backend BEFORE wiping the
+        // local session (the DELETE needs the JWT). Covers sign-out paths that
+        // call the store directly rather than services/auth.logout(). Otherwise
+        // the server keeps pushing this account's notifications to the phone
+        // after sign-out. Best-effort + idempotent — a no-op if logout() already
+        // cleared it (the token is gone, the DELETE just fails silently).
+        try {
+          const { unregisterPushNotifications } = require('@/src/services/pushNotifications');
+          await unregisterPushNotifications();
+        } catch {}
         await clearSession();
         set({ user: null, token: null, isAuthenticated: false });
       },
@@ -45,6 +70,12 @@ export const useAuthStore = create(
       restoreSession: async () => {
         console.log('[AuthStore] Restoring session...');
         try {
+          // Guard: on iOS the Keychain survives an app uninstall, so a
+          // reinstall can silently restore a stale session. If the token only
+          // exists in SecureStore (and not in its AsyncStorage mirror), treat
+          // it as a fresh install and purge it. Migration-safe — see session.ts.
+          await purgeStaleKeychainSession();
+
           const token = await getToken();
           const user = await getUser<User>();
 

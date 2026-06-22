@@ -105,6 +105,7 @@ export default function BusinessDetailScreen() {
           {/* Back button */}
           <TouchableOpacity
             onPress={() => router.back()}
+            hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}
             style={{
               position: 'absolute',
               top: 50,
@@ -172,7 +173,18 @@ export default function BusinessDetailScreen() {
                 </Text>
               </View>
             )}
-            {restaurant.pickup_start_time && (
+            {/* Pickup-time chip — replaced with "Fermé aujourd'hui" when
+                the location is closed for the whole business day, so the
+                spot that normally shows hours actually tells the customer
+                why there's no window today instead of going blank. */}
+            {(restaurant as any).closed_today ? (
+              <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: theme.colors.bg, borderRadius: 20, paddingHorizontal: 10, paddingVertical: 6 }}>
+                <Clock size={12} color={theme.colors.error} />
+                <Text style={{ color: theme.colors.error, ...theme.typography.caption, marginLeft: 4, fontWeight: '600' }}>
+                  {t('basket.closedToday', { defaultValue: 'Fermé aujourd\'hui' })}
+                </Text>
+              </View>
+            ) : restaurant.pickup_start_time && (
               <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: theme.colors.bg, borderRadius: 20, paddingHorizontal: 10, paddingVertical: 6 }}>
                 <Clock size={12} color={theme.colors.textSecondary} />
                 <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, marginLeft: 4 }}>

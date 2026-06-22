@@ -2,9 +2,8 @@ import React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Animated, Linking } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
-import { MapPin, Clock, Navigation, Leaf, Banknote } from 'lucide-react-native';
+import { MapPin, Clock, Navigation, Banknote } from 'lucide-react-native';
 import { useTheme } from '@/src/theme/ThemeProvider';
-import { calcCO2Saved } from '@/src/lib/impactCalculations';
 import type { Order } from '@/src/types';
 
 interface OrderCardProps {
@@ -151,7 +150,7 @@ export function OrderCard({ order }: OrderCardProps) {
                 },
               ]}
             >
-              {order.pickupCode}
+              {String(order.pickupCode ?? '').substring(0, 6).toUpperCase()}
             </Text>
           </View>
 
@@ -164,24 +163,19 @@ export function OrderCard({ order }: OrderCardProps) {
             const doneStatuses = ['collected', 'completed', 'picked_up'] as const;
             const isDone = doneStatuses.includes(order.status as any);
             if (!isDone) return null;
-            const co2 = calcCO2Saved(order.quantity);
+            // CO₂ pill removed: the per-meal kgCO₂ estimate was not accurate
+            // enough to claim on individual orders. Money saved stays because
+            // it's the literal price delta the customer didn't pay.
             const savedTnd = Math.max(0, (order.basket.originalPrice - order.basket.discountedPrice) * order.quantity);
+            if (savedTnd <= 0) return null;
             return (
               <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: theme.spacing.sm, marginTop: theme.spacing.md }}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: theme.colors.accentFresh + '15', borderRadius: theme.radii.r8, paddingHorizontal: theme.spacing.md, paddingVertical: theme.spacing.xs, gap: 4 }}>
-                  <Leaf size={12} color={theme.colors.accentFresh} />
-                  <Text style={{ color: theme.colors.accentFresh, fontSize: 12, fontFamily: 'Poppins_600SemiBold', fontWeight: '600' as const }}>
-                    {t('impact.perOrderCo2', { value: co2.toFixed(1), defaultValue: `−${co2.toFixed(1)} kg CO₂` })}
+                <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: theme.colors.primary + '15', borderRadius: theme.radii.r8, paddingHorizontal: theme.spacing.md, paddingVertical: theme.spacing.xs, gap: 4 }}>
+                  <Banknote size={12} color={theme.colors.primary} />
+                  <Text style={{ color: theme.colors.primary, fontSize: 12, fontFamily: 'Poppins_600SemiBold', fontWeight: '600' as const }}>
+                    {t('impact.perOrderMoney', { value: savedTnd.toFixed(0), defaultValue: `+${savedTnd.toFixed(0)} TND économisés` })}
                   </Text>
                 </View>
-                {savedTnd > 0 && (
-                  <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: theme.colors.primary + '15', borderRadius: theme.radii.r8, paddingHorizontal: theme.spacing.md, paddingVertical: theme.spacing.xs, gap: 4 }}>
-                    <Banknote size={12} color={theme.colors.primary} />
-                    <Text style={{ color: theme.colors.primary, fontSize: 12, fontFamily: 'Poppins_600SemiBold', fontWeight: '600' as const }}>
-                      {t('impact.perOrderMoney', { value: savedTnd.toFixed(0), defaultValue: `+${savedTnd.toFixed(0)} TND économisés` })}
-                    </Text>
-                  </View>
-                )}
               </View>
             );
           })()}

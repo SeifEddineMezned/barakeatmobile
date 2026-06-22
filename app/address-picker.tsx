@@ -1,7 +1,7 @@
 import React, { useState, useRef } from 'react';
 import {
   View, Text, TouchableOpacity, ScrollView,
-  TextInput, Platform, StyleSheet, Modal,
+  TextInput, Platform, StyleSheet, Modal, Linking,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MapPin, Home, Briefcase, Plus, ChevronLeft, Check, Trash2, Edit3, Navigation, AlertTriangle } from 'lucide-react-native';
@@ -10,9 +10,11 @@ import { useTheme } from '@/src/theme/ThemeProvider';
 import { PaperSurface } from '@/src/components/ui/PaperSurface';
 import { EditIcon8, DeleteIcon8 } from '@/src/components/ui/Icon8';
 import { useAddressStore, type SavedAddress } from '@/src/stores/addressStore';
+import { resolveAddressLabel, defaultAddressKey } from '@/src/utils/addressLabel';
 import { useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import { searchAddresses, reverseGeocode } from '@/src/services/geocoding';
+import { useCustomAlert } from '@/src/components/CustomAlert';
 
 let MapView: any = null;
 let Marker: any = null;
@@ -30,6 +32,7 @@ export default function AddressPickerScreen() {
   const theme = useTheme();
   const router = useRouter();
   const { t } = useTranslation();
+  const customAlert = useCustomAlert();
   const { addresses, selectedId, addAddress, updateAddress, removeAddress, selectAddress } = useAddressStore();
 
   const [step, setStep] = useState<Step>('list');
@@ -39,7 +42,21 @@ export default function AddressPickerScreen() {
   const goToCurrentLocation = async () => {
     try {
       const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') return;
+      if (status !== 'granted') {
+        // Previously silent — the button felt broken. Surface a branded popup
+        // that explains why and offers a one-tap route into iOS/Android
+        // Settings to flip the permission.
+        customAlert.showAlert(
+          t('permissions.locationTitle', { defaultValue: 'Localisation désactivée' }),
+          t('permissions.locationBody', { defaultValue: "Pour utiliser votre position actuelle, autorisez l'accès à la localisation dans les Réglages." }),
+          [
+            { text: t('common.cancel', { defaultValue: 'Annuler' }), style: 'cancel' },
+            { text: t('permissions.openSettings', { defaultValue: 'Ouvrir les Réglages' }), onPress: () => Linking.openSettings() },
+          ],
+          { type: 'warning' },
+        );
+        return;
+      }
       const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
       const coords = { lat: pos.coords.latitude, lng: pos.coords.longitude };
       setPendingRegion(coords);
@@ -50,6 +67,8 @@ export default function AddressPickerScreen() {
     } catch {}
   };
   const [labelInput, setLabelInput] = useState('');
+  // Inline error on the name page (e.g. duplicate name). Cleared on edits.
+  const [nameError, setNameError] = useState('');
   const [editingAddress, setEditingAddress] = useState<SavedAddress | null>(null);
   // Address pending-delete: stored as the full object so the modal can show its label
   const [addressPendingDelete, setAddressPendingDelete] = useState<SavedAddress | null>(null);
@@ -60,6 +79,7 @@ export default function AddressPickerScreen() {
   const reset = () => {
     setStep('list');
     setLabelInput('');
+    setNameError('');
     setEditingAddress(null);
     setReverseGeocodedName('');
     // Re-arm auto-fill for the next session. Without this, after the user
@@ -70,7 +90,9 @@ export default function AddressPickerScreen() {
   };
 
   const handleBack = () => {
-    if (step === 'form') { setStep('map'); return; }
+    // The name page (form) is step 2 of BOTH create (from map) and edit (from
+    // the edit map) — go back to whichever page 1 we came from.
+    if (step === 'form') { setStep(editingAddress ? 'edit' : 'map'); setNameError(''); return; }
     if (step === 'map') { reset(); return; }
     if (step === 'edit') { reset(); return; }
     router.back();
@@ -93,16 +115,12 @@ export default function AddressPickerScreen() {
     fetchReverseGeocode(addr.lat, addr.lng);
   };
 
-  const handleEditConfirm = () => {
-    if (editingAddress) {
-      const trimmed = labelInput.trim();
-      void updateAddress(editingAddress.id, {
-        lat: pendingRegion.lat,
-        lng: pendingRegion.lng,
-        label: trimmed || editingAddress.label,
-      });
-    }
-    reset();
+  // Edit flow, page 1 (map) → page 2 (name). The name is NOT editable on the
+  // map page anymore — the user confirms/changes it on the name page, exactly
+  // like the create flow.
+  const handleEditMapConfirm = () => {
+    setNameError('');
+    setStep('form');
   };
 
   const handleMapConfirm = () => {
@@ -118,12 +136,26 @@ export default function AddressPickerScreen() {
       setLabelInput(reverseGeocodedName);
       labelSourceCoordsRef.current = { ...pendingRegion };
     }
+    setNameError('');
     setStep('form');
   };
 
+  // Save the name page — for create AND edit. Two addresses may not share a
+  // name (case-insensitive), excluding the one being edited.
   const handleFormSave = () => {
     const label = labelInput.trim() || t('addressPicker.defaultLabel', { defaultValue: 'Mon adresse' });
-    void addAddress({ label, lat: pendingRegion.lat, lng: pendingRegion.lng });
+    const duplicate = addresses.some(
+      (a) => a.id !== editingAddress?.id && a.label.trim().toLowerCase() === label.toLowerCase()
+    );
+    if (duplicate) {
+      setNameError(t('addressPicker.duplicateName', { defaultValue: 'Ce nom est déjà utilisé. Choisissez-en un autre.' }));
+      return;
+    }
+    if (editingAddress) {
+      void updateAddress(editingAddress.id, { lat: pendingRegion.lat, lng: pendingRegion.lng, label });
+    } else {
+      void addAddress({ label, lat: pendingRegion.lat, lng: pendingRegion.lng });
+    }
     reset();
   };
 
@@ -195,16 +227,24 @@ export default function AddressPickerScreen() {
     step === 'list' ? t('addressPicker.title')
     : step === 'map' ? t('addressPicker.chooseLocation')
     : step === 'edit' ? t('addressPicker.editLocation')
-    : t('addressPicker.labelPlace');
+    : (editingAddress
+        ? t('addressPicker.confirmName', { defaultValue: 'Confirmer le nom' })
+        : t('addressPicker.labelPlace'));
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]} edges={['top']}>
       {/* Header */}
-      <View style={[styles.header, { borderBottomColor: theme.colors.divider }]}>
-        <TouchableOpacity onPress={handleBack} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+      <View style={[styles.header, { borderBottomColor: theme.colors.divider, justifyContent: 'center', alignItems: 'center', minHeight: 48 }]}>
+        <TouchableOpacity
+          onPress={handleBack}
+          hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}
+          style={{ position: 'absolute', left: 16, top: 12 }}
+        >
           <ChevronLeft size={24} color={theme.colors.textPrimary} />
         </TouchableOpacity>
-        <Text style={[theme.typography.h2, { color: theme.colors.textPrimary, flex: 1, marginLeft: 12 }]}>
+        {/* pointerEvents="none" — title paints later than the absolute back
+            button and would otherwise swallow taps over the icon. */}
+        <Text pointerEvents="none" style={[theme.typography.h2, { color: theme.colors.textPrimary }]}>
           {title}
         </Text>
       </View>
@@ -239,7 +279,7 @@ export default function AddressPickerScreen() {
                 <View style={{ width: '100%', height: 200, backgroundColor: theme.colors.divider, alignItems: 'center', justifyContent: 'center' }}>
                   <MapPin size={32} color={theme.colors.muted} />
                   <Text style={[theme.typography.bodySm, { color: theme.colors.muted, marginTop: 8 }]}>
-                    {selectedAddress.label}
+                    {resolveAddressLabel(selectedAddress.label, t)}
                   </Text>
                   <Text style={[theme.typography.caption, { color: theme.colors.textSecondary, marginTop: 4 }]}>
                     {selectedAddress.lat.toFixed(4)}, {selectedAddress.lng.toFixed(4)}
@@ -270,8 +310,8 @@ export default function AddressPickerScreen() {
               </Text>
               {addresses.map((addr) => {
                 const isSelected = addr.id === selectedId;
-                const labelLower = addr.label.toLowerCase();
-                const Icon = labelLower === 'home' ? Home : labelLower === 'work' ? Briefcase : MapPin;
+                const dk = defaultAddressKey(addr.label);
+                const Icon = dk === 'home' ? Home : dk === 'work' ? Briefcase : MapPin;
                 return (
                   <TouchableOpacity
                     key={addr.id}
@@ -287,28 +327,45 @@ export default function AddressPickerScreen() {
                         ]}
                         numberOfLines={1}
                       >
-                        {addr.label}
+                        {resolveAddressLabel(addr.label, t)}
                       </Text>
                       {/* Show coordinates as address detail */}
                       <Text style={[theme.typography.caption, { color: theme.colors.textSecondary, marginTop: 2 }]}>
                         {addr.lat.toFixed(4)}, {addr.lng.toFixed(4)}
                       </Text>
                     </View>
-                    {isSelected && <Check size={18} color={theme.colors.primary} />}
-                    {/* Edit button */}
+                    {/* Edit / Delete buttons — each in a 36 px round
+                        chip so the icons read as proper tap targets
+                        instead of bare glyphs. Icons themselves are
+                        bumped to 22 px (was 16). The "selected"
+                        Check that used to sit between row-text and
+                        actions was redundant with the row's
+                        highlighted background + primary border, so
+                        it's dropped — the visual state of the row
+                        already conveys selection. */}
                     <TouchableOpacity
                       onPress={() => handleEditAddress(addr)}
-                      hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                      style={{ marginLeft: 10 }}
+                      hitSlop={{ top: 10, bottom: 10, left: 6, right: 6 }}
+                      style={{
+                        width: 36, height: 36, borderRadius: 18,
+                        backgroundColor: theme.colors.primary + '12',
+                        justifyContent: 'center', alignItems: 'center',
+                        marginLeft: 10,
+                      }}
                     >
-                      <EditIcon8 size={16} />
+                      <EditIcon8 size={22} />
                     </TouchableOpacity>
                     <TouchableOpacity
                       onPress={() => setAddressPendingDelete(addr)}
-                      hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                      style={{ marginLeft: 10 }}
+                      hitSlop={{ top: 10, bottom: 10, left: 6, right: 6 }}
+                      style={{
+                        width: 36, height: 36, borderRadius: 18,
+                        backgroundColor: '#b9454514',
+                        justifyContent: 'center', alignItems: 'center',
+                        marginLeft: 10,
+                      }}
                     >
-                      <DeleteIcon8 size={16} />
+                      <DeleteIcon8 size={22} />
                     </TouchableOpacity>
                   </TouchableOpacity>
                 );
@@ -382,10 +439,22 @@ export default function AddressPickerScreen() {
               </View>
             )}
 
-            {/* Fixed center pin */}
+            {/* Fixed center pin — brighter blue (#2196F3, Material
+                blue 500) so it reads as a map marker, not a brand
+                element. White-bordered outer ring + tiny white core
+                dot give the user a precise "this is exactly where
+                you're picking" indicator. Same geometry across all
+                three picker surfaces (LocationPickerModal +
+                LocationFormFields) so the picking feedback feels
+                consistent customer-side and business-side. The
+                stem tip lands at the map's geographic center —
+                see centerPin's `marginTop: -(pinDot.height +
+                pinStem.height)` in styles below. */}
             <View style={styles.centerPin} pointerEvents="none">
-              <View style={[styles.pinDot, { backgroundColor: theme.colors.primary }]} />
-              <View style={[styles.pinStem, { backgroundColor: theme.colors.primary }]} />
+              <View style={[styles.pinDot, { backgroundColor: '#2196F3' }]}>
+                <View style={styles.pinCore} />
+              </View>
+              <View style={[styles.pinStem, { backgroundColor: '#2196F3' }]} />
             </View>
 
             {/* Instruction tooltip */}
@@ -491,10 +560,22 @@ export default function AddressPickerScreen() {
               </View>
             )}
 
-            {/* Fixed center pin */}
+            {/* Fixed center pin — brighter blue (#2196F3, Material
+                blue 500) so it reads as a map marker, not a brand
+                element. White-bordered outer ring + tiny white core
+                dot give the user a precise "this is exactly where
+                you're picking" indicator. Same geometry across all
+                three picker surfaces (LocationPickerModal +
+                LocationFormFields) so the picking feedback feels
+                consistent customer-side and business-side. The
+                stem tip lands at the map's geographic center —
+                see centerPin's `marginTop: -(pinDot.height +
+                pinStem.height)` in styles below. */}
             <View style={styles.centerPin} pointerEvents="none">
-              <View style={[styles.pinDot, { backgroundColor: theme.colors.primary }]} />
-              <View style={[styles.pinStem, { backgroundColor: theme.colors.primary }]} />
+              <View style={[styles.pinDot, { backgroundColor: '#2196F3' }]}>
+                <View style={styles.pinCore} />
+              </View>
+              <View style={[styles.pinStem, { backgroundColor: '#2196F3' }]} />
             </View>
 
             {/* Editing label */}
@@ -515,21 +596,7 @@ export default function AddressPickerScreen() {
           </View>
 
           <View style={[styles.mapFooter, { backgroundColor: theme.colors.bg, gap: 10 }]}>
-            {/* Editable label — lets the user rename "Maman" → "Travail" etc. */}
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, paddingHorizontal: 14, paddingVertical: 10, borderWidth: 1, borderColor: theme.colors.divider }}>
-              <EditIcon8 size={14} />
-              <TextInput
-                value={labelInput}
-                onChangeText={(v) => {
-                  labelAutoFilledRef.current = false;
-                  setLabelInput(v);
-                }}
-                placeholder={editingAddress.label}
-                placeholderTextColor={theme.colors.muted}
-                style={{ flex: 1, color: theme.colors.textPrimary, ...theme.typography.bodySm }}
-                maxLength={40}
-              />
-            </View>
+            {/* The name is edited on the next page (Confirmer le nom), not here. */}
             <TouchableOpacity
               onPress={goToCurrentLocation}
               style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 12, borderRadius: theme.radii.r16, borderWidth: 1, borderColor: theme.colors.divider, backgroundColor: theme.colors.surface }}
@@ -538,7 +605,7 @@ export default function AddressPickerScreen() {
               <Text style={[theme.typography.bodySm, { color: theme.colors.primary, fontWeight: '600' }]}>{t('addressPicker.useCurrentLocation', { defaultValue: 'Utiliser ma position actuelle' })}</Text>
             </TouchableOpacity>
             <TouchableOpacity
-              onPress={handleEditConfirm}
+              onPress={handleEditMapConfirm}
               style={[styles.confirmBtn, { backgroundColor: theme.colors.primary, borderRadius: theme.radii.r16 }]}
             >
               <Text style={[theme.typography.button, { color: '#fff' }]}>{t('addressPicker.confirmLocation')}</Text>
@@ -559,6 +626,7 @@ export default function AddressPickerScreen() {
             <TouchableOpacity
               onPress={() => {
                 labelAutoFilledRef.current = false;
+                if (nameError) setNameError('');
                 setLabelInput(reverseGeocodedName);
               }}
               activeOpacity={0.8}
@@ -603,6 +671,7 @@ export default function AddressPickerScreen() {
                   key={ql}
                   onPress={() => {
                     labelAutoFilledRef.current = false;
+                    if (nameError) setNameError('');
                     setLabelInput(qlLabel);
                   }}
                   style={[
@@ -642,15 +711,28 @@ export default function AddressPickerScreen() {
             value={labelInput}
             onChangeText={(v) => {
               labelAutoFilledRef.current = false;
+              if (nameError) setNameError('');
               setLabelInput(v);
             }}
           />
+
+          {/* Duplicate-name (or other) error. */}
+          {nameError ? (
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: -12, marginBottom: 18 }}>
+              <AlertTriangle size={14} color={theme.colors.error} />
+              <Text style={[theme.typography.bodySm, { color: theme.colors.error, flex: 1 }]}>{nameError}</Text>
+            </View>
+          ) : null}
 
           <TouchableOpacity
             onPress={handleFormSave}
             style={[styles.confirmBtn, { backgroundColor: theme.colors.primary, borderRadius: theme.radii.r16 }]}
           >
-            <Text style={[theme.typography.button, { color: '#fff' }]}>{t('addressPicker.saveAddress')}</Text>
+            <Text style={[theme.typography.button, { color: '#fff' }]}>
+              {editingAddress
+                ? t('addressPicker.confirmName', { defaultValue: 'Confirmer le nom' })
+                : t('addressPicker.saveAddress')}
+            </Text>
           </TouchableOpacity>
         </View>
       )}
@@ -673,7 +755,7 @@ export default function AddressPickerScreen() {
             </Text>
             {addressPendingDelete && (
               <Text style={{ color: theme.colors.textSecondary, ...theme.typography.body, textAlign: 'center', marginBottom: 8 }}>
-                <Text style={{ fontWeight: '700' }}>{addressPendingDelete.label}</Text>
+                <Text style={{ fontWeight: '700' }}>{resolveAddressLabel(addressPendingDelete.label, t)}</Text>
               </Text>
             )}
             <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm, textAlign: 'center', marginBottom: 24, lineHeight: 20 }}>
@@ -743,18 +825,40 @@ const styles = StyleSheet.create({
     top: '50%',
     left: '50%',
     alignItems: 'center',
-    marginLeft: -8,
-    marginTop: -30,
+    // Composite is 22 (dot) + 14 (stem) tall. Offset by -half-width
+    // and -full-height so the STEM TIP — the actual geographic pick
+    // point — lands exactly at the map's center.
+    marginLeft: -11,
+    marginTop: -36,
   },
   pinDot: {
-    width: 16,
-    height: 16,
-    borderRadius: 8,
-    borderWidth: 2,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    borderWidth: 2.5,
     borderColor: '#fff',
+    justifyContent: 'center',
+    alignItems: 'center',
+    // Subtle elevation so the pin sits above the map tiles instead
+    // of looking flat against them.
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.25,
+    shadowRadius: 2,
+    elevation: 4,
+  },
+  // White inner core — the precision indicator. Sits dead center
+  // inside the blue dot so the user can see EXACTLY which pixel is
+  // being picked. Without it the blue dot reads as a generic blob;
+  // with it the eye locks onto the precise pick point.
+  pinCore: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#fff',
   },
   pinStem: {
-    width: 2,
+    width: 3,
     height: 14,
   },
   tooltip: {

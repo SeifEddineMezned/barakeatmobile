@@ -2,7 +2,7 @@ import { Tabs } from "expo-router";
 import { LayoutDashboard, ShoppingBag, ClipboardList, User, Bell, Settings, ChevronDown, MapPin, Check, Building2, Plus, QrCode, Hand, Clock, CheckCircle, MessageCircle, Store } from "lucide-react-native";
 import React from "react";
 import { useTranslation } from "react-i18next";
-import { View, Text, TouchableOpacity, Animated, Dimensions, PanResponder, Modal, StyleSheet, ScrollView, useWindowDimensions, BackHandler } from "react-native";
+import { View, Text, TouchableOpacity, Animated, Dimensions, PanResponder, Modal, StyleSheet, ScrollView, useWindowDimensions, BackHandler, AppState, Platform } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter, useSegments } from "expo-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -14,9 +14,14 @@ import { useNotificationStore } from "@/src/stores/notificationStore";
 import { useAuthStore } from "@/src/stores/authStore";
 import { useBusinessStore } from "@/src/stores/businessStore";
 import { useWalkthroughStore } from "@/src/stores/walkthroughStore";
+import { useSplashStore } from "@/src/stores/splashStore";
 import { NoLocationCTA } from "@/src/components/NoLocationCTA";
 import { DelayedLoader } from "@/src/components/DelayedLoader";
 import { DemoTapHintToast } from "@/src/components/DemoTapHintToast";
+import { fetchConversationUnreads, fetchConversations } from "@/src/services/messages";
+import { usePollWhenForegrounded } from "@/src/hooks/usePollWhenFocused";
+import { getBusinessDayDateStr } from "@/src/utils/timezone";
+import { isPendingReservationActive } from "@/src/utils/orderExpiry";
 import Svg, { Path } from 'react-native-svg';
 import { useOverlayOriginOffset } from "@/src/components/useOverlayOriginOffset";
 
@@ -30,11 +35,105 @@ export default function BusinessTabLayout() {
   const router = useRouter();
   const setUnreadCount = useNotificationStore((s) => s.setUnreadCount);
   const unreadCount = useNotificationStore((s) => s.unreadCount);
+  // Chat-icon plumbing — header chat button publishes its window-space
+  // center to the notification store so the SpeechBubblePopup that fires
+  // on a message notif visually springs from this exact icon. Tap routes
+  // to the full-page /business/conversations screen (was a bottom sheet,
+  // promoted to a real screen at user request).
+  const setChatIconOrigin = useNotificationStore((s) => s.setChatIconOrigin);
+  // Conversation unread map — same query the per-order chat icons in
+  // incoming-orders.tsx use, so React-Query dedupes the fetch.
+  const msgUnreadsQuery = useQuery({
+    queryKey: ['conversation-unreads'],
+    queryFn: fetchConversationUnreads,
+    staleTime: 25_000,
+    enabled: isAuthenticated,
+  });
+  // Full conversation list — shared cache with /business/conversations
+  // (same ['conversations'] key) so this doesn't add a second network
+  // request. We need the full rows here so the header badge counts the
+  // SAME conversations the conversations screen shows: a conversation
+  // whose last message is >7 days old is dropped from the list, so its
+  // unread_count should not inflate the badge.
+  //
+  // Refetch every 30 s while the app is FOREGROUNDED. The layout never
+  // unmounts so without an interval the badge would only refresh when
+  // something else (the conversations screen, the message thread)
+  // happened to remount the shared cache.
+  //
+  // Why usePollWhenForegrounded (NOT a bare `refetchInterval: 30_000`):
+  // the layout-level mount persists when the app is backgrounded, so a
+  // bare interval kept firing /conversations every 30 s with the phone
+  // in the user's pocket — the server's auto-close UPDATEs ran on each
+  // hit and the load contributed to the "save → 503 popup → but
+  // actually saved" symptom. Gating on AppState pauses the poll
+  // entirely while backgrounded; push notifications already invalidate
+  // ['conversations'] on foreground return so the badge is fresh the
+  // moment the user comes back.
+  const conversationsRefetch = usePollWhenForegrounded(30_000);
+  const conversationsQuery = useQuery({
+    queryKey: ['conversations'],
+    queryFn: fetchConversations,
+    staleTime: 25_000,
+    refetchInterval: conversationsRefetch,
+    refetchOnWindowFocus: true,
+    enabled: isAuthenticated,
+  });
+  // Badge value = NUMBER OF CONVERSATIONS with unread messages, not the
+  // sum of unread message counts. "4" on the badge then matches "4 red
+  // dots in the conversations list" 1:1, which is what the user is
+  // expecting when they tap through. Summing message counts caused the
+  // badge to overshoot (one chatty thread with 5 unread messages read
+  // as "5 unread" on the badge even though it was a single conversation).
+  const msgUnreadsTotal = React.useMemo(() => {
+    // Badge counts only ACTIONABLE unreads — what the user can act on
+    // today. Two filters mirror the À venir tab on the conversations
+    // page so the badge number always matches what the list shows:
+    //
+    //   1. Conversation status must be open (closed / blocked threads
+    //      are no longer actionable).
+    //   2. Last message must fall inside TODAY's business day (the
+    //      03:30 Tunisia cutoff), or be a brand-new open thread with no
+    //      history yet. Without this the badge was counting messages
+    //      from previous business days OR from months ago — the user
+    //      reported the badge showing "1" while the À venir list showed
+    //      stale unreads from before the 03:30 reset.
+    //
+    // Past-tab unreads (older than the business-day boundary) are
+    // intentionally NOT counted — they're reachable in Anciennes, but
+    // shouldn't push the merchant to open the chat surface right now.
+    const now = new Date();
+    const todayBizDateStr = getBusinessDayDateStr(now);
+    const convs = conversationsQuery.data ?? [];
+    let count = 0;
+    for (const c of convs) {
+      const unread = Number(c.unread_count) || 0;
+      if (unread <= 0) continue;
+      if (c.status !== 'open') continue;
+      const lastMs = c.last_message_at ? new Date(c.last_message_at).getTime() : 0;
+      if (lastMs === 0) {
+        // No history yet — fresh open thread, count it.
+        count += 1;
+        continue;
+      }
+      const lastBizDateStr = getBusinessDayDateStr(new Date(lastMs));
+      if (lastBizDateStr === todayBizDateStr) count += 1;
+    }
+    return count;
+  }, [conversationsQuery.data]);
   const brandAnim = React.useRef(new Animated.Value(0)).current;
 
   // Compute visible tabs based on permissions (computed below, default all 4)
   const allTabNames = ['dashboard', 'my-baskets', 'incoming-orders', 'business-profile'];
   const navWidth = Dimensions.get('window').width - 64;
+  // Single animated value drives BOTH the pill's translateX AND the
+  // icon/label crossfade. The previous "two parallel Animated.Values"
+  // approach (glassAnim + tabIndexAnim) introduced three different ways
+  // they could drift on slow Android — colour-stays-grey + pill-snap-back
+  // bugs the user kept hitting on one specific phone. Driving every visual
+  // off `glassAnim` (real pill position) by interpolation makes drift
+  // impossible: if the pill is where it should be, the colours follow.
+  // Same pattern as the customer navbar in app/(tabs)/_layout.tsx.
   const glassAnim = React.useRef(new Animated.Value(0)).current;
   const [activeIndex, setActiveIndex] = React.useState(0);
 
@@ -144,15 +243,16 @@ export default function BusinessTabLayout() {
   // Fetch org context & locations for the location dropdown
   const [locationModalVisible, setLocationModalVisible] = React.useState(false);
 
-  // my-context (role / org / location memberships) doesn't change
-  // mid-session except when an admin actively re-assigns the user.
-  // Old config (staleTime 10s + refetchOnMount 'always' + 60s interval +
-  // refetchOnWindowFocus + refetchOnReconnect) was firing 1–2 req/min
-  // baseline plus a refetch on every tab swap. Dropped to 5 min stale
-  // + 5 min interval; opt back into reconnect explicitly so a fresh
-  // session after a network blip still picks up role changes. The
-  // 'always' mount and window-focus refetches are dropped — they
-  // were duplicating the work for zero benefit.
+  // my-context (role / org / location memberships) doesn't change mid-
+  // session except when an admin actively re-assigns the user. Polling
+  // tightly to detect that change is wasteful — instead the backend
+  // sends a silent `member_updated` push to the affected user the moment
+  // role / permissions change, and the listener below refetches once
+  // on receipt. The conservative 5 min interval here is the fallback for
+  // the rare case where the push gets dropped (device offline, token
+  // expired, FCM/APNs hiccup). Foreground-transition refetch ALSO runs
+  // — covers the user backgrounding the app during the membership
+  // change.
   const myContextQuery = useQuery({
     queryKey: ['my-context'],
     queryFn: fetchMyContext,
@@ -162,8 +262,69 @@ export default function BusinessTabLayout() {
     refetchOnReconnect: true,
   });
 
+  // Foreground transition refetch — covers the case where the device
+  // backgrounded our app, an admin changed this user's role on the
+  // server, the silent push fired but the OS coalesced or dropped it
+  // (common when the screen is locked for a while), and the user
+  // brought us back. AppState 'change' → active fires before any
+  // tab/focus event in JS.
+  const refetchMyContext = myContextQuery.refetch;
+  React.useEffect(() => {
+    const sub = AppState.addEventListener('change', (next) => {
+      if (next === 'active') void refetchMyContext();
+    });
+    return () => sub.remove();
+  }, [refetchMyContext]);
+
   const orgId = myContextQuery.data?.organization_id;
   const myRole = myContextQuery.data?.role;
+
+  // ── Auto-refresh on role / permission / location-membership change ─────
+  // When the my-context payload tells us this business user's role,
+  // permission set, or location assignment moved (i.e. an admin changed
+  // them on the team-management screen, either locally or from another
+  // device), play the Barakeat halo splash and re-fetch every dependent
+  // query. The splash gives the user a visible "we're applying your new
+  // role" beat AND naturally remounts the heavy tabs UI underneath so the
+  // visible-tab gates / permission gates pick up the new values without
+  // a manual restart. We deliberately NOT close + reopen the app — the
+  // user reported that's jarring; this preserves the running JS instance,
+  // the auth session, and the cached tabs state and just refreshes what
+  // role/perms control.
+  //
+  // The snapshot is initialised on the FIRST data load (so the splash
+  // doesn't fire on every cold start), then compared on every subsequent
+  // data update. Compares via JSON.stringify because permissions/location
+  // membership are records/arrays — identity comparison would always
+  // diff on a React Query refetch even when the payload is identical.
+  const triggerSplash = useSplashStore((s) => s.triggerSplash);
+  const roleSnapshotRef = React.useRef<string | null>(null);
+  React.useEffect(() => {
+    const data = myContextQuery.data;
+    if (!data) return;
+    const snapshot = JSON.stringify({
+      role: (data as any).role ?? null,
+      permissions: (data as any).permissions ?? null,
+      location_id: (data as any).location_id ?? null,
+      location_ids: (data as any).location_ids ?? null,
+    });
+    if (roleSnapshotRef.current === null) {
+      // First sighting — capture without firing.
+      roleSnapshotRef.current = snapshot;
+      return;
+    }
+    if (roleSnapshotRef.current === snapshot) return;
+    roleSnapshotRef.current = snapshot;
+    // Show the halo splash (non-login variant so we don't show the welcome
+    // carousel after) and invalidate org-details so the new role's
+    // location-list / member-list paints fresh under the splash. Other
+    // permission-gated queries hang off the same key family and pick up
+    // the change automatically.
+    triggerSplash(false);
+    void queryClient.invalidateQueries({ queryKey: ['org-details'], refetchType: 'all' });
+    void queryClient.invalidateQueries({ queryKey: ['business-today-orders'], refetchType: 'all' });
+    void queryClient.invalidateQueries({ queryKey: ['baskets'], refetchType: 'all' });
+  }, [myContextQuery.data, triggerSplash, queryClient]);
 
   const orgDetailsQuery = useQuery({
     queryKey: ['org-details', orgId],
@@ -203,7 +364,16 @@ export default function BusinessTabLayout() {
   const isAdminOrOwner = isOrgAdmin; // Only org-level admins get full org-wide access
   // Org owner/admin with zero locations — switcher shows an orange "no
   // location yet" affordance, mirroring the dashboard pill.
-  const hasNoLocation = isOrgAdmin
+  //
+  // Suppressed while the walkthrough is running so the demo plays out over
+  // a populated UI (basket / order injection via demoBasketActive /
+  // demoOrderActive). The dashboard "add your first location" popup
+  // re-fires the moment the walkthrough ends (its focus-effect depends on
+  // walkthroughStep), so the user still gets nudged to create a real
+  // location once the demo is done.
+  const walkthroughStep = useWalkthroughStore((s) => s.step);
+  const hasNoLocation = walkthroughStep === null
+    && isOrgAdmin
     && !!orgId
     && !orgDetailsQuery.isLoading
     && orgLocations.length === 0;
@@ -221,9 +391,14 @@ export default function BusinessTabLayout() {
   // Granular basket permissions — mirror the exact flags my-baskets.tsx uses
   // to gate each action, so the demo only walks through what this member can
   // actually do.
-  const canCreateDeleteBaskets = isAdminOrOwner || hasPerm('create_delete_baskets');
-  const canEditQuantities = isAdminOrOwner || hasPerm('edit_quantities');
-  const canManageBaskets = canCreateDeleteBaskets || canEditQuantities || hasPerm('edit_basket_info');
+  // Same role-trumps-perms policy as the canConfirmPickup / canMessage
+  // gates below: every admin (org or location) gets every per-location
+  // capability by default, regardless of what their stored permissions
+  // column happens to say. Heals legacy admin rows whose perms were never
+  // rewritten and matches the team-management UI's contract.
+  const canCreateDeleteBaskets = isAdminOrOwner || isLocationAdmin || hasPerm('create_delete_baskets');
+  const canEditQuantities = isAdminOrOwner || isLocationAdmin || hasPerm('edit_quantities');
+  const canManageBaskets = canCreateDeleteBaskets || canEditQuantities || isLocationAdmin || hasPerm('edit_basket_info');
   // Profile tab — org admins see the full org profile; location admins see a
   // version scoped to their location only (the team screen enforces the scope).
   const canEditProfile = isOrgAdmin || isLocationAdmin;
@@ -239,6 +414,31 @@ export default function BusinessTabLayout() {
   }, [canViewDashboard, canManageBaskets, canViewOrders, canEditProfile]);
   const tabCount = visibleTabs.length;
   const tabWidth = navWidth / tabCount;
+
+  // Re-snap the glass-pill indicator whenever the tab COUNT changes (i.e.
+  // when the role/permission auto-refresh has just added or removed a
+  // visible tab). The existing inline animation inside the tab-bar
+  // renderer only re-fires on `activeIndex` change — but on a permission
+  // refresh the active tab can stay at the same INDEX while `tabWidth`
+  // changes underneath it (4 tabs → 3 tabs means `navWidth / tabCount`
+  // is now different). Without this effect the pill keeps its old pixel
+  // x — computed against the old tabWidth — and renders under the wrong
+  // button. `setValue` (not spring) so the visual lines up instantly,
+  // hidden behind the refresh splash that's already on screen during a
+  // role/perm change.
+  React.useEffect(() => {
+    glassAnim.setValue(activeIndex * tabWidth);
+    // `activeIndex` intentionally NOT in the dep array. This effect exists
+    // to snap the pill when the TAB LAYOUT changes (a permission refresh
+    // adds/removes a tab → tabWidth recomputes). When the user simply
+    // taps a tab, `activeIndex` updates via setActiveIndex but tabWidth
+    // doesn't move — we want the press handler's spring (or the in-renderer
+    // auto-sync's spring) to drive the pill, NOT a hard setValue snap. The
+    // previous deps included `activeIndex`, and on slow Android the snap
+    // landed mid-spring and hard-cut the pill to its target, leaving the
+    // colour crossfade out of sync.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tabCount, tabWidth, glassAnim]);
 
   // Measure the floating tab bar in window coords so the demo's tab halos
   // sit exactly on the pills (no inset/`bottom:20` guesswork). Re-measured on
@@ -314,6 +514,14 @@ export default function BusinessTabLayout() {
   // pointed at a valid id, so this null branch is rare and we surface it
   // honestly with the placeholder copy.
   const selectedLocationName = React.useMemo(() => {
+    // No locations created yet → unified "Aucun emplacement" label so the
+    // switcher pill reads the same on dashboard, my-baskets and orders. The
+    // dashboard branch below would otherwise fall through to the org name or
+    // "Tous les emplacements" placeholder, which made the dropdown look
+    // inconsistent across tabs in the empty-org state.
+    if (hasNoLocation) {
+      return t('business.locationSwitcher.noLocationYet', { defaultValue: 'Aucun emplacement' });
+    }
     if (!selectedLocationId) {
       if (isDashboard && isAdminOrOwner) {
         return myContextQuery.data?.organization_name ?? t('business.allLocations', { defaultValue: 'Tous les emplacements' });
@@ -322,7 +530,7 @@ export default function BusinessTabLayout() {
     }
     const loc = orgLocations.find((l) => l.id === Number(selectedLocationId));
     return loc?.name ?? t('business.location', { defaultValue: 'Location' });
-  }, [selectedLocationId, orgLocations, isAdminOrOwner, isDashboard, t]);
+  }, [hasNoLocation, selectedLocationId, orgLocations, isAdminOrOwner, isDashboard, t]);
 
   // PanResponder for swipe-to-dismiss on the location modal
   const modalPanResponder = React.useMemo(() => PanResponder.create({
@@ -334,22 +542,62 @@ export default function BusinessTabLayout() {
     },
   }), []);
 
-  // Layout-level pending-orders badge poll. NOT focus-gated — business
+  // Layout-level pending-orders poll. NOT focus-gated — business
   // users want to see the orders badge update across every tab in the
   // partner app. Bumped 30s → 45s and staleTime 15s → 30s to cut the
   // baseline drip; freshness is restored sharply when the user opens
   // the incoming-orders tab (which invalidates this query).
+  //
+  // Always fetches WITHOUT a location filter so we have data for every
+  // location the user can see — this powers two surfaces:
+  //   1. The nav-bar orders badge (count for the CURRENTLY selected
+  //      location, or sum across all locations on the dashboard's
+  //      "Tous" view).
+  //   2. The per-location count chips inside the location-switcher
+  //      modal — replaces the old "this one is selected" checkmark
+  //      with a more useful "this one has N incoming orders" hint so
+  //      multi-location merchants can see at a glance which venue
+  //      needs attention before they even tap.
   const todayOrdersQuery = useQuery({
-    queryKey: ['today-orders-count', selectedLocationId],
-    queryFn: () => fetchTodayOrders(selectedLocationId),
+    queryKey: ['today-orders-count'],
+    queryFn: () => fetchTodayOrders(null),
     enabled: isAuthenticated && user?.role === 'business',
     refetchInterval: 45_000,
     staleTime: 30_000,
   });
 
-  const pendingOrderCount = (todayOrdersQuery.data ?? []).filter(
-    (o: any) => o.status === 'confirmed' || o.status === 'reserved' || o.status === 'pending'
-  ).length;
+  // Per-location active-pending count. Derived in JS (no extra
+  // network) from the same fetch above; the shared
+  // `isPendingReservationActive` predicate keeps these counts
+  // aligned with the dashboard "En attente" tile and the incoming-
+  // orders En cours tab — anything that's actually pending right
+  // now, nothing older or already-expired.
+  const pendingCountByLocation = React.useMemo(() => {
+    const today = getBusinessDayDateStr(new Date());
+    const map = new Map<number, number>();
+    for (const o of todayOrdersQuery.data ?? []) {
+      if (!isPendingReservationActive(o, today)) continue;
+      const lid = Number((o as any).location_id);
+      if (!Number.isFinite(lid)) continue;
+      map.set(lid, (map.get(lid) ?? 0) + 1);
+    }
+    return map;
+  }, [todayOrdersQuery.data]);
+
+  // Pending-orders badge value for the bottom-nav icon. Counts only
+  // the SELECTED location's pending orders (or sums across all
+  // locations when the user is on the dashboard's "Tous" view, where
+  // selectedLocationId is null). Same predicate basis as
+  // pendingCountByLocation above, so the badge and the modal chips
+  // can never disagree.
+  const pendingOrderCount = React.useMemo(() => {
+    if (selectedLocationId) {
+      return pendingCountByLocation.get(Number(selectedLocationId)) ?? 0;
+    }
+    let total = 0;
+    for (const n of pendingCountByLocation.values()) total += n;
+    return total;
+  }, [pendingCountByLocation, selectedLocationId]);
 
   React.useEffect(() => {
     Animated.spring(brandAnim, {
@@ -374,8 +622,11 @@ export default function BusinessTabLayout() {
       ],
     }}>
       {canSwitchLocation ? (
-        // Pill trigger — matches the dashboard's location switcher so the
-        // business interface has one consistent control across all tabs.
+        // Pill trigger — matches the dashboard's location switcher exactly:
+        // brand-primary Building2 + textPrimary text + chevron, no orange
+        // / MapPin special case for the empty-org state. The
+        // "Aucun emplacement" copy already comes from selectedLocationName,
+        // so the pill stays informative without flipping its whole palette.
         <TouchableOpacity
           onPress={() => setLocationModalVisible(true)}
           style={{
@@ -387,28 +638,35 @@ export default function BusinessTabLayout() {
             alignItems: 'center',
             gap: 6,
             ...theme.shadows.shadowMd,
-            maxWidth: 220,
-            borderWidth: hasNoLocation ? 1 : 0,
-            borderColor: hasNoLocation ? '#e67e22' : 'transparent',
+            maxWidth: 240,
           }}
           activeOpacity={0.7}
         >
-          {hasNoLocation
-            ? <MapPin size={14} color="#e67e22" />
-            : <Building2 size={14} color={theme.colors.primary} />}
+          <Building2 size={14} color={theme.colors.primary} />
           <Text
             numberOfLines={1}
             ellipsizeMode="tail"
-            style={{ color: hasNoLocation ? '#e67e22' : theme.colors.textPrimary, fontSize: 13, fontWeight: '600', fontFamily: 'Poppins_600SemiBold', flexShrink: 1 }}
+            style={{ color: theme.colors.textPrimary, fontSize: 13, fontWeight: '600', fontFamily: 'Poppins_600SemiBold', flexShrink: 1 }}
           >
-            {hasNoLocation
-              ? t('business.locationSwitcher.noLocationYet', { defaultValue: 'Aucun emplacement' })
-              : selectedLocationName}
+            {selectedLocationName}
           </Text>
-          <ChevronDown size={13} color={hasNoLocation ? '#e67e22' : theme.colors.textSecondary} />
+          <ChevronDown size={13} color={theme.colors.textSecondary} />
         </TouchableOpacity>
       ) : (
-        <View style={{ backgroundColor: theme.colors.surface, borderRadius: 20, paddingHorizontal: 12, paddingVertical: 8, flexDirection: 'row', alignItems: 'center', gap: 6, ...theme.shadows.shadowMd, maxWidth: 220 }}>
+        // Static (non-tappable) pill — used when the user only has one
+        // location to choose from. Same styling as the interactive pill
+        // and the dashboard pill so every tab reads identically.
+        <View style={{
+          backgroundColor: theme.colors.surface,
+          borderRadius: 20,
+          paddingHorizontal: 12,
+          paddingVertical: 8,
+          flexDirection: 'row',
+          alignItems: 'center',
+          gap: 6,
+          ...theme.shadows.shadowMd,
+          maxWidth: 240,
+        }}>
           <Building2 size={14} color={theme.colors.primary} />
           <Text
             numberOfLines={1}
@@ -422,25 +680,69 @@ export default function BusinessTabLayout() {
     </Animated.View>
   );
 
-  const headerRight = () => (
+  // Builds the right-hand cluster of the nav header. `includeChat: false`
+  // produces the Settings + Bell pair without the conversations shortcut —
+  // used on the incoming-orders tab where every order card already has its
+  // own per-order chat button, so the global one is redundant.
+  const buildHeaderRight = (includeChat: boolean) => () => (
     <View style={{ flexDirection: 'row', alignItems: 'center' }}>
       <TouchableOpacity
         onPress={() => router.push('/settings' as never)}
-        style={{ marginRight: 12 }}
+        hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}
+        style={{ marginRight: 12, padding: 6 }}
       >
         <Settings size={20} color={theme.colors.textPrimary} />
       </TouchableOpacity>
+      {/* Chat icon — pushes the full-page /business/conversations route.
+          Sits between Settings and the bell so the cluster reads as
+          "system / chat / notifications". onLayout publishes the icon's
+          window-space center to the notification store so the
+          SpeechBubblePopup that fires on chat notifs springs from this
+          exact spot. */}
+      {includeChat && isAuthenticated ? (
+        <TouchableOpacity
+          onPress={() => router.push('/business/conversations' as never)}
+          onLayout={(e) => {
+            (e.target as any)?.measureInWindow?.((x: number, y: number, w: number, h: number) => {
+              if (w > 0 && h > 0) setChatIconOrigin({ x: x + w / 2, y: y + h });
+            });
+          }}
+          hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}
+          style={{ marginRight: 12, padding: 6 }}
+        >
+          <MessageCircle size={20} color={theme.colors.textPrimary} />
+          {msgUnreadsTotal > 0 && (
+            <View style={{
+              position: 'absolute',
+              top: 2,
+              right: 0,
+              backgroundColor: theme.colors.error,
+              borderRadius: 8,
+              minWidth: 16,
+              height: 16,
+              justifyContent: 'center',
+              alignItems: 'center',
+              paddingHorizontal: 4,
+            }}>
+              <Text style={{ color: '#fff', fontSize: 10, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
+                {msgUnreadsTotal > 99 ? '99+' : msgUnreadsTotal}
+              </Text>
+            </View>
+          )}
+        </TouchableOpacity>
+      ) : null}
       {isAuthenticated ? (
         <TouchableOpacity
           onPress={() => router.push('/notifications' as never)}
-          style={{ marginRight: 16 }}
+          hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}
+          style={{ marginRight: 10, padding: 6 }}
         >
           <Bell size={20} color={theme.colors.textPrimary} />
           {unreadCount > 0 && (
             <View style={{
               position: 'absolute',
-              top: -4,
-              right: -6,
+              top: 2,
+              right: 0,
               backgroundColor: theme.colors.error,
               borderRadius: 8,
               minWidth: 16,
@@ -458,6 +760,11 @@ export default function BusinessTabLayout() {
       ) : null}
     </View>
   );
+  // Default header — full Settings + Chat + Bell cluster.
+  const headerRight = buildHeaderRight(true);
+  // Variant without the chat icon — applied to the incoming-orders tab,
+  // where each card already has its own per-order chat button.
+  const headerRightNoChat = buildHeaderRight(false);
 
   // Hard render-gate: block the business UI only for unauthenticated users
   // and users we can clearly identify as customers. Team admins / owners /
@@ -590,8 +897,20 @@ export default function BusinessTabLayout() {
             {state.routes.filter((route) => visibleTabs.includes(route.name)).map((route, index) => {
               const { options } = descriptors[route.key];
               const isFocused = index === safeVisIdx;
-              const color = isFocused ? '#FFFFFF' : theme.colors.textSecondary;
-              const iconColor = isFocused ? '#FFFFFF' : theme.colors.textSecondary;
+              const inactiveColor = theme.colors.textSecondary;
+              const activeColor = '#FFFFFF';
+              // White-overlay opacity interpolated from the PILL'S LIVE X
+              // (glassAnim), not from a parallel index value. Peaks at 1
+              // when the pill is centred on this tab, fades to 0 over the
+              // immediate neighbours. Because the source IS the pill
+              // position, the colours physically cannot get out of sync —
+              // if the pill is on this tab, this tab is white. Same
+              // pattern as the customer navbar (app/(tabs)/_layout.tsx).
+              const whiteOpacity = glassAnim.interpolate({
+                inputRange: [(index - 1) * tabWidth, index * tabWidth, (index + 1) * tabWidth],
+                outputRange: [0, 1, 0],
+                extrapolate: 'clamp',
+              });
 
               const onPress = () => {
                 const event = navigation.emit({
@@ -602,36 +921,48 @@ export default function BusinessTabLayout() {
                 // Refetch permissions on every tab press (cheap — only fires if stale)
                 if (myContextQuery.isStale) void myContextQuery.refetch();
                 if (!isFocused && !event.defaultPrevented) {
+                  // Only navigate — do NOT setActiveIndex or start a spring
+                  // here. The in-renderer auto-sync above watches navigation
+                  // state and triggers the pill spring on the next render
+                  // after nav state propagates. Doing both produced a race
+                  // on slow Android: setActiveIndex's re-render fired the
+                  // auto-sync (which still saw the OLD safeVisIdx because
+                  // nav state hadn't propagated yet), sending the pill back
+                  // to the previous tab for a frame.
                   navigation.navigate(route.name);
-                  setActiveIndex(index);
-                  // Animate glass pill to this tab
-                  Animated.spring(glassAnim, {
-                    toValue: index * tabWidth,
-                    useNativeDriver: true,
-                    friction: 10,
-                    tension: 100,
-                  }).start();
                 }
               };
 
-              let icon = null;
+              let IconComp: any = null;
               let badge = 0;
               const iconSize = 22;
-              // Single clean icon — no double-stacking which caused washout on dark bg
-              const renderBizIcon = (IconComp: any) => (
-                <IconComp size={iconSize} color={iconColor} />
-              );
               switch (route.name) {
-                case 'dashboard': icon = renderBizIcon(LayoutDashboard); break;
-                case 'my-baskets': icon = renderBizIcon(ShoppingBag); break;
+                case 'dashboard': IconComp = LayoutDashboard; break;
+                case 'my-baskets': IconComp = ShoppingBag; break;
                 case 'incoming-orders':
-                  icon = renderBizIcon(ClipboardList);
-                  if (pendingOrderCount > 0) {
-                    badge = pendingOrderCount;
-                  }
+                  IconComp = ClipboardList;
+                  if (pendingOrderCount > 0) badge = pendingOrderCount;
                   break;
-                case 'business-profile': icon = renderBizIcon(User); break;
+                // Commerce-oriented Store icon (was the customer User
+                // glyph). The merchant tab IS the business profile, so
+                // the storefront silhouette reads truer than a person.
+                case 'business-profile': IconComp = Store; break;
               }
+              // Two stacked icons + two stacked labels per tab. The gray pair
+              // is the always-on baseline; the white pair sits on top with
+              // animated opacity that the native driver crossfades in/out as
+              // the pill slides past this tab's index. This is what removes
+              // the perceived "old button fades out before the pill moves"
+              // jank on slow Android phones — the JS thread no longer has to
+              // re-render anything for the color to track the pill.
+              const label = options.title ?? route.name;
+              const labelStyle = {
+                fontSize: 8,
+                fontFamily: 'Poppins_500Medium',
+                marginTop: 3,
+                width: tabWidth - 16,
+                textAlign: 'center' as const,
+              };
 
               return (
                 <TouchableOpacity
@@ -647,7 +978,18 @@ export default function BusinessTabLayout() {
                   activeOpacity={0.7}
                 >
                   <View style={{ position: 'relative' }}>
-                    {icon}
+                    {/* Two-layer icon (gray underneath + white overlay with
+                        animated opacity, source = glassAnim). Both platforms
+                        use the same render path — the crossfade can't drift
+                        because it reads the pill's actual position. */}
+                    {IconComp && (
+                      <View style={{ width: iconSize, height: iconSize }}>
+                        <IconComp size={iconSize} color={inactiveColor} />
+                        <Animated.View style={{ position: 'absolute', top: 0, left: 0, opacity: whiteOpacity }}>
+                          <IconComp size={iconSize} color={activeColor} />
+                        </Animated.View>
+                      </View>
+                    )}
                     {badge > 0 && (
                       <View style={{
                         position: 'absolute',
@@ -665,20 +1007,24 @@ export default function BusinessTabLayout() {
                       </View>
                     )}
                   </View>
-                  <Text
-                    numberOfLines={1}
-                    ellipsizeMode="tail"
-                    style={{
-                      color,
-                      fontSize: 8,
-                      fontFamily: 'Poppins_500Medium',
-                      marginTop: 3,
-                      width: tabWidth - 16,
-                      textAlign: 'center',
-                    }}
-                  >
-                    {options.title ?? route.name}
-                  </Text>
+                  {/* Stacked gray + animated-white labels — same crossfade
+                      story as the icon above, both platforms. */}
+                  <View style={{ marginTop: 3, height: 12, justifyContent: 'center' }}>
+                    <Text
+                      numberOfLines={1}
+                      ellipsizeMode="tail"
+                      style={[labelStyle, { color: inactiveColor, marginTop: 0 }]}
+                    >
+                      {label}
+                    </Text>
+                    <Animated.Text
+                      numberOfLines={1}
+                      ellipsizeMode="tail"
+                      style={[labelStyle, { color: activeColor, marginTop: 0, position: 'absolute', left: 0, right: 0, opacity: whiteOpacity }]}
+                    >
+                      {label}
+                    </Animated.Text>
+                  </View>
                 </TouchableOpacity>
               );
             })}
@@ -706,13 +1052,25 @@ export default function BusinessTabLayout() {
         options={{
           title: t('business.orders.title'),
           tabBarIcon: ({ size, focused }) => <ClipboardList size={size} color={focused ? '#FFFFFF' : theme.colors.textSecondary} fill={focused ? theme.colors.primary : 'transparent'} />,
+          // Per-order cards on this tab already carry their own chat
+          // button, so the global chat shortcut would be redundant.
+          // Strip it from the header on this screen only — Settings + Bell
+          // still render.
+          headerRight: headerRightNoChat,
         }}
       />
       <Tabs.Screen
         name="business-profile"
         options={{
-          title: t('business.profile.title'),
-          tabBarIcon: ({ size, focused }) => <User size={size} color={focused ? '#FFFFFF' : theme.colors.textSecondary} fill={focused ? theme.colors.primary : 'transparent'} />,
+          // Short "Profil" / "Profile" / "الملف" label so the tab
+          // doesn't ellipsize on narrow phones. The full
+          // `business.profile.title` ("Business Profile" / "Infos
+          // Commerce") is still used inside the screen header.
+          title: t('business.profile.tabLabel', { defaultValue: 'Profil' }),
+          // Store (storefront) instead of User (customer glyph) — this
+          // tab IS the merchant's profile, so a commerce icon reads
+          // truer than a person icon.
+          tabBarIcon: ({ size, focused }) => <Store size={size} color={focused ? '#FFFFFF' : theme.colors.textSecondary} fill={focused ? theme.colors.primary : 'transparent'} />,
         }}
       />
     </Tabs>
@@ -780,7 +1138,31 @@ export default function BusinessTabLayout() {
                 >
                   {t('business.allLocations', { defaultValue: 'Tous les emplacements' })}
                 </Text>
-                {!selectedLocationId && <Check size={18} color={theme.colors.primary} />}
+                {/* Per-location modal chip — same total used by the
+                    nav-bar badge so the two numbers always agree.
+                    Replaces the old "this row is selected"
+                    checkmark; the row's tinted background already
+                    conveys selection, so the slot is freed up for
+                    something more useful: "this venue has N orders
+                    waiting on you right now". */}
+                {(() => {
+                  let total = 0;
+                  for (const n of pendingCountByLocation.values()) total += n;
+                  return total > 0 ? (
+                    <View style={{
+                      minWidth: 24, height: 24,
+                      borderRadius: 12,
+                      backgroundColor: theme.colors.primary,
+                      paddingHorizontal: 7,
+                      justifyContent: 'center',
+                      alignItems: 'center',
+                    }}>
+                      <Text style={{ color: '#fff', fontSize: 11, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
+                        {total}
+                      </Text>
+                    </View>
+                  ) : null;
+                })()}
               </TouchableOpacity>
             )}
 
@@ -823,7 +1205,28 @@ export default function BusinessTabLayout() {
                       </Text>
                     ) : null}
                   </View>
-                  {isSelected && <Check size={18} color={theme.colors.primary} />}
+                  {/* Pending-orders chip for this location. Same
+                      predicate the nav-bar badge uses (so the two
+                      numbers can never drift). Hidden when zero —
+                      the row's tinted background already shows
+                      selection, so we don't need a placeholder. */}
+                  {(() => {
+                    const count = pendingCountByLocation.get(loc.id) ?? 0;
+                    return count > 0 ? (
+                      <View style={{
+                        minWidth: 24, height: 24,
+                        borderRadius: 12,
+                        backgroundColor: theme.colors.primary,
+                        paddingHorizontal: 7,
+                        justifyContent: 'center',
+                        alignItems: 'center',
+                      }}>
+                        <Text style={{ color: '#fff', fontSize: 11, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
+                          {count}
+                        </Text>
+                      </View>
+                    ) : null;
+                  })()}
                 </TouchableOpacity>
               );
             })}
@@ -857,9 +1260,20 @@ export default function BusinessTabLayout() {
       canCreateDeleteBaskets={canCreateDeleteBaskets}
       canEditQuantities={canEditQuantities}
       canEditProfile={canEditProfile}
-      canConfirmPickup={isAdminOrOwner || hasPerm('confirm_pickup')}
-      canMessage={isAdminOrOwner || hasPerm('messaging')}
+      // role='admin' (org or location) is treated as "all per-location
+      // capabilities enabled" regardless of stored permission flags. This
+      // matches the team-management UI's promise ("admin = all perms by
+      // default") AND it heals any legacy admin account whose permissions
+      // column never got rewritten (members promoted to admin via the
+      // role-change modal BEFORE that modal was fixed to write the full
+      // admin perm set on promotion). Without this, those legacy admins
+      // would show as `confirm_pickup: 'none'` in the DB even though
+      // they're admins, and the demo (plus real UI) would silently strip
+      // their chat / confirm-pickup / basket-management affordances.
+      canConfirmPickup={isAdminOrOwner || isLocationAdmin || hasPerm('confirm_pickup')}
+      canMessage={isAdminOrOwner || isLocationAdmin || hasPerm('messaging')}
       isOrgAdmin={isOrgAdmin}
+      isLocationAdmin={isLocationAdmin}
       hasNoLocation={hasNoLocation}
       insetsTop={insets.top}
       insetsBottom={insets.bottom}
@@ -914,28 +1328,16 @@ interface BizStep {
 // the stale height while the tab pill is positioned `bottom: 20` from
 // the live window). Live values come from `useWindowDimensions()` below.
 
-function buildWalkthroughSteps(visibleTabs: string[], canCreateDeleteBaskets: boolean, canEditQuantities: boolean, canEditProfile: boolean, canConfirmPickup: boolean, canMessage: boolean, isOrgAdmin: boolean, hasNoLocation: boolean, insetsTop: number, SCREEN_W_BIZ: number): BizStep[] {
-  // ── Special case: no location yet ──────────────────────────────────────
-  // Org admin with zero locations — every other step would point at a
-  // screen that just shows NoLocationCTA, so we short-circuit to a single
-  // step that highlights the "add your first location" button. The user
-  // taps it, navigates to /business/add-location, and the walkthrough
-  // ends. Once they have a location they can replay the full tour from
-  // Settings → Mode démo.
-  if (hasNoLocation) {
-    return [{
-      tabIndex: 0,
-      routeName: 'dashboard',
-      icon: MapPin,
-      titleKey: 'walkthrough.biz.addLocation.title',
-      descKey: 'walkthrough.biz.addLocation.desc',
-      highlight: 'element',
-      tooltipPosition: 'top',
-      requireTap: true,
-      advanceOnPath: '/business/add-location',
-      measureKey: 'addLocationCta',
-    }];
-  }
+function buildWalkthroughSteps(visibleTabs: string[], canCreateDeleteBaskets: boolean, canEditQuantities: boolean, canEditProfile: boolean, canConfirmPickup: boolean, canMessage: boolean, isOrgAdmin: boolean, isLocationAdmin: boolean, _hasNoLocation: boolean, insetsTop: number, SCREEN_W_BIZ: number): BizStep[] {
+  // The previous "no location yet" short-circuit (one step pointing at the
+  // add-location CTA halo) is gone. The walkthrough now always runs the
+  // full demo, even for brand-new org admins with zero locations:
+  // hasNoLocation is suppressed while the walkthrough is active (see the
+  // [_layout.tsx:206] declaration), so the dashboard / orders / baskets
+  // pages render their normal UI and the existing demoBasketActive /
+  // demoOrderActive injections populate it with fake data. The
+  // "Ajoutez votre premier point de vente" nudge is then surfaced as a
+  // centered popup on the dashboard the moment the walkthrough ends.
   const steps: BizStep[] = [];
   // ── Dashboard ─────────────────────────────────────────────────────────
   const dashIdx = visibleTabs.indexOf('dashboard');
@@ -966,10 +1368,14 @@ function buildWalkthroughSteps(visibleTabs: string[], canCreateDeleteBaskets: bo
       // Activate demo basket NOW so create-basket pre-fills on mount.
       enter: { demoBasket: true },
     });
-    // 1b. Intermediary page — reuse an existing org basket. Org-admins manage
-    // baskets across locations, so only they get this "you can reuse" step;
-    // other roles skip straight to the create-new CTA below.
-    if (isOrgAdmin) {
+    // 1b. Intermediary page — reuse an existing org basket. The actual
+    // select-org-basket page shows the "existing baskets" list to BOTH org
+    // admins AND location admins (every admin manages baskets within their
+    // scope), so the demo step needs to show for both. The previous
+    // `if (isOrgAdmin)` gate skipped this step for location admins even
+    // though they SAW the existing-baskets option in the real form —
+    // creating a mismatch between the demo and the actual UI.
+    if (isOrgAdmin || isLocationAdmin) {
       steps.push({
         tabIndex: basketIdx,
         routeName: 'my-baskets',
@@ -977,7 +1383,17 @@ function buildWalkthroughSteps(visibleTabs: string[], canCreateDeleteBaskets: bo
         titleKey: 'walkthrough.biz.reuseBasket.title',
         descKey: 'walkthrough.biz.reuseBasket.desc',
         highlight: 'element',
-        target: { top: insetsTop + 130, left: 16, width: SCREEN_W_BIZ - 32, height: 76, radius: 12 },
+        // Fallback rect tuned for the FIRST basket card position now that
+        // selectOrgExistingList wraps only the first card (~76 px tall)
+        // instead of the whole heading + list block. The +270 vertical
+        // budget covers the page chrome above the card: header (~54) +
+        // "Créer un nouveau" CTA (~92) + section divider + "Paniers
+        // existants" subtitle (~36) + "Ou choisissez un panier existant"
+        // caption (~28). The host page still publishes a precise measured
+        // rect; this is only what paints if that publish fails (unlikely
+        // — the wait-for-measured-rect logic in SubScreenWalkthroughOverlay
+        // holds the dim mask up to 1500 ms).
+        target: { top: insetsTop + 270, left: 16, width: SCREEN_W_BIZ - 32, height: 76, radius: 12 },
         tooltipPosition: 'bottom',
         measureKey: 'selectOrgExistingList',
       });
@@ -1011,7 +1427,15 @@ function buildWalkthroughSteps(visibleTabs: string[], canCreateDeleteBaskets: bo
       tooltipPosition: 'bottom',
       measureKey: 'formDailyReset',
     });
-    // 3. Pickup time card — Suivant
+    // 3. Pickup time card — Suivant. Rectangular halo (radius: 0) per
+    // design request — the underlying "Heure de retrait" card on the form
+    // Halo wraps the two TimePicker boxes (pickupCardRef now lives on
+    // the time-pickers row, not the toggle below). Rounded radius so
+    // the cutout matches the rest of the business demo's halos — the
+    // earlier zero-radius value was tuned to the square-cornered
+    // checkbox the ref USED to point at; now that the ref hugs the
+    // rounded TimePicker row, the cutout needs the same rounded
+    // corners as every other step.
     steps.push({
       tabIndex: basketIdx,
       routeName: 'my-baskets',
@@ -1019,7 +1443,7 @@ function buildWalkthroughSteps(visibleTabs: string[], canCreateDeleteBaskets: bo
       titleKey: 'walkthrough.biz.formPickup.title',
       descKey: 'walkthrough.biz.formPickup.desc',
       highlight: 'element',
-      target: { top: 320, left: 16, width: SCREEN_W_BIZ - 32, height: 80, radius: 16 },
+      target: { top: 320, left: 16, width: SCREEN_W_BIZ - 32, height: 80, radius: 14 },
       tooltipPosition: 'bottom',
       measureKey: 'formPickupTime',
     });
@@ -1267,7 +1691,18 @@ function buildWalkthroughSteps(visibleTabs: string[], canCreateDeleteBaskets: bo
   // ── Profile — gestion d'équipe + infos commerce ───────────────────────
   const profileIdx = visibleTabs.indexOf('business-profile');
   if (profileIdx >= 0 && canEditProfile) {
-    steps.push({ tabIndex: profileIdx, routeName: 'business-profile', icon: User, titleKey: 'walkthrough.biz.profile.title', descKey: 'walkthrough.biz.profile.desc', highlight: 'tab' });
+    // This step's glyph mirrors the tab's icon, so when the tab uses
+    // Store the walkthrough hint card uses Store too. The OTHER
+    // profile-section steps below stay on User / Building2 because
+    // they specifically reference team-members / org info.
+    // Defensive `demoOrder: false` cleanup: the orders sub-tour normally
+    // clears the injected demo order on its qrFab step, but that step is
+    // gated on `canConfirmPickup`. A user role that has chat (canMessage)
+    // but NOT confirm-pickup would skip qrFab and arrive here with the
+    // demo order still injected on the (background) incoming-orders tab.
+    // Re-clearing on profile-tab entry guarantees the orders tab is clean
+    // before the user navigates back to it from profile/settings.
+    steps.push({ tabIndex: profileIdx, routeName: 'business-profile', icon: Store, titleKey: 'walkthrough.biz.profile.title', descKey: 'walkthrough.biz.profile.desc', highlight: 'tab', enter: { demoOrder: false } });
     // Infos commerce comes BEFORE the team tour. That way the team tour
     // can navigate into /business/team and continue to the settings hand-
     // off without needing to pop back to /business/profile mid-demo.
@@ -1282,10 +1717,14 @@ function buildWalkthroughSteps(visibleTabs: string[], canCreateDeleteBaskets: bo
       tooltipPosition: 'bottom',
       measureKey: 'profileBusinessInfo',
     });
-    // Gestion d'équipe — admins only. Tap the team card on the profile
-    // page to navigate to /business/team. The sub-screen overlay there
-    // renders the next two steps on top of that pushed screen.
-    if (isOrgAdmin) {
+    // Gestion d'équipe — every admin (org OR location). Tap the team card
+    // on the profile page to navigate to /business/team. The sub-screen
+    // overlay there renders the team-page steps on top of that pushed
+    // screen. Location admins get a SCOPED version of the team tour:
+    // they see the org/location info card at the top and the members
+    // list of their location, but the locations-section step is skipped
+    // because location admins don't manage locations across the org.
+    if (isOrgAdmin || isLocationAdmin) {
       steps.push({
         tabIndex: profileIdx,
         routeName: 'business-profile',
@@ -1314,42 +1753,27 @@ function buildWalkthroughSteps(visibleTabs: string[], canCreateDeleteBaskets: bo
         tooltipPosition: 'bottom',
         measureKey: 'teamOrgCard',
       });
-      // Locations list — preview step. Highlights the whole locations
-      // section first so the user understands what the section contains
-      // (their points of vente / dépôts), then the next step focuses on
-      // the "+" button. Mirrors the members-list / + member pattern so
-      // both sections get the same two-beat introduction.
-      steps.push({
-        tabIndex: profileIdx,
-        routeName: 'business-profile',
-        icon: MapPin,
-        titleKey: 'walkthrough.biz.teamLocations.title',
-        descKey: 'walkthrough.biz.teamLocations.desc',
-        highlight: 'element',
-        target: { radius: 16 },
-        tooltipPosition: 'bottom',
-        measureKey: 'teamLocationsSection',
-      });
-      // Locations section — highlight the "+ add location" button. The
-      // team page scrolls the locations section into view on step entry
-      // (see team.tsx). 18-radius matches the small round + button.
-      steps.push({
-        tabIndex: profileIdx,
-        routeName: 'business-profile',
-        icon: MapPin,
-        titleKey: 'walkthrough.biz.teamAddLocation.title',
-        descKey: 'walkthrough.biz.teamAddLocation.desc',
-        highlight: 'element',
-        target: { radius: 16 },
-        tooltipPosition: 'bottom',
-        measureKey: 'teamAddLocationBtn',
-      });
+      // Locations list — ORG ADMINS ONLY. Location admins are scoped to
+      // their own location and don't manage the org-wide locations list,
+      // so highlighting "your points of vente" reads as misleading. They
+      // skip straight from the org/info card to the members list.
+      if (isOrgAdmin) {
+        steps.push({
+          tabIndex: profileIdx,
+          routeName: 'business-profile',
+          icon: MapPin,
+          titleKey: 'walkthrough.biz.teamLocations.title',
+          descKey: 'walkthrough.biz.teamLocations.desc',
+          highlight: 'element',
+          target: { radius: 16 },
+          tooltipPosition: 'bottom',
+          measureKey: 'teamLocationsSection',
+        });
+      }
       // Members list — preview step. Highlights the whole members section
-      // first so the user sees the full list (and can read who's on the
-      // team), then the next step focuses on the "+" button. Splitting the
-      // tour this way avoids the previous jump where the halo went straight
-      // from a small + on locations to a small + on members with no context
-      // about what the section even contained.
+      // so the user sees the full list. The follow-up "+ add member" step
+      // was also removed for the same reason as above (navigating into the
+      // add-member flow during the demo risks side-effects).
       steps.push({
         tabIndex: profileIdx,
         routeName: 'business-profile',
@@ -1360,19 +1784,6 @@ function buildWalkthroughSteps(visibleTabs: string[], canCreateDeleteBaskets: bo
         target: { radius: 16 },
         tooltipPosition: 'top',
         measureKey: 'teamMembersSection',
-      });
-      // Members section — highlight the "+ add member" button. Scrolls
-      // the members section into view first so the button is visible.
-      steps.push({
-        tabIndex: profileIdx,
-        routeName: 'business-profile',
-        icon: User,
-        titleKey: 'walkthrough.biz.teamAddMember.title',
-        descKey: 'walkthrough.biz.teamAddMember.desc',
-        highlight: 'element',
-        target: { radius: 16 },
-        tooltipPosition: 'top',
-        measureKey: 'teamAddMemberBtn',
       });
     }
   }
@@ -1457,7 +1868,7 @@ function CutoutMask({ x, y, w, h, radius = 0, onOutsidePress, sw, sh }: { x: num
   );
 }
 
-function BusinessWalkthroughOverlay({ navRef, tabWidth, theme, t, visibleTabs, canCreateDeleteBaskets, canEditQuantities, canEditProfile, canConfirmPickup, canMessage, isOrgAdmin, hasNoLocation, insetsTop, insetsBottom, router }: { navRef: any; tabWidth: number; theme: any; t: any; visibleTabs: string[]; canCreateDeleteBaskets: boolean; canEditQuantities: boolean; canEditProfile: boolean; canConfirmPickup: boolean; canMessage: boolean; isOrgAdmin: boolean; hasNoLocation: boolean; insetsTop: number; insetsBottom: number; router: any }) {
+function BusinessWalkthroughOverlay({ navRef, tabWidth, theme, t, visibleTabs, canCreateDeleteBaskets, canEditQuantities, canEditProfile, canConfirmPickup, canMessage, isOrgAdmin, isLocationAdmin, hasNoLocation, insetsTop, insetsBottom, router }: { navRef: any; tabWidth: number; theme: any; t: any; visibleTabs: string[]; canCreateDeleteBaskets: boolean; canEditQuantities: boolean; canEditProfile: boolean; canConfirmPickup: boolean; canMessage: boolean; isOrgAdmin: boolean; isLocationAdmin: boolean; hasNoLocation: boolean; insetsTop: number; insetsBottom: number; router: any }) {
   // Live dimensions — recompute on every window-size change (rotation,
   // system-bar visibility changes, foldable hinge). The tab pill is
   // positioned `bottom: 20` from the live window bottom, so the tab halo
@@ -1470,8 +1881,14 @@ function BusinessWalkthroughOverlay({ navRef, tabWidth, theme, t, visibleTabs, c
   // That means `measureInWindow`-published rect coords can be used directly
   // for `top:` / `left:` — no per-device guesswork (Samsung edge-to-edge vs
   // Pixel 6 vs iOS) for status-bar offsets.
-  const { originRef, originX, originY, originMeasured, remeasure: remeasureOrigin } = useOverlayOriginOffset();
-  const BIZ_WALKTHROUGH_STEPS = React.useMemo(() => buildWalkthroughSteps(visibleTabs, canCreateDeleteBaskets, canEditQuantities, canEditProfile, canConfirmPickup, canMessage, isOrgAdmin, hasNoLocation, insetsTop, SCREEN_W_LIVE), [visibleTabs, canCreateDeleteBaskets, canEditQuantities, canEditProfile, canConfirmPickup, canMessage, isOrgAdmin, hasNoLocation, insetsTop, SCREEN_W_LIVE]);
+  // Pre-seed the origin offset with insetsTop so the first paint of the
+  // overlay already lands at the correct vertical origin. See the
+  // useOverlayOriginOffset hook + the matching call in the customer overlay
+  // for the rationale — without this, the first frame after the demo welcome
+  // cover dismisses snaps up by insetsTop pixels once the async measurement
+  // returns.
+  const { originRef, originX, originY, originMeasured, remeasure: remeasureOrigin } = useOverlayOriginOffset({ y: insetsTop });
+  const BIZ_WALKTHROUGH_STEPS = React.useMemo(() => buildWalkthroughSteps(visibleTabs, canCreateDeleteBaskets, canEditQuantities, canEditProfile, canConfirmPickup, canMessage, isOrgAdmin, isLocationAdmin, hasNoLocation, insetsTop, SCREEN_W_LIVE), [visibleTabs, canCreateDeleteBaskets, canEditQuantities, canEditProfile, canConfirmPickup, canMessage, isOrgAdmin, isLocationAdmin, hasNoLocation, insetsTop, SCREEN_W_LIVE]);
   const step = useWalkthroughStore((s) => s.step);
   const nextStep = useWalkthroughStore((s) => s.nextStep);
   const skipWalkthrough = useWalkthroughStore((s) => s.skipWalkthrough);
@@ -1512,24 +1929,111 @@ function BusinessWalkthroughOverlay({ navRef, tabWidth, theme, t, visibleTabs, c
   // Per-step content fade — the halo ring + tooltip fade in once the rect has
   // settled (haloReady) so step-to-step transitions glide instead of popping.
   const contentAnim = React.useRef(new Animated.Value(0)).current;
+  // `displayedStep` is the step the overlay is RENDERING right now. `step`
+  // (from the store) is the TARGET. They diverge briefly during a step
+  // transition: when the user advances, we animate contentAnim 1→0 first
+  // so the previous step's halo / tooltip / cutout-reveal fade out at
+  // their CURRENT position, THEN we swap displayedStep to the target and
+  // fade back in at the new position. Without this two-phase commit the
+  // cutout rectangle's position would change the same instant `step`
+  // updated — producing the visible "snap" the user reported between
+  // steps. The dim mask itself stays at opacity 1 throughout so the
+  // background never flashes bright.
+  const [displayedStep, setDisplayedStep] = React.useState<number | null>(null);
+  const activeStepMeasureKey = displayedStep !== null ? BIZ_WALKTHROUGH_STEPS[displayedStep]?.measureKey : null;
+  // Subscribe to THIS step's measured rect so we can flip haloReady the
+  // moment the host page publishes a rect — instead of timing out blindly
+  // and snapping later from the fallback. Used by the no-snap effect below.
+  const activeStepMeasuredRect = useWalkthroughStore((s) =>
+    activeStepMeasureKey ? s.measuredRects[activeStepMeasureKey] : null,
+  );
+
+  // Effect 1 — target step transition. On a step change, smoothly fade out
+  // the current displayed step, then swap displayedStep to the new target.
+  // First entry (displayedStep === null) skips the fade-out because there's
+  // nothing to fade out from.
+  //
+  // Safety net: previously this relied SOLELY on the Animated.timing
+  // `finished: true` callback to commit the displayedStep swap. When two
+  // step transitions happened in quick succession (or some other animation
+  // ran on `contentAnim` mid-fade), the first timing's callback fired with
+  // `finished: false` and the swap was SKIPPED — `displayedStep` stayed
+  // behind, `haloReady` never reset, and the overlay rendered the
+  // PREVIOUS step's halo / tooltip indefinitely (or nothing if the
+  // previous step was inline-modal). That's exactly the "tooltip fails to
+  // show, screen doesn't fade, doesn't advance" intermittent symptom the
+  // user reported. Use a parallel setTimeout as the floor: whichever
+  // fires first (the animation's done callback OR the 220 ms timer) wins.
+  // Even if Animated.timing is hijacked, the timer guarantees the swap.
   React.useEffect(() => {
-    if (step === null) { setHaloReady(false); contentAnim.setValue(0); return; }
+    if (step === displayedStep) return;
+    if (displayedStep === null) {
+      // Fresh entry — show the target step immediately. The normal fade-in
+      // happens via Effect 3 once the rect settles.
+      setDisplayedStep(step);
+      return;
+    }
+    let committed = false;
+    const commit = () => {
+      if (committed) return;
+      committed = true;
+      setHaloReady(false);
+      setDisplayedStep(step);
+    };
+    const timer = setTimeout(commit, 220);
+    Animated.timing(contentAnim, { toValue: 0, duration: 180, useNativeDriver: true }).start(() => {
+      commit();
+    });
+    return () => clearTimeout(timer);
+  }, [step, displayedStep, contentAnim]);
+
+  // Effect 2 — displayedStep settled. Reset halo state and wait for the
+  // new step's rect to land (or for a fixed-position step, fire on the
+  // next frame).
+  React.useEffect(() => {
+    if (displayedStep === null) { setHaloReady(false); contentAnim.setValue(0); return; }
     setTtHeight(0);
-    contentAnim.setValue(0);
-    const mk = BIZ_WALKTHROUGH_STEPS[step]?.measureKey;
-    // Team sub-screen steps run a scrollTo (60 ms) + deferred remeasure
-    // (350–450 ms). The halo must wait for the remeasure to commit or it
-    // lands at the pre-scroll rect. Other element steps just need a beat
-    // for the first onLayout to settle (e.g. profile cards that re-layout
-    // after their underlying data query resolves).
-    const isTeamScroll = mk === 'teamOrgCard' || mk === 'teamLocationsSection' || mk === 'teamAddLocationBtn' || mk === 'teamAddMemberBtn' || mk === 'teamMembersSection';
-    const delay = isTeamScroll ? 520 : 260;
     setHaloReady(false);
-    const t = setTimeout(() => setHaloReady(true), delay);
+    // Steps that highlight a fixed-position element (e.g. tab pills) don't
+    // need any host measurement — they paint from the step's `target` rect.
+    // For those we flip haloReady immediately on the next frame so the
+    // halo glides in without the previous timer-based 260 ms wait.
+    if (!activeStepMeasureKey) {
+      const raf = requestAnimationFrame(() => setHaloReady(true));
+      return () => cancelAnimationFrame(raf);
+    }
+    // Element steps — wait for the host to publish a measured rect. If we
+    // already have one (re-entering the step), fire on the next frame.
+    if (activeStepMeasuredRect) {
+      const raf = requestAnimationFrame(() => setHaloReady(true));
+      return () => cancelAnimationFrame(raf);
+    }
+    // Not measured yet → hold the dim mask up to 1500 ms while we wait.
+    // The effect re-fires when `activeStepMeasuredRect` flips non-null
+    // (see the deps below), so as soon as the rect lands we paint
+    // immediately. The timeout is the safety net for steps whose host
+    // never publishes (e.g. the page declined for this key).
+    const t = setTimeout(() => setHaloReady(true), 1500);
     return () => clearTimeout(t);
-  }, [step, BIZ_WALKTHROUGH_STEPS]);
+  }, [displayedStep, BIZ_WALKTHROUGH_STEPS, activeStepMeasureKey, !!activeStepMeasuredRect, contentAnim]);
+
+  // Effect 3 — once the new rect is ready, fade the content back in.
+  // Longer duration (260 ms) than the fade-out (180 ms) so the new step
+  // emerges with a gentler easing — feels less like a hard cut.
+  //
+  // Safety net: if the fade-in is interrupted (another animation hijacks
+  // contentAnim), the timing callback fires with `finished: false` and
+  // contentAnim might be stuck somewhere between 0 and 1 — leaving the
+  // halo + tooltip partially visible / invisible. A 320 ms fallback
+  // setValue(1) ensures it always lands at 1 even if the animation never
+  // gets to.
   React.useEffect(() => {
-    if (haloReady) Animated.timing(contentAnim, { toValue: 1, duration: 220, useNativeDriver: true }).start();
+    if (!haloReady) return;
+    const timer = setTimeout(() => contentAnim.setValue(1), 320);
+    Animated.timing(contentAnim, { toValue: 1, duration: 260, useNativeDriver: true }).start(({ finished }) => {
+      if (finished) clearTimeout(timer);
+    });
+    return () => clearTimeout(timer);
   }, [haloReady, contentAnim]);
   React.useEffect(() => {
     if (step !== null) {
@@ -1566,6 +2070,25 @@ function BusinessWalkthroughOverlay({ navRef, tabWidth, theme, t, visibleTabs, c
       // pushed Stack screens like /business/create-basket) can render this
       // step's highlight when the user is above the tabs.
       if (s?.measureKey) {
+        // Forward the step's positional `target` to the store too — without
+        // this, sub-screens that *can't* publish a measured rect (e.g.
+        // /business/select-org-basket's "existing baskets" list when the
+        // org has none, so the View is never rendered and its ref stays
+        // null) would render only the dim mask with no tooltip / Suivant,
+        // leaving the user stuck. With the target propagated, the overlay
+        // falls back to the step's hard-coded rect and the demo continues.
+        // BizStep.target carries a `size` helper that the store shape
+        // doesn't know about — map it onto width/height so the sub-screen
+        // overlay can use the same rect math as the layout-level one.
+        const target = s.target ? {
+          top: s.target.top,
+          bottom: s.target.bottom,
+          left: s.target.left,
+          right: s.target.right,
+          width: s.target.width ?? s.target.size,
+          height: s.target.height ?? s.target.size,
+          radius: s.target.radius,
+        } : undefined;
         setCurrentStep({
           measureKey: s.measureKey,
           titleKey: s.titleKey,
@@ -1580,15 +2103,47 @@ function BusinessWalkthroughOverlay({ navRef, tabWidth, theme, t, visibleTabs, c
           // can match it (it previously hardcoded 18, which mismatched
           // pill-shaped buttons like the create-basket confirm CTA).
           radius: s.target?.radius,
+          target,
         });
       } else {
         setCurrentStep(null);
       }
       // Settings hand-off: push /settings once, mark the overlay flag, and
       // return. The settings screen renders its own cutout overlay.
+      //
+      // Before the push we drop any pushed sub-screen the prior step left
+      // behind (typically /business/team after the team sub-tour) by
+      // router.replace-ing to /(business)/dashboard, AND we point the tabs
+      // navigator at the dashboard tab. That way the back button from
+      // /settings pops to the dashboard — same as when the user reaches
+      // settings through the normal gear-icon path — instead of stranding
+      // them on /business/team with no UI cue to leave it.
       if (s?.isSettings) {
         setShowSettingsOverlay(true);
-        try { router.push('/settings'); } catch {}
+        try {
+          // Point the tabs nav at the dashboard FIRST so the (business)
+          // group sitting underneath /settings has the right tab selected
+          // for when the user backs out.
+          try { navRef.current?.navigate('dashboard'); } catch {}
+          // ONE navigation operation, not two — the previous version
+          // dispatched router.replace('/(business)/dashboard') AND
+          // router.push('/settings') in the same tick, which raced inside
+          // Expo Router and could end up with /settings push being
+          // discarded by the in-flight replace. The user-visible symptom
+          // was the Next button on the team-management last step
+          // "skipping" the settings overlay entirely and landing the user
+          // on /(tabs)/ — the customer search home — because the demo-end
+          // route correction kicked in with no /settings screen to anchor
+          // against. Use replace from sub-screens (pops /business/team
+          // cleanly) and push from tabs (keeps the (business) layout in
+          // the back-stack so dismissing /settings returns to dashboard).
+          const onSubScreen = pathname.startsWith('/business/');
+          if (onSubScreen) {
+            router.replace('/settings' as never);
+          } else {
+            router.push('/settings' as never);
+          }
+        } catch {}
         return;
       }
       if (s?.routeName && navRef.current) {
@@ -1638,15 +2193,36 @@ function BusinessWalkthroughOverlay({ navRef, tabWidth, theme, t, visibleTabs, c
   // already calls nextStep in the happy path; this is the belt-and-
   // suspenders so the demo can never strand the user on the orders tab
   // with no overlay UI to recover from.
+  //
+  // Defer by ~80 ms so the sub-screen's unmount cleanup (which fires
+  // SYNCHRONOUSLY during React's unmount commit) lands first and
+  // advances `step` — which causes this effect to re-run with a fresh
+  // step where `measureKey` no longer matches, making the safety net a
+  // no-op in the happy path. Without this defer, BOTH paths fire on the
+  // same React tick (the unmount cleanup updates the store but the
+  // currentStep reflector in BizOverlay's [step] effect hasn't run
+  // yet, so this effect still sees the old measureKey) — step advances
+  // TWICE, and on a step list whose total happens to align with that
+  // double advance, the second call ends the walkthrough via the
+  // clearDemoState branch in nextStep. That's the "scan-qr → Next
+  // cleared the demo" symptom.
   React.useEffect(() => {
     if (step === null) return;
     const s = BIZ_WALKTHROUGH_STEPS[step];
     const mk = s?.measureKey;
-    if (mk === 'scanQrBack' && !pathname.startsWith('/business/scan-qr')) {
-      nextStep(BIZ_WALKTHROUGH_STEPS.length);
-    } else if (mk === 'chatBack' && !pathname.startsWith('/message')) {
-      nextStep(BIZ_WALKTHROUGH_STEPS.length);
-    }
+    if (mk !== 'scanQrBack' && mk !== 'chatBack') return;
+    const timer = setTimeout(() => {
+      const latestStep = useWalkthroughStore.getState().step;
+      if (latestStep === null) return;
+      const latestS = BIZ_WALKTHROUGH_STEPS[latestStep];
+      const latestMk = latestS?.measureKey;
+      if (latestMk === 'scanQrBack' && !pathname.startsWith('/business/scan-qr')) {
+        nextStep(BIZ_WALKTHROUGH_STEPS.length);
+      } else if (latestMk === 'chatBack' && !pathname.startsWith('/message')) {
+        nextStep(BIZ_WALKTHROUGH_STEPS.length);
+      }
+    }, 80);
+    return () => clearTimeout(timer);
   }, [pathname, step, BIZ_WALKTHROUGH_STEPS, nextStep]);
 
   // Hardware-back interceptor: while the walkthrough is active, the only
@@ -1676,8 +2252,13 @@ function BusinessWalkthroughOverlay({ navRef, tabWidth, theme, t, visibleTabs, c
     }
   }, [step, expandedDemoCard, verifyModalOpen, BIZ_WALKTHROUGH_STEPS, nextStep]);
 
-  if (step === null) return null;
-  const current = BIZ_WALKTHROUGH_STEPS[step];
+  // Render based on the DISPLAYED step (the one currently faded-in or
+  // mid-transition), not the TARGET `step`. This is what keeps the
+  // cutout / halo / tooltip stable during the 180 ms fade-out: the user
+  // sees the previous step's content fade gracefully, the swap happens
+  // while contentAnim ≈ 0, then the new step's content fades in.
+  if (displayedStep === null) return null;
+  const current = BIZ_WALKTHROUGH_STEPS[displayedStep];
   if (!current) return null;
   // Settings step — the settings screen renders its own overlay.
   if (current.isSettings) return null;
@@ -1688,7 +2269,7 @@ function BusinessWalkthroughOverlay({ navRef, tabWidth, theme, t, visibleTabs, c
   if (current.highlight === 'inline-modal') return null;
 
   const StepIcon = current.icon;
-  const isLast = step === BIZ_WALKTHROUGH_STEPS.length - 1;
+  const isLast = displayedStep === BIZ_WALKTHROUGH_STEPS.length - 1;
   const tabBarLeft = 32;
 
   // Compute the cutout rectangle (x, y, w, h) in screen coordinates, plus
@@ -1820,9 +2401,15 @@ function BusinessWalkthroughOverlay({ navRef, tabWidth, theme, t, visibleTabs, c
   // step type. The previous behaviour (skipToNextTab on element steps) was
   // confusing because the same label "Skip" did different things.
   const handleSkip = skipWalkthrough;
-  // Tab steps advance on tapping the mask; element steps never do (we want
-  // the user to tap the actual feature through the unmasked hole).
-  const maskPress = current.highlight === 'tab' ? handleAdvance : undefined;
+  // Mask taps NEVER advance the demo — even on tab steps. The previous
+  // behaviour (`current.highlight === 'tab' ? handleAdvance : undefined`)
+  // turned every dim-area tap into a Suivant on tab steps, so a stray
+  // tap on the dimmed surroundings of the highlighted tab pill silently
+  // skipped the user to the next step. The tooltip already exposes an
+  // explicit "Suivant" button (tab steps aren't requireTap) and the tab
+  // pill itself is tappable through the cutout — those two paths are the
+  // only legitimate ways to move forward.
+  const maskPress = undefined;
   const showNextButton = !current.requireTap;
   const showTapHint = !!current.requireTap;
 
@@ -1872,7 +2459,7 @@ function BusinessWalkthroughOverlay({ navRef, tabWidth, theme, t, visibleTabs, c
             shadowColor: '#000', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.15, shadowRadius: 20, elevation: 10,
           }}>
           <Text style={{ color: theme.colors.muted, fontSize: 12, fontFamily: 'Poppins_500Medium', marginBottom: 10 }}>
-            {step + 1}/{BIZ_WALKTHROUGH_STEPS.length}
+            {displayedStep + 1}/{BIZ_WALKTHROUGH_STEPS.length}
           </Text>
           <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 10 }}>
             <View style={{ width: 44, height: 44, borderRadius: 22, backgroundColor: '#114b3c12', justifyContent: 'center', alignItems: 'center', marginRight: 12 }}>

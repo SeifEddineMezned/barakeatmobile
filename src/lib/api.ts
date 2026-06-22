@@ -1,6 +1,24 @@
 import axios from 'axios';
 import * as SecureStore from 'expo-secure-store';
+import NetInfo from '@react-native-community/netinfo';
 import { mapErrorToI18nKey } from './errorMap';
+
+// Cached device connectivity. Lets error messages tell "you're offline" apart
+// from "the server didn't answer" (e.g. a Railway dyno waking from idle) so we
+// never wrongly blame the user's WiFi when it's actually working. Defaults to
+// online — "we don't know yet" must never read as offline.
+let _deviceOnline = true;
+try {
+  NetInfo.addEventListener((s) => {
+    const raw = s.isInternetReachable ?? s.isConnected;
+    _deviceOnline = raw !== false; // null/undefined → assume online
+  });
+} catch {
+  // NetInfo unavailable (e.g. in some test envs) — stay optimistic.
+}
+export function isDeviceOnline(): boolean {
+  return _deviceOnline;
+}
 
 // ─── Admin Token ─────────────────────────────────────────────────────────────
 // The backend's requireRestaurantAdmin middleware validates x-admin-token as:
@@ -22,7 +40,7 @@ export function getAdminToken(userId: number): string {
     _cachedAdminToken = btoa(`${userId}:${now}`);
     _cachedAdminTokenTs = now;
     _cachedAdminTokenUserId = userId;
-    console.log('[API] Generated new admin token for userId:', userId);
+    if (__DEV__) console.log('[API] Generated new admin token for userId:', userId);
   }
   return _cachedAdminToken!;
 }
@@ -47,7 +65,16 @@ export const apiClient = axios.create({
 apiClient.interceptors.request.use(
   async (config) => {
     try {
-      const token = await SecureStore.getItemAsync(TOKEN_KEY);
+      // Read the token via the shared session helper so this interceptor uses
+      // the SAME SecureStore → AsyncStorage fallback the auth-restore path
+      // uses. If only AsyncStorage has the token (because SecureStore went
+      // bad on this device), the interceptor still populates the Authorization
+      // header. Previously the interceptor only consulted SecureStore, so
+      // every API request after a SecureStore corruption went out anonymous
+      // — even when restoreSession had already recovered the session from
+      // the AsyncStorage fallback.
+      const { getToken } = require('./session');
+      const token = await getToken();
       if (token) {
         config.headers.Authorization = `Bearer ${token}`;
       }
@@ -89,16 +116,26 @@ apiClient.interceptors.response.use(
       // 429 — back off and retry GET/HEAD requests. Without this, the
       // polling timers across the app would keep firing on schedule
       // even after the server told us to slow down.
-      const cfg = error.config as (typeof error.config & { _429Attempt?: number; _netAttempt?: number; retryOnNetworkError?: boolean }) | undefined;
+      const cfg = error.config as (typeof error.config & { _429Attempt?: number; _netAttempt?: number; retryOnNetworkError?: boolean; skip429Retry?: boolean }) | undefined;
       const method = (cfg?.method ?? 'get').toLowerCase();
       const idempotent = method === 'get' || method === 'head';
 
-      // Transient network failure (no response at all). Retry safe requests
-      // before surfacing the error — this is what was showing up as
-      // "[API] Error: undefined Network Error /api/reservations/verify-qr"
-      // on the first scan after the backend had gone idle.
+      // Transient network failure (no response at all). Retry before surfacing
+      // the error — this is what was showing up as the instant "pas de connexion"
+      // popup on the FIRST press of any button after the app/backend sat idle
+      // (cold Railway dyno, DNS/TLS warm-up), where the second press worked.
+      //
+      // Only retry GET/HEAD (idempotent) or non-idempotent calls that explicitly
+      // opt in via `retryOnNetworkError: true`. The earlier rule — "retry any
+      // non-timeout network error regardless of verb" — was UNSAFE on Android
+      // cellular: a slow POST can succeed on the server, then the response gets
+      // dropped during a cell-handoff / radio sleep. axios reports that as
+      // `isNetworkError=true` + `isTimeout=false` (socket closed, no response),
+      // and the interceptor would silently re-send the same POST → duplicate
+      // server-side write. Symptom: duplicate chat messages on Android.
       const isNetworkError = !error.response;
-      if (isNetworkError && cfg && (idempotent || cfg.retryOnNetworkError === true)) {
+      const retryThisError = idempotent || cfg?.retryOnNetworkError === true;
+      if (isNetworkError && cfg && retryThisError) {
         const attempt = (cfg._netAttempt ?? 0) + 1;
         if (attempt <= MAX_NETWORK_RETRIES) {
           cfg._netAttempt = attempt;
@@ -111,7 +148,12 @@ apiClient.interceptors.response.use(
         // Out of retries — fall through to the normal rejection.
       }
 
-      if (status === 429 && cfg && idempotent) {
+      // `skip429Retry: true` opts a call OUT of the auto-retry loop entirely
+      // so the caller sees the 429 immediately. Critical for startup-path
+      // probes (e.g. /api/auth/onboarding) where the default 30 s Retry-After
+      // × 3 retries would block the splash holding overlay for ~90 s while
+      // the app appears to hang on a green screen.
+      if (status === 429 && cfg && idempotent && !cfg.skip429Retry) {
         const attempt = (cfg._429Attempt ?? 0) + 1;
         if (attempt <= MAX_429_RETRIES) {
           cfg._429Attempt = attempt;
@@ -165,6 +207,92 @@ export function isApiError(err: unknown): err is ApiError {
 }
 
 /**
+ * Generate a per-attempt idempotency key for write endpoints that accept one.
+ *
+ * Used by reserve, send-message, create-basket, submit-report, redeem-code:
+ *   • The caller mints a key in a `useRef` when the user first taps submit.
+ *   • The same key is re-sent on every retry of THAT attempt — so the server
+ *     can recognise the second POST as a replay of the first and return the
+ *     cached row instead of inserting a duplicate.
+ *   • Reset (mint a fresh key next time) when the user changes the form state
+ *     in a way that should produce a NEW write (cart change, new message
+ *     text, new basket name, new code).
+ *
+ * Format: `<base36 timestamp>-<20 base36 random chars>` — ~120 bits of
+ * entropy, comfortably collision-free for per-user scoping. Avoids
+ * crypto.randomUUID because Hermes (RN's JS engine) doesn't ship it natively
+ * and we don't want a native-module dependency for this.
+ */
+export function makeAttemptKey(): string {
+  const r1 = Math.random().toString(36).substring(2, 12);
+  const r2 = Math.random().toString(36).substring(2, 12);
+  return `${Date.now().toString(36)}-${r1}${r2}`;
+}
+
+/**
+ * "Ghost success" detector — returns true when an apparent error is actually
+ * proof that the user's INTENT has already been achieved server-side.
+ *
+ * The pattern: customer taps "submit review" → network blips between commit
+ * and response → app shows "submission failed" → user retries → backend says
+ * "you already reviewed this". The second response IS the receipt for the
+ * first attempt. From the user's perspective the action succeeded — they
+ * should see a success state, not a second failure popup.
+ *
+ * Each `kind` carries action-specific knowledge of which error shapes mean
+ * "intent achieved" vs. "real failure". Only narrow, EXPLICIT matches are
+ * treated as ghost-success — anything ambiguous keeps surfacing as a real
+ * error so we never swallow a legitimate failure.
+ *
+ * Usage in a useMutation onError:
+ *   onError: (err) => {
+ *     if (isActionAlreadyDoneError(err, 'review')) {
+ *       // Treat as success — server already has the row
+ *       queryClient.invalidateQueries(...); navigate(...); return;
+ *     }
+ *     setToastMsg({ type: 'error', text: getErrorMessage(err) });
+ *   }
+ *
+ * Add a new `kind` only when the backend gives a SPECIFIC error code/string
+ * for that endpoint's "already done" state. Don't broaden existing kinds —
+ * each one is calibrated to the exact route's response shape.
+ */
+export type AlreadyDoneActionKind = 'review' | 'cancel-reservation' | 'confirm-pickup';
+
+export function isActionAlreadyDoneError(err: unknown, kind: AlreadyDoneActionKind): boolean {
+  if (!isApiError(err)) return false;
+  const raw = String(err.message ?? '').toLowerCase();
+  const data = (err.data ?? {}) as { error?: string; status?: string; message?: string };
+  const code = String(data.error ?? '').toLowerCase();
+  const currentStatus = String(data.status ?? '').toLowerCase();
+
+  switch (kind) {
+    case 'review':
+      // POST /api/reviews → 400 "You have already reviewed this reservation".
+      // Customer's intent (the review row exists) is satisfied either way.
+      return err.status === 400 && (raw.includes('already reviewed') || code.includes('already reviewed'));
+
+    case 'cancel-reservation':
+      // DELETE /api/reservations/:id → 409 { error: 'order_already_terminal', status: '<currentStatus>' }.
+      // Treat as success ONLY when the order is in a state that satisfies
+      // the cancel intent (cancelled or expired = "not active anymore"). DO
+      // NOT swallow 'picked_up' / 'completed' — the user wanted to cancel
+      // but the merchant already collected, which is a real conflict the
+      // customer needs to see.
+      if (err.status !== 409) return false;
+      if (code !== 'order_already_terminal') return false;
+      return currentStatus === 'cancelled' || currentStatus === 'expired';
+
+    case 'confirm-pickup':
+      // POST /api/reservations/:id/confirm-pickup → 400 "Cette commande a
+      // déjà été récupérée." The merchant's intent (mark as picked up) is
+      // achieved. Cancelled / refunded responses on this endpoint are NOT
+      // swallowed — those are real "you can't collect this" conflicts.
+      return err.status === 400 && (raw.includes('déjà été récupérée') || raw.includes('deja ete recuperee'));
+  }
+}
+
+/**
  * Turns ANY thrown error into a clean, user-appropriate, TRANSLATED string.
  *
  * Guarantee: this never returns a raw/technical backend string (tokens, JWTs,
@@ -196,13 +324,29 @@ export function getErrorMessage(err: unknown, fallback?: string): string {
 
   // 1. Known backend message → its translation.
   if (raw) {
-    const i18nKey = mapErrorToI18nKey(raw);
+    let i18nKey = mapErrorToI18nKey(raw);
+    // The request got NO response but the device is online → it's the server
+    // (waking from idle / briefly unreachable), not the user's connection.
+    // Swap the alarming "check your network" copy for an honest "try again".
+    if (i18nKey === 'errors.networkError' && _deviceOnline) {
+      i18nKey = 'errors.serverUnavailable';
+    }
     if (i18nKey && i18n) {
       const translated = i18n.t(i18nKey);
       // i18next returns the key itself when the key is missing — treat that as
       // "no translation" so we fall through to the fallback instead of showing
       // a raw key like "errors.loginFailed".
       if (translated && translated !== i18nKey) return translated;
+    }
+    // 1b. Pass-through for already-friendly French backend strings. A handful
+    // of routes return clean, user-grade French sentences (e.g. "Vous venez de
+    // réserver. Veuillez patienter avant de réessayer.") that we'd rather show
+    // verbatim than swallow into the generic. Conservative whitelist on the
+    // opening word so noisy technical messages still fall through to the
+    // generic at step 2/3.
+    const trimmed = raw.trim();
+    if (FRIENDLY_FR_PREFIXES.some((p) => trimmed.startsWith(p))) {
+      return trimmed;
     }
   }
 
@@ -213,5 +357,19 @@ export function getErrorMessage(err: unknown, fallback?: string): string {
     const generic = i18n.t('common.errorOccurred');
     if (generic && generic !== 'common.errorOccurred') return generic;
   }
-  return 'Something went wrong. Please try again.';
+  return 'Something went wrong. Please try again in a moment.';
 }
+
+// Conservative whitelist used by getErrorMessage step 1b. Anything starting
+// with one of these prefixes is treated as already-user-grade French and
+// surfaced verbatim. Keep this tight — adding broad prefixes like "Erreur"
+// or "Échec" would let raw technical strings leak to users.
+const FRIENDLY_FR_PREFIXES = [
+  'Vous ',
+  'Cette ',
+  'Cet ',
+  'Aucun ',
+  'Veuillez ',
+  'Pas de ',
+  'Demandez ',
+];

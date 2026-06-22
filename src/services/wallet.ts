@@ -27,7 +27,11 @@ export async function fetchWallet(): Promise<WalletData> {
   const res = await apiClient.get<any>('/api/wallet');
   const rawTransactions: any[] = Array.isArray(res.data?.transactions) ? res.data.transactions : [];
   return {
-    balance: toNumber(res.data?.balance),
+    // Clamp to >= 0: credits can never legitimately go negative (terms §6), and
+    // a negative balance leaking through would make the reserve screen's
+    // `Math.min(walletBalance, orderTotal)` credit cap negative and corrupt the
+    // applied-credit math. Treat any negative server value as 0 for spend/UI.
+    balance: Math.max(0, toNumber(res.data?.balance)),
     currency: res.data?.currency ?? 'TND',
     transactions: rawTransactions.map((t) => ({ ...t, amount: toNumber(t?.amount) })) as WalletTransaction[],
   };
@@ -38,10 +42,21 @@ export async function payWithCredits(amount: number, reservationId?: number): Pr
   return { balance: toNumber(res.data?.balance) };
 }
 
-export async function redeemCode(code: string): Promise<{ balance: number; amount: number }> {
-  const res = await apiClient.post<any>('/api/wallet/redeem', { code });
+export async function redeemCode(code: string, idempotencyKey?: string): Promise<{ balance: number; amount: number }> {
+  // idempotencyKey distinguishes "I retried after a network blip" (same key →
+  // replay: returns the SAME success payload with the existing balance) from
+  // "I redeemed yesterday and re-typed today" (different key → backend returns
+  // the existing 'Vous avez déjà utilisé ce code' error).
+  const key = idempotencyKey && idempotencyKey.length > 0 ? idempotencyKey : undefined;
+  const res = await apiClient.post<any>(
+    '/api/wallet/redeem',
+    { code, client_request_id: key },
+    key ? { headers: { 'Idempotency-Key': key } } : undefined
+  );
   // Backend puts the credited amount on `transaction.amount`; keep a root-level
-  // fallback in case that ever changes.
+  // fallback in case that ever changes. On idempotent replay the `transaction`
+  // field may be omitted (we don't re-look-up the original wallet_transaction)
+  // — the message string carries the credited count for display.
   const amount = toNumber(res.data?.transaction?.amount ?? res.data?.amount);
   return { balance: toNumber(res.data?.balance), amount };
 }

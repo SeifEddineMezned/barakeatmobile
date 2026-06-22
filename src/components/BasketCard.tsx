@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Animated, Image, Modal, ScrollView, Platform } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
-import { Heart, Clock, MapPin, Star, ShoppingBag, Tag, Layers, Info, X, TimerOff } from 'lucide-react-native';
+import { Heart, Clock, MapPin, Star, ShoppingBag, Layers, Info, X, TimerOff } from 'lucide-react-native';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { Basket } from '@/src/types';
 import { isPickupExpiredInTz } from '@/src/utils/timezone';
@@ -21,11 +21,18 @@ export function BasketCard({ basket, onFavoritePress, isFavorite = false }: Bask
   const router = useRouter();
   // Distance is only meaningful when the user has a saved address to measure from.
   // With no address selected, render a dash instead of "0 km" (which reads as "right here").
-  const hasSelectedAddress = useAddressStore((s) => s.selectedId !== null);
+  const hasSelectedAddress = useAddressStore((s) => s.selectedId !== null || s.demoAddress !== null);
   const scaleAnim = React.useRef(new Animated.Value(1)).current;
   const favoriteAnim = React.useRef(new Animated.Value(1)).current;
-  const entranceOpacity = React.useRef(new Animated.Value(0)).current;
-  const entranceTranslateY = React.useRef(new Animated.Value(20)).current;
+  // Entrance animation: previously initialized at opacity 0 + y +20, which
+  // meant a card that mounted but never actually started its animation
+  // (component re-keyed during a filter swap, focus event during the same
+  // frame, etc.) would sit at full layout height with opacity 0 — exactly
+  // the "blob of empty space between cards" symptom. Initial values are now
+  // the FINAL state, so worst case the entrance just doesn't play; the card
+  // never disappears from view.
+  const entranceOpacity = React.useRef(new Animated.Value(1)).current;
+  const entranceTranslateY = React.useRef(new Animated.Value(0)).current;
   const [infoVisible, setInfoVisible] = useState(false);
   const infoSwipe = useSwipeToDismiss(() => setInfoVisible(false));
 
@@ -42,7 +49,13 @@ export function BasketCard({ basket, onFavoritePress, isFavorite = false }: Bask
   const isPickupTimeExpired = isPickupExpiredInTz(basket.pickupWindow?.end);
   const isPickupExpired = isPickupTimeExpired || (basket.quantityLeft <= 0 && !isGenuinelySoldOut);
   const isInactive = basket.isActive === false && !isSoldOut && !isPickupExpired;
-  const isUnavailable = isSoldOut || isPickupExpired || isInactive;
+  // closed_today is the strongest signal — when the location is closed for
+  // the whole business day, EVERY basket reads as unavailable regardless of
+  // stock or pickup-window state, and the badge replaces "Épuisé" / "Expiré"
+  // with the more specific "Fermé aujourd'hui" so the customer knows the
+  // *reason* isn't sold-out / time-up but simply "not open today".
+  const isClosedToday = basket.closedToday === true;
+  const isUnavailable = isClosedToday || isSoldOut || isPickupExpired || isInactive;
 
   useEffect(() => {
     Animated.parallel([
@@ -212,23 +225,47 @@ export function BasketCard({ basket, onFavoritePress, isFavorite = false }: Bask
               </Text>
             </View>
 
-            {/* Sold-out overlay label — pointerEvents none so heart button stays tappable */}
-            {isSoldOut && (
-              <View pointerEvents="none" style={styles.soldOutOverlay}>
-                <View style={styles.soldOutLabel}>
+            {/* Closed-today overlay — wins over both sold-out and expired
+                because it's the reason the others would fire. Customer sees
+                a single, specific message instead of "Épuisé" + greyed cards
+                that look like a stockout problem. */}
+            {isClosedToday && (
+              <View pointerEvents="none" style={styles.expiredImageOverlay}>
+                <View style={styles.expiredLabel}>
+                  <TimerOff size={14} color="#fff" style={{ marginRight: 4 }} />
                   <Text style={{ color: '#fff', fontSize: 12, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
-                    {t('basket.soldOut')}
+                    {t('basket.closedToday', { defaultValue: 'Fermé aujourd\'hui' })}
                   </Text>
                 </View>
               </View>
             )}
-            {/* Pickup expired overlay — scoped only to image area, single semi-transparent layer */}
-            {(isPickupExpired || isInactive) && !isSoldOut && (
+            {/* Pickup expired overlay — scoped only to image area, single
+                semi-transparent layer. Rendered BEFORE sold-out AND with NO
+                `!isSoldOut` guard so that when a basket is both expired AND
+                sold out, "Expiré" wins — the expired state is more
+                actionable (the pickup time was missed) while "Épuisé" is
+                just an inventory artifact at that point. The sold-out
+                block below has its own `!isPickupExpired` guard so the
+                two badges never double-stack. */}
+            {(isPickupExpired || isInactive) && !isClosedToday && (
               <View pointerEvents="none" style={styles.expiredImageOverlay}>
                 <View style={styles.expiredLabel}>
                   <TimerOff size={14} color="#fff" style={{ marginRight: 4 }} />
                   <Text style={{ color: '#fff', fontSize: 12, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
                     {t('orders.status.expired', { defaultValue: 'Expiré' })}
+                  </Text>
+                </View>
+              </View>
+            )}
+            {/* Sold-out overlay label — pointerEvents none so heart button
+                stays tappable. Gated on NOT being expired/inactive too, so
+                an expired sold-out basket shows the expired badge above
+                instead of double-stacking. */}
+            {isSoldOut && !isClosedToday && !isPickupExpired && !isInactive && (
+              <View pointerEvents="none" style={styles.soldOutOverlay}>
+                <View style={styles.soldOutLabel}>
+                  <Text style={{ color: '#fff', fontSize: 12, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
+                    {t('basket.soldOut')}
                   </Text>
                 </View>
               </View>
@@ -255,15 +292,9 @@ export function BasketCard({ basket, onFavoritePress, isFavorite = false }: Bask
               {/* Rating moved to image overlay */}
             </View>
 
-            {/* Category row */}
-            {basket.category && basket.category !== 'Tous' && (
-              <View style={[styles.categoryRow, { marginTop: 3 }]}>
-                <Tag size={10} color={theme.colors.textSecondary} />
-                <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, marginLeft: 4 }]} numberOfLines={1}>
-                  {t(`categories.${basket.category.toLowerCase()}`, { defaultValue: basket.category })}
-                </Text>
-              </View>
-            )}
+            {/* Category row removed — the location's category already shows on
+                the location preview; it added noise (and a wrong "Restaurant"
+                default) on the basket card. */}
 
             {/* Details row: chips + price */}
             <View style={[styles.detailsRow, { marginTop: theme.spacing.xs }]}>
@@ -274,7 +305,12 @@ export function BasketCard({ basket, onFavoritePress, isFavorite = false }: Bask
                     style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, marginLeft: 3 }]}
                     numberOfLines={1}
                   >
-                    {basket.pickupWindow.start}-{basket.pickupWindow.end}
+                    {/* Non-breaking hyphen (‑) instead of '-' so the
+                        layout engine can't ever split "15:10-16:00" into two
+                        lines. With a plain hyphen RN's text layout treats it
+                        as a soft break opportunity when the chip is even one
+                        pixel too narrow. */}
+                    {`${basket.pickupWindow.start}‑${basket.pickupWindow.end}`}
                   </Text>
                 </View>
                 {hasSelectedAddress && (
@@ -464,11 +500,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 7,
     paddingVertical: 3,
     marginLeft: 6,
-  },
-  categoryRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingLeft: 38,
   },
   detailsRow: {
     flexDirection: 'row',

@@ -5,12 +5,13 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import { getErrorMessage } from '@/src/lib/api';
+import { verifyOrAlarm } from '@/src/hooks/useVerifyOnError';
 import { X, Clock } from 'lucide-react-native';
 import { validateBizDayWindow } from '@/src/utils/timezone';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { PrimaryCTAButton } from '@/src/components/PrimaryCTAButton';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { fetchMyProfile, fetchMyBaskets, updateLocationById, updateBasket } from '@/src/services/business';
+import { fetchMyProfile, fetchMyBaskets, updateLocationById } from '@/src/services/business';
 import { useBusinessStore } from '@/src/stores/businessStore';
 import { useAuthStore } from '@/src/stores/authStore';
 import { DelayedLoader } from '@/src/components/DelayedLoader';
@@ -53,22 +54,15 @@ export default function AvailabilityScreen() {
   const toTimeField = (hhmm: string): string =>
     hhmm.includes(':') && hhmm.split(':').length === 2 ? `${hhmm}:00` : hhmm;
 
-  // Normalize any HH:MM or HH:MM:SS string to HH:MM:SS for lexicographic comparison.
-  const normalizeTime = (v: string | null | undefined): string | null => {
-    if (!v) return null;
-    const parts = v.split(':');
-    if (parts.length === 2) return `${v}:00`;
-    if (parts.length === 3) return v;
-    return null;
-  };
-
-  const clampToWindow = (v: string | null | undefined, lo: string, hi: string): string => {
-    const n = normalizeTime(v);
-    if (!n) return lo;
-    if (n < lo) return lo;
-    if (n > hi) return hi;
-    return n;
-  };
+  // Live validation status — re-evaluated on every pickerStart/end change so
+  // the hint flips red and the save button disables the instant the merchant
+  // picks an invalid window (zero / <15 min / crosses 03:30). Matches the
+  // price-discount pattern in create-basket.tsx (warning text doubles as
+  // the error indicator instead of stacking two messages).
+  const windowStatus = React.useMemo(
+    () => validateBizDayWindow(pickupStart, pickupEnd),
+    [pickupStart, pickupEnd],
+  );
 
   const saveMutation = useMutation({
     mutationFn: async () => {
@@ -77,27 +71,21 @@ export default function AvailabilityScreen() {
       if (!locationId) throw new Error('Profil non chargé. Veuillez réessayer.');
       const newStart = toTimeField(pickupStart);
       const newEnd = toTimeField(pickupEnd);
-      // PUT /api/locations/:id — same confirmed pattern as PUT /api/baskets/:id
-      await updateLocationById(
+      // PUT /api/locations/:id — backend now (a) hard-blocks the save with
+      // 409 `ordered_basket_window_shortened` if any of today's confirmed
+      // orders would have their pickup window shortened, and (b) returns
+      // `affected_custom_baskets` listing baskets with custom pickup times
+      // that now fall outside the new location hours (informational only —
+      // they are NOT auto-clamped any more; the merchant must decide). The
+      // previous client-side clamp-each-basket loop is gone — it was the
+      // source of the "3:00-3:00" bug the user kept hitting.
+      const res = await updateLocationById(
         locationId,
         { pickup_start_time: newStart, pickup_end_time: newEnd },
         userId,
         profileQuery.data?.organization_id ?? undefined
       );
-      // Clamp each basket's pickup window to the new location window.
-      // Non-conflicting baskets keep their original times (re-sent in case the
-      // updateLocationById fallback overwrote all baskets to newStart/newEnd).
-      const baskets = basketsQuery.data ?? [];
-      await Promise.all(
-        baskets.map((b) =>
-          updateBasket(b.id, {
-            pickup_start_time: clampToWindow(b.pickup_start_time, newStart, newEnd),
-            pickup_end_time: clampToWindow(b.pickup_end_time, newStart, newEnd),
-          }).catch((err: any) => {
-            console.log('[Availability] Failed to clamp basket', b.id, err?.message);
-          })
-        )
-      );
+      return res;
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['my-profile'] });
@@ -105,51 +93,110 @@ export default function AvailabilityScreen() {
       void queryClient.invalidateQueries({ queryKey: ['business-stats'] });
       void queryClient.invalidateQueries({ queryKey: ['business-analytics'] });
       void queryClient.invalidateQueries({ queryKey: ['locations'] });
-      alert.showAlert(t('common.success'), t('business.availability.saved'));
+      // Heads-up popup AFTER the save committed. Baskets using "horaires
+      // du commerce" (NULL columns) automatically pick up the new location
+      // hours; baskets with their OWN pickup_start_time / pickup_end_time
+      // are now LEFT UNTOUCHED on the backend (per the user's request:
+      // never auto-modify custom-pickup baskets). If any such baskets
+      // exist, surface a one-button confirmation pointing the merchant to
+      // the baskets page to verify them. The popup is purely informational
+      // — the location change is already saved by the time it appears.
+      const baskets = basketsQuery.data ?? [];
+      const customCount = baskets.filter((b) => b.pickup_start_time != null || b.pickup_end_time != null).length;
+      if (customCount > 0) {
+        alert.showAlert(
+          t('business.availability.customWarningTitle', { defaultValue: 'Vérifiez vos paniers' }),
+          t('business.availability.customWarningBody', {
+            defaultValue: "1 ou plusieurs paniers ont des horaires de retraits personnalisés et n'ont pas été modifiés.\nAllez à Mes Paniers pour vérifier qu'ils sont toujours corrects.",
+          }),
+          [
+            {
+              text: t('business.availability.goToBaskets', { defaultValue: 'Voir mes paniers' }),
+              onPress: () => {
+                router.back(); // close availability screen
+                router.push('/(business)/my-baskets' as never);
+              },
+            },
+          ],
+          { layout: 'sheet', type: 'info' },
+        );
+        return; // navigation handled in the action onPress
+      }
       router.back();
     },
-    onError: (err: any) => {
-      alert.showAlert(t('common.error'), getErrorMessage(err));
+    onError: async (err: any) => {
+      // 409 ordered_basket_window_shortened — show the specific conflict.
+      // List up to 5 affected orders so the merchant knows whose pickup
+      // they'd be stranding. Suppress verifyOrAlarm in this branch since
+      // the change definitively did NOT commit (the backend rejected
+      // BEFORE the UPDATE).
+      const errCode = err?.data?.error ?? err?.response?.data?.error;
+      if (errCode === 'ordered_basket_window_shortened') {
+        const affected = err?.data?.affected ?? err?.response?.data?.affected ?? [];
+        const lines = (Array.isArray(affected) ? affected : []).slice(0, 5)
+          .map((b: any) => `• ${b.basket_name ?? 'Panier'}${b.customer_name ? ` (${b.customer_name})` : ''}: ${b.current_window} → ${b.new_window}`)
+          .join('\n');
+        const extraCount = Math.max(0, (Array.isArray(affected) ? affected.length : 0) - 5);
+        alert.showAlert(
+          t('business.availability.orderConflictTitle', { defaultValue: 'Commandes en cours' }),
+          `${t('business.availability.orderConflictBody', {
+            defaultValue: "Vous ne pouvez pas raccourcir l'horaire — des clients ont déjà commandé pour aujourd'hui.",
+          })}\n\n${lines}${extraCount > 0 ? `\n\n+${extraCount} ${t('business.availability.moreOrders', { defaultValue: 'autres' })}` : ''}`,
+        );
+        return;
+      }
+      // Verify before alarming. Availability save updates the location
+      // pickup window AND clamps every basket — multi-step; the first
+      // step often succeeds even if the response was lost.
+      const newStart = toTimeField(pickupStart);
+      const newEnd = toTimeField(pickupEnd);
+      await verifyOrAlarm<any>({
+        error: err,
+        queryClient,
+        verifyKey: ['my-profile'],
+        verify: (fresh: any) => {
+          if (!fresh) return false;
+          const liveStart = String(fresh?.pickup_start_time ?? '').substring(0, 5);
+          const liveEnd = String(fresh?.pickup_end_time ?? '').substring(0, 5);
+          const sentStart = String(newStart ?? '').substring(0, 5);
+          const sentEnd = String(newEnd ?? '').substring(0, 5);
+          return liveStart === sentStart && liveEnd === sentEnd;
+        },
+        onConfirmed: () => {
+          void queryClient.invalidateQueries({ queryKey: ['my-profile'] });
+          void queryClient.invalidateQueries({ queryKey: ['my-baskets'] });
+          void queryClient.invalidateQueries({ queryKey: ['business-stats'] });
+          void queryClient.invalidateQueries({ queryKey: ['business-analytics'] });
+          void queryClient.invalidateQueries({ queryKey: ['locations'] });
+          alert.showAlert(t('common.success'), t('business.availability.saved'));
+          router.back();
+        },
+        onUnconfirmed: () => alert.showAlert(t('common.error'), getErrorMessage(err)),
+      });
     },
   });
 
   const handleSavePress = () => {
-    // Cross-03:30 / zero-duration check first — once the rule fires
-    // there's nothing else to validate.
-    const status = validateBizDayWindow(pickupStart, pickupEnd);
+    // Cross-03:30 / zero-duration / too-short check — once the rule fires
+    // there's nothing else to validate. (The save button is also disabled
+    // when status !== 'ok' so this is a belt-and-suspenders guard for the
+    // case where the merchant tapped before validation updated.)
+    const status = windowStatus;
     if (status !== 'ok') {
       const msg = status === 'zero'
         ? t('business.availability.invalidWindow', { defaultValue: "L'heure de fin doit être différente de l'heure de début." })
-        : t('business.availability.crossReset', { defaultValue: "Le créneau ne peut pas traverser la réinitialisation quotidienne (03:30). Choisissez un début ≥ 03:30, ou une fin ≤ 03:29." });
+        : status === 'too-short'
+          ? t('business.availability.tooShort', { defaultValue: 'Le créneau de retrait doit durer au moins 15 minutes.' })
+          : t('business.availability.crossReset', { defaultValue: "Le créneau ne peut pas traverser la réinitialisation quotidienne (03:30). Choisissez un début ≥ 03:30, ou une fin ≤ 03:29." });
       alert.showAlert(t('common.error', { defaultValue: 'Erreur' }), msg);
       return;
     }
-    const newStart = toTimeField(pickupStart);
-    const newEnd = toTimeField(pickupEnd);
-    const baskets = basketsQuery.data ?? [];
-    const conflicting = baskets.filter((b) => {
-      const bs = normalizeTime(b.pickup_start_time);
-      const be = normalizeTime(b.pickup_end_time);
-      return (bs !== null && bs < newStart) || (be !== null && be > newEnd);
-    });
-    if (conflicting.length > 0) {
-      alert.showAlert(
-        t('business.availability.conflictTitle'),
-        t('business.availability.conflictMessage', {
-          count: conflicting.length,
-          start: newStart.substring(0, 5),
-          end: newEnd.substring(0, 5),
-        }),
-        [
-          { text: t('common.cancel'), style: 'cancel' },
-          {
-            text: t('business.availability.adjustAndSave'),
-            onPress: () => saveMutation.mutate(),
-          },
-        ]
-      );
-      return;
-    }
+    // Save unconditionally — the location-hour change is independent of
+    // any custom-pickup baskets the merchant might have. If a save error
+    // happens (ordered-basket conflict, network) the onError surfaces it;
+    // if the save succeeds AND there are custom-pickup baskets, the
+    // onSuccess shows an informational popup pointing the merchant to
+    // the baskets page to verify them (no longer a pre-save blocker).
     saveMutation.mutate();
   };
 
@@ -169,7 +216,7 @@ export default function AvailabilityScreen() {
         paddingTop: theme.spacing.lg,
         paddingBottom: theme.spacing.md,
       }]}>
-        <TouchableOpacity onPress={() => router.back()} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+        <TouchableOpacity onPress={() => router.back()} hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}>
           <X size={24} color={theme.colors.textPrimary} />
         </TouchableOpacity>
         <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h2, flex: 1, textAlign: 'center' as const }}>
@@ -183,17 +230,36 @@ export default function AvailabilityScreen() {
         contentContainerStyle={{ paddingHorizontal: theme.spacing.xl, paddingBottom: 40 }}
         showsVerticalScrollIndicator={false}
       >
-        {/* Cross-reset rule reminder — same copy as the hours modal in
-            business-profile so the constraint reads consistently from
-            either entry point. */}
-        <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 6, marginTop: theme.spacing.lg, paddingHorizontal: 4 }}>
-          <Clock size={12} color={theme.colors.muted} style={{ marginTop: 2 }} />
-          <Text style={{ color: theme.colors.muted, ...theme.typography.caption, flex: 1, lineHeight: 15 }}>
-            {t('business.availability.crossResetHint', {
-              defaultValue: 'Le créneau ne doit pas traverser 03:30 (réinitialisation quotidienne). Commencez ≥ 03:30 ou terminez ≤ 03:29.',
-            })}
-          </Text>
-        </View>
+        {/* Cross-reset / duration rule reminder. Two states share the same
+            slot:
+              - default (windowStatus === 'ok'): muted-grey hint about the
+                03:30 rule, same as the hours modal in business-profile.
+              - error (zero / too-short / crosses-reset): same row, but the
+                icon + text flip to red and the copy swaps to the specific
+                violation. The save button below disables to match. Single
+                element with two visual states — matches the price-discount
+                pattern in create-basket.tsx (no stacked duplicate hints). */}
+        {(() => {
+          const isError = windowStatus !== 'ok';
+          const hintColor = isError ? theme.colors.error : theme.colors.muted;
+          const message = !isError
+            ? t('business.availability.crossResetHint', {
+                defaultValue: 'Le créneau ne doit pas traverser 03:30 (réinitialisation quotidienne). Commencez ≥ 03:30 ou terminez ≤ 03:29.',
+              })
+            : windowStatus === 'zero'
+              ? t('business.availability.invalidWindow', { defaultValue: "L'heure de fin doit être différente de l'heure de début." })
+              : windowStatus === 'too-short'
+                ? t('business.availability.tooShort', { defaultValue: 'Le créneau de retrait doit durer au moins 15 minutes.' })
+                : t('business.availability.crossReset', { defaultValue: "Le créneau ne peut pas traverser la réinitialisation quotidienne (03:30). Choisissez un début ≥ 03:30, ou une fin ≤ 03:29." });
+          return (
+            <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 6, marginTop: theme.spacing.lg, paddingHorizontal: 4 }}>
+              <Clock size={12} color={hintColor} style={{ marginTop: 2 }} />
+              <Text style={{ color: hintColor, ...theme.typography.caption, flex: 1, lineHeight: 15 }}>
+                {message}
+              </Text>
+            </View>
+          );
+        })()}
 
         <View style={{
           backgroundColor: theme.colors.surface,
@@ -236,7 +302,7 @@ export default function AvailabilityScreen() {
             onPress={handleSavePress}
             title={t('business.availability.save')}
             loading={saveMutation.isPending}
-            disabled={saveMutation.isPending}
+            disabled={saveMutation.isPending || windowStatus !== 'ok'}
           />
         </View>
       </ScrollView>

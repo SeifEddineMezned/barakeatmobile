@@ -43,6 +43,17 @@ const ERROR_MAP: Record<string, string> = {
   // Role mismatch (backend sends these for requested_type enforcement)
   'This account is registered as a business. Please switch to business mode.': 'errors.accountIsBusiness',
   'This account is registered as a customer. Please switch to customer mode.': 'errors.accountIsCustomer',
+  // ── Password-reset: account existence revealed (forgot-password) ───────────
+  // routes/auth.js /forgot-password now returns a French sentence + a `code`
+  // when no matching account exists (or the account is OAuth-only). These
+  // substring keys are mutually exclusive ("commerçant"/"client" sit between
+  // "compte" and "n'est associé", so the generic key can't match a typed one)
+  // and map to typed, localized messages so the modal names the account type.
+  'Aucun compte commerçant': 'errors.noBusinessAccount',
+  'Aucun compte client': 'errors.noCustomerAccount',
+  "Aucun compte n'est associé": 'errors.noAccountFound',
+  'connexion Google': 'errors.oauthGoogle',
+  'connexion Apple': 'errors.oauthApple',
   // Google / Apple auth
   'Google did not return an id_token': 'errors.googleAuthFailed',
   'Token exchange failed': 'errors.googleAuthFailed',
@@ -50,6 +61,23 @@ const ERROR_MAP: Record<string, string> = {
   // ── Basket / price errors ───────────────────────────────────────────────────
   'Selling price must be at least 50%': 'errors.priceDiscount',
   'Le prix réduit doit être': 'errors.priceDiscount',
+  // Custom pickup-window validation (basket PUT route). Surface the typed
+  // codes so the merchant sees the actual reason instead of "connexion".
+  'invalid_pickup_format': 'errors.invalidPickupFormat',
+  'pickup_start_after_end': 'errors.pickupStartAfterEnd',
+  'pickup_window_too_short': 'errors.pickupWindowTooShort',
+  // api.ts prefers backend `message` over `error` when building err.message,
+  // so the substring matcher needs to recognise the French sentence itself —
+  // not just the snake_case code. Without these the validation messages from
+  // routes/baskets.js fell through to the generic "Une erreur est survenue".
+  "L'heure de début du retrait": 'errors.pickupStartAfterEnd',
+  "L'heure de retrait personnalisée": 'errors.invalidPickupFormat',
+  'Le créneau de retrait doit durer': 'errors.pickupWindowTooShort',
+  // Location-hours change blocked because today's orders would have their
+  // pickup window shortened. The availability.tsx onError handler renders a
+  // detailed list of affected orders — this mapping is the fallback when a
+  // different caller surfaces the same error through the shared helper.
+  'ordered_basket_window_shortened': 'errors.locationHoursOrderConflict',
 
   // ── Team / multi-org errors ───────────────────────────────────────────────
   // Backend rejects a partner add when the email is already enrolled in a
@@ -58,16 +86,30 @@ const ERROR_MAP: Record<string, string> = {
   // any other caller that surfaces backend errors through the shared map.
   'email_already_partner_elsewhere': 'errors.emailAlreadyPartnerElsewhere',
   'Cet email est déjà associé à un autre commerce': 'errors.emailAlreadyPartnerElsewhere',
+  // Same-org / same-email-elsewhere edge cases — the users-table unique
+  // constraint fires for an email that already exists as ANY type, and the
+  // location-membership uniqueness fires when the same person is re-added
+  // to the same location. Both surfaced as generic before this mapping.
+  'Un utilisateur avec cet email ou téléphone existe déjà': 'errors.addMemberAccountExists',
+  'Cet utilisateur est déjà membre de cet emplacement': 'errors.alreadyMemberHere',
+  "Échec de l'ajout du membre": 'errors.addMemberFailed',
 
   // ── Reservation errors ─────────────────────────────────────────────────────
   'Restaurant is paused': 'errors.restaurantPaused',
   'No baskets available': 'errors.noBaskets',
+  'Not enough baskets available': 'errors.noBaskets',
   'Already reserved today': 'errors.alreadyReserved',
   'Pickup time expired': 'errors.pickupExpired',
+  'Pickup time has expired for today': 'errors.pickupExpired',
   'Reservation not found': 'errors.reservationNotFound',
   'Not authorized to view this reservation': 'errors.forbidden',
   'Maximum 20 baskets per order': 'errors.maxQuantity',
   'Invalid or expired code': 'errors.otpExpired',
+  'Solde insuffisant': 'errors.insufficientCredits',
+  'Prix du panier indisponible': 'errors.basketPriceUnavailable',
+  'This location is paused today': 'errors.locationPaused',
+  'This location is closed today': 'errors.locationClosed',
+  'Code de retrait invalide': 'errors.invalidPickupCode',
 
   // ── Generic / network ──────────────────────────────────────────────────────
   'Unauthorized': 'errors.unauthorized',

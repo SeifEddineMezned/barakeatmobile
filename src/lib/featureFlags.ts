@@ -137,6 +137,18 @@ export const FeatureFlags = {
   ENABLE_GROWING_TREE: false,
   ENABLE_SPLASH_ANIMATION: false,
   IS_PROTOTYPE: false,
+
+  // ── Arabic locale ─────────────────────────────────────────────────────────
+  // OFF for now while the RTL layout is being audited. Picking 'ar' from a
+  // language switcher used to call I18nManager.forceRTL(true), which on Android
+  // triggers a partial mid-session activity reload — components mounted before
+  // the flip kept their LTR layout while new mounts read the post-flip flag,
+  // producing the asymmetric "half the screen is mirrored" symptom. The
+  // forceRTL call has been removed from src/i18n/index.ts as a defence in
+  // depth, and language pickers should hide the Arabic pill while this flag
+  // is false so users can't reach the broken state by accident. Flip back on
+  // once every screen has been audited for RTL correctness.
+  LANGUAGES_AR_ENABLED: false,
 } as const;
 
 // ── Daily reset schedule (not a boolean flag — separate constant) ──────────

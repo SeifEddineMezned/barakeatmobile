@@ -1,8 +1,9 @@
 import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
-import { AlertTriangle } from 'lucide-react-native';
+import { router } from 'expo-router';
 import i18n from '@/src/i18n';
 import { captureException } from '@/src/lib/sentry';
+import { BarakeatErrorIcon } from '@/src/components/ui/BarakeatErrorIcon';
 
 interface Props {
   children: React.ReactNode;
@@ -11,16 +12,19 @@ interface Props {
 interface State {
   hasError: boolean;
   error: Error | null;
+  /** Bumped on every recovery so the subtree fully remounts instead of
+   *  re-rendering the same broken element tree (which would re-throw and loop). */
+  resetKey: number;
 }
 
 export class ErrorBoundary extends React.Component<Props, State> {
   constructor(props: Props) {
     super(props);
-    this.state = { hasError: false, error: null };
+    this.state = { hasError: false, error: null, resetKey: 0 };
   }
 
   static getDerivedStateFromError(error: Error): State {
-    return { hasError: true, error };
+    return { hasError: true, error, resetKey: 0 };
   }
 
   componentDidCatch(error: Error, info: React.ErrorInfo) {
@@ -28,19 +32,33 @@ export class ErrorBoundary extends React.Component<Props, State> {
     captureException(error, { componentStack: info.componentStack ?? '' });
   }
 
+  // Leave the (possibly broken) current screen for a known-good one, THEN clear
+  // the error and remount the subtree. Navigating first means that even if the
+  // crash was the screen itself, "Retry" lands somewhere that renders instead
+  // of re-throwing immediately — the previous implementation only flipped
+  // hasError, so a deterministic render error looped forever.
+  private handleRetry = () => {
+    try {
+      router.replace('/');
+    } catch (e) {
+      console.warn('[ErrorBoundary] navigation on retry failed:', e);
+    }
+    this.setState((prev) => ({ hasError: false, error: null, resetKey: prev.resetKey + 1 }));
+  };
+
   render() {
     if (this.state.hasError) {
       return (
         <View style={styles.container}>
           <View style={styles.card}>
-            <AlertTriangle size={48} color="#FF9800" />
+            <BarakeatErrorIcon size={56} color="#d94f4f" />
             <Text style={styles.title}>{i18n.t('common.errorOccurred')}</Text>
             <Text style={styles.subtitle}>
               {i18n.t('common.errorOccurredDesc', { defaultValue: 'An unexpected error occurred. Please try again.' })}
             </Text>
             <TouchableOpacity
               style={styles.button}
-              onPress={() => this.setState({ hasError: false, error: null })}
+              onPress={this.handleRetry}
               activeOpacity={0.8}
             >
               <Text style={styles.buttonText}>{i18n.t('common.retry')}</Text>
@@ -50,7 +68,7 @@ export class ErrorBoundary extends React.Component<Props, State> {
       );
     }
 
-    return this.props.children;
+    return <React.Fragment key={this.state.resetKey}>{this.props.children}</React.Fragment>;
   }
 }
 

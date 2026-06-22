@@ -64,6 +64,18 @@ export interface Basket {
   maxPerCustomer?: number;
   /** Number of basket types this merchant offers (for search card display) */
   basketTypeCount?: number;
+  /** True when the basket has its OWN pickup_start_time / pickup_end_time
+   *  (i.e. doesn't inherit the location's default hours). Sourced from the
+   *  raw basket row at normalisation time — single source of truth so the
+   *  "custom pickup time" yellow chip renders consistently on the search
+   *  cards, the location preview, and the basket detail page. */
+  hasCustomPickup?: boolean;
+  /** True when the basket's location is closed for the entire current
+   *  business day (weekly_schedule for today resolves to closed). Surfaces
+   *  in the UI as a "Fermé aujourd'hui" badge — search-page card swaps the
+   *  "Épuisé" / "Expiré" badges for this one, location-preview swaps the
+   *  pickup-time chip, basket-detail disables the Reserve CTA. */
+  closedToday?: boolean;
 }
 
 export interface Merchant {
@@ -103,6 +115,25 @@ export interface User {
   phone?: string;
   role: UserRole;
   gender?: 'male' | 'female' | string;
+  /** Server-stored avatar URL or local silhouette token (e.g.
+   *  'silhouette://male' / 'silhouette://female'). Set during OAuth
+   *  first-login onboarding from the man / woman holding basket picker;
+   *  may also be a real URL for users who later upload a photo. */
+  avatar?: string | null;
+  /** Server `onboarding_completed`: false until the user finishes the
+   *  welcome-carousel / demo / address first-login flow. Drives that flow's
+   *  trigger — NOT the OAuth gender screen (see `genderStepCompleted`). */
+  onboardingCompleted?: boolean;
+  /** OAuth-only flag: false until the user has completed (or skipped) the
+   *  first-login gender screen (`/auth/onboarding`). Decoupled from
+   *  `onboardingCompleted` so finishing the gender step doesn't suppress the
+   *  welcome carousel / demo / address prompt. Email + restaurant sign-in
+   *  flows always report this as true. */
+  genderStepCompleted?: boolean;
+  // How the account authenticates. 'google'/'apple' accounts sign in only via
+  // their provider (no password) — the app hides email/password change for them.
+  // Missing on older stored sessions → treat as 'local'.
+  authProvider?: 'local' | 'google' | 'apple';
 }
 
 export interface BusinessProfile {

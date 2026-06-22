@@ -28,6 +28,14 @@ export interface ReviewFromAPI {
   comment?: string;
   image_url?: string;
   created_at?: string;
+  /** Name of the basket this review's order was for (joined server-side). */
+  basket_name?: string;
+  /** When the signed-in caller has reported this review, their report reason
+   *  (one of the REVIEW_REPORT_REASONS keys) + when. Null/absent otherwise. */
+  my_report_reason?: string | null;
+  my_report_at?: string | null;
+  /** Total distinct reporters on this review (moderation status hint). */
+  report_count?: number;
 }
 
 export async function submitReview(data: SubmitReviewRequest): Promise<ReviewFromAPI> {
@@ -116,6 +124,25 @@ export async function canReview(restaurantId: number | string): Promise<boolean>
   } catch {
     return false;
   }
+}
+
+/** Reasons a user can flag a review as objectionable. Mirrors the backend's
+ *  REVIEW_REPORT_REASONS whitelist (routes/reviews.js). */
+export type ReviewReportReason = 'offensive' | 'spam' | 'false_info' | 'personal_info' | 'other';
+
+/** Report a review for moderation (UGC requirement). Idempotent server-side:
+ *  a repeat report by the same user is a no-op (`already_reported: true`). */
+export async function reportReview(
+  reviewId: number,
+  reason: ReviewReportReason,
+  details?: string
+): Promise<{ alreadyReported: boolean; hidden: boolean }> {
+  console.log('[Reviews] Reporting review:', reviewId, reason);
+  const res = await apiClient.post<{ already_reported?: boolean; hidden?: boolean }>(
+    `/api/reviews/${reviewId}/report`,
+    { reason, details: details ?? '' }
+  );
+  return { alreadyReported: !!res.data?.already_reported, hidden: !!res.data?.hidden };
 }
 
 export async function fetchReviewsByRestaurant(restaurantId: number | string): Promise<ReviewFromAPI[]> {

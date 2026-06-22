@@ -65,15 +65,16 @@ export default function StatDetailScreen() {
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: theme.colors.bg }}>
       <StatusBar style="dark" />
-      <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14 }}>
-        <TouchableOpacity onPress={() => router.back()} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 16, paddingVertical: 14, minHeight: 52 }}>
+        <TouchableOpacity
+          onPress={() => router.back()}
+          hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}
+          style={{ position: 'absolute', left: 16, top: 14 }}
+        >
           <ChevronLeft size={24} color={theme.colors.textPrimary} />
         </TouchableOpacity>
-        <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h2, flex: 1, marginLeft: 12 }}>
+        <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h2 }}>
           {title}
-        </Text>
-        <Text style={{ color: theme.colors.muted, ...theme.typography.bodySm }}>
-          {listData.length} {t('profile.places', { defaultValue: 'commerces' })}
         </Text>
       </View>
       <View style={{

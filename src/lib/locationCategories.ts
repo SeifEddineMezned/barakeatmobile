@@ -12,6 +12,8 @@
 //     onboarding flow even though it was never offered as a choice.
 //   • Added 'pizzeria', 'traiteur', 'healthy', 'fast_food' to better reflect
 //     the actual Tunisian food-commerce landscape.
+//   • Added 'hotel' — hotels with restaurants/buffets are a meaningful source
+//     of surplus food; surfaced on both the mobile and website signup forms.
 export const LOCATION_CATEGORIES = [
   'bakery',
   'restaurant',
@@ -20,6 +22,7 @@ export const LOCATION_CATEGORIES = [
   'supermarket',
   'pizzeria',
   'traiteur',
+  'hotel',
   'healthy',
 ] as const;
 

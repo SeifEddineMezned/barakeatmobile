@@ -1,5 +1,5 @@
 import { Tabs, useSegments } from "expo-router";
-import { Search, ShoppingBag, Heart, User, Map, Bell, Settings, Flame, Trophy, Zap, Clock, MapPin, QrCode, CheckCircle, X as XIcon, Navigation, Wallet, Plus, Hand } from "lucide-react-native";
+import { Search, ShoppingBag, Heart, User, Map, Bell, Settings, Clock, MapPin, QrCode, CheckCircle, X as XIcon, Navigation, Wallet, Plus, Hand, Banknote, CreditCard } from "lucide-react-native";
 import Svg, { Path } from 'react-native-svg';
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import React, { useState, useEffect } from "react";
@@ -144,146 +144,60 @@ export default function TabLayout() {
   // ── Splash done — must be declared before any useEffect that references it ──
   const splashDone = useSplashStore((s) => s.splashDone);
 
-  // ── Post-reservation celebration popup ──
-  const celebrationPending = useCelebrationStore((s) => s.pending);
-  const clearCelebration = useCelebrationStore((s) => s.clearPending);
-  const [showCelebration, setShowCelebration] = useState(false);
-  const [orderConfirmPopup, setOrderConfirmPopup] = useState<{ pickupCode: string; pickupStart: string; pickupEnd: string; address: string; locationName?: string; basketName?: string; basketImage?: string; quantity?: number; price?: number; qrCodeUrl?: string } | null>(null);
+  // ── Post-reservation order-confirmed popup ──
+  // The XP "Bien joué" celebration modal itself lives globally in
+  // app/_layout.tsx (<PostReservationCelebration/>) so it survives the
+  // reserve.tsx → /(tabs)/orders navigation transition without a black/white
+  // flash. After the user dismisses it, the celebration writes its
+  // confirmData to celebrationStore.pendingOrderConfirm — we watch that
+  // here and surface the "Votre commande est confirmée !" detail popup
+  // once the user is actually on /(tabs)/orders.
+  const pendingOrderConfirm = useCelebrationStore((s) => s.pendingOrderConfirm);
+  const showOrderConfirmPopupAction = useCelebrationStore((s) => s.showOrderConfirmPopup);
+  const hideOrderConfirmPopupAction = useCelebrationStore((s) => s.hideOrderConfirmPopup);
+  const orderConfirmPopup = useCelebrationStore((s) => s.orderConfirmPopupData);
+  const orderConfirmKey = useCelebrationStore((s) => s.orderConfirmKey);
+  const signalClearOverlays = useCelebrationStore((s) => s.signalClearOverlays);
   const [qrExpanded, setQrExpanded] = useState(false);
-  const [showLevelUpBanner, setShowLevelUpBanner] = useState(false);
-  const flameScale = React.useRef(new Animated.Value(6)).current;
-  const celebrationOpacity = React.useRef(new Animated.Value(0)).current;
-  const statsOpacity = React.useRef(new Animated.Value(0)).current;
-  const xpBarWidth = React.useRef(new Animated.Value(0)).current;
-  const levelUpScale = React.useRef(new Animated.Value(0)).current;
-  // Track every timer the celebration effect schedules so re-runs (Samsung
-  // sometimes fires the effect twice — Android state batching + reference
-  // changes on the celebrationPending object) can cancel pending callbacks
-  // before they double-trigger the level-up banner.
-  const celebrationTimersRef = React.useRef<Array<ReturnType<typeof setTimeout>>>([]);
-  // Identity guard — record the celebrationPending reference we're currently
-  // animating. If the effect runs again with the SAME reference, skip the
-  // whole pipeline so the banner / animations don't fire twice.
-  const celebrationLastRunRef = React.useRef<typeof celebrationPending | null>(null);
-  // Dismissal re-entry guard. Once the user taps Continue we begin tearing
-  // down the celebration; ignore any subsequent dismiss triggers (double-
-  // taps, animation-completion races, etc.) until a new celebration arrives.
-  const celebrationDismissingRef = React.useRef(false);
-
+  // Bridge from the post-reservation celebration. reserve.tsx writes the
+  // confirm payload to `pendingOrderConfirm` after the user taps Continue;
+  // we pick it up here and show the "Commande confirmée !" detail popup
+  // via the store action. The action ALSO clears pendingOrderConfirm in
+  // the same write so this effect can never re-fire on the same payload.
   React.useEffect(() => {
-    if (!celebrationPending) {
-      celebrationLastRunRef.current = null;
-      return;
-    }
-    if (celebrationLastRunRef.current === celebrationPending) {
-      return;
-    }
-    celebrationLastRunRef.current = celebrationPending;
-    // Fresh celebration → re-arm the dismissal guard so the next Continue
-    // tap will actually dismiss.
-    celebrationDismissingRef.current = false;
-    // Cancel any timers / animations still in flight from a prior run.
-    celebrationTimersRef.current.forEach((id) => clearTimeout(id));
-    celebrationTimersRef.current = [];
-    flameScale.stopAnimation();
-    statsOpacity.stopAnimation();
-    xpBarWidth.stopAnimation();
-    levelUpScale.stopAnimation();
+    if (!pendingOrderConfirm) return;
+    showOrderConfirmPopupAction(pendingOrderConfirm);
+    setQrExpanded(false);
+    // Defensively clear any badge/streak modal that may have rendered a
+    // few ms BEFORE orderConfirmActive could gate it. Cheap and idempotent.
+    signalClearOverlays();
+  }, [pendingOrderConfirm, showOrderConfirmPopupAction, signalClearOverlays]);
 
-    setShowCelebration(true);
-    setShowLevelUpBanner(false);
-    flameScale.setValue(celebrationPending.streakChanged ? 9 : 4);
-    celebrationOpacity.setValue(1);
-    statsOpacity.setValue(0);
-    // Start XP bar from previous progress position
-    const startProgress = celebrationPending.xpProgressBefore ?? 0;
-    xpBarWidth.setValue(celebrationPending.levelAfter > celebrationPending.levelBefore ? startProgress : startProgress);
-
-    // Phase 1: flame shrinks from huge to normal
-    Animated.spring(flameScale, {
-      toValue: 1,
-      useNativeDriver: true,
-      friction: 5,
-      tension: 40,
-    }).start();
-
-    // Phase 2 (after 700ms): stats fade in + XP bar animates from previous to new
-    const phase2Timer = setTimeout(() => {
-      const isLevelUp = celebrationPending.levelAfter > celebrationPending.levelBefore;
-      Animated.parallel([
-        Animated.timing(statsOpacity, { toValue: 1, duration: 400, useNativeDriver: false }),
-        isLevelUp
-          ? // Level up: fill bar to 100% first, then reset to new progress
-            Animated.timing(xpBarWidth, { toValue: 1, duration: 600, useNativeDriver: false })
-          : // Same level: animate from previous to new progress
-            Animated.timing(xpBarWidth, { toValue: celebrationPending.xpProgress, duration: 900, useNativeDriver: false }),
-      ]).start(() => {
-        if (isLevelUp) {
-          // Show level-up banner, then reset bar to new level progress
-          setShowLevelUpBanner(true);
-          levelUpScale.setValue(0);
-          Animated.spring(levelUpScale, { toValue: 1, friction: 5, tension: 60, useNativeDriver: true }).start();
-          const phase3Timer = setTimeout(() => {
-            xpBarWidth.setValue(0);
-            Animated.timing(xpBarWidth, { toValue: celebrationPending.xpProgress, duration: 700, useNativeDriver: false }).start();
-          }, 400);
-          celebrationTimersRef.current.push(phase3Timer);
-        }
-      });
-    }, 700);
-    celebrationTimersRef.current.push(phase2Timer);
-
-    return () => {
-      celebrationTimersRef.current.forEach((id) => clearTimeout(id));
-      celebrationTimersRef.current = [];
-      flameScale.stopAnimation();
-      statsOpacity.stopAnimation();
-      xpBarWidth.stopAnimation();
-      levelUpScale.stopAnimation();
-    };
-  }, [celebrationPending]);
-
-  const dismissCelebration = React.useCallback(() => {
-    // Re-entry guard. Double-taps on Continue, an interrupted-animation
-    // completion callback firing late, or any other source that would
-    // re-trigger this would otherwise queue a second order-confirm popup
-    // and (because the celebration data has already been cleared) leave
-    // the Modal in a state where a stray re-render paints the popup
-    // again with the ?? 1 / ?? 50 default fallbacks. Bail out cleanly.
-    if (celebrationDismissingRef.current) return;
-    celebrationDismissingRef.current = true;
-    // Capture confirmData NOW while celebrationPending is still set —
-    // we'll clear it shortly.
-    const confirmData = celebrationPending?.confirmData;
-    Animated.timing(celebrationOpacity, { toValue: 0, duration: 250, useNativeDriver: false }).start(() => {
-      // Order matters here. setShowCelebration(false) is a React state
-      // update that batches with the next render; clearCelebration() is a
-      // Zustand sync update that propagates immediately. If they ran in
-      // the opposite order, there would be a render where the Modal is
-      // still visible (showCelebration === true) but celebrationPending
-      // is already null — and the popup would paint with the ?? 1
-      // (level) / ?? 50 (XP band) fallbacks for a single frame. Hiding
-      // the Modal first guarantees it's gone before the data clears.
-      setShowCelebration(false);
-      setShowLevelUpBanner(false);
-      // Defer the Zustand clear by a microtask so the React setStates
-      // above have a chance to flush first. The Modal then unmounts in
-      // the same commit, and the subsequent celebrationPending=null
-      // update is a no-op for the Modal (already gone).
-      Promise.resolve().then(() => {
-        clearCelebration();
-        void queryClient.invalidateQueries({ queryKey: ['reservations'] });
-      });
-      // Show order confirmed popup after celebration
-      if (confirmData) {
-        setTimeout(() => {
-          setOrderConfirmPopup(confirmData);
-          setQrExpanded(false);
-        }, 300);
+  // Shared close handler for the order-confirmed popup. The popup's
+  // visibility is driven by store state (`orderConfirmPopupData !== null`),
+  // and `hideOrderConfirmPopupAction` flips that synchronously in a single
+  // store write — no React batching, no local-state-vs-store drift, no
+  // ref gate needed. Previous attempts kept the popup state local AND
+  // mirrored to the store, which left two sources of truth that could
+  // disagree for a frame on Android; this collapses to one.
+  // Optionally drops a `target=<reservationId>` deep-link param on the
+  // orders tab so the orders screen scrolls + highlights + auto-expands
+  // the freshly-confirmed card (via its existing target-id pipeline +
+  // ReservationCard's initialExpanded false→true edge handler).
+  const dismissOrderConfirmPopup = React.useCallback((opts?: { goToOrder?: boolean }) => {
+    const resvId = opts?.goToOrder ? orderConfirmPopup?.reservationId : null;
+    hideOrderConfirmPopupAction();
+    // Tear down ANY competing overlay (badge, streak, address-prompt) in
+    // the same gesture. "Voir la commande" must leave a clean orders tab.
+    signalClearOverlays();
+    if (resvId) {
+      try {
+        router.replace({ pathname: '/(tabs)/orders', params: { tab: 'upcoming', target: String(resvId) } } as never);
+      } catch {
+        try { router.setParams({ tab: 'upcoming', target: String(resvId) } as never); } catch {}
       }
-    });
-  }, [celebrationOpacity, clearCelebration, queryClient, celebrationPending]);
-
+    }
+  }, [orderConfirmPopup, router, hideOrderConfirmPopupAction, signalClearOverlays]);
   // Keep fetching gamification stats here (no UI): hitting this endpoint is
   // what makes the backend create the `streak_expiring` notification on day 6.
   // The streak-about-to-expire warning is now shown ONLY through the standard
@@ -526,9 +440,19 @@ export default function TabLayout() {
               // Derive isFocused from route NAME, not from filtered array index,
               // so it's always correct regardless of how 'nearby' shifts raw indexes.
               const isFocused = route.name === focusedRouteName;
-              const color = isFocused ? '#FFFFFF' : theme.colors.textSecondary;
-              const iconStroke = isFocused ? '#FFFFFF' : theme.colors.textSecondary;
-              const iconFill = 'transparent';
+
+              // Active-colour (white) layer opacity, tied to the PILL's live
+              // position. The icon + label colour now crossfades in lockstep
+              // with the sliding green pill instead of hard-flipping on the
+              // navigation state — which used to leave the previous tab's white
+              // label sitting on the white bar (invisible) until the pill
+              // arrived, then snap to grey. Peaks at 1 when the pill is centred
+              // on this tab, fades to 0 over its neighbours.
+              const whiteOpacity = glassAnim.interpolate({
+                inputRange: [(index - 1) * tabWidth, index * tabWidth, (index + 1) * tabWidth],
+                outputRange: [0, 1, 0],
+                extrapolate: 'clamp',
+              });
 
               const onPress = () => {
                 const event = navigation.emit({
@@ -541,14 +465,25 @@ export default function TabLayout() {
                 }
               };
 
-              let icon = null;
               const iconSize = 22;
-              switch (route.name) {
-                case 'index': icon = <TabIcon icon={Search} color={iconStroke} size={iconSize} focused={isFocused} fill={iconFill} />; break;
-                case 'orders': icon = <TabIcon icon={ShoppingBag} color={iconStroke} size={iconSize} focused={isFocused} fill={iconFill} />; break;
-                case 'favorites': icon = <TabIcon icon={Heart} color={iconStroke} size={iconSize} focused={isFocused} fill={iconFill} />; break;
-                case 'profile': icon = <TabIcon icon={User} color={iconStroke} size={iconSize} focused={isFocused} fill={iconFill} />; break;
-              }
+              const renderIcon = (col: string, focused: boolean) => {
+                switch (route.name) {
+                  case 'index': return <TabIcon icon={Search} color={col} size={iconSize} focused={focused} fill="transparent" />;
+                  case 'orders': return <TabIcon icon={ShoppingBag} color={col} size={iconSize} focused={focused} fill="transparent" />;
+                  case 'favorites': return <TabIcon icon={Heart} color={col} size={iconSize} focused={focused} fill="transparent" />;
+                  case 'profile': return <TabIcon icon={User} color={col} size={iconSize} focused={focused} fill="transparent" />;
+                  default: return null;
+                }
+              };
+              const labelStyle = (col: string) => ({
+                color: col,
+                fontSize: 9,
+                fontFamily: 'Poppins_500Medium',
+                marginTop: 2,
+                maxWidth: tabWidth - 8,
+                textAlign: 'center' as const,
+              });
+              const title = options.title ?? route.name;
 
               return (
                 <TouchableOpacity
@@ -562,21 +497,21 @@ export default function TabLayout() {
                   }}
                   activeOpacity={0.7}
                 >
-                  {icon}
-                  <Text
-                    numberOfLines={1}
-                    ellipsizeMode="tail"
-                    style={{
-                      color,
-                      fontSize: 9,
-                      fontFamily: 'Poppins_500Medium',
-                      marginTop: 2,
-                      maxWidth: tabWidth - 8,
-                      textAlign: 'center',
-                    }}
-                  >
-                    {options.title ?? route.name}
+                  {/* Base (inactive / grey) layer */}
+                  {renderIcon(theme.colors.textSecondary, false)}
+                  <Text numberOfLines={1} ellipsizeMode="tail" style={labelStyle(theme.colors.textSecondary)}>
+                    {title}
                   </Text>
+                  {/* Active (white) layer — crossfaded by the pill position. */}
+                  <Animated.View
+                    pointerEvents="none"
+                    style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, alignItems: 'center', justifyContent: 'center', opacity: whiteOpacity }}
+                  >
+                    {renderIcon('#FFFFFF', true)}
+                    <Text numberOfLines={1} ellipsizeMode="tail" style={labelStyle('#FFFFFF')}>
+                      {title}
+                    </Text>
+                  </Animated.View>
                 </TouchableOpacity>
               );
             })}
@@ -874,98 +809,12 @@ export default function TabLayout() {
           streak-about-to-expire warning now appears solely via the standard
           notification popup (NotificationDetail handles `streak_expiring`). */}
 
-      {/* Post-reservation celebration popup.
-          Visibility gated on BOTH showCelebration AND celebrationPending so
-          the popup can never render with null data — eliminates the brief
-          "level 1, 0/50" flash that happened when the Zustand pending=null
-          update propagated faster than the React showCelebration=false
-          update, and stops any stray re-render after a popup-modal close
-          from accidentally re-painting the celebration with default
-          fallbacks. */}
-      <Modal visible={showCelebration && celebrationPending != null} transparent animationType="none" onRequestClose={dismissCelebration}>
-        <Animated.View style={{ flex: 1, backgroundColor: 'rgba(17,75,60,0.97)', justifyContent: 'center', alignItems: 'center', padding: 28, opacity: celebrationOpacity }}>
-          {/* Flame — starts huge, springs to normal */}
-          {celebrationPending?.streakChanged ? (
-            <Animated.View style={{ transform: [{ scale: flameScale }], marginBottom: 12 }}>
-              <Flame size={56} color="#FF6B35" fill="#FF6B35" />
-            </Animated.View>
-          ) : (
-            <Animated.View style={{ transform: [{ scale: flameScale }], marginBottom: 12 }}>
-              <Trophy size={56} color="#e3ff5c" />
-            </Animated.View>
-          )}
-
-          {/* Stats card fades in */}
-          <Animated.View style={{ opacity: statsOpacity, width: '100%', alignItems: 'center' }}>
-            {/* Level heading */}
-            <Text style={{ color: '#e3ff5c', fontSize: 28, fontWeight: '700', fontFamily: 'Poppins_700Bold', textAlign: 'center' }}>
-              {t('reserve.goodJob', { defaultValue: 'Bien jou\u00e9 !' })}
-            </Text>
-            <Text style={{ color: 'rgba(255,255,255,0.75)', fontSize: 15, fontFamily: 'Poppins_400Regular', marginTop: 4, textAlign: 'center' }}>
-              {t('impact.level', { level: String(showLevelUpBanner ? celebrationPending?.levelAfter : celebrationPending?.levelBefore ?? celebrationPending?.levelAfter ?? 1) })}
-            </Text>
-
-            {/* XP gained badge */}
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: 'rgba(227,255,92,0.15)', borderRadius: 20, paddingHorizontal: 16, paddingVertical: 8, marginTop: 16 }}>
-              <Zap size={16} color="#e3ff5c" />
-              <Text style={{ color: '#e3ff5c', fontSize: 15, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
-                +{celebrationPending?.xpGained ?? 0} XP
-              </Text>
-            </View>
-
-            {/* XP bar */}
-            <View style={{ width: '100%', backgroundColor: 'rgba(255,255,255,0.12)', borderRadius: 8, height: 14, overflow: 'hidden', marginTop: 20 }}>
-              <Animated.View style={{
-                height: '100%',
-                backgroundColor: '#e3ff5c',
-                borderRadius: 8,
-                width: xpBarWidth.interpolate({ inputRange: [0, 1], outputRange: ['0%', '100%'] }),
-              }} />
-            </View>
-            <Text style={{ color: 'rgba(255,255,255,0.5)', fontSize: 12, fontFamily: 'Poppins_400Regular', marginTop: 6, alignSelf: 'flex-end' }}>
-              {celebrationPending?.xpInLevel ?? 0}/{celebrationPending?.xpBandSize ?? 50} XP
-            </Text>
-
-            {/* Level up banner */}
-            {showLevelUpBanner && (
-              <Animated.View style={{ transform: [{ scale: levelUpScale }], backgroundColor: 'rgba(227,255,92,0.18)', borderRadius: 16, paddingHorizontal: 24, paddingVertical: 14, marginTop: 16, alignItems: 'center' }}>
-                <Text style={{ color: '#e3ff5c', fontSize: 20, fontWeight: '700', fontFamily: 'Poppins_700Bold', textAlign: 'center' }}>
-                  {t('reserve.congratsLevelUp', { defaultValue: 'F\u00e9licitations !' })}
-                </Text>
-                <Text style={{ color: 'rgba(255,255,255,0.8)', fontSize: 14, fontFamily: 'Poppins_400Regular', marginTop: 4, textAlign: 'center' }}>
-                  {t('reserve.youReachedLevel', { level: String(celebrationPending?.levelAfter ?? 1), defaultValue: `Vous avez atteint le niveau ${celebrationPending?.levelAfter ?? 1}` })}
-                </Text>
-              </Animated.View>
-            )}
-
-            {/* Streak row (if changed) */}
-            {celebrationPending?.streakChanged && (celebrationPending?.newStreak ?? 0) > 0 && (
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: 'rgba(255,107,53,0.18)', borderRadius: 14, paddingHorizontal: 18, paddingVertical: 10, marginTop: 16 }}>
-                <Flame size={18} color="#FF6B35" fill="#FF6B35" />
-                <Text style={{ color: '#FF6B35', fontSize: 16, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
-                  {celebrationPending.newStreak} {t('streak.days', { count: celebrationPending.newStreak, defaultValue: 'jours' })}
-                </Text>
-                <Text style={{ color: 'rgba(255,107,53,0.8)', fontSize: 13, fontFamily: 'Poppins_400Regular' }}>
-                  {t('streak.current', { defaultValue: 'de suite' })}
-                </Text>
-              </View>
-            )}
-
-            {/* Continue button */}
-            <TouchableOpacity
-              onPress={dismissCelebration}
-              style={{ backgroundColor: '#e3ff5c', borderRadius: 16, paddingVertical: 16, paddingHorizontal: 48, marginTop: 28 }}
-            >
-              <Text style={{ color: '#114b3c', fontSize: 16, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
-                {t('common.continue', { defaultValue: 'Continuer' })}
-              </Text>
-            </TouchableOpacity>
-          </Animated.View>
-        </Animated.View>
-      </Modal>
+      {/* Post-reservation "Bien joué !" celebration now lives in
+          app/_layout.tsx (<PostReservationCelebration/>) so it can span the
+          reserve.tsx → /(tabs)/orders navigation without a flash. */}
 
       {/* ── Order confirmed popup (after celebration) — matches notification detail style ── */}
-      <Modal visible={orderConfirmPopup !== null} transparent animationType="fade" onRequestClose={() => setOrderConfirmPopup(null)}>
+      <Modal key={`oc-${orderConfirmKey}`} visible={orderConfirmPopup !== null} transparent animationType="fade" onRequestClose={() => dismissOrderConfirmPopup()}>
         <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 16 }}>
           {/* Backdrop dismiss as an absolutely-positioned SIBLING (not a
               wrapper). Previously a wrapping TouchableOpacity + the inner
@@ -974,7 +823,7 @@ export default function TabLayout() {
               ScrollView's pan gesture unless the touch started on a child
               TouchableOpacity (the QR toggle). Same pattern that already
               works for the detail modal in notifications.tsx. */}
-          <TouchableOpacity style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }} activeOpacity={1} onPress={() => setOrderConfirmPopup(null)} />
+          <TouchableOpacity style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }} activeOpacity={1} onPress={() => dismissOrderConfirmPopup()} />
           <View style={{ backgroundColor: theme.colors.surface, borderRadius: 24, width: '100%', maxWidth: 420, maxHeight: '90%', overflow: 'hidden', ...theme.shadows.shadowLg }}>
             {/* Coloured top strip — matches notification detail exactly */}
             <View style={{ backgroundColor: '#114b3c', paddingHorizontal: 20, paddingVertical: 16, flexDirection: 'row', alignItems: 'center', gap: 12 }}>
@@ -1058,6 +907,53 @@ export default function TabLayout() {
                       </Text>
                     </View>
                   ) : null}
+                  {/* Combined Paiement row — mirrors the customer expanded
+                      order card. Top line: payment-method label. Bottom
+                      line (when credits were used): the toDoLine — "À
+                      payer à la récupération" / "Réglée entièrement par
+                      crédits". Skipped entirely when we have no total
+                      to reason about. */}
+                  {orderConfirmPopup?.price ? (() => {
+                    const totalNum = (orderConfirmPopup.quantity ?? 1) > 1
+                      ? orderConfirmPopup.price * (orderConfirmPopup.quantity ?? 1)
+                      : orderConfirmPopup.price;
+                    const pm = orderConfirmPopup.paymentMethod ?? 'cash';
+                    const creditAmt = orderConfirmPopup.creditAmount ?? 0;
+                    const isCard = pm === 'card';
+                    const cashSlice = Math.max(0, totalNum - creditAmt);
+                    const PMIcon = isCard ? CreditCard : Banknote;
+                    const methodLabel = isCard
+                      ? (creditAmt > 0
+                          ? t('orders.paymentByCardWithCredits', { defaultValue: 'Paiement par carte (+ crédits)' })
+                          : t('orders.paymentByCard', { defaultValue: 'Paiement par carte' }))
+                      : (creditAmt > 0
+                          ? t('orders.paymentInCashWithCredits', { defaultValue: 'Paiement en espèces (+ crédits)' })
+                          : t('orders.paymentInCash', { defaultValue: 'Paiement en espèces' }));
+                    const fmt = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(2));
+                    let toDoLine: string | null = null;
+                    if (!isCard && cashSlice > 0) {
+                      toDoLine = t('orders.toPayAtPickup', { amount: fmt(cashSlice), defaultValue: 'À payer à la récupération : {{amount}} TND' });
+                    } else if (!isCard && cashSlice === 0 && creditAmt > 0) {
+                      toDoLine = t('orders.paidEntirelyByCredits', { defaultValue: 'Réglée entièrement par crédits' });
+                    }
+                    return (
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 10, borderTopWidth: 1, borderTopColor: theme.colors.divider }}>
+                        <View style={{ width: 30, height: 30, borderRadius: 15, backgroundColor: '#114b3c', justifyContent: 'center', alignItems: 'center' }}>
+                          <PMIcon size={13} color="#e3ff5c" />
+                        </View>
+                        <View style={{ flex: 1 }}>
+                          <Text style={{ color: theme.colors.textPrimary, fontSize: 13, fontWeight: '700' }}>
+                            {methodLabel}
+                          </Text>
+                          {toDoLine ? (
+                            <Text style={{ color: theme.colors.primary, fontSize: 13, fontWeight: '600', marginTop: 4 }}>
+                              {toDoLine}
+                            </Text>
+                          ) : null}
+                        </View>
+                      </View>
+                    );
+                  })() : null}
                   {/* Pickup time */}
                   {orderConfirmPopup?.pickupStart ? (
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 8, borderTopWidth: 1, borderTopColor: theme.colors.divider }}>
@@ -1079,7 +975,7 @@ export default function TabLayout() {
                     </Text>
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
                       <Text style={{ color: '#e3ff5c', fontSize: 28, fontWeight: '700', fontFamily: 'Poppins_700Bold', letterSpacing: 6 }}>
-                        {orderConfirmPopup.pickupCode}
+                        {String(orderConfirmPopup.pickupCode).substring(0, 6).toUpperCase()}
                       </Text>
                       <TouchableOpacity onPress={() => setQrExpanded(!qrExpanded)} style={{ width: 36, height: 36, borderRadius: 18, backgroundColor: 'rgba(255,255,255,0.15)', justifyContent: 'center', alignItems: 'center' }}>
                         <QrCode size={18} color="#e3ff5c" />
@@ -1096,10 +992,14 @@ export default function TabLayout() {
                 ) : null}
               </ScrollView>
 
-              {/* Action button */}
+              {/* Action button — closes the popup AND drops the new
+                  reservation id on the orders tab as a `target=` param so
+                  the orders screen scrolls to + highlights the just-confirmed
+                  card on first press. The ref-gate inside
+                  dismissOrderConfirmPopup absorbs accidental second taps. */}
               <View style={{ flexDirection: 'row', gap: 10, marginTop: 16 }}>
                 <TouchableOpacity
-                  onPress={() => setOrderConfirmPopup(null)}
+                  onPress={() => dismissOrderConfirmPopup({ goToOrder: true })}
                   style={{ flex: 1, backgroundColor: theme.colors.primary, borderRadius: 14, paddingVertical: 14, alignItems: 'center' }}
                 >
                   <Text style={{ color: '#e3ff5c', fontSize: 15, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
@@ -1428,7 +1328,14 @@ const LAYOUT_OVERLAY_EDGE_PADDING = 24;
 
 function WalkthroughOverlay({ navRef, tabWidth, theme, t, insets, tabBarTopY }: { navRef: any; tabWidth: number; theme: any; t: any; insets: any; tabBarTopY: number | null }) {
   const { width: SCREEN_W_CUST, height: SCREEN_H_CUST } = useWindowDimensions();
-  const { originRef, originX, originY, originMeasured, remeasure: remeasureOrigin } = useOverlayOriginOffset();
+  // Pre-seed the origin offset with insets.top so the very first paint of
+  // the overlay already has a usable Y origin. Without this, the first frame
+  // after the demo welcome cover dismisses rendered the cutout + halo at
+  // origin (0, 0), then the async measureInWindow snapped them up by
+  // insets.top once it returned — the "demo first page snap" the user
+  // reported. The async measurement still runs and refines if the actual
+  // origin differs from the guess (rare).
+  const { originRef, originX, originY, originMeasured, remeasure: remeasureOrigin } = useOverlayOriginOffset({ y: insets?.top ?? 0 });
   const router = useRouter();
   const segments = useSegments();
   const pathname = '/' + (segments as string[]).join('/');
@@ -1468,6 +1375,23 @@ function WalkthroughOverlay({ navRef, tabWidth, theme, t, insets, tabBarTopY }: 
   const contentAnim = React.useRef(new Animated.Value(0)).current;
   React.useEffect(() => {
     if (step === null) { setReadyState({ step: null, ready: false }); contentAnim.setValue(0); return; }
+    // Tab-pill steps don't need the 300 ms layout-settle gate — their
+    // position is deterministic (tabBarTopY + tabIndex * tabWidth), so
+    // there's nothing to wait for. Showing the halo + tooltip instantly
+    // for these removes the subtle "fade-in snap" the user reported on
+    // demo step 0 (Discover-tab pill) when the welcome cover dismisses:
+    // previously the screen sat fully dim for 300 ms before contentAnim
+    // started fading from 0, which read as a delayed pop-in. Element
+    // steps still need the settle because their measured rect can be
+    // republished a beat after the step lands (host screen relayouts,
+    // list reflows) and we want the dim to mask that brief drift.
+    const stepDef = WALKTHROUGH_STEPS[step];
+    const isTabStep = stepDef?.highlight === 'tab';
+    if (isTabStep) {
+      setReadyState({ step, ready: true });
+      contentAnim.setValue(1);
+      return;
+    }
     setReadyState({ step, ready: false });
     contentAnim.setValue(0);
     const id = setTimeout(() => setReadyState((s) => (s.step === step ? { step, ready: true } : s)), 300);
@@ -1596,14 +1520,31 @@ function WalkthroughOverlay({ navRef, tabWidth, theme, t, insets, tabBarTopY }: 
         setDemoOrderActive(s.enter.demoOrder);
       }
 
-      // Settings hand-off: push /settings and let settings.tsx render the
-      // SettingsDemoOverlay over the highlighted "Mode démo" row. Skip the
-      // rest of this effect — we don't want to navigate tabs / overwrite
-      // currentStep behind the settings overlay.
+      // Settings hand-off: route to /settings via the tabs root so the
+      // navigation stack doesn't keep whatever Stack screen the demo last
+      // pushed (e.g. /wallet for the credits step) AND the underlying
+      // tab inside /(tabs) is the search tab. Result: a clean stack of
+      // /(tabs)/index → /settings, so when the user taps the back button
+      // on the settings overlay they land on the search tab (the natural
+      // place to start using the app), not the demo-time credits page or
+      // a side tab the demo last selected.
+      // settings.tsx then renders the SettingsDemoOverlay over the
+      // highlighted "Mode démo" row.
       if (s.isSettings) {
         setCurrentStep(null);
         setShowSettingsOverlay(true);
-        try { router.push('/settings' as never); } catch {}
+        try {
+          // Plain push — keeps the navigation stack valid so any later
+          // back navigation works as expected. The post-demo redirect to
+          // the search tab is owned by endDemoSequence in app/_layout.tsx,
+          // which now routes ALL customers (not just first-login) back to
+          // /(tabs)/ when the demo concludes. That way: demo's last step
+          // briefly shows /settings highlighted, user taps "OK, terminer
+          // la démo", endDemoSequence pops them straight to the search
+          // tab — no stale /wallet in the back stack, no manipulation of
+          // the stack here, no POP_TO_TOP or GO_BACK errors.
+          router.push('/settings' as never);
+        } catch {}
         return;
       }
 

@@ -45,7 +45,10 @@ Use this document when filling out the Google Play Data Safety section and Apple
 ## Data Retention
 
 - Account data: Retained while account is active
-- Deleted upon account deletion request
+- On account deletion: personal identity (name, email, phone, avatar, chat history)
+  is removed within 30 days. Order/transaction records are retained in anonymized
+  form ("Compte supprimé") for accounting, partner settlement, and fraud/abuse
+  prevention (legitimate interest); they no longer identify the person.
 - Push tokens: Cleared on logout
 - Local storage: Cleared on app uninstall or logout
 

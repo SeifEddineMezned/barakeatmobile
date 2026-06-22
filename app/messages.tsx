@@ -70,7 +70,7 @@ export default function MessagesScreen() {
             {isClosed && (
               <View style={{ backgroundColor: theme.colors.muted + '20', borderRadius: 8, paddingHorizontal: 6, paddingVertical: 2, marginLeft: 8 }}>
                 <Text style={{ color: theme.colors.muted, fontSize: 10 }}>
-                  {item.status === 'blocked' ? t('messages.blocked', { defaultValue: 'Bloqué' }) : t('messages.closed', { defaultValue: 'Fermé' })}
+                  {item.status === 'blocked' ? t('messages.blocked', { defaultValue: 'Bloquée' }) : t('messages.closed', { defaultValue: 'Fermée' })}
                 </Text>
               </View>
             )}
@@ -91,11 +91,15 @@ export default function MessagesScreen() {
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]}>
       <StatusBar style="dark" />
-      <View style={[styles.header, { paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: theme.colors.divider }]}>
-        <TouchableOpacity onPress={() => router.back()} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+      <View style={[styles.header, { paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: theme.colors.divider, justifyContent: 'center', alignItems: 'center', minHeight: 52 }]}>
+        <TouchableOpacity
+          onPress={() => router.back()}
+          hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}
+          style={{ position: 'absolute', left: 16, top: 14 }}
+        >
           <ChevronLeft size={24} color={theme.colors.textPrimary} />
         </TouchableOpacity>
-        <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h2, flex: 1, marginLeft: 12 }}>
+        <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h2 }}>
           {t('messages.title', { defaultValue: 'Messages' })}
         </Text>
       </View>

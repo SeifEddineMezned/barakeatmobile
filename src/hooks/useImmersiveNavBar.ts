@@ -23,9 +23,13 @@ export async function applyImmersiveNavBar(): Promise<void> {
     // setHidden in this version). When this package is upgraded past 4.x,
     // switch to NavigationBar.setHidden(true), the future-proof method.
     await NavigationBar.setVisibilityAsync('hidden');
-    // 'overlay-swipe' = immersive sticky: a bottom-edge swipe reveals the bar
-    // temporarily, OVERLAYING content (no layout reflow), then it auto-hides.
-    await NavigationBar.setBehaviorAsync('overlay-swipe');
+    // setBehaviorAsync('overlay-swipe') is intentionally NOT called. With
+    // app.json's `edgeToEdgeEnabled: true`, edge-to-edge already overlays
+    // the nav bar transparently and Android's NavigationBar API throws
+    // `setBehaviorAsync is not supported with edge-to-edge enabled` every
+    // single time the hook fires (each route change). The behavior we
+    // wanted from 'overlay-swipe' — bar overlays content, auto-hides on
+    // swipe-down — is the default in edge-to-edge mode.
   } catch (e) {
     console.warn('[useImmersiveNavBar] Failed to hide Android navigation bar:', e);
   }
