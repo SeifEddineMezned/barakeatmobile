@@ -137,6 +137,12 @@ interface WalkthroughState {
   // customer demo walk through the full reservation flow without touching
   // the backend or the user's real reservations.
   demoCustomerActive: boolean;
+  // True for ONE end-of-demo handler run when the demo was ended by the user
+  // tapping "Quitter la démo" (skipWalkthrough), vs reaching the last step
+  // (completion). endDemoSequence reads it to decide where to send the user on
+  // quit — back to /settings when the demo was launched from Settings → Mode
+  // démo. Reset to false on every (re)start and on completion.
+  demoQuit: boolean;
 
   // ── Cross-screen flags used by 'modal' / 'expand' advance triggers.
   // incoming-orders writes these so the business overlay can advance when
@@ -227,6 +233,7 @@ const clearDemoState = {
   demoOrderActive: false,
   demoScanCode: null,
   demoCustomerActive: false,
+  demoQuit: false,
   verifyModalOpen: false,
   expandedDemoCard: false,
   showSettingsOverlay: false,
@@ -249,6 +256,7 @@ export const useWalkthroughStore = create<WalkthroughState>()(
       demoOrderActive: false,
       demoScanCode: null,
       demoCustomerActive: false,
+      demoQuit: false,
       verifyModalOpen: false,
       expandedDemoCard: false,
       currentStep: null,
@@ -297,7 +305,7 @@ export const useWalkthroughStore = create<WalkthroughState>()(
       // Skipping is the same as completing for the auto-launch gate. The user
       // explicitly opted out, so we mustn't keep nagging them on every reload —
       // they can replay the tour from Settings → Mode démo.
-      skipWalkthrough: () => set({ step: null, hasCompletedWalkthrough: true, ...clearDemoState }),
+      skipWalkthrough: () => set({ step: null, hasCompletedWalkthrough: true, ...clearDemoState, demoQuit: true }),
 
       resetWalkthroughCompletion: () => set({ hasCompletedWalkthrough: false }),
 

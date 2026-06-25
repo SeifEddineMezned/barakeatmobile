@@ -702,7 +702,13 @@ export default function TeamScreen() {
   const orgDetails: OrgDetailsFromAPI | undefined = orgDetailsQuery.data;
   const org = orgDetails?.organization;
   const members = orgDetails?.members ?? [];
-  const locations = orgDetails?.locations ?? [];
+  // Defensive dedupe by id — the "Emplacements" count and the location chips
+  // both read `locations.length`, so any duplicate row in the payload would
+  // inflate the count (e.g. showing 4 when there are 3). The backend already
+  // excludes soft-deleted locations; this guards against an accidental repeat.
+  const locations = ((orgDetails?.locations ?? []) as any[]).filter(
+    (l, i, arr) => arr.findIndex((x) => String(x.id) === String(l.id)) === i,
+  );
   // Used by formatLocationName(...) wherever this screen renders a location.
   // Falls back to context's organization_name if orgDetails hasn't loaded.
   const orgName = org?.name ?? contextQuery.data?.organization_name ?? '';
@@ -794,6 +800,9 @@ export default function TeamScreen() {
         password: newMemberPassword,
         role: newMemberRole,
         permissions: permsPayload,
+        // "Add NEW member" form → refuse an email that's already a member of the
+        // org (role / extra-location changes go through team management).
+        reject_if_existing_member: true,
         ...(locationId ? { location_id: locationId } : {}),
       });
     },
@@ -810,6 +819,17 @@ export default function TeamScreen() {
       );
     },
     onError: async (err: any, _vars, context) => {
+      // Already a member of this org — deterministic deny, skip verify.
+      if (err?.data?.error === 'member_already_exists') {
+        alert.showAlert(
+          t('business.team.addMemberError.alreadyMemberTitle', { defaultValue: 'Membre déjà existant' }),
+          t('business.team.addMemberError.alreadyMember', {
+            defaultValue: err?.data?.message
+              || "Cet utilisateur est déjà membre de cette organisation. Utilisez la gestion d'équipe pour modifier son rôle ou l'affecter à d'autres emplacements.",
+          }),
+        );
+        return;
+      }
       // Verify before alarming. The member-add endpoint also fires an
       // email with credentials inline — a re-tap on timeout would
       // produce a duplicate-email outcome that's hard to undo.

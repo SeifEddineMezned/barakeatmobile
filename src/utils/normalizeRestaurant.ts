@@ -141,10 +141,26 @@ export function normalizeRawBasketToBasket(
   const locStart = locEff.start;
   const locEnd = locEff.end;
 
+  // Compose the merchant label as "Org - Location" when both are
+  // present and distinct (the canonical pattern used on every other
+  // surface — order cards, notif popups, etc.). Falls back to the org
+  // name alone when there's no location row, or when the org and
+  // location share the same name (single-location orgs would otherwise
+  // read "Barakeat - Barakeat"). Reads the dedicated location_only_name
+  // field the backend now ships on /api/baskets/:id and
+  // /api/baskets/location/:locationId.
+  const rawOrgName = (b.org_name ?? b.restaurant_name ?? fallbackRestaurantName ?? null) as string | null;
+  const rawLocationName = (b.location_only_name ?? b.location_name ?? null) as string | null;
+  const trimmedOrg = typeof rawOrgName === 'string' ? rawOrgName.trim() : '';
+  const trimmedLoc = typeof rawLocationName === 'string' ? rawLocationName.trim() : '';
+  const composedMerchantName = trimmedOrg && trimmedLoc && trimmedOrg !== trimmedLoc
+    ? `${trimmedOrg} - ${trimmedLoc}`
+    : (trimmedOrg || trimmedLoc || 'Unknown');
+
   return {
     id: String(b.id),
     merchantId: String(b.location_id ?? b.restaurant_id ?? ''),
-    merchantName: b.org_name ?? b.restaurant_name ?? fallbackRestaurantName ?? 'Unknown',
+    merchantName: composedMerchantName,
     merchantLogo: b.org_image_url ?? b.restaurant_image ?? undefined,
     merchantRating: undefined,
     reviewCount: undefined,

@@ -33,10 +33,8 @@ import { useWalkthroughStore } from "@/src/stores/walkthroughStore";
 import { fetchGamificationStats } from "@/src/services/gamification";
 import { apiClient, getErrorMessage } from "@/src/lib/api";
 import { FeatureFlags } from "@/src/lib/featureFlags";
-import { Search, ShoppingBag, Trophy, LayoutDashboard, Package, BarChart3, MapPin, CreditCard, TrendingUp, ClipboardList, Store } from "lucide-react-native";
+import { Search, ShoppingBag, Trophy, LayoutDashboard, Package, BarChart3, MapPin, TrendingUp, ClipboardList, Store } from "lucide-react-native";
 import { fetchMyContext } from "@/src/services/teams";
-import { PasswordInput } from "@/src/components/PasswordInput";
-import { setFirstLoginPassword } from "@/src/services/profile";
 import { InAppNotification } from "@/src/components/InAppNotification";
 import { useNotificationStore } from "@/src/stores/notificationStore";
 // import { registerForPushNotifications } from "@/src/services/pushNotifications";
@@ -50,6 +48,7 @@ import Constants from "expo-constants";
 
 const isExpoGo = Constants.appOwnership === 'expo';
 import { initSentry } from "@/src/lib/sentry";
+import { resetStackTo } from "@/src/lib/navStack";
 import { OfflineBanner } from "@/src/components/OfflineBanner";
 import { CustomAlertProvider, showGlobalAlert } from "@/src/components/CustomAlert";
 import { ImageCropperProvider } from "@/src/components/ImageCropper";
@@ -65,6 +64,18 @@ initSentry();
 // for the full rationale.
 installRouterGuards();
 SplashScreen.preventAutoHideAsync().catch(() => {});
+
+// MODULE-LEVEL (not a component ref) so it survives a RootLayoutInner remount.
+// The native splash must be hidden exactly ONCE per process: it shows at launch
+// and the in-app BarakeatHaloSplash (re-shown on login etc.) is a separate JS
+// overlay. A per-instance ref reset to false whenever this tree remounts — e.g.
+// the account-deleted logout resets the nav stack (router.dismissAll), which
+// remounts RootLayoutInner — and the splash effect then called hideAsync a
+// SECOND time, now targeting a view controller (the alert Modal's, or a freshly
+// created one) with no splash registered → "No native splash screen registered
+// for given view controller", a rejection expo-splash-screen does NOT route
+// through the returned promise's .catch. A process-wide guard prevents that.
+let _nativeSplashHidden = false;
 
 const queryClient = new QueryClient({
   // Global safety net for mutations: any mutation error NOT already handled by
@@ -143,6 +154,7 @@ function RootLayoutNav() {
       <Stack.Screen name="review" options={{ presentation: "card", headerShown: false }} />
       <Stack.Screen name="business/create-basket" options={{ presentation: "card", headerShown: false }} />
       <Stack.Screen name="business/select-org-basket" options={{ headerShown: false }} />
+      <Stack.Screen name="business/set-password" options={{ headerShown: false, gestureEnabled: false }} />
       <Stack.Screen name="business/availability" options={{ presentation: "modal", headerShown: false }} />
       <Stack.Screen name="business/menu-items" options={{ presentation: "modal", headerShown: false }} />
       <Stack.Screen name="business/scan-qr" options={{ presentation: "card", headerShown: false }} />
@@ -466,21 +478,18 @@ function RootLayoutInner() {
   // settled by then; the user accepts a brief native-splash hold over a
   // visible "app then splash" glitch.
   const [splashOverlayReady, setSplashOverlayReady] = useState(false);
-  // Tracks whether SplashScreen.hideAsync() has already been called this
-  // session. expo-splash-screen registers ONE native splash per view
-  // controller; calling hideAsync a second time after the first call has
-  // already unregistered it throws "No native splash screen registered
-  // for given view controller. Call 'SplashScreen.show' for given view
-  // controller first." — an uncatchable async rejection that ends up in
-  // the unhandled-promise logger. The effect below can legitimately fire
-  // hideAsync from multiple branches (splashOverlayReady=true, then
-  // showSplash=false on dismiss; or safety timer fires after the ready
-  // branch already did). The ref gate ensures only the first call
-  // actually invokes hideAsync; every later call is a silent no-op.
-  const splashHiddenRef = useRef(false);
+  // Hide the native splash at most once per process. expo-splash-screen
+  // registers ONE native splash per view controller; calling hideAsync after
+  // it's already unregistered throws "No native splash screen registered for
+  // given view controller" — an async rejection the .catch below does NOT
+  // reliably swallow. The effect can legitimately fire from multiple branches
+  // (splashOverlayReady=true, then showSplash=false on dismiss; or the safety
+  // timer). The module-level `_nativeSplashHidden` gate (above) ensures only
+  // the first call ever invokes hideAsync, and unlike the old per-instance ref
+  // it survives a RootLayoutInner remount (e.g. the logout nav-stack reset).
   const hideNativeSplashOnce = React.useCallback(() => {
-    if (splashHiddenRef.current) return;
-    splashHiddenRef.current = true;
+    if (_nativeSplashHidden) return;
+    _nativeSplashHidden = true;
     SplashScreen.hideAsync().catch(() => {});
   }, []);
   useEffect(() => {
@@ -536,14 +545,14 @@ function RootLayoutInner() {
         void signOut();
       }
       if (inBusinessFlow || inTabsFlow) {
-        router.replace('/auth/sign-in' as never);
+        resetStackTo(router, '/auth/sign-in');
       }
       return;
     }
 
     if (!isAuthenticated) {
       if (inBusinessFlow || inTabsFlow) {
-        router.replace('/auth/sign-in' as never);
+        resetStackTo(router, '/auth/sign-in');
       }
       return;
     }
@@ -584,10 +593,13 @@ function RootLayoutInner() {
     // of which auth screen they happened to land on.
     if (isBiz && !inBusinessFlow && !inOnboarding) {
       console.log('[RootLayout] Routing business user to (business)/dashboard (segments[0] was:', segments[0], ')');
-      router.replace('/(business)/dashboard' as never);
+      // resetStackTo (not replace): wipe any prior-session history so the
+      // post-login home is the sole stack entry — Back exits the app instead
+      // of popping into a stale, blank screen from before logout.
+      resetStackTo(router, '/(business)/dashboard');
     } else if (!isBiz && !inTabsFlow && !inOnboarding) {
       console.log('[RootLayout] Routing customer user to (tabs) (segments[0] was:', segments[0], ')');
-      router.replace('/(tabs)' as never);
+      resetStackTo(router, '/(tabs)');
     }
   }, [isRestoringSession, isAuthenticated, user?.role, (user as any)?.genderStepCompleted, splashAnimDone]);
 
@@ -922,14 +934,9 @@ function RootLayoutInner() {
   const [bizWelcome, setBizWelcome] = useState<{ orgName: string; isOwner: boolean } | null>(null);
   // Business first-login "set your password" step — shown AFTER the demo and
   // BEFORE the dashboard's add-location popup (which stays gated on
-  // onboardingSequenceActive until this is dismissed). Skippable; sets a new
-  // password with no current-password entry (the backend treats a first login —
-  // password_changed_at IS NULL — as allowed to set without the old one).
-  const [bizPasswordPrompt, setBizPasswordPrompt] = useState(false);
-  const [bizPwd, setBizPwd] = useState('');
-  const [bizPwd2, setBizPwd2] = useState('');
-  const [bizPwdSaving, setBizPwdSaving] = useState(false);
-  const [bizPwdError, setBizPwdError] = useState<string | null>(null);
+  // onboardingSequenceActive until the password screen releases it). It is now a
+  // dedicated route (app/business/set-password.tsx) using the same
+  // AccountFlowPage form as settings, not an inline modal.
 
   // Check if user needs the post-login tutorial.
   //
@@ -1451,10 +1458,28 @@ function RootLayoutInner() {
     // Cold start: app launched by tapping a notification while it was killed.
     // Defer briefly + require an authenticated, restored session so we don't
     // fight the splash → home routing or strand a logged-out user on a screen.
+    //
+    // CRITICAL de-dupe: getLastNotificationResponseAsync() returns the most
+    // recent TAPPED notification and KEEPS returning it on every subsequent
+    // cold start — even when the app was opened normally, not via that
+    // notification. Without guarding, every launch (once the session restores
+    // as authenticated) re-routed to /notifications off a stale tap — the
+    // "I reopened the app and randomly landed on the notifications page (with
+    // the splash over it)" bug. We persist the handled response's identifier
+    // and consume it once, so we only navigate on a genuinely NEW tap.
     (async () => {
       try {
         const last = await Notifications.getLastNotificationResponseAsync();
         if (!last) return;
+        const HANDLED_KEY = 'lastHandledNotifResponseId';
+        const respId = last.notification?.request?.identifier ?? null;
+        if (respId) {
+          const alreadyHandled = await AsyncStorage.getItem(HANDLED_KEY);
+          if (alreadyHandled === respId) return; // stale response from a prior launch
+          // Mark consumed NOW so it can never re-fire on a future cold start,
+          // regardless of whether the auth gate below lets us route this time.
+          await AsyncStorage.setItem(HANDLED_KEY, respId);
+        }
         setTimeout(() => {
           const s = useAuthStore.getState();
           if (s.isAuthenticated && !s.isRestoringSession) {
@@ -1504,6 +1529,11 @@ function RootLayoutInner() {
     const w = useWalkthroughStore.getState();
     if (!w.demoSequencePending) return;
     w.setDemoSequencePending(false);
+    // Did the user QUIT ("Quitter la démo") vs reach the end? skipWalkthrough
+    // sets demoQuit; completion does not. Combined with wasFirstLogin below it
+    // tells us a quit from a Settings → Mode démo run, which should return the
+    // user to /settings (vs an onboarding/first-login quit → role home).
+    const wasQuit = w.demoQuit;
     // NOTE: `onboardingSequenceActive` is intentionally NOT cleared here. For a
     // business first login we keep it TRUE so the dashboard's add-location popup
     // stays deferred behind the "set your password" step below; it's cleared at
@@ -1529,6 +1559,10 @@ function RootLayoutInner() {
     // Capture this BEFORE the first-login branch consumes it so we can also
     // use it below for the "land on search tab" routing.
     const wasFirstLogin = firstLoginDemoPendingRef.current;
+    // Quit from a Settings-launched demo (NOT first-login onboarding): the user
+    // opened "Mode démo" from /settings, so send them straight back there.
+    // Onboarding quits fall through to the role-home routing below.
+    const wasSettingsDemo = wasQuit && !wasFirstLogin;
 
     // (a) First login only: mark onboarding complete server-side and refresh
     // gamification so the "tutorial finished" badge surfaces now (post-demo).
@@ -1587,7 +1621,11 @@ function RootLayoutInner() {
     // end-of-tour position (partner dashboard) — their walkthrough's
     // settings step lands in business settings which is the natural
     // place to leave a partner.
-    if (!biz) {
+    if (wasSettingsDemo) {
+      // Launched from Settings → Mode démo and quit mid-tour: return the user to
+      // the settings page they opened it from (customer AND business).
+      try { router.replace('/settings' as never); } catch {}
+    } else if (!biz) {
       try { router.replace('/(tabs)/' as never); } catch {}
     }
 
@@ -1612,7 +1650,7 @@ function RootLayoutInner() {
     // the badge popup (fires from the gamification refetch above) gets
     // the stage first. The sequencing effect upstream watches
     // `badgePopup` and flips the real `showAddAddressPrompt` once clear.
-    if (!biz && useAddressStore.getState().addresses.length === 0) {
+    if (!biz && !wasSettingsDemo && useAddressStore.getState().addresses.length === 0) {
       badgeWasShownRef.current = false;
       setPendingAddressPrompt(true);
     }
@@ -1623,43 +1661,17 @@ function RootLayoutInner() {
     // above. Dismissing the modal (save or skip) clears that flag so the
     // location popup can finally paint. Non-first-login or customer flows
     // unblock immediately.
-    if (biz && wasFirstLogin) {
-      setBizPwd('');
-      setBizPwd2('');
-      setBizPwdError(null);
-      setBizPasswordPrompt(true);
+    if (wasSettingsDemo) {
+      // Already routed to /settings above (Settings-launched demo quit). Just
+      // release the onboarding gate so nothing stays deferred behind it.
+      useWalkthroughStore.getState().setOnboardingSequenceActive(false);
+    } else if (biz && wasFirstLogin) {
+      // Send them to the dedicated "set your password" screen (the same
+      // AccountFlowPage form as settings). The onboarding gate stays TRUE; that
+      // screen releases it when the user saves/skips and lands on the dashboard.
+      router.push('/business/set-password' as never);
     } else {
       useWalkthroughStore.getState().setOnboardingSequenceActive(false);
-    }
-  };
-
-  // Close the business "set your password" step and release the onboarding
-  // gate so the dashboard's add-location popup can finally appear.
-  const dismissBizPasswordPrompt = () => {
-    setBizPasswordPrompt(false);
-    useWalkthroughStore.getState().setOnboardingSequenceActive(false);
-  };
-
-  const handleBizPasswordSave = async () => {
-    // Mirror the sign-up strength rule so a partner can't set a weaker password
-    // here than the one the form would have required.
-    if (bizPwd.length < 8 || !/[A-Z]/.test(bizPwd) || !/[a-z]/.test(bizPwd) || !/[0-9]/.test(bizPwd) || !/[!@#$%^&*]/.test(bizPwd)) {
-      setBizPwdError(t('auth.passwordRequirements'));
-      return;
-    }
-    if (bizPwd !== bizPwd2) {
-      setBizPwdError(t('auth.passwordsDontMatch', { defaultValue: 'Les mots de passe ne correspondent pas.' }));
-      return;
-    }
-    setBizPwdError(null);
-    setBizPwdSaving(true);
-    try {
-      await setFirstLoginPassword(bizPwd);
-      dismissBizPasswordPrompt();
-    } catch (e: any) {
-      setBizPwdError(getErrorMessage(e));
-    } finally {
-      setBizPwdSaving(false);
     }
   };
 
@@ -1910,7 +1922,11 @@ function RootLayoutInner() {
               double-counted the inset on devices where the in-Modal SafeAreaView
               resolves a real top inset, shoving this row well below the Quit
               button — the "still not aligned / move it up" report. */}
-          <SafeAreaView style={{ flex: 1, backgroundColor: '#fffff8' }} edges={['bottom']}>
+          {/* bg matches the demo start cover (DemoWelcomeCover uses
+              theme.colors.bg = #fcfcfa) so the carousel → demo-cover hand-off
+              has no background-color shift. `theme` isn't in scope here, so the
+              token value is inlined. */}
+          <SafeAreaView style={{ flex: 1, backgroundColor: '#fcfcfa' }} edges={['bottom']}>
             {/* Single top row: page index on the left, language switcher in
                 the centre, Skip on the right. The language pills match the
                 pre-welcome onboarding screen — flat rounded rects, solid
@@ -2028,83 +2044,6 @@ function RootLayoutInner() {
               )}
             </View>
           </SafeAreaView>
-        </Modal>
-      )}
-      {/* Business first-login "set your password" step. Shown after the demo,
-          before the dashboard add-location popup (which stays gated on
-          onboardingSequenceActive until this is dismissed). Skippable. */}
-      {bizPasswordPrompt && splashDone && (
-        <Modal visible transparent animationType="fade" onRequestClose={dismissBizPasswordPrompt}>
-          <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 24 }}>
-            <View style={{ backgroundColor: '#fffff8', borderRadius: 24, padding: 24, width: '100%', maxWidth: 360 }}>
-              <View style={{ alignSelf: 'center', backgroundColor: '#e3ff5c', borderRadius: 40, padding: 16, marginBottom: 16 }}>
-                <CreditCard size={26} color="#114b3c" />
-              </View>
-              <Text style={{ color: '#114b3c', fontSize: 20, fontWeight: '700', fontFamily: 'Poppins_700Bold', textAlign: 'center', marginBottom: 8 }}>
-                {t('business.setPassword.title', { defaultValue: 'Définissez votre mot de passe' })}
-              </Text>
-              <Text style={{ color: '#114b3c99', fontSize: 14, fontFamily: 'Poppins_400Regular', textAlign: 'center', lineHeight: 20, marginBottom: 20 }}>
-                {t('business.setPassword.subtitle', { defaultValue: 'Choisissez un mot de passe personnel pour remplacer celui qui vous a été envoyé.' })}
-              </Text>
-
-              <Text style={{ color: '#114b3c', fontSize: 13, fontFamily: 'Poppins_500Medium', marginBottom: 6 }}>
-                {t('business.setPassword.newLabel', { defaultValue: 'Nouveau mot de passe' })}
-              </Text>
-              <PasswordInput
-                containerStyle={{ backgroundColor: '#fff', borderColor: '#114b3c' }}
-                style={{ height: 52, paddingHorizontal: 16, color: '#114b3c', borderWidth: 0, fontSize: 15, fontFamily: 'Poppins_400Regular' }}
-                value={bizPwd}
-                onChangeText={setBizPwd}
-                placeholder="••••••••"
-                placeholderTextColor="#114b3c40"
-                accessibilityLabel={t('business.setPassword.newLabel', { defaultValue: 'Nouveau mot de passe' })}
-              />
-              <View style={{ height: 12 }} />
-              <Text style={{ color: '#114b3c', fontSize: 13, fontFamily: 'Poppins_500Medium', marginBottom: 6 }}>
-                {t('business.setPassword.confirmLabel', { defaultValue: 'Confirmer le mot de passe' })}
-              </Text>
-              <PasswordInput
-                containerStyle={{ backgroundColor: '#fff', borderColor: bizPwd2.length > 0 && bizPwd !== bizPwd2 ? '#ef4444' : '#114b3c' }}
-                style={{ height: 52, paddingHorizontal: 16, color: '#114b3c', borderWidth: 0, fontSize: 15, fontFamily: 'Poppins_400Regular' }}
-                value={bizPwd2}
-                onChangeText={setBizPwd2}
-                placeholder="••••••••"
-                placeholderTextColor="#114b3c40"
-                accessibilityLabel={t('business.setPassword.confirmLabel', { defaultValue: 'Confirmer le mot de passe' })}
-              />
-
-              {bizPwdError ? (
-                <Text style={{ color: '#ef4444', fontSize: 12, fontFamily: 'Poppins_400Regular', marginTop: 8 }}>
-                  {bizPwdError}
-                </Text>
-              ) : null}
-
-              <TouchableOpacity
-                onPress={handleBizPasswordSave}
-                disabled={bizPwdSaving}
-                style={{ height: 52, justifyContent: 'center', alignItems: 'center', backgroundColor: '#114b3c', borderRadius: 14, marginTop: 20, opacity: bizPwdSaving ? 0.6 : 1 }}
-                accessibilityRole="button"
-                accessibilityLabel={t('business.setPassword.save', { defaultValue: 'Enregistrer' })}
-              >
-                {bizPwdSaving ? <ActivityIndicator color="#e3ff5c" /> : (
-                  <Text style={{ color: '#e3ff5c', fontSize: 15, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
-                    {t('business.setPassword.save', { defaultValue: 'Enregistrer' })}
-                  </Text>
-                )}
-              </TouchableOpacity>
-              <TouchableOpacity
-                onPress={dismissBizPasswordPrompt}
-                disabled={bizPwdSaving}
-                style={{ height: 44, justifyContent: 'center', alignItems: 'center', marginTop: 6 }}
-                accessibilityRole="button"
-                accessibilityLabel={t('common.later', { defaultValue: 'Plus tard' })}
-              >
-                <Text style={{ color: '#114b3c99', fontSize: 14, fontFamily: 'Poppins_500Medium', textDecorationLine: 'underline' }}>
-                  {t('common.later', { defaultValue: 'Plus tard' })}
-                </Text>
-              </TouchableOpacity>
-            </View>
-          </View>
         </Modal>
       )}
       {/* Badge unlocked popup. Gated on splashDone so a fast gamification
@@ -2230,7 +2169,7 @@ function RootLayoutInner() {
             {t('auth.prototypeClosed', { defaultValue: 'Nous pr\u00e9parons le lancement officiel de notre application. L\'acc\u00e8s sera bient\u00f4t disponible. Merci pour votre patience !' })}
           </Text>
           <TouchableOpacity
-            onPress={() => { void signOut(); router.replace('/auth/sign-in' as never); }}
+            onPress={() => { void signOut(); resetStackTo(router, '/auth/sign-in'); }}
             style={{ backgroundColor: '#114b3c', borderRadius: 14, paddingHorizontal: 32, paddingVertical: 14 }}
           >
             <Text style={{ color: '#e3ff5c', fontSize: 15, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>

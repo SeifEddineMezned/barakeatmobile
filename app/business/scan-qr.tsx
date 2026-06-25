@@ -64,10 +64,15 @@ function ReviewScreen({
   toCollect,
   fmtDT,
   row,
+  isExpired,
 }: {
   t: any; theme: any; insets: any;
   cancelReview: () => void;
-  confirmReview: () => void;
+  // Takes the override boolean — the parent's confirmReview pipes it into
+  // confirmPickup's expiredOverride argument when the order is expired
+  // and the merchant ticked the override. For non-expired orders the arg
+  // is ignored.
+  confirmReview: (expiredOverride: boolean) => void;
   confirming: boolean;
   basketIdForFetch: string | number | null;
   rawBasketImageFromOrder: string | null;
@@ -86,7 +91,13 @@ function ReviewScreen({
   toCollect: number;
   fmtDT: (n: number) => string;
   row: any;
+  isExpired: boolean;
 }) {
+  // Track whether the merchant has explicitly opted to confirm a tardy
+  // pickup on an order the cron already flipped to expired. The CTA
+  // stays disabled until they tick this; the warning banner makes it
+  // clear what they're agreeing to.
+  const [acceptExpired, setAcceptExpired] = React.useState(false);
   // Fetch the basket directly when we have an id. TodayReservationFromAPI
   // doesn't include image URLs, so the previous extraction (basket?.image_url
   // etc) was always falling through to the placeholder. This one-shot
@@ -303,6 +314,53 @@ function ReviewScreen({
           earlier `paddingBottom: 0` glued it to the edge on small
           Androids where the immersive nav-bar hook drove
           insets.bottom to 0. */}
+      {/* Expired-order warning + override gate. The cron flipped this
+          order to cancelled because the customer didn't show up in time,
+          but the merchant is now choosing to honour the late pickup
+          (e.g. the customer just walked in). The CTA stays disabled
+          until they tap the checkbox so the action isn't accidental;
+          tapping fires confirmPickup with expiredOverride=true. */}
+      {isExpired ? (
+        <View
+          style={{
+            marginHorizontal: theme.spacing.lg,
+            marginBottom: theme.spacing.sm,
+            backgroundColor: '#fff4e6',
+            borderRadius: theme.radii.r12,
+            padding: theme.spacing.md,
+            borderLeftWidth: 3,
+            borderLeftColor: '#ee7b3c',
+          }}
+        >
+          <Text style={{ color: '#7a3b0c', ...theme.typography.bodySm, fontWeight: '700', marginBottom: 4 }}>
+            {t('business.scan.expiredTitle', { defaultValue: 'Commande expirée' })}
+          </Text>
+          <Text style={{ color: '#7a3b0c', ...theme.typography.caption, marginBottom: theme.spacing.sm }}>
+            {t('business.scan.expiredBody', { defaultValue: "Cette commande a expiré car le client n'est pas passé à temps. Vous pouvez tout de même confirmer le retrait si vous acceptez de lui remettre son panier." })}
+          </Text>
+          <TouchableOpacity
+            onPress={() => setAcceptExpired((v) => !v)}
+            activeOpacity={0.7}
+            style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}
+          >
+            <View
+              style={{
+                width: 20, height: 20, borderRadius: 5,
+                borderWidth: 2,
+                borderColor: acceptExpired ? '#ee7b3c' : '#a06b3d',
+                backgroundColor: acceptExpired ? '#ee7b3c' : 'transparent',
+                alignItems: 'center', justifyContent: 'center',
+              }}
+            >
+              {acceptExpired ? <CheckCircle size={14} color="#fff" /> : null}
+            </View>
+            <Text style={{ color: '#7a3b0c', ...theme.typography.caption, fontWeight: '600', flex: 1 }}>
+              {t('business.scan.expiredOverrideAck', { defaultValue: 'Je confirme vouloir remettre le panier malgré le retard' })}
+            </Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
+
       <View
         style={{
           paddingHorizontal: theme.spacing.lg,
@@ -311,9 +369,10 @@ function ReviewScreen({
         }}
       >
         <PrimaryCTAButton
-          onPress={confirmReview}
+          onPress={() => confirmReview(acceptExpired)}
           title={t('business.scan.confirmPickup', { defaultValue: 'Confirmer le retrait' })}
           loading={confirming}
+          disabled={isExpired && !acceptExpired}
         />
       </View>
     </SafeAreaView>
@@ -497,8 +556,10 @@ export default function ScanQRScreen() {
   };
 
   // Finalize the pickup the business reviewed. Confirms server-side, then shows
-  // the success screen.
-  const confirmReview = async () => {
+  // the success screen. `expiredOverride` is passed through from the review
+  // screen's checkbox so the backend's expired-status guard knows the
+  // merchant is intentionally honouring a tardy pickup.
+  const confirmReview = async (expiredOverride: boolean = false) => {
     if (!reviewOrder || confirming) return;
     setConfirming(true);
     // Hoisted out of the try block so both the success branch and the
@@ -523,7 +584,7 @@ export default function ScanQRScreen() {
       void queryClient.invalidateQueries({ queryKey: ['business-analytics'] });
     };
     try {
-      await confirmPickup(String(reviewOrder.reservation_id), reviewOrder.pickup_code ?? '', reviewOrder.buyer_id);
+      await confirmPickup(String(reviewOrder.reservation_id), reviewOrder.pickup_code ?? '', reviewOrder.buyer_id, expiredOverride);
       enterSuccessScreen();
     } catch (err) {
       // Ghost-success path 1 — RETRY case: backend says "cette commande a
@@ -857,6 +918,7 @@ export default function ScanQRScreen() {
         toCollect={toCollect}
         fmtDT={fmtDT}
         row={row}
+        isExpired={!!reviewOrder.is_expired}
       />
     );
   }

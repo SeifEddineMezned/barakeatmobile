@@ -196,6 +196,12 @@ export async function addMember(
     role?: string;
     restaurant_id?: number | string;
     location_id?: number | string;
+    /** Assign a brand-new member to several locations in one atomic call. */
+    location_ids?: number[];
+    /** Sent by the "add new member" FORM only: refuse if the email already
+     *  belongs to a member of this org (role / extra-location changes are done
+     *  from team management instead). Team-management callers omit this. */
+    reject_if_existing_member?: boolean;
     permissions?: Record<string, string>;
   }
 ): Promise<any> {

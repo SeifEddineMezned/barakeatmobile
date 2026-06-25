@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Switch, ActivityIndicator, Modal } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Switch, ActivityIndicator, Modal, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import { useRouter, useLocalSearchParams } from 'expo-router';
@@ -144,25 +144,22 @@ export default function AddMemberScreen() {
         role,
         permissions: permsPayload,
       };
-      // Org admins have no location constraint — one membership without location_id.
+      // This is the "add NEW member" form, so it sends reject_if_existing_member:
+      // the backend refuses if the email already belongs to a member of the org
+      // (re-adding an existing person is done from team management, not here).
+      // All selected locations are created in ONE atomic backend call.
+      // Org admins have no location constraint — one membership without location.
       if (isOrgAdminSelected) {
-        const result = await addMember(orgId, basePayload);
+        const result = await addMember(orgId, { ...basePayload, reject_if_existing_member: true });
         return { firstResult: result, assignedLocationIds: [] as number[] };
       }
-      // Non-admins: create one membership per selected location. The first call
-      // creates the user account; subsequent calls reuse the same email (backend
-      // handles the second-membership-for-existing-user case).
       const ids = Array.from(locationIds);
       if (ids.length === 0) {
-        const result = await addMember(orgId, basePayload);
+        const result = await addMember(orgId, { ...basePayload, reject_if_existing_member: true });
         return { firstResult: result, assignedLocationIds: [] as number[] };
       }
-      let firstResult: any = null;
-      for (const locId of ids) {
-        const res = await addMember(orgId, { ...basePayload, location_id: locId });
-        if (!firstResult) firstResult = res;
-      }
-      return { firstResult, assignedLocationIds: ids };
+      const result = await addMember(orgId, { ...basePayload, location_ids: ids, reject_if_existing_member: true });
+      return { firstResult: result, assignedLocationIds: ids };
     },
     onSuccess: async ({ firstResult, assignedLocationIds }) => {
       void queryClient.invalidateQueries({ queryKey: ['org-details'] });
@@ -207,6 +204,19 @@ export default function AddMemberScreen() {
           t('business.team.addMemberError.emailInOtherOrg', {
             org: otherOrg,
             defaultValue: `Cet email est déjà associé à ${otherOrg}. Utilisez une adresse différente, ou retirez d'abord ce membre de l'autre commerce.`,
+          }),
+        );
+        return;
+      }
+      // Already a member of THIS org — re-adding via the form is blocked. Point
+      // the admin at team management for role / location changes. Deterministic
+      // deny, so skip the verify-before-alarm path.
+      if (err?.data?.error === 'member_already_exists') {
+        alert.showAlert(
+          t('business.team.addMemberError.alreadyMemberTitle', { defaultValue: 'Membre déjà existant' }),
+          t('business.team.addMemberError.alreadyMember', {
+            defaultValue: err?.data?.message
+              || "Cet utilisateur est déjà membre de cette organisation. Utilisez la gestion d'équipe pour modifier son rôle ou l'affecter à d'autres emplacements.",
           }),
         );
         return;
@@ -460,8 +470,9 @@ export default function AddMemberScreen() {
           <Switch
             value={sendCredentials}
             onValueChange={setSendCredentials}
-            trackColor={{ false: theme.colors.divider, true: '#114b3c50' }}
-            thumbColor={sendCredentials ? '#114b3c' : theme.colors.muted}
+            trackColor={{ false: theme.colors.divider, true: theme.colors.primary }}
+            thumbColor={sendCredentials ? '#fff' : (Platform.OS === 'android' ? theme.colors.surface : undefined)}
+            ios_backgroundColor={theme.colors.divider}
           />
         </View>
 
@@ -470,14 +481,17 @@ export default function AddMemberScreen() {
           onPress={() => mutation.mutate()}
           disabled={mutation.isPending || !canSubmit}
           style={{
-            backgroundColor: canSubmit ? '#114b3c' : theme.colors.muted,
+            backgroundColor: '#114b3c',
             borderRadius: 14, paddingVertical: 16, alignItems: 'center', marginTop: 28,
+            // Stay green when disabled — just faded (matches PrimaryCTAButton),
+            // instead of turning grey.
+            opacity: canSubmit ? 1 : 0.5,
           }}
         >
           {mutation.isPending ? (
-            <ActivityIndicator color="#e3ff5c" />
+            <ActivityIndicator color="#fff" />
           ) : (
-            <Text style={{ color: '#e3ff5c', fontWeight: '700', fontSize: 16 }}>
+            <Text style={{ color: '#fff', fontWeight: '700', fontSize: 16 }}>
               {t('business.team.addMemberBtn', { defaultValue: 'Ajouter le membre' })}
             </Text>
           )}

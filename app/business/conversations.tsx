@@ -74,12 +74,27 @@ function isPickupOver(r: any): boolean {
   }
   if (!dateStr) return true; // can't reason about it → assume done, don't show
   const endTime = r.pickup_end_time ?? r.pickup_end ?? r.basket?.pickup_end_time ?? null;
-  const timeStr = endTime ? String(endTime).substring(0, 5) : '23:59';
+  const startTime = r.pickup_start_time ?? r.pickup_start ?? r.basket?.pickup_start_time ?? null;
+  const endStr = endTime ? String(endTime).substring(0, 5) : '23:59';
+  const startStr = startTime ? String(startTime).substring(0, 5) : null;
   // Local-time interpretation. A 1-2 h timezone slip vs. business TZ is
   // far smaller than the "3+ days stale" gap the user reported, so this
   // is good enough to keep aged reservations out of the upcoming bucket.
-  const combined = new Date(`${dateStr}T${timeStr}:00`);
+  let combined = new Date(`${dateStr}T${endStr}:00`);
   if (!Number.isFinite(combined.getTime())) return true;
+  // Cross-midnight pickup windows (e.g. 21:30 → 02:00 for an overnight
+  // bakery): the reservation_date holds the day pickup OPENS; the end
+  // time of 02:00 belongs to the NEXT calendar day. Without this
+  // detection the date+time concat lands at "yesterday 02:00 AM",
+  // making every overnight order look 22+ hours expired the instant
+  // the page loads — the cause of "active overnight order shows in
+  // Terminées tab even though pickup is still 2h in the future".
+  if (startStr) {
+    const startCombined = new Date(`${dateStr}T${startStr}:00`);
+    if (Number.isFinite(startCombined.getTime()) && combined.getTime() < startCombined.getTime()) {
+      combined = new Date(combined.getTime() + 24 * 60 * 60 * 1000);
+    }
+  }
   return Date.now() > combined.getTime();
 }
 
@@ -337,6 +352,12 @@ export default function BusinessConversationsScreen() {
               status: (c as any).reservation_status,
               reservation_date: (c as any).reservation_date,
               pickup_end_time: (c as any).reservation_pickup_end_time,
+              // pickup_start_time is read by isPickupOver()'s cross-midnight
+              // detection. The backend SELECT returns it as a sibling field
+              // to reservation_pickup_end_time so this row alone (no separate
+              // fetch) is enough for the partition to correctly classify
+              // overnight pickup windows (start > end on the wall clock).
+              pickup_start_time: (c as any).reservation_pickup_start_time,
             }
           : null;
       const resv = embeddedResv

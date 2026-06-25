@@ -758,10 +758,34 @@ export default function NotificationsScreen() {
             const qty = msgParams.quantity ?? msgParams.qty ?? msgParams.count ?? null;
             const price = msgParams.price ?? msgParams.total ?? null;
             const isStreak = notifType.includes('streak');
+            // Customer pickup-window notifs (reminder ~1h before start,
+            // closing ~1h before end, expired after the window, extended
+            // when the merchant grants extra time). Without these flags
+            // the detail popup's "Voir la commande" CTA had no matching
+            // branch in handleAction below and silently no-op'd — same
+            // problem the in-app popup had before being patched.
+            const isPickupReminder = notifType.includes('pickup_reminder');
+            const isPickupClosing = notifType.includes('pickup_closing');
+            const isPickupExtended = notifType.includes('pickup_extended');
+            const isOrderExpired = notifType.includes('order_expired');
             const handleAction = () => {
               setDetailNotif(null);
               if (isMessage) { router.push({ pathname: '/message/[id]', params: { id: String(detailNotif.reference_id ?? '') } } as never); return; }
               if (isStreak) { router.push('/(tabs)' as never); return; }
+              if (!isBusiness && (isPickupReminder || isPickupClosing || isPickupExtended || isOrderExpired)) {
+                // Land on the orders tab and target the matching reservation
+                // so the screen scrolls + auto-expands it. Expired rows live
+                // in the issues tab; the rest are still actionable upcoming
+                // orders.
+                router.push({
+                  pathname: '/(tabs)/orders',
+                  params: {
+                    tab: isOrderExpired ? 'issues' : 'upcoming',
+                    target: String(detailNotif.reference_id ?? ''),
+                  },
+                } as never);
+                return;
+              }
               if (isPickupConfirmed && !isBusiness) {
                 router.push({ pathname: '/review', params: {
                   reservationId: String(detailNotif.reference_id ?? ''),

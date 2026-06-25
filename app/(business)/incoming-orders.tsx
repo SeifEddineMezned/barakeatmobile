@@ -5,7 +5,7 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import Svg, { Path } from 'react-native-svg';
 import { DemoTapHintToast } from '@/src/components/DemoTapHintToast';
 import { useTranslation } from 'react-i18next';
-import { CheckCircle, XCircle, QrCode, ClipboardList, ChevronDown, ChevronUp, AlertTriangle, MessageCircle, Star, User, Banknote, Wallet, HelpCircle, Hand, Info, CreditCard, ShoppingBag, MapPin, Navigation, Clock } from 'lucide-react-native';
+import { CheckCircle, XCircle, QrCode, ClipboardList, ChevronDown, ChevronUp, AlertTriangle, MessageCircle, Star, User, Banknote, Wallet, HelpCircle, Hand, Info, CreditCard, ShoppingBag, MapPin, Navigation, Clock, TimerReset } from 'lucide-react-native';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { isPickupExpiredInTz, getBusinessDayDateStr } from '@/src/utils/timezone';
@@ -30,6 +30,7 @@ import { PaperSurface } from '@/src/components/ui/PaperSurface';
 import { MotifText } from '@/src/components/MotifText';
 import { parseMotifRaw, motifDisplay, type MotifAuthor } from '@/src/utils/motif';
 import { orderIdToCode } from '@/src/utils/orderCode';
+import { TimePicker } from '@/src/components/TimePicker';
 
 // ─── Canonical UI status model ────────────────────────────────────────────────
 // Backend emits:  confirmed | picked_up | cancelled
@@ -51,7 +52,7 @@ function timeAgo(dateStr: string | null | undefined, t: (key: string, opts?: Rec
   const then = new Date(dateStr).getTime();
   if (!Number.isFinite(then)) return '';
   const diff = Math.floor((Date.now() - then) / 1000);
-  if (diff < 60) return t('timeAgo.seconds', { count: Math.max(diff, 0) });
+  if (diff < 60) return t('timeAgo.justNow', { defaultValue: "À l'instant" });
   if (diff < 3600) return t('timeAgo.minutes', { count: Math.floor(diff / 60) });
   if (diff < 86400) return t('timeAgo.hours', { count: Math.floor(diff / 3600) });
   const days = Math.floor(diff / 86400);
@@ -106,6 +107,12 @@ interface NormalizedOrder {
   creditAmount: number;
   location_id?: number;
   basket_id?: number;
+  // ISO timestamp set by POST /reservations/:id/extend-pickup when a member
+  // grants a pickup extension on a system-expired order. While this is in
+  // the future, isOrderExpired() treats the row as still-active so the
+  // order moves back into the En attente tab and the merchant can confirm
+  // the late pickup.
+  pickupExtendedUntil?: string | null;
 }
 
 // Money formatter — integers stay clean ("5 TND"), fractions show millimes.
@@ -362,6 +369,12 @@ export default function IncomingOrdersScreen() {
   const canMessage = isAdminOrOwner || hasPerm('messaging');
   const canViewHistory = isAdminOrOwner || hasPerm('view_history');
   const canCancelOrder = isAdminOrOwner || hasPerm('cancel_order');
+  // Mirror the extend-pickup endpoint's permission gate (reservations.js,
+  // POST /:id/extend-pickup). Allowing edit_quantities alongside
+  // confirm_pickup ensures the FE button doesn't hide for members whom the
+  // backend would happily accept. Diverging here was the original reason a
+  // legitimate operator couldn't see the button.
+  const canExtendPickup = isAdminOrOwner || hasPerm('confirm_pickup') || hasPerm('edit_quantities');
 
   // Walkthrough: measure the QR FAB so the tutorial cutout sits exactly on it.
   const qrFabRef = useRef<View>(null);
@@ -453,6 +466,12 @@ export default function IncomingOrdersScreen() {
     //   3. Top-level `basket_name` / `restaurant_name` as last-resort.
     const oa = o as any;
     const bidStr = oa.basket_id != null ? String(oa.basket_id) : null;
+    // NOTE: `restaurant_name` (the "Org — Location" label) is deliberately NOT
+    // a fallback here — it isn't a basket name. When the basket was deleted we
+    // keep its real name if the backend still has it (soft-deleted basket name
+    // comes through `basket_name` from the order join), otherwise we show
+    // "Panier supprimé" rather than wrongly printing the org/location name. A
+    // row with no basket_id at all is a legacy generic "Panier Surprise".
     const basketName: string =
       (bidStr ? basketNameById.get(bidStr) : undefined)
       ?? oa.basket?.name
@@ -461,8 +480,9 @@ export default function IncomingOrdersScreen() {
       ?? oa.basket?.basket_name
       ?? oa.basket_type_name
       ?? oa.basket_name
-      ?? oa.restaurant_name
-      ?? t('orders.surpriseBag', { defaultValue: 'Panier Surprise' });
+      ?? (bidStr
+        ? t('orders.deletedBasket', { defaultValue: 'Panier supprimé' })
+        : t('orders.surpriseBag', { defaultValue: 'Panier Surprise' }));
     return {
       id: String(o.id),
       buyerId: o.buyer_id,
@@ -498,6 +518,7 @@ export default function IncomingOrdersScreen() {
       creditAmount: Number((o as any).credit_amount ?? 0),
       location_id: (o as any).location_id ?? undefined,
       basket_id: (o as any).basket_id ?? undefined,
+      pickupExtendedUntil: (o as any).pickup_extended_until ?? null,
     };
   };
 
@@ -624,6 +645,14 @@ export default function IncomingOrdersScreen() {
   const isOrderExpired = (o: NormalizedOrder) => {
     if (o.id === 'demo-order-1') return false;
     if (o.status !== 'confirmed') return false;
+    // Pickup extension granted by a member (POST /:id/extend-pickup) — while
+    // its deadline is still ahead, the order is intentionally re-active even
+    // though the original pickup_end has passed. Mirrors the backend cron +
+    // cancel guard so the En attente / Problèmes partition is consistent.
+    if (o.pickupExtendedUntil) {
+      const extMs = new Date(o.pickupExtendedUntil).getTime();
+      if (!isNaN(extMs) && extMs > Date.now()) return false;
+    }
     const effectiveDay = o.reservationDate
       ?? (o.createdAt ? getBusinessDayDateStr(new Date(o.createdAt)) : null);
     if (effectiveDay && effectiveDay < todayBizDateStr) return true;
@@ -702,6 +731,14 @@ export default function IncomingOrdersScreen() {
   }, [issueOrders, issueTypeFilter]);
 
   const tabDisplayedOrders = activeTab === 'incoming' ? incomingOrders : activeTab === 'completed' ? completedOrders : filteredIssueOrders;
+
+  // "En attente" + "Vendus" counts are BASKETS, not orders — an order of 3
+  // baskets counts as 3 — so they match the dashboard's basket-based stats
+  // ("Paniers vendus"). "Problèmes" stays an ORDER count (issueOrders.length):
+  // a problem is per-order (a cancelled/expired order), not per-basket.
+  const basketCount = (list: NormalizedOrder[]) => list.reduce((s, o) => s + (Number(o.quantity) || 1), 0);
+  const incomingBaskets = basketCount(incomingOrders);
+  const completedBaskets = basketCount(completedOrders);
 
   // Apply the order-code search on top of the tab-specific list. Substring
   // match against the displayed BK-XXXXX code, case-insensitive — the user
@@ -1036,7 +1073,15 @@ export default function IncomingOrdersScreen() {
   // the card). Also covers the case where the user pressed "Voir la
   // commande" from the in-app notification popup earlier.
   useEffect(() => {
-    if (demoOrderActive) setExpandedOrderId(null);
+    if (demoOrderActive) {
+      setExpandedOrderId(null);
+      // Force the pending ("incoming") tab — the demo order is injected there,
+      // and the walkthrough halo for the "une commande !" step is positioned at
+      // the TOP of that tab. If the demo was opened while the 'completed' (Vendus)
+      // or 'issues' (Problèmes) tab happened to be active, the screen would
+      // otherwise stay on it and the halo would land over the wrong (real) cards.
+      setActiveTab('incoming');
+    }
   }, [demoOrderActive]);
 
   // Tapping the demo order card to EXPAND it advances the orderCard
@@ -1131,6 +1176,96 @@ export default function IncomingOrdersScreen() {
     );
   }, [queryClient, t, alert]);
 
+  // Grant a pickup extension on a system-expired order — flips status back
+  // to 'confirmed', re-opens the conversation, and notifies the buyer via
+  // push. Backend enforces the SAME-BIZ-DAY rule (POST returns 409
+  // past_biz_day if the order belongs to a prior biz day); the button below
+  // also hides itself in that case so this handler should never see one.
+  //
+  // UX: opens a TimePicker so the merchant types/scrolls to the new
+  // pickup deadline as a clock time (e.g. "16:30"). The FE converts the
+  // selected HH:MM to minutes-from-now and posts that to the existing
+  // backend endpoint, so no contract change is needed.
+  // ─── Extension TimePicker state ────────────────────────────────────────
+  // `extendingOrderId` doubles as the modal's open flag (null = closed).
+  // `extendTargetTime` holds the HH:MM the merchant is editing; we seed
+  // it to "NOW + 30 min" so the wheel lands on a sensible default the
+  // first tap can confirm without scrolling.
+  const [extendingOrderId, setExtendingOrderId] = useState<string | null>(null);
+  const [extendTargetTime, setExtendTargetTime] = useState<string>('');
+  const [extendSubmitting, setExtendSubmitting] = useState(false);
+  const openExtendPicker = useCallback((orderId: string) => {
+    const now = new Date();
+    const seed = new Date(now.getTime() + 30 * 60 * 1000);
+    const hh = String(seed.getHours()).padStart(2, '0');
+    const mm = String(seed.getMinutes()).padStart(2, '0');
+    setExtendTargetTime(`${hh}:${mm}`);
+    setExtendingOrderId(orderId);
+  }, []);
+  const handleExtendPickup = openExtendPicker;
+  // Backend allows 5–240 min — keep client-side bounds in sync so the
+  // merchant gets a clean inline error instead of a server 400.
+  const MIN_EXT_MIN = 5;
+  const MAX_EXT_MIN = 240;
+  const submitExtension = useCallback(async () => {
+    if (!extendingOrderId || !extendTargetTime) return;
+    const [hh, mm] = extendTargetTime.split(':').map(Number);
+    if (isNaN(hh) || isNaN(mm)) return;
+    // Build the absolute target instant from today's calendar date +
+    // selected HH:MM in the device's local tz. Cross-midnight handling:
+    // if the constructed time is in the past, assume the merchant means
+    // "tomorrow morning" and roll forward 24h. Caps at MAX_EXT_MIN so
+    // the user can't trivially pick a value the backend will reject.
+    const now = new Date();
+    const target = new Date(now);
+    target.setHours(hh, mm, 0, 0);
+    if (target.getTime() <= now.getTime()) {
+      target.setDate(target.getDate() + 1);
+    }
+    const minutes = Math.round((target.getTime() - now.getTime()) / 60000);
+    if (minutes < MIN_EXT_MIN) {
+      alert.showAlert(
+        t('common.error', { defaultValue: 'Erreur' }),
+        t('business.orders.extendTooSoon', {
+          min: MIN_EXT_MIN,
+          defaultValue: `Choisissez au moins ${MIN_EXT_MIN} minutes dans le futur.`,
+        })
+      );
+      return;
+    }
+    if (minutes > MAX_EXT_MIN) {
+      alert.showAlert(
+        t('common.error', { defaultValue: 'Erreur' }),
+        t('business.orders.extendTooLong', {
+          max: MAX_EXT_MIN,
+          defaultValue: `Maximum ${MAX_EXT_MIN} minutes (${MAX_EXT_MIN / 60} heures) à partir de maintenant.`,
+        })
+      );
+      return;
+    }
+    setExtendSubmitting(true);
+    try {
+      await apiClient.post(`/api/reservations/${extendingOrderId}/extend-pickup`, { extension_minutes: minutes });
+      void queryClient.invalidateQueries({ queryKey: ['today-orders'] });
+      void queryClient.invalidateQueries({ queryKey: ['today-orders-count'] });
+      void queryClient.invalidateQueries({ queryKey: ['location-orders'] });
+      void queryClient.invalidateQueries({ queryKey: ['business-stats'] });
+      void queryClient.invalidateQueries({ queryKey: ['business-analytics'] });
+      setExtendingOrderId(null);
+      alert.showAlert(
+        t('common.success', { defaultValue: 'Succès' }),
+        t('business.orders.extendPickupSuccessUntil', {
+          time: extendTargetTime,
+          defaultValue: `Délai prolongé jusqu'à ${extendTargetTime}. Le client a été notifié.`,
+        }),
+      );
+    } catch (err) {
+      alert.showAlert(t('common.error', { defaultValue: 'Erreur' }), getErrorMessage(err));
+    } finally {
+      setExtendSubmitting(false);
+    }
+  }, [extendingOrderId, extendTargetTime, queryClient, t, alert]);
+
   // Status → tone mapping for the <StatusDot> component. Replaces the old
   // tinted-pill config (color + bg + icon + label). Icons are now inline
   // elsewhere when needed; the status chip itself is dot-first.
@@ -1215,7 +1350,7 @@ export default function IncomingOrdersScreen() {
       }}>
         <View style={{ flexDirection: 'row' }}>
           <View style={{ flex: 1, alignItems: 'center', paddingHorizontal: 4 }}>
-            <Text style={{ color: activeTab === 'incoming' ? theme.colors.secondary : '#fff', ...theme.typography.h2 }}>{incomingOrders.length}</Text>
+            <Text style={{ color: activeTab === 'incoming' ? theme.colors.secondary : '#fff', ...theme.typography.h2 }}>{incomingBaskets}</Text>
             <Text
               style={{
                 color: activeTab === 'incoming' ? theme.colors.secondary : 'rgba(255,255,255,0.7)',
@@ -1229,7 +1364,7 @@ export default function IncomingOrdersScreen() {
           {canViewHistory && (
             <>
               <View style={{ flex: 1, alignItems: 'center', paddingHorizontal: 4 }}>
-                <Text style={{ color: activeTab === 'completed' ? theme.colors.secondary : '#fff', ...theme.typography.h2 }}>{completedOrders.length}</Text>
+                <Text style={{ color: activeTab === 'completed' ? theme.colors.secondary : '#fff', ...theme.typography.h2 }}>{completedBaskets}</Text>
                 <Text
                   style={{
                     color: activeTab === 'completed' ? theme.colors.secondary : 'rgba(255,255,255,0.7)',
@@ -1238,8 +1373,8 @@ export default function IncomingOrdersScreen() {
                   }}
                 >
                   {t('business.orders.statusPickedUp', {
-                    count: completedOrders.length,
-                    defaultValue: completedOrders.length === 1 ? 'Vendu' : 'Vendus',
+                    count: completedBaskets,
+                    defaultValue: completedBaskets === 1 ? 'Vendu' : 'Vendus',
                   })}
                 </Text>
               </View>
@@ -1266,9 +1401,9 @@ export default function IncomingOrdersScreen() {
       <View style={[styles.tabs, { paddingHorizontal: theme.spacing.xl, marginTop: theme.spacing.sm }]}>
         {(canViewHistory ? ['incoming', 'completed', 'issues'] as const : ['incoming'] as const).map((tab) => {
           const label = tab === 'incoming' ? t('business.orders.pendingPickup', { defaultValue: 'En attente' })
-            : tab === 'completed' ? t('business.orders.statusPickedUp', { count: completedOrders.length, defaultValue: completedOrders.length === 1 ? 'Vendu' : 'Vendus' })
+            : tab === 'completed' ? t('business.orders.statusPickedUp', { count: completedBaskets, defaultValue: completedBaskets === 1 ? 'Vendu' : 'Vendus' })
             : t('business.orders.issues', { defaultValue: 'Problèmes' });
-          const count = tab === 'incoming' ? incomingOrders.length : tab === 'completed' ? completedOrders.length : issueOrders.length;
+          const count = tab === 'incoming' ? incomingBaskets : tab === 'completed' ? completedBaskets : issueOrders.length;
           return (
           <TouchableOpacity
             key={tab}
@@ -1464,6 +1599,40 @@ export default function IncomingOrdersScreen() {
                           column (see below) so it sits vertically aligned
                           with them on the right edge of the card. */}
                     </View>
+                    {/* Live extension pill — shows the merchant the same
+                        "Délai prolongé · expire dans Xm" countdown the
+                        customer sees on their reservation card, so both
+                        sides reference the SAME live deadline. Renders
+                        ONLY while the order is still active (status
+                        'confirmed' AND extension window not elapsed) —
+                        once the merchant confirms pickup the status flips
+                        to 'picked_up' and the live countdown stops; the
+                        expanded view then shows a historical "Étendu
+                        jusqu'à HH:MM" row instead (see below). timeTick
+                        (the 60s screen-wide tick that already drives
+                        isOrderExpired) re-renders this every minute so
+                        the countdown stays live. */}
+                    {order.status === 'confirmed' && (() => {
+                      const extRaw = order.pickupExtendedUntil;
+                      if (!extRaw) return null;
+                      const extMs = new Date(extRaw).getTime();
+                      if (isNaN(extMs) || extMs <= Date.now()) return null;
+                      void timeTick;  // re-render dependency
+                      const diffMs = extMs - Date.now();
+                      const totalMin = Math.max(0, Math.ceil(diffMs / 60000));
+                      const h = Math.floor(totalMin / 60);
+                      const m = totalMin % 60;
+                      const timeStr = h > 0 ? `${h}h ${m}m` : `${totalMin}m`;
+                      const color = totalMin < 5 ? theme.colors.error : theme.colors.accentWarm;
+                      return (
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 4 }}>
+                          <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: color }} />
+                          <Text style={{ color, ...theme.typography.caption, fontWeight: '600' }}>
+                            {t('orders.extensionGranted', { defaultValue: 'Délai prolongé · expire dans' })} {timeStr}
+                          </Text>
+                        </View>
+                      );
+                    })()}
                     {/* Price line moved out of the upper section — see the
                         unified bottom row below (price + payment icon on the
                         LEFT, time + order ID on the RIGHT). The bottom row
@@ -1714,6 +1883,31 @@ export default function IncomingOrdersScreen() {
                           {order.pickupWindow.start} - {order.pickupWindow.end}
                         </Text>
                       </View>
+                      {/* Historical extension row — shown on EVERY tab as
+                          long as pickup_extended_until is set on the row,
+                          so the merchant has audit-trail visibility into
+                          the extended deadline even after the order is
+                          picked up / re-expired / cancelled. The live
+                          countdown pill (collapsed view above) only shows
+                          while still in window AND status='confirmed';
+                          this row is the permanent record. */}
+                      {order.pickupExtendedUntil && (() => {
+                        const extMs = new Date(order.pickupExtendedUntil).getTime();
+                        if (isNaN(extMs)) return null;
+                        const hhmm = new Intl.DateTimeFormat('fr-FR', {
+                          hour: '2-digit', minute: '2-digit', hour12: false,
+                        }).format(new Date(extMs));
+                        return (
+                          <View style={[styles.detailRow, { marginTop: 4 }]}>
+                            <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption }]}>
+                              {t('business.orders.extendedUntilLabel', { defaultValue: 'Délai prolongé jusqu\'à' })}
+                            </Text>
+                            <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '600' as const }]}>
+                              {hhmm}
+                            </Text>
+                          </View>
+                        );
+                      })()}
                       {/* Reservation date for incoming orders */}
                       {isIncoming && (
                         <View style={[styles.detailRow, { marginTop: 4 }]}>
@@ -1847,6 +2041,81 @@ export default function IncomingOrdersScreen() {
                         </View>
                       )}
                     </View>
+
+                    {/* Extension action — visible whenever the card is
+                        displaying as EXPIRED (orange "Expiré" badge), the
+                        caller has order-handling powers, AND the order
+                        belongs to TODAY's business day. Grants a 30-min
+                        window so the merchant can confirm a late pickup
+                        the customer showed up for; flips the order back to
+                        En attente + notifies the customer. The same-biz-day
+                        gate intentionally excludes yesterday's stragglers
+                        per product spec (those are already settled). The
+                        backend enforces the same rule. Triggers off
+                        `displayStatus === 'expired'` — same flag that
+                        paints the orange Expiré badge — so the button
+                        shows for every card the user sees as expired,
+                        including system-flipped 'cancelled' rows with an
+                        expiry reason. */}
+                    {displayStatus === 'expired' && canExtendPickup && (() => {
+                      const orderBizDay = order.reservationDate
+                        ?? (order.createdAt ? getBusinessDayDateStr(new Date(order.createdAt)) : null);
+                      const sameBizDay = !!orderBizDay && orderBizDay === todayBizDateStr;
+                      // Belt-and-suspenders 24h fallback mirroring the
+                      // backend's POST /:id/extend-pickup gate. Biz-day
+                      // is the authoritative rule, but if the daily
+                      // expire-stale cron misses its 03:30 tick the FE
+                      // could otherwise show "Prolonger le retrait" on
+                      // a multi-day-old row whose biz-day computation
+                      // happens to match today. The 24h cap hides the
+                      // button in that case so the merchant never sees
+                      // a CTA that would 409.
+                      const createdMs = order.createdAt ? new Date(order.createdAt).getTime() : NaN;
+                      const within24h = !isNaN(createdMs) && (Date.now() - createdMs) <= 24 * 60 * 60 * 1000;
+                      const hide = !sameBizDay || !within24h;
+                      if (__DEV__ && hide) {
+                        // Surfaced so an order that mysteriously doesn't
+                        // show the button has a paper trail with the
+                        // exact values being compared.
+                        // eslint-disable-next-line no-console
+                        console.log('[ExtendBtn] hidden', {
+                          orderId: order.id,
+                          reason: !sameBizDay ? 'past_biz_day' : 'older_than_24h',
+                          orderBizDay,
+                          todayBizDateStr,
+                          reservationDate: order.reservationDate,
+                          createdAt: order.createdAt,
+                          ageHours: isNaN(createdMs) ? null : Math.round((Date.now() - createdMs) / 36e5),
+                        });
+                      }
+                      if (hide) return null;
+                      return (
+                        <View style={[styles.actionRow, { marginTop: theme.spacing.lg, paddingTop: theme.spacing.md, borderTopWidth: 1, borderTopColor: theme.colors.divider, gap: 8 }]}>
+                          <TouchableOpacity
+                            onPress={(e) => {
+                              e.stopPropagation?.();
+                              handleExtendPickup(order.id);
+                            }}
+                            style={[
+                              styles.actionBtn,
+                              {
+                                flex: 1,
+                                backgroundColor: theme.colors.primary,
+                                borderRadius: theme.radii.r12,
+                                paddingHorizontal: 14,
+                                paddingVertical: 10,
+                                justifyContent: 'center',
+                              },
+                            ]}
+                          >
+                            <TimerReset size={16} color="#fff" />
+                            <Text style={[{ color: '#fff', ...theme.typography.caption, fontWeight: '600' as const, marginLeft: 6 }]}>
+                              {t('business.orders.extendPickupAction', { defaultValue: 'Prolonger le retrait' })}
+                            </Text>
+                          </TouchableOpacity>
+                        </View>
+                      );
+                    })()}
 
                     {/* Action row — only for incoming confirmed orders */}
                     {isIncoming && (canConfirmPickup || canCancelOrder) && (
@@ -2552,6 +2821,118 @@ export default function IncomingOrdersScreen() {
             </View>
           </PaperSurface>
           </Animated.View>
+        </View>
+      </Modal>
+
+      {/* Extension picker — opened by the "Prolonger le retrait" button on
+          any expired same-biz-day card. The TimePicker inside renders its
+          OWN inner modal when tapped; nested Modals are supported in RN
+          and the picker's modal layers on top of this sheet cleanly. We
+          drive submission externally via the wheel's onChange + the
+          bottom CTA so the merchant sees their selection committed
+          deliberately rather than the moment they tap a wheel value. */}
+      <Modal
+        visible={extendingOrderId !== null}
+        transparent
+        animationType="fade"
+        onRequestClose={() => { if (!extendSubmitting) setExtendingOrderId(null); }}
+      >
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 20 }}>
+          <TouchableOpacity
+            style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}
+            activeOpacity={1}
+            onPress={() => { if (!extendSubmitting) setExtendingOrderId(null); }}
+          />
+          <View style={{ backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, padding: theme.spacing.xl, width: '100%', maxWidth: 360 }}>
+            <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, marginBottom: theme.spacing.sm }]}>
+              {t('business.orders.extendPickup', { defaultValue: 'Prolonger le retrait' })}
+            </Text>
+            <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.bodySm, marginBottom: theme.spacing.lg }]}>
+              {t('business.orders.extendPickupBody', { defaultValue: "Choisissez la nouvelle heure limite. Le client recevra une notification avec cette heure." })}
+            </Text>
+            <TimePicker
+              value={extendTargetTime}
+              onChange={setExtendTargetTime}
+              label={t('business.orders.extendPickupTimeLabel', { defaultValue: 'Nouvelle heure limite' })}
+              primaryColor={theme.colors.primary}
+              textColor={theme.colors.textPrimary}
+              bgColor={theme.colors.bg}
+              mutedColor={theme.colors.muted}
+            />
+            {/* Live computed extension duration — gives the merchant
+                an at-a-glance preview of what HH:MM translates to in
+                "+Xh Ym" terms, since most people think of an extension
+                as a duration ("give them 30 more minutes") even though
+                they're picking it via a clock time. Uses the same
+                cross-midnight roll-forward submitExtension uses, so
+                the displayed minutes match what the backend will get.
+                Color flips to error when outside the 5–240 bounds so
+                the merchant sees the problem before tapping Prolonger
+                and hitting the inline alert. */}
+            {(() => {
+              if (!extendTargetTime) return null;
+              const [hh, mm] = extendTargetTime.split(':').map(Number);
+              if (isNaN(hh) || isNaN(mm)) return null;
+              const now = new Date();
+              const target = new Date(now);
+              target.setHours(hh, mm, 0, 0);
+              if (target.getTime() <= now.getTime()) {
+                target.setDate(target.getDate() + 1);
+              }
+              const totalMin = Math.round((target.getTime() - now.getTime()) / 60000);
+              const tooShort = totalMin < MIN_EXT_MIN;
+              const tooLong = totalMin > MAX_EXT_MIN;
+              const outOfRange = tooShort || tooLong;
+              const h = Math.floor(totalMin / 60);
+              const m = totalMin % 60;
+              const durLabel = h > 0
+                ? (m === 0
+                  ? t('business.orders.extDurH', { h, defaultValue: `${h}h` })
+                  : t('business.orders.extDurHM', { h, m, defaultValue: `${h}h ${m}m` }))
+                : t('business.orders.extDurM', { m: totalMin, defaultValue: `${totalMin} min` });
+              const prefix = t('business.orders.extDurPrefix', { defaultValue: 'Durée d’extension' });
+              const color = outOfRange ? theme.colors.error : theme.colors.textSecondary;
+              return (
+                <View style={{ marginTop: theme.spacing.sm, alignItems: 'center' }}>
+                  <Text style={{ color, ...theme.typography.caption, fontWeight: '600' }}>
+                    {prefix} : <Text style={{ fontWeight: '700' }}>+{durLabel}</Text>
+                  </Text>
+                  {tooShort ? (
+                    <Text style={{ color: theme.colors.error, ...theme.typography.caption, marginTop: 2 }}>
+                      {t('business.orders.extendTooSoon', { min: MIN_EXT_MIN, defaultValue: `Choisissez au moins ${MIN_EXT_MIN} minutes dans le futur.` })}
+                    </Text>
+                  ) : null}
+                  {tooLong ? (
+                    <Text style={{ color: theme.colors.error, ...theme.typography.caption, marginTop: 2 }}>
+                      {t('business.orders.extendTooLong', { max: MAX_EXT_MIN, defaultValue: `Maximum ${MAX_EXT_MIN} minutes (${MAX_EXT_MIN / 60} heures) à partir de maintenant.` })}
+                    </Text>
+                  ) : null}
+                </View>
+              );
+            })()}
+            <View style={{ flexDirection: 'row', gap: 12, marginTop: theme.spacing.lg }}>
+              <TouchableOpacity
+                onPress={() => { if (!extendSubmitting) setExtendingOrderId(null); }}
+                disabled={extendSubmitting}
+                style={{ flex: 1, paddingVertical: 12, borderRadius: theme.radii.r12, borderWidth: 1, borderColor: theme.colors.divider, alignItems: 'center', opacity: extendSubmitting ? 0.5 : 1 }}
+              >
+                <Text style={{ color: theme.colors.textSecondary, fontSize: 14, fontWeight: '600' }}>
+                  {t('common.cancel', { defaultValue: 'Annuler' })}
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => { void submitExtension(); }}
+                disabled={extendSubmitting || !extendTargetTime}
+                style={{ flex: 1, paddingVertical: 12, borderRadius: theme.radii.r12, backgroundColor: theme.colors.primary, alignItems: 'center', opacity: (extendSubmitting || !extendTargetTime) ? 0.5 : 1 }}
+              >
+                <Text style={{ color: '#fff', fontSize: 14, fontWeight: '700' }}>
+                  {extendSubmitting
+                    ? t('common.loading', { defaultValue: 'Patientez…' })
+                    : t('business.orders.extendPickupConfirm', { defaultValue: 'Prolonger' })}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
         </View>
       </Modal>
     </SafeAreaView>

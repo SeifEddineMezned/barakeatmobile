@@ -6,6 +6,7 @@ import React, { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { View, Text, TouchableOpacity, Animated, Dimensions, PanResponder, Modal, Image, AppState, StyleSheet, ScrollView, Linking, useWindowDimensions, BackHandler } from "react-native";
 import { useRouter } from "expo-router";
+import { resetStackTo } from "@/src/lib/navStack";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTheme } from "@/src/theme/ThemeProvider";
 import { useOverlayOriginOffset } from "@/src/components/useOverlayOriginOffset";
@@ -220,7 +221,7 @@ export default function TabLayout() {
     normalizedType === 'business' || normalizedType === 'restaurant';
   React.useEffect(() => {
     if (!isAuthenticated) {
-      router.replace('/auth/sign-in' as never);
+      resetStackTo(router, '/auth/sign-in');
     }
   }, [isAuthenticated]);
 

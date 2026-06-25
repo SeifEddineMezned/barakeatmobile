@@ -2,7 +2,7 @@ import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react'
 import { useStatusBarStyleOnFocus } from '@/src/hooks/useStatusBarStyleOnFocus';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity, Modal, TextInput,
-  ActivityIndicator, Animated, Switch, Alert, Platform,
+  ActivityIndicator, Animated, Switch, Alert, Platform, Image,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
@@ -67,6 +67,42 @@ function getBadgeIcon(badgeId: string) {
   }
 }
 
+// Per-badge accent color so the wall of badges reads as a colorful set rather
+// than a row of identical green circles. Each family gets a hue that matches
+// its theme (flames = orange, medals = blue/gold, nature = green, etc.). Only
+// applied to UNLOCKED badges; locked ones stay muted/grey so the "earned vs
+// not" distinction is still obvious at a glance.
+function getBadgeColor(badgeId: string): string {
+  switch (badgeId) {
+    case 'first_save': return '#f59e0b';
+    case 'streak_3': return '#fb923c';
+    case 'streak_7': return '#f97316';
+    case 'streak_30': return '#ea580c';
+    case 'saved_10': case 'food_saver': return '#22c55e';
+    case 'saved_25': case 'food_saver_25': return '#14b8a6';
+    case 'saved_50': case 'food_saver_50': return '#3b82f6';
+    case 'saved_100': return '#eab308';
+    case 'bakery_lover': return '#b45309';
+    case 'local_hero': return '#ef4444';
+    case 'variety_seeker': return '#8b5cf6';
+    case 'early_bird': return '#facc15';
+    case 'onboarding_complete': return '#6366f1';
+    case 'generous': return '#ec4899';
+    case 'big_spender': return '#10b981';
+    case 'ramadan_saver': return '#7c3aed';
+    default: return '#114b3c';
+  }
+}
+
+// Impact-stat labels are short two-word phrases ("Paniers sauvés", "Argent
+// économisé"). Break them at the FIRST space so each word stacks on its own
+// line — a calmer, balanced look in the narrow 110px stat cards than one
+// shrunk-to-fit line. Single-word labels are returned unchanged.
+function twoLineLabel(label: string): string {
+  const i = label.indexOf(' ');
+  return i === -1 ? label : `${label.slice(0, i)}\n${label.slice(i + 1)}`;
+}
+
 export default function ProfileScreen() {
   useStatusBarStyleOnFocus('dark');
   const { t } = useTranslation();
@@ -79,6 +115,26 @@ export default function ProfileScreen() {
   const [showPrefsModal, setShowPrefsModal] = useState(false);
   const [selectedPrefs, setSelectedPrefs] = useState<string[]>([]);
   const [statModal, setStatModal] = useState<'money' | 'co2' | 'baskets' | 'spots' | null>(null);
+  // Self-managed fade for the stat-detail popup. The stock Modal
+  // animationType="fade" empties the card content (it's derived from
+  // `statModal`) the instant you tap close, while the card View keeps fading
+  // out — leaving an empty surface + its drop shadow visible for a frame (the
+  // "shadow stays behind when I close it" artifact). Instead we drive the fade
+  // ourselves: keep `statModal` SET so the content stays rendered, animate the
+  // whole overlay's opacity to 0, THEN unmount — so the card and its shadow
+  // fade away together and vanish cleanly.
+  const statModalAnim = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    if (statModal !== null) {
+      statModalAnim.setValue(0);
+      Animated.timing(statModalAnim, { toValue: 1, duration: 180, useNativeDriver: true }).start();
+    }
+  }, [statModal, statModalAnim]);
+  const closeStatModal = useCallback(() => {
+    Animated.timing(statModalAnim, { toValue: 0, duration: 160, useNativeDriver: true }).start(() => {
+      setStatModal(null);
+    });
+  }, [statModalAnim]);
   const [badgeModal, setBadgeModal] = useState<Badge | null>(null);
   // Keep the last-shown badge through the modal's fade-OUT so the card never
   // renders EMPTY (a white box + its shadow) for a frame as it animates closed.
@@ -557,7 +613,7 @@ export default function ProfileScreen() {
             <CreditCard size={18} color="#114b3c" />
           </View>
           <View style={{ flex: 1, marginLeft: 14 }}>
-            <Text style={{ color: theme.colors.textPrimary, fontSize: 15, fontWeight: '600' }}>{t('wallet.credits', { defaultValue: 'Crédits Barakeat' })}</Text>
+            <Text style={{ color: theme.colors.textPrimary, fontSize: 15, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>{t('wallet.credits', { defaultValue: 'Mes crédits' })}</Text>
             <Text style={{ color: theme.colors.muted, fontSize: 12, marginTop: 3 }}>{t('wallet.earnCreditsShort', { defaultValue: 'Gagnez et utilisez des crédits' })}</Text>
           </View>
           <ChevronRight size={18} color={theme.colors.muted} />
@@ -565,6 +621,9 @@ export default function ProfileScreen() {
 
         {/* Stats Row */}
         <View style={{ marginBottom: theme.spacing.xxl, overflow: 'visible' }}>
+        <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, marginBottom: theme.spacing.md }]}>
+          {t('impact.myImpact', { defaultValue: 'Mon impact' })}
+        </Text>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ overflow: 'visible' }} contentContainerStyle={{ gap: 10, paddingRight: theme.spacing.xl, paddingHorizontal: 4, paddingVertical: 6 }}>
           <TouchableOpacity onPress={() => setStatModal('money')} accessibilityLabel={`${stats.moneySaved.toFixed(0)} TND ${t('profile.moneySaved')}`} accessibilityRole="button" style={{ width: 110, backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, padding: theme.spacing.md, alignItems: 'center', ...theme.shadows.shadowSm }}>
             <View style={[styles.statIcon, { backgroundColor: theme.colors.primary + '15', borderRadius: theme.radii.r12, width: 36, height: 36 }]}>
@@ -574,7 +633,7 @@ export default function ProfileScreen() {
               {stats.moneySaved.toFixed(0)} TND
             </Text>
             <Text adjustsFontSizeToFit minimumFontScale={0.6} numberOfLines={2} textBreakStrategy="simple" style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, textAlign: 'center' }]}>
-              {t('profile.moneySaved')}
+              {twoLineLabel(t('profile.moneySaved'))}
             </Text>
           </TouchableOpacity>
           <TouchableOpacity onPress={() => setStatModal('co2')} accessibilityLabel={`${stats.co2Saved.toFixed(1)} kg ${t('profile.co2Saved')}`} accessibilityRole="button" style={{ width: 110, backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, padding: theme.spacing.md, alignItems: 'center', ...theme.shadows.shadowSm }}>
@@ -585,7 +644,7 @@ export default function ProfileScreen() {
               {stats.co2Saved.toFixed(1)} kg
             </Text>
             <Text adjustsFontSizeToFit minimumFontScale={0.6} numberOfLines={2} textBreakStrategy="simple" style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, textAlign: 'center' }]}>
-              {t('profile.co2Saved')}
+              {twoLineLabel(t('profile.co2Saved'))}
             </Text>
           </TouchableOpacity>
           <TouchableOpacity onPress={() => setStatModal('baskets')} accessibilityLabel={`${stats.basketsBought} ${t('profile.basketsBought')}`} accessibilityRole="button" style={{ width: 110, backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, padding: theme.spacing.md, alignItems: 'center', ...theme.shadows.shadowSm }}>
@@ -596,7 +655,7 @@ export default function ProfileScreen() {
               {stats.basketsBought}
             </Text>
             <Text adjustsFontSizeToFit minimumFontScale={0.6} numberOfLines={2} textBreakStrategy="simple" style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, textAlign: 'center' }]}>
-              {t('profile.basketsBought')}
+              {twoLineLabel(t('profile.basketsBought'))}
             </Text>
           </TouchableOpacity>
           <TouchableOpacity onPress={() => setStatModal('spots')} accessibilityLabel={`${stats.businessesTried} ${t('profile.businessesTried', { defaultValue: 'Places Tried' })}`} accessibilityRole="button" style={{ width: 110, backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, padding: theme.spacing.md, alignItems: 'center', ...theme.shadows.shadowSm }}>
@@ -607,7 +666,7 @@ export default function ProfileScreen() {
               {stats.businessesTried}
             </Text>
             <Text adjustsFontSizeToFit minimumFontScale={0.6} numberOfLines={2} textBreakStrategy="simple" style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, textAlign: 'center' }]}>
-              {t('profile.businessesTried', { defaultValue: 'Places Tried' })}
+              {twoLineLabel(t('profile.businessesTried', { defaultValue: 'Places Tried' }))}
             </Text>
           </TouchableOpacity>
         </ScrollView>
@@ -616,7 +675,7 @@ export default function ProfileScreen() {
         {/* Badges Section */}
         <View style={{ marginBottom: theme.spacing.xl, overflow: 'visible' }}>
           <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, marginBottom: theme.spacing.md }]}>
-            {t('impact.badges')}
+            {t('impact.myBadges', { defaultValue: 'Mes badges' })}
           </Text>
           <ScrollView
             horizontal
@@ -627,6 +686,7 @@ export default function ProfileScreen() {
             {stats.badges.map((badge) => {
               const bid = badge.badge_id ?? badge.id;
               const BadgeIcon = badge.unlocked ? getBadgeIcon(bid) : Lock;
+              const badgeColor = badge.unlocked ? getBadgeColor(bid) : theme.colors.muted;
               const badgeName = badge.nameKey
                 ? t(`badges.${badge.nameKey}`, { defaultValue: badge.name ?? bid })
                 : badge.name ?? bid;
@@ -658,7 +718,7 @@ export default function ProfileScreen() {
                       styles.badgeCircle,
                       {
                         backgroundColor: badge.unlocked
-                          ? theme.colors.primary + '15'
+                          ? badgeColor + '22'
                           : theme.colors.divider,
                         borderRadius: 28,
                         width: 56,
@@ -668,7 +728,7 @@ export default function ProfileScreen() {
                   >
                     <BadgeIcon
                       size={24}
-                      color={badge.unlocked ? theme.colors.primary : theme.colors.muted}
+                      color={badgeColor}
                     />
                   </View>
                   <Text
@@ -1000,9 +1060,10 @@ export default function ProfileScreen() {
           uppercase 11px label + big white number, then a preview list using
           the rich icon-circle pattern (#114b3c bg + #e3ff5c icon), then a
           yellow "Voir plus" CTA. */}
-      <Modal visible={statModal !== null} transparent animationType="fade" onRequestClose={() => setStatModal(null)}>
-        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setStatModal(null)}>
-          <View
+      <Modal visible={statModal !== null} transparent animationType="none" statusBarTranslucent onRequestClose={closeStatModal}>
+        <Animated.View style={{ flex: 1, opacity: statModalAnim }}>
+        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={closeStatModal}>
+          <Animated.View
             style={[styles.modalContent, {
               backgroundColor: theme.colors.surface,
               borderRadius: theme.radii.r24,
@@ -1010,11 +1071,12 @@ export default function ProfileScreen() {
               ...theme.shadows.shadowLg,
               maxHeight: '75%',
               width: '100%',
+              transform: [{ scale: statModalAnim.interpolate({ inputRange: [0, 1], outputRange: [0.96, 1] }) }],
             }]}
             onStartShouldSetResponder={() => true}
           >
             <TouchableOpacity
-              onPress={() => setStatModal(null)}
+              onPress={closeStatModal}
               style={{ position: 'absolute', top: 12, right: 12, width: 32, height: 32, borderRadius: 16, backgroundColor: theme.colors.bg, justifyContent: 'center', alignItems: 'center', zIndex: 1 }}
               hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
               accessibilityLabel={t('common.close', { defaultValue: 'Close' })}
@@ -1084,19 +1146,44 @@ export default function ProfileScreen() {
                 const spotMap = new Map<string, { name: string; logo?: string; count: number }>();
                 completed.forEach((r: any) => {
                   const name = r.restaurant_name ?? r.restaurant?.name ?? r.basket?.merchantName ?? '';
-                  const logo = r.restaurant?.image_url ?? r.org_image_url ?? r.basket?.merchantLogo;
+                  // `/my/reservations` returns the org logo as the top-level
+                  // `restaurant_image` (= o.image_url JOIN). The older
+                  // chained reads (r.restaurant?.image_url etc.) never match
+                  // that shape, so the popup was always falling through to
+                  // the generic green Store icon. Including restaurant_image
+                  // in the fallback chain lets the real brand logo render.
+                  const logo = r.restaurant_image
+                    ?? r.restaurant?.image_url
+                    ?? r.org_image_url
+                    ?? r.basket?.merchantLogo
+                    ?? null;
                   if (!name) return;
                   const existing = spotMap.get(name);
-                  if (existing) { existing.count += 1; } else { spotMap.set(name, { name, logo, count: 1 }); }
+                  if (existing) {
+                    existing.count += 1;
+                    // First non-empty logo wins so a later reservation
+                    // missing the field can't blank out an org we already
+                    // matched.
+                    if (!existing.logo && logo) existing.logo = logo;
+                  } else {
+                    spotMap.set(name, { name, logo, count: 1 });
+                  }
                 });
                 const spots = Array.from(spotMap.values()).sort((a, b) => b.count - a.count).slice(0, 3);
                 return spots.length > 0 ? (
                   <View style={{ width: '100%', marginBottom: theme.spacing.md }}>
                     {spots.map((s, i) => (
                       <View key={i} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 12, borderTopWidth: i > 0 ? 1 : 0, borderTopColor: theme.colors.divider }}>
-                        <View style={{ width: 30, height: 30, borderRadius: 15, backgroundColor: '#114b3c', justifyContent: 'center', alignItems: 'center' }}>
-                          <Store size={13} color="#e3ff5c" />
-                        </View>
+                        {s.logo ? (
+                          <Image
+                            source={{ uri: s.logo }}
+                            style={{ width: 30, height: 30, borderRadius: 15, backgroundColor: theme.colors.bg }}
+                          />
+                        ) : (
+                          <View style={{ width: 30, height: 30, borderRadius: 15, backgroundColor: '#114b3c', justifyContent: 'center', alignItems: 'center' }}>
+                            <Store size={13} color="#e3ff5c" />
+                          </View>
+                        )}
                         <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '600', flex: 1, marginLeft: 12 }} numberOfLines={1}>{s.name}</Text>
                         <Text style={{ color: theme.colors.primary, ...theme.typography.bodySm, fontWeight: '700' }}>
                           {t('profile.orderCount', { count: s.count, defaultValue: '{{count}} commande(s)' })}
@@ -1176,8 +1263,9 @@ export default function ProfileScreen() {
                 <ChevronRight size={16} color="#114b3c" />
               </TouchableOpacity>
             )}
-          </View>
+          </Animated.View>
         </TouchableOpacity>
+        </Animated.View>
       </Modal>
 
       {/* Badge Modal */}
@@ -1200,13 +1288,16 @@ export default function ProfileScreen() {
               if (!bm) return null;
               const bid = bm.badge_id ?? bm.id;
               const BadgeIcon = bm.unlocked ? getBadgeIcon(bid) : Lock;
+              // Same per-badge accent as the badge cards on the profile grid, so
+              // tapping a badge opens a popup whose icon color matches the card.
+              const badgeColor = bm.unlocked ? getBadgeColor(bid) : theme.colors.muted;
               const badgeName = bm.nameKey
                 ? t(`badges.${bm.nameKey}`, { defaultValue: bm.name ?? bid })
                 : bm.name ?? bid;
               return (
                 <>
-                  <View style={{ width: 72, height: 72, borderRadius: 36, backgroundColor: bm.unlocked ? theme.colors.primary + '15' : theme.colors.divider, justifyContent: 'center', alignItems: 'center', marginBottom: theme.spacing.lg }}>
-                    <BadgeIcon size={32} color={bm.unlocked ? theme.colors.primary : theme.colors.muted} />
+                  <View style={{ width: 72, height: 72, borderRadius: 36, backgroundColor: bm.unlocked ? badgeColor + '22' : theme.colors.divider, justifyContent: 'center', alignItems: 'center', marginBottom: theme.spacing.lg }}>
+                    <BadgeIcon size={32} color={badgeColor} />
                   </View>
                   <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, textAlign: 'center', marginBottom: theme.spacing.sm }]}>
                     {bm.unlocked ? badgeName : t('impact.locked')}

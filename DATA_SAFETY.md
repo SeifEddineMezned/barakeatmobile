@@ -14,15 +14,18 @@ Use this document when filling out the Google Play Data Safety section and Apple
 | Password | Yes (hashed on backend) | No | Authentication | Yes |
 | Approximate location | Yes (with permission) | No | Show nearby baskets | No |
 | Precise location | Yes (with permission) | No | Map features, distance calc | No |
-| Photos | Yes (user-uploaded) | Stored on backend | Reviews, profile pictures | No |
+| Photos | Yes (user-uploaded) | Stored via Cloudinary (CDN) | Reviews, profile pictures | No |
 | Purchase history | Yes | No | Order tracking, gamification | Yes |
-| Device push token | Yes | Expo push service | Notifications | No |
+| Device push token | Yes | Expo push service + Google (FCM) | Notifications | No |
 | App interactions | Yes | No | Gamification (XP, badges) | No |
 | Food preferences | Yes | No | Personalization | No |
 
 ## Data NOT Collected
 
-- Financial/payment info (no card payments currently)
+- Financial/payment info — online card payments are processed **entirely by ClicToPay**
+  (PCI-DSS compliant gateway); card numbers and bank details are entered directly with
+  ClicToPay and are **never received or stored** by Barakeat. Cash and Barakeat-credit
+  payments involve no card data at all.
 - Health data
 - Browsing history
 - Contact list
@@ -39,6 +42,9 @@ Use this document when filling out the Google Play Data Safety section and Apple
 | Google OAuth | Email, name (from Google) | Authentication |
 | Apple Sign-In | Email, name (from Apple) | Authentication |
 | Expo Push Service | Device push token | Notifications |
+| Firebase Cloud Messaging (FCM) | Device push token | Push notification delivery (Android + chat) |
+| Cloudinary | User-uploaded photos | Image hosting/CDN for reviews & avatars |
+| ClicToPay | Card/bank details (entered directly with ClicToPay, not by Barakeat) | Secure online payment processing |
 | Sentry | Crash stack traces, device info | Crash reporting |
 | Railway (backend host) | All API data | Backend infrastructure |
 

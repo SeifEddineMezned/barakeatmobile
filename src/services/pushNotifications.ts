@@ -1,6 +1,12 @@
 import { Platform } from 'react-native';
 import Constants from 'expo-constants';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { apiClient } from '@/src/lib/api';
+
+// Key under which we remember THIS device's Expo push token, so sign-out can
+// detach exactly this device from the account (multi-device) without touching
+// the account's other devices.
+const EXPO_TOKEN_KEY = '@barakeat_expo_push_token';
 
 // Expo Go does not support push notifications from SDK 53+ on Android.
 // Importantly: we LAZY-LOAD `expo-notifications` inside each function below
@@ -105,31 +111,36 @@ async function doRegisterForPushNotifications(): Promise<string | null> {
     });
     const token = tokenData.data;
 
-    // Send token to backend
-    try {
-      await apiClient.put('/api/auth/push-token', { pushToken: token });
-    } catch {
-      console.log('[Push] Failed to save token to backend');
-    }
-
-    // Also register the NATIVE FCM device token. The backend uses it to send
-    // collapsible per-conversation chat notifications via FCM directly (one
-    // notification per chat, Messenger-style) — Expo's push relay can't set the
-    // Android collapse tag. On Android this returns { type: 'fcm', data }.
+    // Gather the native FCM token too (Android only) so we register BOTH tokens
+    // for this device in ONE multi-device row. `.data` IS the FCM registration
+    // token on Android; the reported `type` may be 'android' not 'fcm' depending
+    // on SDK version, so don't gate on it.
+    let fcmToken: string | null = null;
     try {
       const deviceToken = await Notifications.getDevicePushTokenAsync();
-      // On Android, `.data` IS the FCM registration token — but the reported
-      // `type` may be 'android' (not 'fcm') depending on the SDK version, so do
-      // NOT gate on it or the token silently never registers (chat collapse then
-      // falls back to Expo = stacked notifications).
       console.log('[Push] device push token type:', deviceToken?.type);
       if (Platform.OS === 'android' && typeof deviceToken?.data === 'string' && deviceToken.data) {
-        await apiClient.put('/api/auth/fcm-token', { fcmToken: deviceToken.data });
-        console.log('[Push] FCM device token registered with backend');
+        fcmToken = deviceToken.data;
       }
     } catch (e) {
-      console.log('[Push] Failed to register FCM device token:', (e as any)?.message);
+      console.log('[Push] Failed to get FCM device token:', (e as any)?.message);
     }
+
+    // PRIMARY: register THIS device (expo + fcm + platform) so the account can
+    // have several live devices that ALL receive pushes (multi-device).
+    try {
+      await apiClient.put('/api/auth/device-token', { expoToken: token, fcmToken, platform: Platform.OS });
+    } catch {
+      console.log('[Push] Failed to register device token');
+    }
+    // Remember this device's Expo token so sign-out detaches exactly this device.
+    try { await AsyncStorage.setItem(EXPO_TOKEN_KEY, token); } catch {}
+
+    // LEGACY fallback — keep the single-token columns in sync so an older backend
+    // path (or a failed device-token call) still delivers. Harmless when the
+    // device row exists: the server prefers device rows and ignores these.
+    try { await apiClient.put('/api/auth/push-token', { pushToken: token }); } catch {}
+    if (fcmToken) { try { await apiClient.put('/api/auth/fcm-token', { fcmToken }); } catch {} }
 
     return token;
   } catch (error) {
@@ -143,6 +154,14 @@ async function doRegisterForPushNotifications(): Promise<string | null> {
 // push toggle OFF. In-app notifications are NOT affected — they are polled from
 // the notifications feed and never depend on the push token.
 export async function unregisterPushNotifications(): Promise<void> {
+  // Detach ONLY this device's multi-device row (the account's other devices keep
+  // receiving pushes), then clear the legacy single-token columns too.
+  try {
+    const token = await AsyncStorage.getItem(EXPO_TOKEN_KEY);
+    if (token) {
+      await apiClient.delete('/api/auth/device-token', { data: { expoToken: token } } as any);
+    }
+  } catch {}
   try {
     await apiClient.delete('/api/auth/push-token');
   } catch {

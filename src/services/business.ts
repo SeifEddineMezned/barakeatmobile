@@ -364,11 +364,25 @@ export async function fetchLocationOrders(locationId?: number | string | null, f
   return Array.isArray(data) ? data : [];
 }
 
-export async function confirmPickup(reservationId: number | string, pickupCode: string, buyerId?: number | string): Promise<void> {
-  console.log('[Business] Confirming pickup:', reservationId);
+export async function confirmPickup(
+  reservationId: number | string,
+  pickupCode: string,
+  buyerId?: number | string,
+  // Set true by the scan-qr review screen when the merchant is
+  // confirming an order the cron already flipped to cancelled
+  // (cancellation_reason='expired_no_pickup'). The backend's status
+  // guard requires this explicit acknowledgement to honour the late
+  // pickup; without it the request is rejected with "Cette réservation
+  // a été annulée."
+  expiredOverride?: boolean,
+): Promise<void> {
+  console.log('[Business] Confirming pickup:', reservationId, expiredOverride ? '(expired override)' : '');
   const payload: Record<string, unknown> = { pickup_code: pickupCode };
   if (buyerId !== undefined && buyerId !== null) {
     payload.buyer_id = buyerId;
+  }
+  if (expiredOverride) {
+    payload.expired_override = true;
   }
   await apiClient.post(`/api/reservations/${reservationId}/confirm-pickup`, payload);
 }
@@ -381,6 +395,12 @@ export interface VerifyQRResult {
   quantity?: number;
   pickup_code?: string;
   status?: string;
+  // True iff the row is status='cancelled' with cancellation_reason
+  // 'expired_no_pickup' — i.e. the cron flipped it because the pickup
+  // window passed without pickup. The merchant may still confirm by
+  // ticking the override on the review screen; confirmPickup() then
+  // passes expiredOverride=true to the backend.
+  is_expired?: boolean;
   // Pickup-summary fields (so the business can review before confirming).
   basket_name?: string | null;
   total?: number;           // full order value (TND)

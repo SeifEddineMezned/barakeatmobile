@@ -34,6 +34,9 @@ export const useAuthStore = create(
           // until the user reloads.
           console.error('[AuthStore] signIn: SecureStore persistence FAILED — session will not survive reload:', err);
         }
+        // Re-arm the account-deleted popup for this new session (the previous
+        // account may have triggered it). Lazy require avoids an import cycle.
+        try { require('@/src/lib/api').resetAccountDeletedGuard?.(); } catch {}
         set({ user, token, isAuthenticated: true });
       },
 

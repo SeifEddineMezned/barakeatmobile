@@ -211,12 +211,21 @@ export function BarakeatHaloSplash({ onFinish, durationMs = CONFIG.cycleMs + CON
     </>
   );
 
+
   return (
     <View
       style={[styles.fill, { backgroundColor: CONFIG.bg }]}
       onLayout={fireMountedSignal}
     >
-      <Svg width="100%" height="100%" viewBox="0 0 390 844" preserveAspectRatio="xMidYMid slice">
+      {/* `preserveAspectRatio="xMidYMid meet"` = contain semantics, which
+          MATCHES the native splash's `resizeMode: 'contain'` exactly. The
+          previous `"slice"` value was cover semantics — on any device whose
+          aspect ratio ≠ 390:844 it scaled the SVG larger than the native
+          PNG, drifting the B's screen position off the native splash's B
+          (the "loading animation slightly offset right of splash" symptom).
+          With "meet" the two renderers share the same scaling rule and the
+          B lands in the same pixels on every device. */}
+      <Svg width="100%" height="100%" viewBox="0 0 390 844" preserveAspectRatio="xMidYMid meet">
         <Defs>
           {/* Vertical depth gradient for the B. Top edge a touch brighter
               than the base lime, bottom edge noticeably darker — mimics the

@@ -6,7 +6,7 @@ import { useRouter, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { usePollWhenFocused } from '@/src/hooks/usePollWhenFocused';
 import { useSwipeToDismiss } from '@/src/hooks/useSwipeToDismiss';
-import { RefreshCw, ShoppingBag, AlertTriangle, Clock, Zap } from 'lucide-react-native';
+import { ShoppingBag, AlertTriangle, Clock, Zap } from 'lucide-react-native';
 import { BarakeatErrorIcon } from '@/src/components/ui/BarakeatErrorIcon';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { isPickupExpiredInTz, getNowInBusinessTz, getBusinessDayDateStr, toBizDayMinutes } from '@/src/utils/timezone';
@@ -128,6 +128,39 @@ function CarouselBanner({ moneySaved, co2Saved, totalOrders, upcomingOrders, get
     let closest: any = null;
     let closestDiff = Infinity;
     for (const r of upcomingOrders) {
+      // ── Extension fast-path ─────────────────────────────────────────────
+      // An order whose pickup_extended_until is in the future is back on
+      // the customer's plate even though its original pickup window has
+      // already closed — without this branch the carousel would skip such
+      // an order entirely (the regular window check below `continue`s
+      // when `nowMinutes >= endMinutes`). Reuse the same biz-day-minute
+      // projection so the countdown reads in the same units as the
+      // ordinary path. displayMinutes = minutes from now → extension
+      // deadline; isActive=true so the banner uses the "closes in"
+      // wording and red-when-urgent treatment that already exists below
+      // for in-window orders.
+      const extRaw = (r as any).pickup_extended_until ?? (r as any).pickupExtendedUntil ?? null;
+      if (extRaw) {
+        const extMs = new Date(extRaw).getTime();
+        if (!isNaN(extMs) && extMs > Date.now()) {
+          const minutesLeft = Math.max(0, Math.ceil((extMs - Date.now()) / 60000));
+          if (minutesLeft < closestDiff) {
+            closestDiff = minutesLeft;
+            closest = {
+              reservation: r,
+              start: '',
+              end: '',
+              minutesLeft,
+              isActive: true,
+              // Flag consumed by the slide renderer so it can swap
+              // "Closes in" → "Extension expires in" without us having to
+              // string-match in the JSX.
+              isExtension: true,
+            };
+          }
+          continue; // extension takes precedence over the raw window
+        }
+      }
       const { start, end } = getPickupTimes(r);
       if (!start || !end) continue;
 
@@ -259,7 +292,15 @@ function CarouselBanner({ moneySaved, co2Saved, totalOrders, upcomingOrders, get
                 ...theme.typography.bodySm,
                 fontWeight: '600',
               }}>
-                {closestOrder.start} - {closestOrder.end}
+                {/* Extensions don't have a meaningful start-end window
+                    (the original window closed; we're counting down to
+                    pickup_extended_until). Show a "Délai prolongé" tag
+                    instead so the customer doesn't see a confusing
+                    "00:00 - 00:00" or stale window from before the
+                    extension. */}
+                {closestOrder.isExtension
+                  ? t('orders.extendedTag', { defaultValue: 'Étendu' })
+                  : `${closestOrder.start} - ${closestOrder.end}`}
               </Text>
               <Text style={{
                 color: isUrgent ? '#fff' : '#114b3c',
@@ -267,11 +308,13 @@ function CarouselBanner({ moneySaved, co2Saved, totalOrders, upcomingOrders, get
                 fontWeight: '700',
                 marginLeft: 'auto',
               }}>
-                {`${closestOrder.isActive
-                  ? t('orders.closesIn', { defaultValue: 'Ferme dans' })
-                  : t('orders.opensIn', { defaultValue: 'Ouvre dans' })} ${closestOrder.minutesLeft > 60
-                    ? `${Math.floor(closestOrder.minutesLeft / 60)}h ${closestOrder.minutesLeft % 60}m`
-                    : `${closestOrder.minutesLeft}m`}`}
+                {`${closestOrder.isExtension
+                  ? t('orders.extensionGranted', { defaultValue: 'Délai prolongé · expire dans' })
+                  : closestOrder.isActive
+                    ? t('orders.closesIn', { defaultValue: 'Ferme dans' })
+                    : t('orders.opensIn', { defaultValue: 'Ouvre dans' })} ${closestOrder.minutesLeft > 60
+                      ? `${Math.floor(closestOrder.minutesLeft / 60)}h ${closestOrder.minutesLeft % 60}m`
+                      : `${closestOrder.minutesLeft}m`}`}
               </Text>
             </View>
           </View>
@@ -712,6 +755,17 @@ export default function OrdersScreen() {
   // windows (e.g. 18:00 → 02:59) stay valid past midnight until the 03:30 reset.
   const isPickupExpiredCheck = useCallback((r: any) => {
     const rr = r as any;
+    // Pickup extension granted by a business member (POST
+    // /reservations/:id/extend-pickup) — while the deadline is still in the
+    // future, the order is intentionally re-active even though the original
+    // pickup window has passed. Customer's "En cours" tab must therefore
+    // treat it as NOT expired so it moves back out of "Problèmes" the
+    // moment the extension is granted.
+    const extUntil = rr.pickup_extended_until ?? rr.pickupExtendedUntil;
+    if (extUntil) {
+      const extMs = new Date(extUntil).getTime();
+      if (!isNaN(extMs) && extMs > Date.now()) return false;
+    }
     // Never expire a reservation created less than 5 minutes ago — short
     // grace for the racey case where the customer reserves at e.g. 18:01
     // for a 18:00-19:00 window and the very first card render computes
@@ -855,17 +909,54 @@ export default function OrdersScreen() {
         r.pickup_end_time
         ?? r.basket?.pickup_end_time
         ?? r.basket?.pickupWindow?.end
-        ?? '23:59';
-      if (dateBasis) {
+        ?? null;
+      // Cross-midnight pickup windows (e.g. 21:30 → 02:00 for an overnight
+      // bakery): the reservation_date holds the day pickup OPENS, while the
+      // end time belongs to the NEXT calendar day. Without this detection
+      // the synth concat lands at "today 02:00 AM" (many hours in the past
+      // of the actual expiry), so freshly-expired overnight orders sort
+      // below older ones and the user sees "il y a 2h" — even though the
+      // window only just closed. Same fix already applied in ReservationCard
+      // and the conversations partition isPickupOver().
+      const startTime =
+        r.pickup_start_time
+        ?? r.basket?.pickup_start_time
+        ?? r.basket?.pickupWindow?.start
+        ?? null;
+      if (dateBasis && endTime) {
         const datePart = String(dateBasis).substring(0, 10);
         const timePart = String(endTime).substring(0, 5);
-        const ts = new Date(`${datePart}T${timePart}:00`).getTime();
-        if (!isNaN(ts)) return ts;
+        let synth = new Date(`${datePart}T${timePart}:00`);
+        if (startTime) {
+          const startTimePart = String(startTime).substring(0, 5);
+          const startSynth = new Date(`${datePart}T${startTimePart}:00`);
+          if (!isNaN(startSynth.getTime()) && !isNaN(synth.getTime()) && synth.getTime() < startSynth.getTime()) {
+            synth = new Date(synth.getTime() + 24 * 60 * 60 * 1000);
+          }
+        }
+        if (!isNaN(synth.getTime())) {
+          // Synth landed in the FUTURE → backend data is inconsistent
+          // (pickup_end missing or a date mismatch produced a tomorrow
+          // timestamp). Fall through to updated_at / created_at rather
+          // than letting the future-dated synth float the row to the
+          // very top of the Problems tab when it actually expired hours
+          // ago and the user just opened the screen.
+          if (synth.getTime() <= Date.now()) return synth.getTime();
+        }
       }
     }
     if (status === 'collected' || status === 'completed' || status === 'picked_up' || status === 'cancelled' || status === 'expired') {
       const ts = r.updated_at ? new Date(r.updated_at).getTime() : NaN;
       if (!isNaN(ts)) return ts;
+    }
+    // For wall-clock-expired 'confirmed' rows whose synth fell through (no
+    // pickup_end_time / synth in the future), prefer updated_at if it's
+    // meaningfully later than created_at — bumped writes are the only
+    // post-creation signal we have. Otherwise fall back to created_at.
+    if (isExpired) {
+      const updMs = r.updated_at ? new Date(r.updated_at).getTime() : NaN;
+      const createdMs = r.created_at ? new Date(r.created_at).getTime() : 0;
+      if (!isNaN(updMs) && updMs > createdMs + 1000) return updMs;
     }
     const fallback = r.created_at ? new Date(r.created_at).getTime() : 0;
     return isNaN(fallback) ? 0 : fallback;
@@ -1178,35 +1269,28 @@ export default function OrdersScreen() {
       {/* Loading / error states render BEFORE the FlatList — the list
           shouldn't even mount during a cold fetch. Title stays visible
           in both branches so the screen never looks "blank" while a
-          spinner / retry button is up. */}
-      {reservationsQuery.isLoading && !reservationsQuery.data ? (
+          spinner / retry button is up.
+
+          ONE branch handles both isLoading and isError: DelayedLoader
+          plays the wave while the request is in flight, and the
+          `forceTimedOut` prop short-circuits it into its existing
+          "Chargement plus long que prévu" + Réessayer view the
+          instant React Query's `isError` flips. Previously the page
+          swapped to a separate "Une erreur est survenue" view on
+          error — that meant the user saw three states (wave → load-
+          slow message → error message) instead of two (wave → load-
+          slow message with retry). Routing the error through the
+          loader keeps the messaging consistent and adds a single
+          retry path. */}
+      {(reservationsQuery.isLoading || reservationsQuery.isError) && !reservationsQuery.data ? (
         <View style={[styles.content, { padding: theme.spacing.xl, paddingTop: 50 }]}>
           <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: theme.spacing.sm }}>
             <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h1 }]}>{t('orders.title')}</Text>
           </View>
-          <DelayedLoader />
-        </View>
-      ) : reservationsQuery.isError && !reservationsQuery.data ? (
-        <View style={[styles.content, { padding: theme.spacing.xl, paddingTop: 50 }]}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: theme.spacing.sm }}>
-            <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h1 }]}>{t('orders.title')}</Text>
-          </View>
-          <View style={styles.centerState}>
-            <Text style={[{ color: theme.colors.error, ...theme.typography.body, textAlign: 'center' as const, marginBottom: 16 }]}>
-              {t('common.errorOccurred')}
-            </Text>
-            <TouchableOpacity
-              onPress={() => reservationsQuery.refetch()}
-              style={[styles.retryButton, { backgroundColor: theme.colors.primary, borderRadius: theme.radii.r12 }]}
-              accessibilityLabel={t('common.retry')}
-              accessibilityRole="button"
-            >
-              <RefreshCw size={16} color="#fff" />
-              <Text style={[{ color: '#fff', ...theme.typography.bodySm, fontWeight: '600' as const, marginLeft: 8 }]}>
-                {t('common.retry')}
-              </Text>
-            </TouchableOpacity>
-          </View>
+          <DelayedLoader
+            onRetry={() => { void reservationsQuery.refetch(); }}
+            forceTimedOut={reservationsQuery.isError}
+          />
         </View>
       ) : (
         <Animated.FlatList
@@ -1526,18 +1610,6 @@ const styles = StyleSheet.create({
   tab: {},
   content: {
     flex: 1,
-  },
-  centerState: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingTop: 60,
-  },
-  retryButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingVertical: 12,
   },
   emptyState: {
     flex: 1,

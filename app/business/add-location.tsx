@@ -174,14 +174,17 @@ export default function AddLocationScreen() {
             onPress={() => mutation.mutate()}
             disabled={mutation.isPending || !canSubmit}
             style={{
-              backgroundColor: canSubmit ? '#114b3c' : theme.colors.muted,
+              backgroundColor: '#114b3c',
               borderRadius: 14, paddingVertical: 16, alignItems: 'center', marginTop: 24,
+              // Stay green when disabled — just faded (matches PrimaryCTAButton),
+              // instead of turning grey.
+              opacity: canSubmit ? 1 : 0.5,
             }}
           >
             {mutation.isPending ? (
-              <ActivityIndicator color="#e3ff5c" />
+              <ActivityIndicator color="#fff" />
             ) : (
-              <Text style={{ color: '#e3ff5c', fontWeight: '700', fontSize: 16 }}>
+              <Text style={{ color: '#fff', fontWeight: '700', fontSize: 16 }}>
                 {FeatureFlags.REQUIRE_LOCATION_APPROVAL
                   ? t('business.team.submitLocation', { defaultValue: 'Soumettre la demande' })
                   : t('business.team.addLocationBtn', { defaultValue: "Ajouter l'emplacement" })}

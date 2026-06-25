@@ -5,6 +5,7 @@ import { useTranslation } from "react-i18next";
 import { View, Text, TouchableOpacity, Animated, Dimensions, PanResponder, Modal, StyleSheet, ScrollView, useWindowDimensions, BackHandler, AppState, Platform } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter, useSegments } from "expo-router";
+import { resetStackTo } from "@/src/lib/navStack";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTheme } from "@/src/theme/ThemeProvider";
 import { getUnreadCount } from "@/src/services/notifications";
@@ -195,7 +196,7 @@ export default function BusinessTabLayout() {
     normalizedType === 'customer' || normalizedType === 'buyer';
   React.useEffect(() => {
     if (!isAuthenticated) {
-      router.replace('/auth/sign-in' as never);
+      resetStackTo(router, '/auth/sign-in');
     }
   }, [isAuthenticated]);
 
@@ -599,6 +600,23 @@ export default function BusinessTabLayout() {
     return total;
   }, [pendingCountByLocation, selectedLocationId]);
 
+  // Active orders in locations OTHER than the one currently being viewed.
+  // The badge is an at-a-glance "another venue needs attention" cue, so it
+  // deliberately EXCLUDES the selected location: if the only pending orders are
+  // for the venue you're already looking at, there's nothing to flag and the
+  // badge stays hidden. On the "Tous" view (selectedLocationId null) no
+  // location is excluded, so it sums every venue. Only ever rendered when
+  // canSwitchLocation is true (2+ locations).
+  const otherLocationsActiveOrders = React.useMemo(() => {
+    const selId = selectedLocationId != null ? Number(selectedLocationId) : null;
+    let total = 0;
+    for (const [lid, n] of pendingCountByLocation.entries()) {
+      if (selId != null && lid === selId) continue;
+      total += n;
+    }
+    return total;
+  }, [pendingCountByLocation, selectedLocationId]);
+
   React.useEffect(() => {
     Animated.spring(brandAnim, {
       toValue: 1,
@@ -651,6 +669,30 @@ export default function BusinessTabLayout() {
             {selectedLocationName}
           </Text>
           <ChevronDown size={13} color={theme.colors.textSecondary} />
+          {/* Red active-orders badge — same palette/typography as the bell
+              and chat badges, sat on the pill's top-right corner. Only shown
+              on the switchable pill (2+ locations); a single-location member
+              renders the static pill below, which never gets a badge. */}
+          {otherLocationsActiveOrders > 0 && (
+            <View style={{
+              position: 'absolute',
+              top: -6,
+              right: -6,
+              backgroundColor: theme.colors.error,
+              borderRadius: 9,
+              minWidth: 18,
+              height: 18,
+              justifyContent: 'center',
+              alignItems: 'center',
+              paddingHorizontal: 4,
+              borderWidth: 1.5,
+              borderColor: theme.colors.surface,
+            }}>
+              <Text style={{ color: '#fff', fontSize: 10, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
+                {otherLocationsActiveOrders > 99 ? '99+' : otherLocationsActiveOrders}
+              </Text>
+            </View>
+          )}
         </TouchableOpacity>
       ) : (
         // Static (non-tappable) pill — used when the user only has one

@@ -71,16 +71,27 @@ const OUT_H = Math.round((VIEWBOX_H / VIEWBOX_W) * OUT_W);
   const B_FONT_SIZE = 340 * S;
   const initialCy = CY - ABOVE;
 
-  // Centre the B's bounding box at (CX, CY). opentype.js draws from the
-  // baseline-left; SvgText with textAnchor="middle" + alignmentBaseline="central"
-  // centres by glyph bbox. Match that by measuring first, then re-drawing
-  // with a translation that puts the bbox centre on (CX, CY).
+  // Tiny per-renderer nudge — MUST stay in lockstep with B_NUDGE_X/Y in
+  // src/components/animations/BarakeatHaloSplash.tsx. Pushes the rendered
+  // B right-and-up by these viewBox units so the static PNG B lands at the
+  // same visual pixels as the live SVG B in the loading animation. Without
+  // this, the splash B sat very slightly left-and-down of the animation B
+  // — a 2-px misalignment visible at the native→JS handoff and reported
+  // as "the splash B isn't quite centered with the animation B".
+  const B_NUDGE_X = 2;
+  const B_NUDGE_Y = -2;
+
+  // Centre the B's bounding box at (CX + nudge, CY + nudge). opentype.js
+  // draws from the baseline-left; SvgText with textAnchor="middle" +
+  // alignmentBaseline="central" centres by glyph bbox. Match that by
+  // measuring first, then re-drawing with a translation that puts the
+  // bbox centre on the nudged target.
   const probe = font.getPath('B', 0, 0, B_FONT_SIZE);
   const bbox = probe.getBoundingBox();
   const bCx = (bbox.x1 + bbox.x2) / 2;
   const bCy = (bbox.y1 + bbox.y2) / 2;
-  const tx = CX - bCx;
-  const ty = CY - bCy;
+  const tx = (CX + B_NUDGE_X) - bCx;
+  const ty = (CY + B_NUDGE_Y) - bCy;
   const bPath = font.getPath('B', tx, ty, B_FONT_SIZE);
   const bPathData = bPath.toPathData();
 

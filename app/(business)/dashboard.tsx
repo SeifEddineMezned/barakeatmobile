@@ -337,6 +337,22 @@ export default function BusinessDashboard() {
     return map;
   }, [allLocationsTodayQuery.data]);
 
+  // Active orders in locations OTHER than the one currently being viewed —
+  // powers the red badge on the dashboard's location-switcher pill. Mirrors
+  // the global header pill in (business)/_layout: it EXCLUDES the selected
+  // location so the badge only flags when a venue you're NOT looking at has
+  // pending orders (sum of the others). On "Tous" (selectedLocationId null)
+  // nothing is excluded. Only rendered when canSwitchDashLocation is true.
+  const otherLocationsActiveOrders = React.useMemo(() => {
+    const selId = selectedLocationId != null ? Number(selectedLocationId) : null;
+    let total = 0;
+    for (const [lid, n] of pendingCountByLocation.entries()) {
+      if (selId != null && lid === selId) continue;
+      total += n;
+    }
+    return total;
+  }, [pendingCountByLocation, selectedLocationId]);
+
   const profileQuery = useQuery({
     queryKey: ['my-profile', selectedLocationId],
     queryFn: () => fetchMyProfile(selectedLocationId),
@@ -816,6 +832,29 @@ export default function BusinessDashboard() {
                 {selectedLocationName}
               </Text>
               <ChevronDown size={13} color={theme.colors.textSecondary} />
+              {/* Red active-orders badge — same palette/typography as the
+                  header bell badge, sat on the pill's top-right corner. Only
+                  on the switchable pill (2+ locations). */}
+              {otherLocationsActiveOrders > 0 && (
+                <View style={{
+                  position: 'absolute',
+                  top: -6,
+                  right: -6,
+                  backgroundColor: theme.colors.error,
+                  borderRadius: 9,
+                  minWidth: 18,
+                  height: 18,
+                  justifyContent: 'center',
+                  alignItems: 'center',
+                  paddingHorizontal: 4,
+                  borderWidth: 1.5,
+                  borderColor: theme.colors.surface,
+                }}>
+                  <Text style={{ color: '#fff', fontSize: 10, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
+                    {otherLocationsActiveOrders > 99 ? '99+' : otherLocationsActiveOrders}
+                  </Text>
+                </View>
+              )}
             </TouchableOpacity>
           ) : (
             <View style={{ backgroundColor: theme.colors.surface, borderRadius: 20, paddingHorizontal: 12, paddingVertical: 8, flexDirection: 'row', alignItems: 'center', gap: 6, ...theme.shadows.shadowMd, maxWidth: 240 }}>
@@ -1756,31 +1795,11 @@ export default function BusinessDashboard() {
                   >
                     {t('business.allLocations', { defaultValue: 'Tous les emplacements' })}
                   </Text>
-                  {/* Sum of pending orders across every location. Same
-                      cache the nav-bar badge reads from, so this
-                      number is guaranteed to match whatever the badge
-                      shows when the user is on the dashboard's
-                      "Tous" view. Replaces the old "this row is
-                      selected" check (the row's tinted background
-                      already conveys selection). */}
-                  {(() => {
-                    let total = 0;
-                    for (const n of pendingCountByLocation.values()) total += n;
-                    return total > 0 ? (
-                      <View style={{
-                        minWidth: 24, height: 24,
-                        borderRadius: 12,
-                        backgroundColor: theme.colors.primary,
-                        paddingHorizontal: 7,
-                        justifyContent: 'center',
-                        alignItems: 'center',
-                      }}>
-                        <Text style={{ color: '#fff', fontSize: 11, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
-                          {total}
-                        </Text>
-                      </View>
-                    ) : null;
-                  })()}
+                  {/* No order-count chip on the "Tous les emplacements" row —
+                      the aggregate total lives on the header pill badge; inside
+                      the dropdown the count chips are reserved for the specific
+                      locations so each row points at one venue's workload. The
+                      tinted background already conveys selection. */}
                 </TouchableOpacity>
               )}
 

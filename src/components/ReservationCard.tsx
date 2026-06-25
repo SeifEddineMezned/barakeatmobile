@@ -38,7 +38,7 @@ function timeAgo(dateStr: string | null | undefined, t: (key: string, opts?: Rec
   const then = new Date(dateStr).getTime();
   if (!Number.isFinite(then)) return '';
   const diff = Math.floor((Date.now() - then) / 1000);
-  if (diff < 60) return t('timeAgo.seconds', { count: Math.max(diff, 0) });
+  if (diff < 60) return t('timeAgo.justNow', { defaultValue: "À l'instant" });
   if (diff < 3600) return t('timeAgo.minutes', { count: Math.floor(diff / 60) });
   if (diff < 86400) return t('timeAgo.hours', { count: Math.floor(diff / 3600) });
   const days = Math.floor(diff / 86400);
@@ -313,6 +313,38 @@ export const ReservationCard = React.memo(function ReservationCard({ reservation
 
   const pickupInfo = (() => {
     if (!isUpcoming || !pickupWindow) return null;
+    // ── Extension override ─────────────────────────────────────────────
+    // When the merchant has granted a pickup extension on a previously
+    // expired order (POST /reservations/:id/extend-pickup → sets
+    // pickup_extended_until), the regular "opens in" / "ends in"
+    // countdown is meaningless — it would re-compute against the ORIGINAL
+    // pickup_end (in the past) and read either "Pickup ended" or
+    // negative time. Replace the pill with an extension countdown that
+    // ticks down to pickup_extended_until, so the customer can see
+    // exactly how long they have to come collect their order. Read both
+    // snake_case and camelCase since the column comes through verbatim
+    // from /my/reservations.
+    const extRaw = (r as any).pickup_extended_until
+      ?? (r as any).pickupExtendedUntil
+      ?? null;
+    if (extRaw) {
+      const extMs = new Date(extRaw).getTime();
+      if (!isNaN(extMs) && extMs > Date.now()) {
+        const diffMs = extMs - Date.now();
+        const totalMin = Math.max(0, Math.ceil(diffMs / 60000));
+        const h = Math.floor(totalMin / 60);
+        const m = totalMin % 60;
+        const timeStr = h > 0 ? `${h}h ${m}m` : `${totalMin}m`;
+        return {
+          label: t('orders.extensionGranted', { defaultValue: 'Délai prolongé · expire dans' }),
+          time: timeStr,
+          // Warm-accent (orange-ish) draws the eye without flashing red —
+          // this is a positive state (the merchant gave you more time),
+          // but still time-sensitive.
+          color: totalMin < 5 ? theme.colors.error : theme.colors.accentWarm,
+        };
+      }
+    }
     const [sh, sm] = (pickupWindow.start ?? '').split(':').map(Number);
     const [eh, em] = (pickupWindow.end ?? '').split(':').map(Number);
     if (isNaN(sh) || isNaN(eh)) return null;
@@ -613,10 +645,36 @@ export const ReservationCard = React.memo(function ReservationCard({ reservation
                     ?? (basket as any)?.pickup_end_time
                     ?? (r.basket?.pickupWindow as any)?.end
                     ?? null;
+                  // pickup_start_time is read so the cross-midnight check
+                  // below can detect overnight pickup windows (end < start
+                  // on the wall clock means the end belongs to the NEXT
+                  // calendar day relative to the reservation_date). Without
+                  // this, an order with pickup 21:30 to 02:00 — or 10:59 to
+                  // 00:00 — synthesises the expiry as TODAY 02:00 AM or
+                  // TODAY 00:00 (i.e. midnight at the START of today),
+                  // which is many hours in the past and produces the
+                  // "just expired but card says 19h ago" symptom.
+                  const startTime =
+                    (r.pickup_start_time as string | undefined)
+                    ?? (basket as any)?.pickup_start_time
+                    ?? (r.basket?.pickupWindow as any)?.start
+                    ?? null;
                   if (dateBasis && endTime) {
                     const datePart = String(dateBasis).substring(0, 10);
                     const timePart = String(endTime).substring(0, 5);
-                    const synth = new Date(`${datePart}T${timePart}:00`);
+                    let synth = new Date(`${datePart}T${timePart}:00`);
+                    // Cross-midnight pickup window: if the end time is
+                    // earlier on the clock than the start time, the end
+                    // actually belongs to the NEXT calendar day. Add 24h
+                    // so the synth lands on the real expiry instant, not
+                    // a day before it.
+                    if (startTime) {
+                      const startTimePart = String(startTime).substring(0, 5);
+                      const startSynth = new Date(`${datePart}T${startTimePart}:00`);
+                      if (!isNaN(startSynth.getTime()) && !isNaN(synth.getTime()) && synth.getTime() < startSynth.getTime()) {
+                        synth = new Date(synth.getTime() + 24 * 60 * 60 * 1000);
+                      }
+                    }
                     if (!isNaN(synth.getTime()) && synth.getTime() <= Date.now()) {
                       evTime = synth.toISOString();
                       resolved = true;
@@ -1035,17 +1093,33 @@ export const ReservationCard = React.memo(function ReservationCard({ reservation
                   </View>
                 );
               })()}
-              {/* Row 3: Pickup time */}
-              {pickupWindow && (
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 8, borderTopWidth: 1, borderTopColor: theme.colors.divider }}>
-                  <View style={{ width: 30, height: 30, borderRadius: 15, backgroundColor: '#114b3c', justifyContent: 'center', alignItems: 'center' }}>
-                    <Clock size={13} color="#e3ff5c" />
+              {/* Row 3: Pickup time. Shows the basket's original window;
+                  when the merchant granted an extension on this order the
+                  row is tagged "(Étendu)" so the customer remembers their
+                  effective deadline is later than this raw window — the
+                  live pill at the top of the card carries the actual
+                  countdown to the extended deadline. */}
+              {pickupWindow && (() => {
+                const extRaw = (r as any).pickup_extended_until
+                  ?? (r as any).pickupExtendedUntil
+                  ?? null;
+                const isExtended = !!extRaw;
+                return (
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 8, borderTopWidth: 1, borderTopColor: theme.colors.divider }}>
+                    <View style={{ width: 30, height: 30, borderRadius: 15, backgroundColor: '#114b3c', justifyContent: 'center', alignItems: 'center' }}>
+                      <Clock size={13} color="#e3ff5c" />
+                    </View>
+                    <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '600', flex: 1 }}>
+                      {t('notifications.pickupAt', { defaultValue: 'Retrait' })} : {pickupWindow.start} - {pickupWindow.end}
+                      {isExtended ? (
+                        <Text style={{ color: theme.colors.accentWarm, fontWeight: '700' }}>
+                          {' '}({t('orders.extendedTag', { defaultValue: 'Étendu' })})
+                        </Text>
+                      ) : null}
+                    </Text>
                   </View>
-                  <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '600', flex: 1 }}>
-                    {t('notifications.pickupAt', { defaultValue: 'Retrait' })} : {pickupWindow.start} - {pickupWindow.end}
-                  </Text>
-                </View>
-              )}
+                );
+              })()}
             </View>
             )}
 
@@ -1095,35 +1169,27 @@ export const ReservationCard = React.memo(function ReservationCard({ reservation
             {/* Footer: review (past) + cancel (upcoming) */}
             <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 10 }}>
               <View style={{ flexDirection: 'row', gap: 8, flex: 1, justifyContent: 'flex-end' }}>
-                {/* Report + Review action pair. Both are now matching
-                    outlined pills — flat surface, 1 px hairline border,
-                    icon + label. The previous design had Report as a
-                    thin ghost button and Review as a solid orange filled
-                    button, which read as the "obvious bot-generated
-                    flagship CTA" the user flagged. Treating them as
-                    siblings (same shape, different accent) makes the
-                    surface feel hand-tuned. Report keeps a neutral
-                    border; Review's border + icon + label flip to the
-                    accent so it still pulls more attention as the
-                    primary post-pickup ask. */}
+                {/* Review = the single prominent CTA (filled star, accent
+                    pill). Report is demoted to a quiet inline "Un problème ?
+                    Signaler" text link so the footer no longer reads as two
+                    competing flagship buttons — but reporting stays directly
+                    reachable, and (unlike the review pill, which the
+                    !hasReview gate removes) the link persists even AFTER a
+                    review exists, so a customer who rated and THEN hit a
+                    problem can still report. Both vanish once a claim is
+                    filed (hasReport). */}
                 {isPast && !hasReport && (
                   <TouchableOpacity
                     onPress={() => router.push({ pathname: '/claim', params: { reservationId: String(reservation.id), locationName: merchantName, basketName: basketTypeName } } as never)}
-                    style={{
-                      borderRadius: 10,
-                      paddingHorizontal: 14,
-                      paddingVertical: 9,
-                      flexDirection: 'row',
-                      alignItems: 'center',
-                      gap: 6,
-                      borderWidth: 1,
-                      borderColor: theme.colors.divider,
-                      backgroundColor: theme.colors.surface,
-                    }}
+                    hitSlop={{ top: 8, bottom: 8, left: 4, right: 8 }}
+                    style={{ flexDirection: 'row', alignItems: 'center', gap: 5, paddingVertical: 9, paddingHorizontal: 4 }}
                   >
-                    <FlagIcon8 size={13} tintColor={theme.colors.textSecondary} />
-                    <Text style={{ color: theme.colors.textSecondary, fontSize: 13, fontWeight: '600' as const, fontFamily: 'Poppins_600SemiBold' }}>
-                      {t('orders.reportIssue', { defaultValue: 'Signaler' })}
+                    <FlagIcon8 size={12} tintColor={theme.colors.textSecondary} />
+                    <Text style={{ color: theme.colors.textSecondary, fontSize: 12, fontWeight: '500' as const, fontFamily: 'Poppins_500Medium' }}>
+                      {t('orders.reportPrompt', { defaultValue: 'Un problème ?' })}{' '}
+                      <Text style={{ color: theme.colors.textPrimary, fontWeight: '700' as const, fontFamily: 'Poppins_700Bold', textDecorationLine: 'underline' }}>
+                        {t('orders.reportIssue', { defaultValue: 'Signaler' })}
+                      </Text>
                     </Text>
                   </TouchableOpacity>
                 )}
@@ -1145,7 +1211,7 @@ export const ReservationCard = React.memo(function ReservationCard({ reservation
                       backgroundColor: theme.colors.primary + '0E',
                     }}
                   >
-                    <Star size={13} color={theme.colors.primary} />
+                    <Star size={13} color={theme.colors.primary} fill={theme.colors.primary} />
                     <Text style={{ color: theme.colors.primary, fontSize: 13, fontWeight: '600' as const, fontFamily: 'Poppins_600SemiBold' }}>
                       {t('orders.leaveReview')}
                     </Text>

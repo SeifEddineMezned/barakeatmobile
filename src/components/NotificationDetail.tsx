@@ -3,9 +3,9 @@
  * and the in-app popup overlay. Renders the exact same UI in both places.
  */
 import React from 'react';
-import { View, Text, TouchableOpacity, ScrollView, Image, Linking, useWindowDimensions } from 'react-native';
+import { View, Text, TouchableOpacity, ScrollView, Image, Linking, useWindowDimensions, ActivityIndicator } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { ShoppingBag, Star, XCircle, Bell, CheckCircle, Clock, MapPin, Navigation, User, MessageCircle, Zap, Flame, X as XIcon, Banknote, CreditCard, Info } from 'lucide-react-native';
+import { ShoppingBag, Star, XCircle, Bell, CheckCircle, Clock, MapPin, Navigation, User, MessageCircle, Zap, Flame, X as XIcon, Banknote, CreditCard, Info, QrCode } from 'lucide-react-native';
 import { PaperSurface } from '@/src/components/ui/PaperSurface';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { NotificationFromAPI } from '@/src/services/notifications';
@@ -86,7 +86,9 @@ function timeAgo(dateStr: string, t: any): string {
   const now = Date.now();
   const then = new Date(dateStr).getTime();
   const diff = Math.floor((now - then) / 1000);
-  if (diff < 60) return t('timeAgo.seconds', { count: diff });
+  // Under a minute reads "À l'instant" on the popup (this component) — the
+  // notifications-LIST cards keep their own timeAgo (seconds) in notifications.tsx.
+  if (diff < 60) return t('timeAgo.justNow', { defaultValue: "À l'instant" });
   if (diff < 3600) return t('timeAgo.minutes', { count: Math.floor(diff / 60) });
   if (diff < 86400) return t('timeAgo.hours', { count: Math.floor(diff / 3600) });
   const days = Math.floor(diff / 86400);
@@ -140,19 +142,16 @@ interface NotificationDetailProps {
 }
 
 export function NotificationDetail({ notif, theme, t, isBusiness, onClose, onAction, outerReservedHeight = 0, demoHighlightAction, topRightAction }: NotificationDetailProps) {
-  const { Icon, color } = getNotifIcon(notif.type, notif.title);
+  const { Icon } = getNotifIcon(notif.type, notif.title);
   const queryClient = useQueryClient();
-  // Screen-aware scroll height for the body. Reserve the card chrome (header +
-  // action button + paddings ~150 px), the safe-area insets, plus headroom for
-  // the in-app popup's extra chrome (the demo "Voir la commande" banner /
-  // carousel indicator that can sit above the card, ~70 px) and a little screen
-  // breathing room — so the WHOLE popup always fits on screen and the content
-  // scrolls inside the body instead of the card overflowing and clipping the
-  // bottom / action button (the cut-off the user hit on the new-reservation
-  // popup). Floor at 160 so the body is always usable on tiny screens.
+  // Cap the WHOLE popup card so the inner ScrollView (declared below
+  // with flex shrink + minHeight 0) reliably absorbs the overflow. See
+  // popupMaxHeight on the PaperSurface around line 559 for the rationale
+  // — the old per-ScrollView maxHeight setup left the parent View free
+  // to grow past the screen for the longer business notif types
+  // (new_reservation, basket_picked_up) and the body refused to scroll.
   const { height: winHeight } = useWindowDimensions();
   const insets = useSafeAreaInsets();
-  const bodyMaxHeight = Math.max(140, winHeight - insets.top - insets.bottom - 250 - outerReservedHeight);
   const notifType = notif.type ?? '';
   const titleStr = notif.title ?? '';
   // Some backends route the discriminator through the message JSON's `key`
@@ -169,6 +168,28 @@ export function NotificationDetail({ notif, theme, t, isBusiness, onClose, onAct
   const typeBlob = `${notifType} ${titleStr} ${msgKey}`.toLowerCase();
   const isNewReservation = typeBlob.includes('new_reservation') || typeBlob.includes('order_confirmed');
   const isCancelled = typeBlob.includes('cancelled');
+  // Order expired (cron-flipped, not a deliberate cancel). Carries the
+  // pickup code + reservation_id in params so the popup can flash a "if
+  // you're really close, here's your code and QR — try the venue" panel
+  // that the customer can show at the counter (the merchant can still
+  // confirm late via the scan-qr override). The flag is intentionally
+  // matched on the notif key / type and NOT just typeBlob.includes
+  // ('expired') so a future "subscription_expired" / "code_expired" etc.
+  // doesn't accidentally route here.
+  const isOrderExpired = notifType === 'order_expired'
+    || msgKey === 'notif_message_order_expired'
+    || typeBlob.includes('order_expired');
+  // Pickup-window-edge customer notifs (~1h-before-start reminder, ~1h-
+  // before-end last call, merchant-granted extension). They all render
+  // through the generic detail-rows fallback below. The popup's org
+  // header already shows "{Org} - {Location}" at the top, so the
+  // "Commerce: …" row inside the detail card is a duplicate for these
+  // three types — hidden via this flag. If no quantity is in the params
+  // (the cron only sends location + time for these), the row swaps to a
+  // "Quantité: 1" line so the slot doesn't go empty.
+  const isPickupWindowEdgeNotif = typeBlob.includes('pickup_reminder')
+    || typeBlob.includes('pickup_closing')
+    || typeBlob.includes('pickup_extended');
   const isReview = typeBlob.includes('review');
   const isPickupConfirmed =
     typeBlob.includes('pickup_confirmed')
@@ -416,8 +437,46 @@ export function NotificationDetail({ notif, theme, t, isBusiness, onClose, onAct
   const organizationQuery = useQuery({
     queryKey: ['organization', orgId],
     queryFn: () => fetchOrganization(String(orgId)),
-    enabled: orgId != null,
+    // `/api/teams/organizations/:id` is membership-gated — only org
+    // members can hit it. The customer's account is NEVER a member of a
+    // partner org, so firing this for them produces the noisy
+    //   [API] Error: 403 Not a member of this organization
+    //   /api/teams/organizations/<id>
+    // line on EVERY notif popup open. The customer surface already has
+    // two safer fallbacks for the org logo + name — msgParams.org_*
+    // (the cron writes those into the notif body for every modern type)
+    // and locationQuery.data?.org_name (public /api/locations row) —
+    // so skipping the teams call costs nothing visually. Gated to
+    // business recipients, who genuinely need the canonical org record
+    // for surfaces that show team-only fields.
+    enabled: orgId != null && !!isBusiness,
     staleTime: 5 * 60_000,
+  });
+  // QR code for order_expired notifications. Lazy-fetched per reservation
+  // so the QR only renders for expired orders (gated by isOrderExpired
+  // via enabled below). Cached 5 min so reopening the popup doesn't refetch.
+  // The backend returns a data-URL string; <Image source={{uri}}> renders
+  // it directly.
+  //
+  // qrExpanded mirrors the ReservationCard pattern — the QR isn't shown
+  // upfront; instead the customer taps a small QrCode button next to the
+  // pickup code text and the image expands inline. Both sides (popup and
+  // bell-list detail) share this state so the customer's choice persists
+  // as the popup re-renders on other re-fetches.
+  const qrReservationId = notif.reference_id ?? null;
+  const [qrExpanded, setQrExpanded] = React.useState(false);
+  const qrQuery = useQuery({
+    // Only fetch once the user actually wants to see the QR — keeps the
+    // popup-open round-trip light for the common "I just saw the push
+    // and dismissed it" path.
+    queryKey: ['notif-qr', qrReservationId],
+    queryFn: async () => {
+      const { fetchReservationQRCode } = require('@/src/services/reservations');
+      return fetchReservationQRCode(String(qrReservationId));
+    },
+    enabled: isOrderExpired && qrExpanded && qrReservationId != null,
+    staleTime: 5 * 60_000,
+    retry: 1,
   });
   // Prefer the ORG logo (brand identity). Backend-provided org_logo_url wins
   // because it has no query latency — the chained location/org lookups stay as
@@ -494,15 +553,27 @@ export function NotificationDetail({ notif, theme, t, isBusiness, onClose, onAct
     );
   };
 
+  // Hard upper bound on the WHOLE popup card (title bar + scrollable body
+  // + action button). Without this cap the PaperSurface would grow to fit
+  // the natural body height and could exceed the screen — exactly what
+  // the business new_reservation case was hitting: 6+ rows in the order
+  // card, the Combined Paiement block, pickup time, address row,
+  // generic detail rows + action button push the natural height past a
+  // typical phone's available vertical space, and the inner ScrollView's
+  // `maxHeight` alone couldn't pull the parent down. Capping the
+  // PaperSurface here AND letting the inner ScrollView take flex: 1
+  // (below) makes the body shrink to whatever room is left and scroll
+  // reliably regardless of how much content the type renders.
+  const popupMaxHeight = Math.max(280, winHeight - insets.top - insets.bottom - 24 - outerReservedHeight);
   return (
-    <PaperSurface radius={20} style={{ width: '100%', maxWidth: 420, borderWidth: 0, overflow: 'hidden', borderLeftWidth: 4, borderLeftColor: color }}>
-      {/* The card's actual LEFT BORDER is thickened and tinted by notification
-          type (no overlay strip) so the type signal reads as part of the popup
-          frame rather than a line floating on top of it. The default 1 px
-          paper border is dropped (borderWidth: 0) and the surface is clipped
-          (overflow: 'hidden') so the brand-green title bar reaches the actual
-          top edge of the card — without this, a thin sliver of the paper
-          gradient was visible above the green band. */}
+    <PaperSurface radius={20} style={{ width: '100%', maxWidth: 420, maxHeight: popupMaxHeight, borderWidth: 0, overflow: 'hidden' }}>
+      {/* No type-tinted left border on the popup — the colored left accent is
+          kept only on the notifications-LIST card rows (notifications.tsx),
+          which carry their own strip. Here the default 1 px paper border is
+          dropped (borderWidth: 0) and the surface is clipped (overflow:
+          'hidden') so the brand-green title bar reaches the actual top edge of
+          the card — without this, a thin sliver of the paper gradient was
+          visible above the green band. */}
       {/* Header — everything on ONE centered line so the type logo (left),
           title, the relative time, the optional bell shortcut, and the close
           button all align vertically. The time sits inline before the action
@@ -557,18 +628,40 @@ export function NotificationDetail({ notif, theme, t, isBusiness, onClose, onAct
         </View>
       </View>
 
-      <View style={{ paddingHorizontal: 20, paddingTop: 16, paddingBottom: 20 }}>
-        <ScrollView showsVerticalScrollIndicator={true} style={{ maxHeight: bodyMaxHeight }} contentContainerStyle={{ paddingBottom: 0 }}>
+      {/* flexShrink: 1 + minHeight: 0 are the React Native incantation
+          that lets this wrapper actually shrink inside the capped
+          PaperSurface. Without minHeight: 0 the wrapper's intrinsic
+          content size wins on iOS and the ScrollView grows to fit its
+          children rather than scrolling. */}
+      <View style={{ paddingHorizontal: 20, paddingTop: 16, paddingBottom: 20, flexShrink: 1, minHeight: 0 }}>
+        <ScrollView
+          showsVerticalScrollIndicator={true}
+          // flexShrink: 1 + minHeight: 0 again — same reason as the
+          // wrapper above. We removed the old `maxHeight: bodyMaxHeight`
+          // because the popup-level cap now drives the available space:
+          // the ScrollView simply takes whatever's left after the
+          // title bar + action button.
+          style={{ flexShrink: 1, minHeight: 0 }}
+          // Android needs nestedScrollEnabled on inner ScrollViews
+          // sitting under any Animated.View / responder wrapper, or the
+          // outer view eats the scroll-start gesture and the body
+          // refuses to scroll. iOS handles this automatically; setting
+          // it on both is harmless.
+          nestedScrollEnabled
+          contentContainerStyle={{ paddingBottom: 0 }}
+        >
           {/* Org-branding header (org logo + name + location) at the very top
               of every customer popup. Customer-only; returns null when there's
               no org context. */}
           {renderOrgHeader()}
 
           {/* Top image header — only rendered for the legacy "other" types
-              (review, message, etc.). New-reservation, cancellation, and
-              pickup-confirmed each render their own basket-centric image
-              inside their respective body blocks below. */}
-          {(locationImage || basketImage) && !isPickupConfirmed && !isCancelled && !isNewReservation ? (
+              (review, message, etc.). New-reservation, cancellation,
+              pickup-confirmed, and order-expired each render their own
+              basket-centric image inside their respective body blocks
+              below, so excluding them here keeps the basket image from
+              appearing twice in the same popup. */}
+          {(locationImage || basketImage) && !isPickupConfirmed && !isCancelled && !isNewReservation && !isOrderExpired ? (
             <View style={{ flexDirection: 'row', gap: 12, marginBottom: 16, justifyContent: 'center' }}>
               {locationImage ? <Image source={{ uri: locationImage }} style={{ width: 70, height: 70, borderRadius: 14, borderWidth: 1, borderColor: theme.colors.divider }} resizeMode="cover" /> : null}
               {basketImage && basketImage !== locationImage ? <Image source={{ uri: basketImage }} style={{ width: 70, height: 70, borderRadius: 14, borderWidth: 1, borderColor: theme.colors.divider }} resizeMode="cover" /> : null}
@@ -584,6 +677,20 @@ export function NotificationDetail({ notif, theme, t, isBusiness, onClose, onAct
               resizeMode="cover"
             />
           ) : null}
+
+          {/* Order-summary card for order_expired — same horizontal layout
+              ("Retrait confirmé" / cancelled use it too): basket image on
+              the LEFT, basket name + qty × price on the right. Replaces
+              the old vertical detail-rows block at this position so the
+              expiry notif visually matches the other lifecycle popups.
+              Border is the warm-orange used for the expiry tone (mirrors
+              the orange hint and the "Expiré" badge elsewhere) instead of
+              the green tint pickup-confirmed uses or the red cancelled
+              uses. The bottom generic block continues to skip
+              order_expired so the same content can't render twice. */}
+          {isOrderExpired && !isBusiness && (basketName || locationName || customerName || qty || price)
+            ? renderOrderSummary('#ee7b3c66')
+            : null}
 
           {/* Message — rendered for every type EXCEPT the customer-side
               pickup_confirmed, which uses its own "How was your experience?"
@@ -800,6 +907,60 @@ export function NotificationDetail({ notif, theme, t, isBusiness, onClose, onAct
             </Text>
           ) : null}
 
+          {/* Order-expired panel — warning text + pickup code (big) + QR
+              code (fetched on demand by qrQuery). Customer can show this
+              at the counter if they get there minutes late; the merchant
+              CAN still confirm via the scan-qr "Confirmer malgré le
+              retard" override, but is not obligated to. Renders ONLY on
+              the customer side; a business-side recipient would never get
+              this type. */}
+          {isOrderExpired && !isBusiness ? (
+            <View style={{ marginBottom: 16 }}>
+              <View style={{ backgroundColor: '#fff4e6', borderRadius: 12, padding: 14, marginBottom: 12, borderLeftWidth: 3, borderLeftColor: '#ee7b3c' }}>
+                <Text style={{ color: '#7a3b0c', ...theme.typography.bodySm, lineHeight: 20 }}>
+                  {t('notifications.orderExpiredHint', {
+                    defaultValue: "Si vous êtes très proche, présentez votre code et votre QR au commerçant. Il peut encore confirmer le retrait s'il le souhaite — mais il n'est plus tenu de vous remettre le panier.",
+                  })}
+                </Text>
+              </View>
+              {/* Pickup code box with inline QR toggle — mirrors the
+                  ReservationCard pattern (code on the left, small QR
+                  button on the right). Tapping the button lazy-fetches
+                  the QR; on success the image collapses in below the
+                  code so the customer can flash it at the counter. The
+                  loading spinner replaces the icon while the fetch is in
+                  flight so the user gets feedback. */}
+              {pickupCode ? (
+                <View style={{ backgroundColor: '#114b3c', borderRadius: 16, padding: 18, marginBottom: 12, alignItems: 'center' }}>
+                  <Text style={{ color: 'rgba(255,255,255,0.6)', ...theme.typography.caption, marginBottom: 6 }}>
+                    {t('reserve.success.pickupCode', { defaultValue: 'Code de retrait' })}
+                  </Text>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                    <Text style={{ color: '#e3ff5c', fontSize: 28, fontFamily: 'Poppins_700Bold', letterSpacing: 6 }}>{pickupCode}</Text>
+                    {qrReservationId != null ? (
+                      <TouchableOpacity
+                        onPress={() => setQrExpanded((v) => !v)}
+                        style={{ backgroundColor: 'rgba(255,255,255,0.15)', borderRadius: 10, padding: 8 }}
+                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                      >
+                        {qrQuery.isLoading
+                          ? <ActivityIndicator size="small" color="#fff" />
+                          : <QrCode size={18} color="#fff" />}
+                      </TouchableOpacity>
+                    ) : null}
+                  </View>
+                  {qrExpanded && qrQuery.data ? (
+                    <Image
+                      source={{ uri: qrQuery.data as string }}
+                      style={{ width: 180, height: 180, borderRadius: 8, marginTop: 14, backgroundColor: '#fff' }}
+                      resizeMode="contain"
+                    />
+                  ) : null}
+                </View>
+              ) : null}
+            </View>
+          ) : null}
+
           {/* Pickup confirmed / basket picked up — rich summary card.
                 Customer ("Retrait confirmé"): "Bravo !" text ABOVE the order
                   summary card (the two were switched on request), then the
@@ -856,8 +1017,14 @@ export function NotificationDetail({ notif, theme, t, isBusiness, onClose, onAct
             </View>
           )}
 
-          {/* Generic detail rows — for types not covered above */}
-          {!isNewReservation && !isReview && !isMessage && !isPickupConfirmed && !isCancelled && !isStreakExpiring && (basketName || locationName || customerName || qty || price) ? (
+          {/* Generic detail rows — for types not covered above. Skips
+              order_expired because we render the same content higher up
+              (right under the basket image) for that flow.
+              For pickup-window-edge notifs (reminder / closing / extended)
+              the Commerce row is suppressed (the org header at the top
+              already shows the venue) and the qty row falls back to "1"
+              when missing — see isPickupWindowEdgeNotif above. */}
+          {!isNewReservation && !isReview && !isMessage && !isPickupConfirmed && !isCancelled && !isStreakExpiring && !isOrderExpired && (basketName || locationName || customerName || qty || price || isPickupWindowEdgeNotif) ? (
             <View style={{ backgroundColor: theme.colors.bg, borderRadius: 14, padding: 16, marginBottom: 16, gap: 12, borderWidth: 1, borderColor: theme.colors.border }}>
               {basketName ? (
                 <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -865,7 +1032,7 @@ export function NotificationDetail({ notif, theme, t, isBusiness, onClose, onAct
                   <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '600', flex: 2, textAlign: 'right' }} numberOfLines={1}>{basketName}</Text>
                 </View>
               ) : null}
-              {(orgLocationLabel || locationName) ? (
+              {!isPickupWindowEdgeNotif && (orgLocationLabel || locationName) ? (
                 <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
                   <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, flex: 1 }}>{t('notifications.location', { defaultValue: 'Commerce' })}</Text>
                   <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '600', flex: 2, textAlign: 'right' }} numberOfLines={1}>{orgLocationLabel || locationName}</Text>
@@ -877,10 +1044,22 @@ export function NotificationDetail({ notif, theme, t, isBusiness, onClose, onAct
                   <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '600', flex: 2, textAlign: 'right' }}>{customerName}</Text>
                 </View>
               ) : null}
+              {/* Quantity row — shows the data's qty when present.
+                  Pickup-window-edge notifs don't ship qty (cron only
+                  sends location + time), but we still want a Quantité
+                  row in the card so the slot left by the hidden Commerce
+                  row reads as a real order detail. Default to 1 which is
+                  the dominant case (one-basket reservations); if the
+                  customer ordered more, the original qty row above wins. */}
               {qty ? (
                 <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
                   <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, flex: 1 }}>{t('notifications.quantity', { defaultValue: 'Quantité' })}</Text>
                   <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '600', flex: 2, textAlign: 'right' }}>{qty}</Text>
+                </View>
+              ) : isPickupWindowEdgeNotif ? (
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, flex: 1 }}>{t('notifications.quantity', { defaultValue: 'Quantité' })}</Text>
+                  <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '600', flex: 2, textAlign: 'right' }}>1</Text>
                 </View>
               ) : null}
               {price ? (

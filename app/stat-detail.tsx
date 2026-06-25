@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react';
-import { View, Text, FlatList, TouchableOpacity } from 'react-native';
+import { View, Text, FlatList, TouchableOpacity, Image } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
@@ -40,14 +40,28 @@ export default function StatDetailScreen() {
 
   const title = t('profile.businessesTried', { defaultValue: 'Commerces essayés' });
 
-  // Distinct restaurants ranked by order count.
+  // Distinct restaurants ranked by order count. The logo is read from the
+  // /my/reservations response — restaurant_image is the org's logo
+  // (= o.image_url JOIN). The older chained reads on the popup were
+  // never matching so the icon kept falling back to the green Store —
+  // include the actual field here so the row renders the brand logo.
   const listData = useMemo(() => {
-    const spotMap = new Map<string, { name: string; count: number }>();
+    const spotMap = new Map<string, { name: string; logo?: string | null; count: number }>();
     completed.forEach((r: any) => {
       const name = r.restaurant_name ?? r.restaurant?.name ?? r.basket?.merchantName ?? '';
       if (!name) return;
+      const logo = r.restaurant_image
+        ?? r.restaurant?.image_url
+        ?? r.org_image_url
+        ?? r.basket?.merchantLogo
+        ?? null;
       const existing = spotMap.get(name);
-      if (existing) { existing.count += 1; } else { spotMap.set(name, { name, count: 1 }); }
+      if (existing) {
+        existing.count += 1;
+        if (!existing.logo && logo) existing.logo = logo;
+      } else {
+        spotMap.set(name, { name, logo, count: 1 });
+      }
     });
     return Array.from(spotMap.values()).sort((a, b) => b.count - a.count).map((s, i) => ({ id: String(i), ...s }));
   }, [completed]);
@@ -112,9 +126,16 @@ export default function StatDetailScreen() {
         keyExtractor={(item) => item.id}
         renderItem={({ item }) => (
           <View style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 14, paddingHorizontal: 20, borderBottomWidth: 1, borderBottomColor: theme.colors.divider }}>
-            <View style={{ width: 30, height: 30, borderRadius: 15, backgroundColor: '#114b3c', justifyContent: 'center', alignItems: 'center' }}>
-              <Store size={14} color="#e3ff5c" />
-            </View>
+            {item.logo ? (
+              <Image
+                source={{ uri: item.logo }}
+                style={{ width: 30, height: 30, borderRadius: 15, backgroundColor: theme.colors.bg }}
+              />
+            ) : (
+              <View style={{ width: 30, height: 30, borderRadius: 15, backgroundColor: '#114b3c', justifyContent: 'center', alignItems: 'center' }}>
+                <Store size={14} color="#e3ff5c" />
+              </View>
+            )}
             <Text style={{ color: theme.colors.textPrimary, ...theme.typography.body, fontWeight: '600', flex: 1, marginLeft: 12 }} numberOfLines={1}>{item.name}</Text>
             <Text style={{ color: theme.colors.primary, ...theme.typography.bodySm, fontWeight: '700' }}>
               {t('profile.orderCount', { count: item.count, defaultValue: '{{count}} commande(s)' })}

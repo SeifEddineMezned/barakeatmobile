@@ -101,6 +101,50 @@ const MAX_429_RETRIES = 3;
 const MAX_NETWORK_RETRIES = 3;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+// ─── Account-deleted handler ───────────────────────────────────────────────
+// The backend's authenticateToken returns 401 { error: 'account_deleted' } when
+// a signed-in user's account no longer exists — e.g. an admin removed/deleted
+// this member (and the orphan-user cleanup dropped the users row) while they
+// were still connected. We surface a one-time "this account has been deleted"
+// popup and sign the user out. The guard makes the burst of polling requests
+// that all 401 at once trigger only ONE popup. Reset on a fresh sign-in so a
+// later account can trigger it again.
+let _accountDeletedHandled = false;
+export function resetAccountDeletedGuard(): void {
+  _accountDeletedHandled = false;
+}
+// Pre-arm the guard so the popup does NOT fire — used by the intentional
+// self-delete flow (the user is already deleting their own account and gets
+// their own confirmation, so a background poll that races the local sign-out
+// shouldn't surface a second "account deleted" popup).
+export function suppressAccountDeletedPopup(): void {
+  _accountDeletedHandled = true;
+}
+function handleAccountDeleted(): void {
+  if (_accountDeletedHandled) return;
+  _accountDeletedHandled = true;
+  // Informational popup first (sync) so it's on screen immediately…
+  try {
+    const i18n = require('@/src/i18n').default;
+    const { showGlobalAlert } = require('@/src/components/CustomAlert');
+    showGlobalAlert(
+      i18n.t('auth.accountDeletedTitle', { defaultValue: 'Compte supprimé' }),
+      i18n.t('auth.accountDeletedBody', { defaultValue: 'Ce compte a été supprimé. Vous avez été déconnecté.' }),
+      [{ text: i18n.t('common.continue', { defaultValue: 'Continuer' }) }],
+      'warning',
+    );
+  } catch {}
+  // …then sign out. Doing it NOW (not on popup-dismiss) means that however the
+  // user leaves the popup — Continue, tapping outside, or killing the app — the
+  // session is already cleared: the central auth guard routes them to sign-in,
+  // and a relaunch finds no token (no popup loop). The popup, rendered by the
+  // root CustomAlertProvider, survives that navigation and sits over sign-in.
+  try {
+    const { useAuthStore } = require('@/src/stores/authStore');
+    void useAuthStore.getState().signOut();
+  } catch {}
+}
+
 apiClient.interceptors.response.use(
   (response) => response,
   async (error) => {
@@ -112,6 +156,14 @@ apiClient.interceptors.response.use(
         (data as any)?.error ||
         error.message ||
         'An unexpected error occurred';
+
+      // Account no longer exists — the signed-in member was deleted/removed
+      // while connected. Fire the one-time popup + sign-out and reject without
+      // retrying (retrying would just 401 again and spin the polling timers).
+      if (status === 401 && (data as any)?.error === 'account_deleted') {
+        handleAccountDeleted();
+        return Promise.reject({ status, message, data, isApiError: true });
+      }
 
       // 429 — back off and retry GET/HEAD requests. Without this, the
       // polling timers across the app would keep firing on schedule

@@ -7,8 +7,9 @@ import { AppTextInput } from '@/src/components/ui/AppTextInput';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
-import { getErrorMessage } from '@/src/lib/api';
+import { getErrorMessage, suppressAccountDeletedPopup } from '@/src/lib/api';
 import { useRouter, useFocusEffect } from 'expo-router';
+import { resetStackTo } from '@/src/lib/navStack';
 import {
   ArrowLeft, Globe, Bell as BellIcon, Shield, HelpCircle, Info, LogOut,
   ChevronRight, ChevronDown, ChevronUp, Lock, FileText, Headphones, X, Trash2, Camera, MapPin, Image as ImageIcon, AlertTriangle, Mail, ExternalLink, Hand, Check,
@@ -286,7 +287,15 @@ export default function SettingsScreen() {
     return () => { timers.forEach((id) => clearTimeout(id)); };
   }, [showSettingsOverlay, measureDemoRow]);
 
-  // Load notification preferences from AsyncStorage
+  // Load notification preferences — AsyncStorage first for instant render,
+  // then OVERWRITE with the backend's stored blob (the authoritative source
+  // the push gate reads in notifPrefAllows). Without the backend hydrate the
+  // toggles drifted: a value toggled OFF on device A then signed-in on B
+  // showed default-ON in the UI on B while the backend still had OFF, so
+  // pushes for that pref silently never arrived even though the toggle
+  // looked correct. The user-reported workaround was toggling OFF then ON
+  // to force a PUT that finally overwrote the stale backend value — this
+  // hydrate removes the need for that.
   useEffect(() => {
     const loadNotifPrefs = async () => {
       try {
@@ -299,6 +308,25 @@ export default function SettingsScreen() {
         if (pushEnabled !== null) setNotifications(pushEnabled === 'true');
       } catch (err) {
         console.log('[Settings] Error loading notif prefs:', err);
+      }
+      // Backend pull — the push gate honours this blob, not AsyncStorage, so
+      // it must drive the UI. Merged backend-over-default so any key the
+      // backend doesn't have falls back to the default (true) instead of
+      // showing as off. Persisted back to AsyncStorage so the next mount
+      // shows the right state instantly without waiting for the round-trip.
+      try {
+        const { apiClient } = require('@/src/lib/api');
+        const res = await apiClient.get('/api/auth/notification-preferences');
+        const remote = (res && (res.data ?? res)) ?? {};
+        if (remote && typeof remote === 'object') {
+          const merged: NotifPrefs = { ...DEFAULT_NOTIF_PREFS, ...remote };
+          setNotifPrefs(merged);
+          try { await AsyncStorage.setItem(NOTIF_PREFS_KEY, JSON.stringify(merged)); } catch {}
+        }
+      } catch (err) {
+        // Offline / older backend without the GET — keep the AsyncStorage state
+        // already applied above. No regression vs. the pre-fix behaviour.
+        console.log('[Settings] Backend notif-prefs hydrate failed (non-fatal):', (err as any)?.message);
       }
     };
     loadNotifPrefs();
@@ -829,6 +857,10 @@ export default function SettingsScreen() {
           console.log('[Delete account] Pre-flight failed; deferring to server:', preflightErr);
         }
       }
+      // Intentional self-deletion — suppress the global "account deleted" popup
+      // so a background poll racing the local sign-out below can't flash it on
+      // top of this flow's own confirmation.
+      suppressAccountDeletedPopup();
       await deleteAccountApi(payload);
       // ── Apple-specific cleanup ──────────────────────────────────────
       // When the deleted account was an Apple sign-in, attempt to clear
@@ -863,7 +895,7 @@ export default function SettingsScreen() {
       await signOut();
       queryClient.clear();
       triggerSplash(false);
-      router.replace('/auth/sign-in' as never);
+      resetStackTo(router, '/auth/sign-in');
       if (wasApple) {
         // Show the iOS Settings note AFTER the navigation so the
         // success popup lands on the sign-in screen (clean exit).
@@ -966,7 +998,7 @@ export default function SettingsScreen() {
     await signOut();
     queryClient.clear(); // Clear all cached data so next login gets fresh data
     triggerSplash(false); // false = sign-out, no welcome modal
-    router.replace('/auth/sign-in' as never);
+    resetStackTo(router, '/auth/sign-in');
   }, [signOut, router, triggerSplash, queryClient]);
 
   const bizRole = bizCtx.data?.role ?? 'member';

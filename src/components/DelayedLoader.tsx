@@ -21,6 +21,18 @@ interface DelayedLoaderProps {
    * shows the message and the user can pull-to-refresh / navigate away.
    */
   onRetry?: () => void;
+  /**
+   * Force the timeout view to appear immediately, bypassing the `timeoutMs`
+   * wall-clock wait. The parent passes `true` when it KNOWS the underlying
+   * request has failed (e.g., React Query's `isError` flipped) — without
+   * this, the user would stare at the bouncing wave for the full timeout
+   * (15 s) before being told something's wrong. Pairing this with `onRetry`
+   * gives the user the retry affordance the moment the failure is known.
+   * Flipping back to false does NOT reset the timeout view (user has to
+   * tap Réessayer to retry); typically the parent unmounts the loader on
+   * success instead.
+   */
+  forceTimedOut?: boolean;
 }
 
 /**
@@ -43,7 +55,7 @@ interface DelayedLoaderProps {
  */
 const BARAKEAT = 'Barakeat'.split('');
 
-export function DelayedLoader({ delay = 400, size = 36, timeoutMs = 15000, onRetry }: DelayedLoaderProps) {
+export function DelayedLoader({ delay = 400, size = 36, timeoutMs = 15000, onRetry, forceTimedOut = false }: DelayedLoaderProps) {
   const theme = useTheme();
   const { t } = useTranslation();
   const [visible, setVisible] = useState(false);
@@ -130,6 +142,22 @@ export function DelayedLoader({ delay = 400, size = 36, timeoutMs = 15000, onRet
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible, timeoutMs]);
 
+  // Force-timeout escape — when the parent KNOWS the request has failed
+  // (e.g., React Query's `isError` flipped), surface the timeout view
+  // immediately so the user gets the "Chargement plus long que prévu" +
+  // Réessayer affordance without waiting out the wall-clock `timeoutMs`.
+  // Skips the initial delay AND the fade-in to be maximally responsive —
+  // the user already knows something's wrong by the time we get here, so
+  // any further hold reads as the app being slow rather than as polish.
+  useEffect(() => {
+    if (!forceTimedOut) return;
+    stopWave();
+    setVisible(true);
+    fadeAnim.setValue(1);
+    setTimedOut(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [forceTimedOut]);
+
   if (!visible) return null;
 
   if (timedOut) {
@@ -210,10 +238,26 @@ export function DelayedLoader({ delay = 400, size = 36, timeoutMs = 15000, onRet
 
 const styles = StyleSheet.create({
   container: {
-    flex: 1,
+    // Absolute-fill the parent (instead of `flex: 1`) so the wave's
+    // centering math IGNORES any siblings — most consumers render this
+    // loader alongside a header (a `<Text>{t('orders.title')}</Text>`
+    // row above), and with flex:1 the loader only got the REMAINING
+    // vertical space below that header. justifyContent:'center' then
+    // centered within the post-header region, which read as "wave below
+    // screen center" because the header had eaten the top quarter.
+    //
+    // Absolute fill bypasses the parent's flex chain: the loader covers
+    // the entire parent (header zone included), so the wave + any
+    // timeout text/retry button sit at the TRUE vertical center of
+    // whatever the parent's bounds are (typically the SafeAreaView ≈
+    // screen). The header text underneath still renders normally —
+    // it's a sibling, not a child of this overlay, and the loader's
+    // transparent background lets it show through. Wave/text are small
+    // enough that they don't visually collide with a top-of-screen
+    // header.
+    ...StyleSheet.absoluteFillObject,
     justifyContent: 'center',
     alignItems: 'center',
-    paddingTop: 60,
   },
   row: {
     flexDirection: 'row',

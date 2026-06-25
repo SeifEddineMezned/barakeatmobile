@@ -10,6 +10,11 @@ const { withAndroidManifest } = require('@expo/config-plugins');
  */
 const PERMISSIONS_TO_REMOVE = [
   'android.permission.RECORD_AUDIO',
+  // Advertising ID — we run no ads and collect no ad identifier. A transitive
+  // Google Play Services dependency can still inject this, which would force an
+  // "Advertising ID" disclosure on the Play Data Safety form. Strip it so the
+  // declaration stays clean (Google's own recommendation when AD_ID is unused).
+  'com.google.android.gms.permission.AD_ID',
 ];
 
 const withRemovePermissions = (config) => {

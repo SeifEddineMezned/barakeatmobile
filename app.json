@@ -48,6 +48,17 @@
     },
     "plugins": [
       [
+        "expo-splash-screen",
+        {
+          "android": {
+            "backgroundColor": "#114b3c",
+            "image": "./assets/images/barakeat_icon_android.png",
+            "resizeMode": "contain",
+            "imageWidth": 240
+          }
+        }
+      ],
+      [
         "expo-router",
         {
           "origin": "https://barakeat.tn/"

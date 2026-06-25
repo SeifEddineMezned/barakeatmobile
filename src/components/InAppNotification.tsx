@@ -4,7 +4,7 @@
  * Carousel of up to 3 unread notifications with "see all" navigation.
  */
 import React, { useEffect, useRef, useState } from 'react';
-import { View, Text, TouchableOpacity, Animated, Dimensions } from 'react-native';
+import { View, Text, TouchableOpacity, Animated, Dimensions, Modal } from 'react-native';
 import { ChevronRight, ChevronLeft as ChevronLeftIcon, Bell } from 'lucide-react-native';
 import { useNotificationStore } from '@/src/stores/notificationStore';
 import { NotificationDetail } from '@/src/components/NotificationDetail';
@@ -212,6 +212,33 @@ export function InAppNotification() {
         quantity: String(msgP.quantity ?? msgP.qty ?? 1),
         total: String(msgP.price ?? msgP.total ?? 0),
       } } as never);
+    } else if (
+      !isBusiness && (
+        notifType.includes('pickup_reminder')
+        || notifType.includes('pickup_closing')
+        || notifType.includes('pickup_extended')
+        || notifType.includes('order_expired')
+      )
+    ) {
+      // Customer pickup-window notifications — route to the orders tab and
+      // pre-target the matching order so the screen scrolls + auto-expands
+      // the card. Without this branch every one of these popups fell through
+      // to /notifications and the "Voir la commande" CTA dropped the user
+      // on a generic list instead of the order they were just nudged about.
+      //
+      //   • pickup_reminder      — ~1h BEFORE pickup_start → upcoming tab
+      //   • pickup_closing       — ~1h BEFORE pickup_end   → upcoming tab
+      //   • pickup_extended      — merchant granted extra time → upcoming tab
+      //   • order_expired        — cron flipped status to expired → issues tab
+      const refId = currentNotif?.reference_id;
+      const isExpired = notifType.includes('order_expired');
+      router.push({
+        pathname: '/(tabs)/orders',
+        params: {
+          tab: isExpired ? 'issues' : 'upcoming',
+          target: refId ? String(refId) : '',
+        },
+      } as never);
     } else if (notifType.includes('streak')) {
       // Streak about to expire → "Order Now" takes the customer to the home
       // feed to place an order and keep the streak alive.
@@ -271,7 +298,22 @@ export function InAppNotification() {
   if (isDemoNotif) outerReservedHeight = 90;
   else if (popupQueue.length > 1) outerReservedHeight = 40;
 
+  // Wrap the overlay in a native Modal — that's the single change that
+  // fixes the long-standing "scroll only works after I tap and hold the
+  // QR / a child Touchable first" bug across EVERY in-app popup. The
+  // previous setup used a manual absolute-positioned Animated.View as
+  // the backdrop, which forced us to add a tap-absorbing wrapper around
+  // <NotificationDetail/> to prevent backdrop taps from firing through
+  // empty card area. EVERY variant of that wrapper (View +
+  // onStartShouldSetResponder, TouchableWithoutFeedback, …) ended up
+  // claiming the touch responder for move detection, which starved the
+  // inner ScrollView of gestures after the first scroll lifted. The
+  // bell-list popup (`app/notifications.tsx`) never hit this because it
+  // was already inside <Modal>, which natively isolates touches in a
+  // separate root — same fix we apply here. animationType="none"
+  // because we keep our own fade + spring (opacityAnim / scaleAnim).
   return (
+    <Modal visible transparent animationType="none" onRequestClose={handleDismiss} statusBarTranslucent>
     <Animated.View
       style={{
         position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
@@ -279,7 +321,10 @@ export function InAppNotification() {
         backgroundColor: 'rgba(0,0,0,0.45)', opacity: opacityAnim,
       }}
     >
-      {/* Tap backdrop to dismiss */}
+      {/* Tap backdrop to dismiss. Stays as a sibling of the card so
+          taps on empty backdrop close the popup; inside-card taps are
+          consumed by the card's child touchables (and otherwise hit
+          plain Views which don't propagate). */}
       <TouchableOpacity activeOpacity={1} onPress={handleDismiss} style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }} />
 
       <Animated.View style={{ transform: [{ scale: scaleAnim }], width: SCREEN_WIDTH - 40, maxWidth: 420 }}>
@@ -332,8 +377,16 @@ export function InAppNotification() {
             page. In single-popup mode (no carousel) we also pass a bell into
             the card header so the shortcut is still reachable. The bell sits
             to the left of the existing X close button. Hidden during the demo
-            to keep focus on the haloed "Voir la commande" action. */}
-        <View onStartShouldSetResponder={() => true}>
+            to keep focus on the haloed "Voir la commande" action.
+
+            No tap-absorbing wrapper around NotificationDetail anymore —
+            the Modal above handles touch isolation, so the inner
+            ScrollView receives gestures cleanly. The card is rendered
+            AFTER the backdrop's TouchableOpacity in the same parent, so
+            it visually layers above; taps that hit the card area land
+            on its child touchables (or on plain Views which don't
+            propagate inside a Modal). */}
+        <View>
           <NotificationDetail
             notif={currentNotif}
             theme={theme}
@@ -361,5 +414,6 @@ export function InAppNotification() {
         </View>
       </Animated.View>
     </Animated.View>
+    </Modal>
   );
 }
