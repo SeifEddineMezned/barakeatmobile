@@ -280,12 +280,12 @@ function ReviewScreen({
         <View style={{ backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, padding: theme.spacing.lg, ...theme.shadows.shadowSm }}>
           <View style={row}>
             <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm }}>{t('reserve.total')}</Text>
-            <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '600' }}>{fmtDT(total)} TND</Text>
+            <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '600' }}>{fmtDT(total)} {t('common.currency', { defaultValue: 'TND' })}</Text>
           </View>
           {hasCredits && (
             <View style={[row, { marginTop: 6 }]}>
               <Text style={{ color: theme.colors.primary, ...theme.typography.bodySm }}>{t('business.scan.creditsUsed', { defaultValue: 'Crédits Barakeat' })}</Text>
-              <Text style={{ color: theme.colors.primary, ...theme.typography.bodySm, fontWeight: '600' }}>−{fmtDT(credits)} TND</Text>
+              <Text style={{ color: theme.colors.primary, ...theme.typography.bodySm, fontWeight: '600' }}>−{fmtDT(credits)} {t('common.currency', { defaultValue: 'TND' })}</Text>
             </View>
           )}
           <View style={[row, { marginTop: 10, paddingTop: 10, borderTopWidth: 1, borderTopColor: theme.colors.divider }]}>
@@ -293,7 +293,7 @@ function ReviewScreen({
               <Banknote size={18} color={theme.colors.primary} />
               <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3 }}>{t('business.scan.toCollect', { defaultValue: 'À encaisser' })}</Text>
             </View>
-            <Text style={{ color: theme.colors.primary, ...theme.typography.h2, fontWeight: '700' }}>{fmtDT(toCollect)} TND</Text>
+            <Text style={{ color: theme.colors.primary, ...theme.typography.h2, fontWeight: '700' }}>{fmtDT(toCollect)} {t('common.currency', { defaultValue: 'TND' })}</Text>
           </View>
           {hasCredits && (
             <View style={{ flexDirection: 'row', gap: 8, marginTop: 10, padding: 10, borderRadius: theme.radii.r12, backgroundColor: theme.colors.primary + '0E' }}>
@@ -408,6 +408,10 @@ export default function ScanQRScreen() {
   const setMeasuredRect = useWalkthroughStore((s) => s.setMeasuredRect);
   const walkthroughCurrentStep = useWalkthroughStore((s) => s.currentStep);
   const skipWalkthrough = useWalkthroughStore((s) => s.skipWalkthrough);
+  // Reactive walkthrough-active flag — drives the header toggle's
+  // disabled/fade state so the button visibly updates the instant the
+  // walkthrough starts/ends (reading getState() inline wouldn't re-render).
+  const inWalkthrough = useWalkthroughStore((s) => s.step !== null);
   const inDemoMode = demoScanCode !== null;
   // Idempotency guard: prevents the unmount cleanup from racing with the
   // (business) layout's safety-net effect at line ~2057 in _layout.tsx,
@@ -738,6 +742,13 @@ export default function ScanQRScreen() {
       useWalkthroughStore.getState().nextStep(999);
       return;
     }
+    // Demo guard — if the walkthrough is running but we're not yet at the
+    // scanQrBack step (the only one designed to exit this screen), block
+    // the back tap entirely. Otherwise an early X-tap would pop the route
+    // and leave the SubScreenOverlay pointing at a screen that's gone.
+    if (useWalkthroughStore.getState().step !== null) {
+      return;
+    }
     router.back();
   };
 
@@ -890,8 +901,8 @@ export default function ScanQRScreen() {
           ? t('orders.paymentByCardWithCredits', { defaultValue: 'Paiement par carte (+ crédits)' })
           : t('orders.paymentByCard', { defaultValue: 'Paiement par carte' }))
       : (hasCredits
-          ? t('orders.paymentInCashWithCredits', { defaultValue: 'Paiement en espèces (+ crédits)' })
-          : t('orders.paymentInCash', { defaultValue: 'Paiement en espèces' }));
+          ? t('orders.paymentInCashWithCredits', { defaultValue: 'Paiement sur place (+ crédits)' })
+          : t('orders.paymentInCash', { defaultValue: 'Paiement sur place' }));
 
     return (
       <ReviewScreen
@@ -970,20 +981,22 @@ export default function ScanQRScreen() {
               }
             }}
             onPress={() => {
-              // During the demoBack flow, the only legal tap on this screen
-              // is the highlighted close X. The four absorber frames around
-              // the X cutout should already block the toggle, but the prior
-              // report ("I tapped this and the profile section never showed")
-              // suggests the responder negotiation was letting taps slip
-              // through on at least one device. Belt-and-suspenders gate.
-              if (isDemoBack) {
-                useWalkthroughStore.getState().notifyTapHint();
-                return;
-              }
+              // Fully locked during the demo / walkthrough. Flipping the scan
+              // surface strands the scripted flow (the demo expects manual code
+              // entry; switching to camera unmounts the screen the overlay is
+              // measuring, which is why subsequent steps fell back to the
+              // "suivez les instructions" hint). No step ever targets this
+              // toggle, so we make it completely inert here — NOT even a tap
+              // hint, which used to stick around on later steps. Gated on both
+              // demo flags (inWalkthrough can be momentarily null between steps
+              // while inDemoMode stays true).
+              if (inWalkthrough || inDemoMode) return;
               setMode(mode === 'camera' ? 'manual' : 'camera');
               setScanned(false);
             }}
+            disabled={inWalkthrough || inDemoMode}
             hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+            style={{ opacity: (inWalkthrough || inDemoMode) ? 0.3 : 1 }}
           >
             {mode === 'camera' ? (
               <Keyboard size={22} color={theme.colors.textPrimary} />

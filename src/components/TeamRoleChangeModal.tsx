@@ -74,6 +74,28 @@ export function TeamRoleChangeModal({
     cancel_order: 'write',
   };
 
+  // Member baseline. Sent every time we DEMOTE a row to 'member' (from
+  // location_admin OR org_admin) so the former admin doesn't silently keep
+  // every capability checked — the team UI's three role tiers advertise
+  // "member" as "permission-limited", and the previous code was preserving
+  // the prior admin's full perms on demotion, which left an ex-admin with
+  // edit/delete/view-history rights that the role label flatly denies.
+  // confirm_pickup + messaging match the role-preset in the add-member
+  // form (app/business/add-member.tsx:47) so a freshly-added member and a
+  // freshly-demoted member end up in the same state. The team-management
+  // UI's per-permission switches still let an admin re-enable any specific
+  // capability afterwards if they want to give this member a hand-picked
+  // tweak.
+  const MEMBER_PERMS: Record<string, string> = {
+    confirm_pickup: 'write',
+    edit_quantities: 'none',
+    edit_basket_info: 'none',
+    create_delete_baskets: 'none',
+    view_history: 'none',
+    messaging: 'write',
+    cancel_order: 'none',
+  };
+
   // Show the inline location picker when demoting away from org-admin —
   // that's the only transition where we lack a location to scope the new
   // role(s) to.
@@ -157,10 +179,13 @@ export function TeamRoleChangeModal({
         // Demotion from org-admin: when the new role is also `admin`
         // (i.e. demoting to location admin), we still want the full admin
         // perm set on every new row — admins have all perms regardless of
-        // scope. When demoting to member, preserve whatever perms the user
-        // already had so we don't accidentally drop a basic-member's
-        // hand-picked capability set.
-        const permsForNewRows = newRole === 'admin' ? FULL_ADMIN_PERMS : currentPermissions;
+        // scope. When demoting to member, RESET to the member baseline:
+        // the user was an org admin so their stored perms are admin-level,
+        // and the role label "Membre" advertises permission-limited access.
+        // Carrying admin perms through would silently keep every capability
+        // checked on the new member row (the bug reported by the team
+        // owner — demoted admins still had everything on).
+        const permsForNewRows = newRole === 'admin' ? FULL_ADMIN_PERMS : MEMBER_PERMS;
         await updateMember(orgId, keep.membership_id, {
           role: newRole,
           location_id: picked[0],
@@ -179,16 +204,21 @@ export function TeamRoleChangeModal({
         }
       } else {
         // Same-scope role flip (member ↔ location_admin) — preserve existing
-        // location_ids, just rewrite role on every membership row. When
-        // flipping TO admin, also write the full admin perm set in the same
-        // request so the promoted user gains every admin capability instead
-        // of silently inheriting their old member-tier perms (which is what
-        // left location admins with `confirm_pickup: 'none'` and made the
-        // demo skip the verify-pickup / chat sub-tours).
+        // location_ids, just rewrite role on every membership row. Whichever
+        // direction we go, we ALSO explicitly write the right perm set:
+        //   • → admin: FULL_ADMIN_PERMS so the promoted user gains every
+        //     admin capability instead of silently inheriting their old
+        //     member-tier perms (the bug that left location admins with
+        //     `confirm_pickup: 'none'`).
+        //   • → member: MEMBER_PERMS so an ex-admin doesn't keep every
+        //     switch checked — the team owner's report: a demoted member
+        //     still had edit/delete/view-history because the previous code
+        //     omitted permissions from the body and the backend persisted
+        //     the prior admin-tier values.
         const newRole = roleChoice === 'member' ? 'member' : 'admin';
         const updateBody = newRole === 'admin'
           ? { role: newRole, permissions: FULL_ADMIN_PERMS }
-          : { role: newRole };
+          : { role: newRole, permissions: MEMBER_PERMS };
         for (const m of memberships) {
           await updateMember(orgId, m.membership_id, updateBody);
         }

@@ -162,7 +162,7 @@ async function nominatimReverse(lat: number, lng: number): Promise<string> {
   try {
     const resp = await fetchWithTimeout(
       `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json&zoom=18&addressdetails=1`,
-      { headers: { 'Accept-Language': 'fr' } }
+      { headers: { 'Accept-Language': 'en' } }
     );
     const data = await resp.json();
     return formatNominatim(data);
@@ -186,10 +186,10 @@ async function nominatimSearch(query: string): Promise<GeocodeHit[]> {
       countrycodes: 'tn',
       viewbox: `${TUNISIA_BBOX.west},${TUNISIA_BBOX.south},${TUNISIA_BBOX.east},${TUNISIA_BBOX.north}`,
       bounded: '0',
-      'accept-language': 'fr',
+      'accept-language': 'en',
     });
     const resp = await fetchWithTimeout(`https://nominatim.openstreetmap.org/search?${params}`, {
-      headers: { 'Accept-Language': 'fr' },
+      headers: { 'Accept-Language': 'en' },
     });
     const data = await resp.json();
     if (!Array.isArray(data)) return [];
@@ -232,7 +232,7 @@ async function photonSearch(query: string): Promise<GeocodeHit[]> {
       lon: String(TUNIS_CENTER.lng),
     });
     const resp = await fetchWithTimeout(`https://photon.komoot.io/api/?${params}`, {
-      headers: { 'Accept-Language': 'fr' },
+      headers: { 'Accept-Language': 'en' },
     });
     const data = await resp.json();
     const features = Array.isArray(data?.features) ? data.features : [];
@@ -298,8 +298,14 @@ export async function reverseGeocode(lat: number, lng: number): Promise<string> 
   const key = reverseKey(lat, lng);
   const cached = reverseCache.get(key);
   if (cached) return cached;
-  let resolved = await nativeReverse(lat, lng);
-  if (!resolved) resolved = await nominatimReverse(lat, lng);
+  // Nominatim wins — it's now pinned to Accept-Language: en, so addresses
+  // are stored in a locale-stable canonical form. The native call falls
+  // back to the device's locale and there's no API to override it, which
+  // is why a Spanish-phone owner was saving "Tunez" instead of "Tunisia"
+  // and French customers were seeing the Spanish string downstream.
+  // Native is kept as the fallback for the offline case.
+  let resolved = await nominatimReverse(lat, lng);
+  if (!resolved) resolved = await nativeReverse(lat, lng);
   if (resolved) reverseCache.set(key, resolved);
   return resolved;
 }

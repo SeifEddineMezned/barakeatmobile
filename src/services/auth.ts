@@ -13,6 +13,12 @@ export interface RegisterRequest {
   phone?: string;       // optional — customers no longer provide a phone number
   gender?: 'male' | 'female' | null; // optional — customer gender step (skippable)
   type: 'buyer' | 'restaurant'; // backend uses `type`, NOT `role`
+  // Customer-only opt-in to the email newsletter (separate channel from
+  // in-app notification_preferences.offersNews). Defaults to false on the
+  // signup form — user actively ticks the checkbox to subscribe. Business
+  // accounts are auto-subscribed server-side on admin create, so this
+  // field is irrelevant for them.
+  newsletter?: boolean;
   // Two-letter UI language (fr/en/ar). Backend uses this to pick the
   // verification-OTP email template so the email matches what the user is
   // looking at on the verify-email screen. Optional — defaults to 'fr'.
@@ -225,8 +231,9 @@ export async function logout(): Promise<void> {
   // notifications after sign-out (the "logged out but still getting pushes"
   // bug). The DELETE clears both the Expo push_token and the native fcm_token.
   try {
-    const { unregisterPushNotifications } = require('@/src/services/pushNotifications');
+    const { unregisterPushNotifications, resetInFlightPushRegistration } = require('@/src/services/pushNotifications');
     await unregisterPushNotifications();
+    try { resetInFlightPushRegistration(); } catch {}
   } catch {}
   await clearSession();
   console.log('[Auth] Logged out');
@@ -268,5 +275,48 @@ export async function updateOnboardingProfile(
     '/api/auth/me/onboarding',
     patch,
   );
+  return res.data;
+}
+
+// Apple first-login name capture. Used by the dedicated name-entry screen
+// that's shown ONLY when Apple withheld the name on first sign-in. Does NOT
+// flip gender_step_completed (separate concern handled by updateOnboardingProfile).
+export interface UpdateUserNameResponse {
+  success: true;
+  user: {
+    id: string;
+    email: string;
+    type: string;
+    name: string;
+    avatar: string | null;
+    gender: 'male' | 'female' | null;
+    onboardingCompleted: boolean;
+    genderStepCompleted: boolean;
+    provider: string | null;
+    nameNeedsInput: boolean;
+  } | null;
+}
+export async function updateUserName(name: string): Promise<UpdateUserNameResponse> {
+  console.log('[Auth] Updating user name');
+  const res = await apiClient.put<UpdateUserNameResponse>('/api/auth/me/name', { name });
+  return res.data;
+}
+
+// ── Newsletter subscription (settings toggle) ──────────────────────────────
+// GET reads the current state (is_active on newsletter_subscribers, keyed
+// by the user's email). PUT flips it — true UPSERTs (reactivates if there
+// was a row + is_active=false), false soft-unsubscribes (keeps the row
+// for re-subscribe history). The same email channel the signup checkbox
+// writes into; both paths go through newsletter_subscribers.
+export interface NewsletterSubscriptionState {
+  email: string;
+  subscribed: boolean;
+}
+export async function fetchNewsletterSubscription(): Promise<NewsletterSubscriptionState> {
+  const res = await apiClient.get<NewsletterSubscriptionState>('/api/newsletter/me/subscription');
+  return res.data;
+}
+export async function updateNewsletterSubscription(subscribed: boolean): Promise<NewsletterSubscriptionState> {
+  const res = await apiClient.put<NewsletterSubscriptionState>('/api/newsletter/me/subscription', { subscribed });
   return res.data;
 }

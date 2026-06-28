@@ -7,7 +7,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
-import { X, AlertCircle, Clock, Minus, Plus, Sparkles, SquareCheck, Square, Camera } from 'lucide-react-native';
+import { X, AlertCircle, Clock, Minus, Plus, Sparkles, SquareCheck, Square, Camera, Lightbulb } from 'lucide-react-native';
 import { BarakeatErrorIcon } from '@/src/components/ui/BarakeatErrorIcon';
 import * as ImagePicker from 'expo-image-picker';
 import { ensureCameraAccess } from '@/src/lib/photoPermission';
@@ -31,12 +31,13 @@ import { fetchMyContext, fetchOrganizationDetails, type OrgDetailsFromAPI } from
 import { validateBizDayWindow, effectiveLocationHours } from '@/src/utils/timezone';
 import { effectiveDailyReinit } from '@/src/utils/dailyReinit';
 import { useWalkthroughStore } from '@/src/stores/walkthroughStore';
+import { useAiRefineStore } from '@/src/stores/aiRefineStore';
 import { DEMO_BASKET_PHOTOS } from '@/src/lib/demoData';
 import { SubScreenWalkthroughOverlay } from '@/src/components/SubScreenWalkthroughOverlay';
 
 export default function CreateBasketScreen() {
   const { editId } = useLocalSearchParams<{ editId?: string }>();
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const { pickAndCrop } = useImageCropper();
   const theme = useTheme();
   const router = useRouter();
@@ -108,6 +109,27 @@ export default function CreateBasketScreen() {
   const [description, setDescription] = useState(
     apiBasket?.description ?? storeBasket?.description ?? ''
   );
+  // AI-improved multilingual variants. Null = no AI version (the plain text is
+  // the single source). Set when the merchant accepts an AI suggestion; cleared
+  // when they edit the text by hand afterwards (so we never submit a stale
+  // translation that no longer matches the visible text).
+  const [descriptionI18n, setDescriptionI18n] = useState<Record<string, string> | null>(
+    ((apiBasket as any)?.description_i18n as Record<string, string>) ?? null
+  );
+  const [pickupInstrI18n, setPickupInstrI18n] = useState<Record<string, string> | null>(
+    ((apiBasket as any)?.pickup_instructions_i18n as Record<string, string>) ?? null
+  );
+  // Which field currently has an AI improve request in flight ('description' |
+  // 'pickup_instructions' | null), plus the pending suggestion to preview.
+  const [aiImproveField, setAiImproveField] = useState<null | 'description' | 'pickup_instructions'>(null);
+  const [aiPreview, setAiPreview] = useState<null | { field: 'description' | 'pickup_instructions'; fr: string; en: string; ar: string; hint: string }>(null);
+  // Interactive description refinement runs on its own full-screen page
+  // (app/business/refine-description.tsx) so the answer field + keyboard have
+  // room. We hand the starting text over via this store and pick the accepted
+  // result back up below.
+  const setRefineInput = useAiRefineStore((s) => s.setInput);
+  const refineResult = useAiRefineStore((s) => s.result);
+  const clearRefine = useAiRefineStore((s) => s.clear);
   const [originalPrice, setOriginalPrice] = useState(
     apiBasket?.original_price != null
       ? String(apiBasket.original_price)
@@ -309,6 +331,9 @@ export default function CreateBasketScreen() {
 
   // ── Walkthrough demo mode ──────────────────────────────────────────────
   const demoBasketActive = useWalkthroughStore((s) => s.demoBasketActive);
+  // Block the X close button while the walkthrough is running so a stray
+  // tap can't pop the route mid-demo and orphan the SubScreenOverlay.
+  const inWalkthrough = useWalkthroughStore((s) => s.step !== null);
   const setMeasuredRect = useWalkthroughStore((s) => s.setMeasuredRect);
   const demoPrefillFiredRef = useRef(false);
 
@@ -508,31 +533,15 @@ export default function CreateBasketScreen() {
     };
   }, [setMeasuredRect]);
 
-  // Brand-styled sheet for "take photo / choose from gallery", same UX as
-  // the review + report-business forms — replaces the generic OS
-  // `Alert.alert` action sheet which felt off-brand. Both new-basket and
-  // edit-basket flows funnel through this one component, so swapping it
-  // here covers both surfaces.
-  const launchBasketCamera = async () => {
-    if (!(await ensureCameraAccess())) return;
-    const result = await ImagePicker.launchCameraAsync({ allowsEditing: true, quality: 0.7 });
-    if (!result.canceled && result.assets?.[0]) setBasketImageUri(result.assets[0].uri);
-  };
-  const launchBasketGallery = async () => {
-    // Limited-access-aware grid → crop. Handles its own permission popup.
+  // Business image pickers go DIRECTLY to the photo library — the "take
+  // photo" option has been removed from every business surface (basket,
+  // logo, cover, menu items, location). Customer-side surfaces (review,
+  // report basket) still keep the camera option because the photo IS the
+  // proof. The previous take-photo / choose-gallery action sheet for the
+  // basket photo lives in git history if it ever needs to come back.
+  const pickBasketImage = async () => {
     const uri = await pickAndCrop({ aspect: [4, 3], quality: 0.7 });
     if (uri) setBasketImageUri(uri);
-  };
-  const pickBasketImage = () => {
-    alert.showAlert(
-      t('common.addPhoto', { defaultValue: 'Photo du panier' }),
-      undefined,
-      [
-        { text: t('common.takePhoto', { defaultValue: 'Prendre une photo' }), onPress: launchBasketCamera },
-        { text: t('common.chooseFromGallery', { defaultValue: 'Choisir depuis la galerie' }), onPress: launchBasketGallery },
-      ],
-      { layout: 'sheet' },
-    );
   };
 
   const handleAISuggest = async () => {
@@ -553,6 +562,115 @@ export default function CreateBasketScreen() {
       setAiLoading(false);
     }
   };
+
+  // The app's active language, narrowed to one of the 3 supported codes. Used
+  // to decide which of the AI trio to drop into the visible textbox on accept
+  // and to preview, so the merchant sees the suggestion in the language they're
+  // working in.
+  const previewLang: 'fr' | 'en' | 'ar' = (() => {
+    const code = (i18n.language || 'fr').slice(0, 2);
+    return code === 'en' || code === 'ar' ? code : 'fr';
+  })();
+
+  // Language codes shown in the "Traduit en …" note. Arabic is omitted while
+  // it's disabled in feature flags (the translation is still stored, it's just
+  // not surfaced to users yet), so the note matches what's actually selectable.
+  const translatedLangsLabel = ['FR', 'EN', ...(FeatureFlags.LANGUAGES_AR_ENABLED ? ['AR'] : [])].join(' · ');
+
+  // AI improve + translate for a free-text field. Sends the merchant's typed
+  // text to /ai-improve; the result (an {fr,en,ar} trio) is staged in aiPreview
+  // for confirmation rather than applied directly, so the merchant always
+  // reviews before it replaces their text.
+  const handleAIImprove = async (field: 'description' | 'pickup_instructions') => {
+    const sourceText = (field === 'description' ? description : pickupInstructions).trim();
+    if (!sourceText) {
+      alert.showAlert(
+        t('business.createBasket.aiImproveEmptyTitle', { defaultValue: 'Rien à améliorer' }),
+        t('business.createBasket.aiImproveEmptyBody', { defaultValue: "Écrivez d'abord votre texte, puis appuyez sur Améliorer." }),
+      );
+      return;
+    }
+    setAiImproveField(field);
+    try {
+      const response = await apiClient.post('/api/baskets/ai-improve', {
+        text: sourceText,
+        field,
+        category: profileQuery.data?.category,
+      });
+      const data = response.data as { fr?: string; en?: string; ar?: string; hint?: string };
+      setAiPreview({
+        field,
+        fr: data.fr || sourceText,
+        en: data.en || sourceText,
+        ar: data.ar || sourceText,
+        hint: data.hint || '',
+      });
+    } catch (err: any) {
+      if (err?.response?.status === 429) {
+        alert.showAlert(
+          t('business.createBasket.aiLimitTitle', { defaultValue: 'Limite atteinte' }),
+          err?.response?.data?.message
+            || t('business.createBasket.aiLimitBody', { defaultValue: "Vous avez atteint votre limite de suggestions IA pour aujourd'hui. Réessayez demain." }),
+        );
+      } else {
+        alert.showAlert(t('common.error'), getErrorMessage(err));
+      }
+    } finally {
+      setAiImproveField(null);
+    }
+  };
+
+  // Apply the staged AI suggestion: drop the merchant-language variant into the
+  // visible textbox and keep the full trio for submission.
+  const acceptAiSuggestion = () => {
+    if (!aiPreview) return;
+    const trio = { fr: aiPreview.fr, en: aiPreview.en, ar: aiPreview.ar };
+    if (aiPreview.field === 'description') {
+      setDescription(trio[previewLang]);
+      setDescriptionI18n(trio);
+      setDescError('');
+    } else {
+      setPickupInstructions(trio[previewLang]);
+      setPickupInstrI18n(trio);
+      setUseDefaultPickupInstructions(false);
+    }
+    setAiPreview(null);
+  };
+
+  // ── Interactive description refinement (Q&A) ───────────────────────────────
+  // Apply the refined description handed back by the full-screen refine page.
+  useEffect(() => {
+    if (!refineResult) return;
+    setDescription(refineResult[previewLang]);
+    setDescriptionI18n(refineResult);
+    setDescError('');
+    clearRefine();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refineResult]);
+
+  // Description "Améliorer" entry point: hand the text to the refine page.
+  const handleAIRefineStart = () => {
+    const sourceText = description.trim();
+    if (!sourceText) {
+      alert.showAlert(
+        t('business.createBasket.aiImproveEmptyTitle', { defaultValue: 'Rien à améliorer' }),
+        t('business.createBasket.aiImproveEmptyBody', { defaultValue: "Écrivez d'abord votre texte, puis appuyez sur Améliorer." }),
+      );
+      return;
+    }
+    setRefineInput({ description: sourceText, title: name.trim(), category: (profileQuery.data as any)?.category });
+    router.push('/business/refine-description' as never);
+  };
+
+  // When the merchant switches the app language, swap any AI-translated field to
+  // the matching variant so the visible text follows the active language. Only
+  // runs when an AI trio exists (a hand-typed field, where descriptionI18n /
+  // pickupInstrI18n is null, is left exactly as the merchant wrote it).
+  useEffect(() => {
+    if (descriptionI18n && descriptionI18n[previewLang]) setDescription(descriptionI18n[previewLang]);
+    if (pickupInstrI18n && pickupInstrI18n[previewLang]) setPickupInstructions(pickupInstrI18n[previewLang]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [previewLang]);
 
   // Update pickup times when profile/baskets load (only if not yet modified by user)
   React.useEffect(() => {
@@ -786,6 +904,10 @@ export default function CreateBasketScreen() {
         if (!useDefaultPickupInstructions && pickupInstructions.trim()) {
           formData.append('pickup_instructions', pickupInstructions.trim());
         }
+        // AI multilingual variants — only sent when an AI version exists and
+        // (for instructions) the merchant isn't inheriting the location's.
+        if (descriptionI18n) formData.append('description_i18n', JSON.stringify(descriptionI18n));
+        if (!useDefaultPickupInstructions && pickupInstrI18n) formData.append('pickup_instructions_i18n', JSON.stringify(pickupInstrI18n));
         if (selectedLocationId) formData.append('location_id', String(Number(selectedLocationId)));
         const filename = basketImageUri!.split('/').pop() ?? 'basket.jpg';
         formData.append('image', { uri: basketImageUri, name: filename, type: 'image/jpeg' } as any);
@@ -815,6 +937,9 @@ export default function CreateBasketScreen() {
         menu_item_ids: selectedMenuItemIds.length > 0 ? selectedMenuItemIds : undefined,
         show_menu_items: showMenuItems,
         pickup_instructions: useDefaultPickupInstructions ? undefined : pickupInstructions.trim() || undefined,
+        // AI multilingual variants (omitted when none / inheriting location).
+        description_i18n: descriptionI18n ?? undefined,
+        pickup_instructions_i18n: useDefaultPickupInstructions ? undefined : (pickupInstrI18n ?? undefined),
         location_id: selectedLocationId ? Number(selectedLocationId) : undefined,
       } as any, attemptKey);
     },
@@ -946,6 +1071,11 @@ export default function CreateBasketScreen() {
           if (selectedMenuItemIds.length) formData.append('menu_item_ids', JSON.stringify(selectedMenuItemIds));
           // Pickup instructions: same inherit contract via the existing clear handler.
           formData.append('pickup_instructions', useDefaultPickupInstructions ? '' : (pickupInstructions.trim() || ''));
+          // AI multilingual variants. Empty string clears the column (backend's
+          // normalizeI18n treats '' as null) so removing the AI version (or
+          // switching instructions back to "inherit") falls back to plain text.
+          formData.append('description_i18n', descriptionI18n ? JSON.stringify(descriptionI18n) : '');
+          formData.append('pickup_instructions_i18n', useDefaultPickupInstructions ? '' : (pickupInstrI18n ? JSON.stringify(pickupInstrI18n) : ''));
           // Per-day schedule: always send when editing so per-day changes land
           // even during an image update, and so toggling back to "same all days"
           // explicitly clears the schedule column (null string → NULL on server).
@@ -980,6 +1110,9 @@ export default function CreateBasketScreen() {
           // undefined lets the user explicitly switch back to "inherit" after
           // having set a custom value previously.
           pickup_instructions: useDefaultPickupInstructions ? null : pickupInstructions.trim() || null,
+          // AI multilingual variants — null clears (falls back to plain text).
+          description_i18n: descriptionI18n ?? null,
+          pickup_instructions_i18n: useDefaultPickupInstructions ? null : (pickupInstrI18n ?? null),
           // Merchant confirmed the pickup-window change despite a live order.
           ...(vars?.confirmPickupChange ? { confirm_pickup_change: true } : {}),
         });
@@ -1282,7 +1415,12 @@ export default function CreateBasketScreen() {
     <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.bg }]}>
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1 }}>
         <View style={[styles.header, { paddingHorizontal: theme.spacing.xl, paddingVertical: theme.spacing.lg }]}>
-          <TouchableOpacity onPress={() => router.back()} hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}>
+          <TouchableOpacity
+            onPress={inWalkthrough ? undefined : () => router.back()}
+            disabled={inWalkthrough}
+            hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}
+            style={{ opacity: inWalkthrough ? 0.3 : 1 }}
+          >
             <X size={24} color={theme.colors.textPrimary} />
           </TouchableOpacity>
           <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h2 }]}>
@@ -1364,13 +1502,38 @@ export default function CreateBasketScreen() {
 
           {/* Description */}
           <View style={[styles.field, { marginBottom: theme.spacing.xl }]}>
-            <Text style={{ color: theme.colors.primary, ...theme.typography.body, fontWeight: '700', marginBottom: theme.spacing.sm }}>
-              {t('business.createBasket.description')}<Text style={{ color: theme.colors.error }}> *</Text>
-            </Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: theme.spacing.sm }}>
+              <Text style={{ color: theme.colors.primary, ...theme.typography.body, fontWeight: '700' }}>
+                {t('business.createBasket.description')}<Text style={{ color: theme.colors.error }}> *</Text>
+              </Text>
+              {FeatureFlags.ENABLE_AI_TEXT_IMPROVE && (
+                <TouchableOpacity
+                  onPress={handleAIRefineStart}
+                  disabled={aiImproveField !== null}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  style={{
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    opacity: aiImproveField !== null && aiImproveField !== 'description' ? 0.4 : 1,
+                  }}
+                >
+                  {aiImproveField === 'description' ? (
+                    <ActivityIndicator size="small" color={theme.colors.primary} />
+                  ) : (
+                    <>
+                      <Sparkles size={14} color={theme.colors.primary} />
+                      <Text style={{ color: theme.colors.primary, ...theme.typography.caption, fontWeight: '700' as const, marginLeft: 4 }}>
+                        {t('business.createBasket.aiImprove', { defaultValue: 'Améliorer avec l\'IA' })}
+                      </Text>
+                    </>
+                  )}
+                </TouchableOpacity>
+              )}
+            </View>
             <TextInput
               style={[styles.textArea, { backgroundColor: theme.colors.surface, borderColor: descError ? theme.colors.error : theme.colors.divider, borderRadius: theme.radii.r12, color: theme.colors.textPrimary, ...theme.typography.body, ...theme.shadows.shadowSm }]}
               value={description}
-              onChangeText={(v) => { setDescription(v); if (v.trim()) setDescError(''); }}
+              onChangeText={(v) => { setDescription(v); if (v.trim()) setDescError(''); setDescriptionI18n(null); }}
               placeholder={t('business.createBasket.descriptionPlaceholder')}
               placeholderTextColor={theme.colors.muted}
               multiline
@@ -1378,6 +1541,11 @@ export default function CreateBasketScreen() {
               textAlignVertical="top"
             />
             {descError !== '' && <Text style={{ color: theme.colors.error, fontSize: 12, marginTop: 4 }}>{descError}</Text>}
+            {FeatureFlags.ENABLE_AI_TEXT_IMPROVE && descriptionI18n && (
+              <Text style={{ color: theme.colors.muted, ...theme.typography.caption, marginTop: 4, fontStyle: 'italic' }}>
+                {t('business.createBasket.aiTranslatedNote', { langs: translatedLangsLabel, defaultValue: 'Traduit en {{langs}}' })}
+              </Text>
+            )}
           </View>
 
           {/* Prices.
@@ -1726,27 +1894,26 @@ export default function CreateBasketScreen() {
               </TouchableOpacity>
             </View>
 
-            {/* Two-state hint — default (muted-grey, explains the 03:30 reset
-                rule) or error (red, swaps in the specific violation: zero
-                window, < 15 min, or crosses 03:30). Same single-element
-                pattern as the price-discount notice and the location-hours
-                editor — keeps the form from stacking duplicate messages. */}
+            {/* Error-only hint — the muted "explains the 03:30 reset rule"
+                caption was removed by user request: it surfaced on every
+                visit even though crossing 03:30 is a vanishingly rare
+                accident, and the actual error already explains the
+                violation in plain language when it fires. Now the row
+                appears ONLY when pickupWindowStatus !== 'ok', and it
+                swaps in the specific violation (zero window, < 15 min,
+                or crosses 03:30). */}
             {(() => {
-              const isError = pickupWindowStatus !== 'ok';
-              const hintColor = isError ? theme.colors.error : theme.colors.muted;
-              const message = !isError
-                ? t('business.createBasket.pickupWindowResetHint', {
-                    defaultValue: 'Le créneau de retrait ne doit pas coïncider avec 03:30 (réinitialisation quotidienne des paniers).',
-                  })
-                : pickupWindowStatus === 'zero'
+              if (pickupWindowStatus === 'ok') return null;
+              const message =
+                pickupWindowStatus === 'zero'
                   ? t('business.baskets.endBeforeStart', { defaultValue: "L'heure de fin doit être différente de l'heure de début." })
                   : pickupWindowStatus === 'too-short'
                     ? t('business.availability.tooShort', { defaultValue: 'Le créneau de retrait doit durer au moins 15 minutes.' })
                     : t('business.availability.crossReset', { defaultValue: "Le créneau ne peut pas traverser la réinitialisation quotidienne (03:30). Choisissez un début ≥ 03:30, ou une fin ≤ 03:29." });
               return (
                 <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 6, marginTop: 8 }}>
-                  <Clock size={11} color={hintColor} style={{ marginTop: 2 }} />
-                  <Text style={{ color: hintColor, ...theme.typography.caption, flex: 1, lineHeight: 15 }}>
+                  <Clock size={11} color={theme.colors.error} style={{ marginTop: 2 }} />
+                  <Text style={{ color: theme.colors.error, ...theme.typography.caption, flex: 1, lineHeight: 15 }}>
                     {message}
                   </Text>
                 </View>
@@ -1762,9 +1929,34 @@ export default function CreateBasketScreen() {
               When unchecked the user's own TextInput renders in the same
               slot, fully editable. */}
           <View style={[styles.field, { marginBottom: theme.spacing.xl }]}>
-            <Text style={{ color: theme.colors.primary, ...theme.typography.body, fontWeight: '700', marginBottom: theme.spacing.sm }}>
-              {t('business.createBasket.pickupInstructions', { defaultValue: 'Instructions de retrait' })}
-            </Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: theme.spacing.sm }}>
+              <Text style={{ color: theme.colors.primary, ...theme.typography.body, fontWeight: '700' }}>
+                {t('business.createBasket.pickupInstructions', { defaultValue: 'Instructions de retrait' })}
+              </Text>
+              {FeatureFlags.ENABLE_AI_TEXT_IMPROVE && !useDefaultPickupInstructions && (
+                <TouchableOpacity
+                  onPress={() => handleAIImprove('pickup_instructions')}
+                  disabled={aiImproveField !== null}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  style={{
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    opacity: aiImproveField !== null && aiImproveField !== 'pickup_instructions' ? 0.4 : 1,
+                  }}
+                >
+                  {aiImproveField === 'pickup_instructions' ? (
+                    <ActivityIndicator size="small" color={theme.colors.primary} />
+                  ) : (
+                    <>
+                      <Sparkles size={14} color={theme.colors.primary} />
+                      <Text style={{ color: theme.colors.primary, ...theme.typography.caption, fontWeight: '700' as const, marginLeft: 4 }}>
+                        {t('business.createBasket.aiImprove', { defaultValue: 'Améliorer avec l\'IA' })}
+                      </Text>
+                    </>
+                  )}
+                </TouchableOpacity>
+              )}
+            </View>
             {/* Wrapper deliberately keeps `pointerEvents` at its default ('auto')
                 — when the checkbox is checked and the preview shows, the only
                 interactive child is the "Voir plus / Voir moins" expander, and
@@ -1845,7 +2037,7 @@ export default function CreateBasketScreen() {
                     },
                   ]}
                   value={pickupInstructions}
-                  onChangeText={setPickupInstructions}
+                  onChangeText={(v) => { setPickupInstructions(v); setPickupInstrI18n(null); }}
                   placeholder={t('business.createBasket.pickupInstructionsPlaceholder', { defaultValue: 'Ex: Sonnez à l\'entrée arrière' })}
                   placeholderTextColor={theme.colors.muted}
                   multiline
@@ -1871,6 +2063,11 @@ export default function CreateBasketScreen() {
                 {t('business.createBasket.useDefaultInstructions', { defaultValue: 'Utiliser celles du commerce' })}
               </Text>
             </TouchableOpacity>
+            {FeatureFlags.ENABLE_AI_TEXT_IMPROVE && !useDefaultPickupInstructions && pickupInstrI18n && (
+              <Text style={{ color: theme.colors.muted, ...theme.typography.caption, marginTop: 6, fontStyle: 'italic' }}>
+                {t('business.createBasket.aiTranslatedNote', { langs: translatedLangsLabel, defaultValue: 'Traduit en {{langs}}' })}
+              </Text>
+            )}
           </View>
 
           {/* Menu Items — yes/no toggle (feature-flagged) */}
@@ -2088,6 +2285,64 @@ export default function CreateBasketScreen() {
               >
                 <Text style={{ color: '#fff', ...theme.typography.body, fontWeight: '600' }}>
                   {t('common.confirm', { defaultValue: 'Confirmer' })}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+
+      {/* AI improve suggestion preview — the merchant reviews the rewritten
+          text (shown in their app language) before it replaces what they
+          typed. Accepting keeps the full FR/EN/AR trio for submission. */}
+      <Modal visible={!!aiPreview} transparent animationType="fade" onRequestClose={() => setAiPreview(null)}>
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', alignItems: 'center', padding: 24 }}>
+          <View style={{ backgroundColor: theme.colors.surface, borderRadius: 20, padding: 24, width: '100%', maxWidth: 360, ...theme.shadows.shadowLg }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12 }}>
+              <View style={{ backgroundColor: theme.colors.primary + '22', width: 40, height: 40, borderRadius: 20, justifyContent: 'center', alignItems: 'center', marginRight: 12 }}>
+                <Sparkles size={20} color={theme.colors.primary} />
+              </View>
+              <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3, flex: 1 }}>
+                {t('business.createBasket.aiPreviewTitle', { defaultValue: 'Suggestion IA' })}
+              </Text>
+            </View>
+            <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm, marginBottom: 10 }}>
+              {FeatureFlags.LANGUAGES_AR_ENABLED
+                ? t('business.createBasket.aiPreviewSubtitle', { defaultValue: 'Version améliorée, traduite automatiquement en français, anglais et arabe :' })
+                : t('business.createBasket.aiPreviewSubtitleNoAr', { defaultValue: 'Version améliorée, traduite automatiquement en français et anglais :' })}
+            </Text>
+            <View style={{ backgroundColor: theme.colors.bg, borderRadius: 12, padding: 14, borderWidth: 1, borderColor: theme.colors.divider, marginBottom: 14 }}>
+              <Text style={{ color: theme.colors.textPrimary, ...theme.typography.body, lineHeight: 22 }}>
+                {aiPreview ? aiPreview[previewLang] : ''}
+              </Text>
+            </View>
+            {!!aiPreview?.hint && (
+              <View style={{ flexDirection: 'row', backgroundColor: '#e3ff5c22', borderRadius: 12, padding: 12, marginBottom: 14 }}>
+                <Lightbulb size={16} color="#b8a600" style={{ marginRight: 8, marginTop: 1 }} />
+                <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm, lineHeight: 20, flex: 1 }}>
+                  {aiPreview.hint}
+                </Text>
+              </View>
+            )}
+            <Text style={{ color: theme.colors.muted, ...theme.typography.caption, marginBottom: 18 }}>
+              {t('business.createBasket.aiDisclaimer', { defaultValue: 'Les suggestions sont générées par IA — vérifiez-les avant de publier.' })}
+            </Text>
+            <View style={{ flexDirection: 'row', gap: 10, width: '100%' }}>
+              <TouchableOpacity
+                onPress={() => setAiPreview(null)}
+                style={{ flex: 1, backgroundColor: theme.colors.bg, borderRadius: 12, paddingVertical: 14, alignItems: 'center', borderWidth: 1, borderColor: theme.colors.divider }}
+              >
+                <Text style={{ color: theme.colors.textPrimary, ...theme.typography.body, fontWeight: '600' }}>
+                  {t('business.createBasket.aiKeepMine', { defaultValue: 'Garder mon texte' })}
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={acceptAiSuggestion}
+                style={{ flex: 1, backgroundColor: theme.colors.primary, borderRadius: 12, paddingVertical: 14, alignItems: 'center' }}
+              >
+                <Text style={{ color: '#fff', ...theme.typography.body, fontWeight: '600' }}>
+                  {t('business.createBasket.aiUse', { defaultValue: 'Utiliser' })}
                 </Text>
               </TouchableOpacity>
             </View>

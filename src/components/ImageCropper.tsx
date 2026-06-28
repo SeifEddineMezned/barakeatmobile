@@ -27,6 +27,7 @@ import {
   Linking,
   Modal,
   PanResponder,
+  Platform,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -164,6 +165,25 @@ export function ImageCropperProvider({ children }: { children: React.ReactNode }
   // available, otherwise falls back to the system picker (Expo Go). Shared by
   // pickPhoto and pickAndCrop.
   const openGrid = useCallback(async (): Promise<string | null> => {
+    // ── ANDROID: system Photo Picker, NO media permission ──────────────────
+    // Google's Photo & Video Permissions policy requires the photo picker for
+    // this infrequent "upload a photo" use case, so the Android app declares no
+    // READ_MEDIA_IMAGES/VIDEO (stripped via withRemovePermissions). The Android
+    // Photo Picker (launchImageLibraryAsync) grants access to ONLY the picked
+    // image with no permission prompt. We deliberately skip ensureMediaAccess /
+    // ensureLibraryAccess on Android — those request the permissions we removed.
+    // allowsEditing:false returns a raw image so pickAndCrop's CropModal crops it.
+    if (Platform.OS === 'android') {
+      try {
+        const res = await ImagePicker.launchImageLibraryAsync({ mediaTypes: 'images', allowsEditing: false, quality: 1 });
+        if (res.canceled || !res.assets?.[0]) return null;
+        return res.assets[0].uri;
+      } catch (e: any) {
+        console.warn('[PhotoPicker] android photo picker failed:', e?.message ?? String(e));
+        return null;
+      }
+    }
+    // ── iOS: custom grid that honors "Limited Access" ──────────────────────
     const access = await ensureMediaAccess();
     if (access === 'ok') {
       return new Promise<string | null>((resolve) => {
@@ -730,7 +750,7 @@ function CropModal({ sourceUri, aspect, quality, onClose }: CropModalProps) {
             <Text style={styles.confirmText}>
               {busy
                 ? t('common.loading', { defaultValue: 'Chargement...' })
-                : t('common.choose', { defaultValue: 'Choisir' })}
+                : t('common.confirm', { defaultValue: 'Confirmer' })}
             </Text>
           </TouchableOpacity>
         </View>

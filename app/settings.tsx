@@ -135,6 +135,20 @@ export default function SettingsScreen() {
   const isBusiness = user?.role === 'business';
   const bizCtx = useQuery({ queryKey: ['my-context'], queryFn: fetchMyContext, enabled: isBusiness, staleTime: 60_000 });
   const bizName = bizCtx.data?.organization_name || bizCtx.data?.location_name;
+  // Self-deletion gate. Customers can always delete their own account
+  // (per the T&Cs). Business users can only self-delete when they are the
+  // org's owner or admin — regular members are part of an organisation's
+  // team contract, and a non-admin nuking their own account out from under
+  // the org isn't a customer-style "right to be forgotten" action; the org
+  // admin handles team membership (remove-member) instead. Treat unknown
+  // business roles (e.g. while bizCtx is still loading) as restricted so
+  // the destructive button never paints briefly during loading and then
+  // hides — the button just stays hidden until the role is known.
+  // (`bizRole` itself is computed lower down, reuse-of-defined-later would
+  // be a TDZ trap — recompute the gate inline against bizCtx directly so
+  // it can be referenced from JSX rendered above that derivation.)
+  const _selfDeleteRole = bizCtx.data?.role;
+  const canSelfDelete = !isBusiness || _selfDeleteRole === 'owner' || _selfDeleteRole === 'admin';
 
   // Fetch fresh user name from DB (users table) — for business users, user.name in
   // the auth store may contain the location name instead of the personal name
@@ -147,7 +161,12 @@ export default function SettingsScreen() {
   // change them often. Expanding on demand keeps the settings page
   // visually calm.
   const [notifPrefsExpanded, setNotifPrefsExpanded] = useState(false);
-  const PUSH_ENABLED_KEY = '@barakeat_push_enabled';
+
+  // Per-user pref key (account A's OFF must not mute account B on the same
+  // device). Resolved via the shared helper so service + UI agree on the
+  // exact AsyncStorage slot.
+  const { pushPrefKeyForUser } = require('@/src/services/pushNotifications');
+  const PUSH_ENABLED_KEY: string = pushPrefKeyForUser(user?.id);
   const [showLanguageModal, setShowLanguageModal] = useState(false);
   const [currentLang, setCurrentLang] = useState(i18n.language ?? 'en');
   const [demoRole, setDemoRole] = useState<'admin' | 'restricted'>('admin');
@@ -303,9 +322,18 @@ export default function SettingsScreen() {
         if (stored) {
           setNotifPrefs({ ...DEFAULT_NOTIF_PREFS, ...JSON.parse(stored) });
         }
-        // Load main push toggle
+        // Load main push toggle. The OS permission OVERRIDES the stored app
+        // preference: if the user denied the system notification prompt (e.g. at
+        // first launch), the toggle must read OFF even though the app default is
+        // ON — otherwise it shows ON while no notification can ever be delivered.
         const pushEnabled = await AsyncStorage.getItem(PUSH_ENABLED_KEY);
-        if (pushEnabled !== null) setNotifications(pushEnabled === 'true');
+        let prefOn = pushEnabled !== null ? pushEnabled === 'true' : true;
+        try {
+          const { getPushPermissionGranted } = require('@/src/services/pushNotifications');
+          const granted = await getPushPermissionGranted();
+          if (!granted) prefOn = false;
+        } catch {}
+        setNotifications(prefOn);
       } catch (err) {
         console.log('[Settings] Error loading notif prefs:', err);
       }
@@ -398,7 +426,39 @@ export default function SettingsScreen() {
     } catch {
       setPhotoLibraryStatus('Not Set');
     }
-  }, [readPhotoPerm]);
+    // Push permission re-check on every resume. The on-mount loader at the
+    // top of this screen reads it once and never again — so when the user
+    // taps the push toggle, gets sent to OS Settings to grant push, and
+    // returns to the app, the toggle stayed OFF. Re-fetching here flips
+    // the `notifications` state the instant AppState='active' fires, and the
+    // setter-guards skip the write when the value didn't actually change so
+    // there's no flicker on normal resumes where nothing was changed.
+    //
+    // We ALWAYS call ensurePushRegistered when perm is granted (no transition
+    // guard) because the device's row in device_push_tokens can become stale
+    // for reasons OTHER than a perm transition — most importantly account
+    // switch, which leaves the row pinned to the previous user_id. The PUT
+    // is idempotent (ON CONFLICT DO UPDATE), so spamming it on every resume
+    // costs one cheap HTTP call and the in-flight dedupe collapses bursts.
+    //
+    // CRITICAL: the toggle state is (OS perm × per-user pref). Earlier this
+    // method set `notifications = granted` unconditionally, which lied when
+    // the user had explicitly muted in-app (toggle visibly flipped ON every
+    // resume even though pref='false' kept the device row deleted — pushes
+    // never fired). The pref read is the same key the toggle's onValueChange
+    // writes to, so initial-load and resume agree on the effective state.
+    try {
+      const { getPushPermissionGranted, ensurePushRegistered } = require('@/src/services/pushNotifications');
+      const granted = await getPushPermissionGranted();
+      const storedPref = await AsyncStorage.getItem(PUSH_ENABLED_KEY);
+      const prefAllowed = storedPref !== 'false';
+      const effective = granted && prefAllowed;
+      setNotifications((prev) => (prev === effective ? prev : effective));
+      if (effective) {
+        try { await ensurePushRegistered(user?.id); } catch {}
+      }
+    } catch {}
+  }, [readPhotoPerm, user?.id, PUSH_ENABLED_KEY]);
 
   // Tapping a permission row. We branch on the CURRENT status because the OS
   // limits what's possible:
@@ -490,17 +550,34 @@ export default function SettingsScreen() {
     }, [checkPermissions]),
   );
 
-  // Save notification preferences locally AND sync to backend
+  // Save notification preferences locally AND sync to backend. The previous
+  // version fire-and-forgot the PUT with `.catch(() => {})`, which silently
+  // swallowed every server error and left the local optimistic state diverged
+  // from the backend — the toggle flipped visually but the push gate still
+  // used the old value, so users had to toggle OFF then ON to re-trigger a
+  // successful PUT before the change actually took effect. Now we AWAIT the
+  // PUT and ROLL BACK both AsyncStorage + in-memory state on failure so the
+  // toggle's visual state always tracks what the backend actually persisted.
   const updateNotifPref = useCallback(async (key: keyof NotifPrefs, value: boolean) => {
+    const previous = notifPrefs;
     const updated = { ...notifPrefs, [key]: value };
+    // Optimistic UI update so the toggle responds instantly.
     setNotifPrefs(updated);
     try {
       await AsyncStorage.setItem(NOTIF_PREFS_KEY, JSON.stringify(updated));
-      // Sync to backend (fire-and-forget)
       const { apiClient } = require('@/src/lib/api');
-      apiClient.put('/api/auth/notification-preferences', updated).catch(() => {});
+      await apiClient.put('/api/auth/notification-preferences', updated);
     } catch (err) {
-      console.log('[Settings] Error saving notif prefs:', err);
+      console.log('[Settings] Error saving notif prefs — rolling back:', (err as any)?.message ?? err);
+      // Backend rejected the new prefs (network blip, 5xx, auth lapse). Roll
+      // back the optimistic toggle so the UI matches reality. The user sees
+      // the switch snap back, which is the right signal that "this didn't
+      // save". Best-effort AsyncStorage rewind — failure here is non-fatal
+      // because the in-memory rollback is the source of truth for the UI.
+      setNotifPrefs(previous);
+      try {
+        await AsyncStorage.setItem(NOTIF_PREFS_KEY, JSON.stringify(previous));
+      } catch {}
     }
   }, [notifPrefs]);
 
@@ -953,6 +1030,20 @@ export default function SettingsScreen() {
           }
         }
         setDeleteStep('blocked');
+      } else if (status === 403 && code === 'MEMBER_CANNOT_SELF_DELETE') {
+        // Safety net for any stale FE that still surfaces the delete button to
+        // a non-admin business member (e.g. an EAS-update mismatch between
+        // backend and bundle). Show the same explanation the inline hint
+        // gives, so the user knows where to go from here.
+        setShowDeleteModal(false);
+        Alert.alert(
+          t('profile.deleteAccountMemberBlockedTitle', { defaultValue: 'Suppression non disponible' }),
+          t('profile.deleteAccountMemberBlockedBody', {
+            defaultValue:
+              "Vous êtes membre d'une organisation. Demandez à l'administrateur de votre commerce de retirer votre accès — cela supprimera votre compte.",
+          }),
+        );
+        return;
       } else if (status === 409 && code === 'OWNER_NEEDS_TRANSFER_OR_DELETE_ORG') {
         setTransferCandidates(Array.isArray(data?.candidates) ? data.candidates : []);
         setTransferTo(null);
@@ -1004,21 +1095,59 @@ export default function SettingsScreen() {
   const bizRole = bizCtx.data?.role ?? 'member';
   const bizPerms = bizCtx.data?.permissions ?? {};
   const isAdminOrOwner = bizRole === 'owner' || bizRole === 'admin';
-  const hasConfirmPickup = isAdminOrOwner || (bizPerms as any).confirm_pickup === 'write' || (bizPerms as any).confirm_pickup === true;
+  // Permission tester — mirrors the inline pattern in business-profile.tsx
+  // (line ~387) and add-member.tsx (line ~28). 'write' / true / 'true' all
+  // count as granted; everything else is denied. Owner / admin short-circuit
+  // every gate by convention — their role implicitly carries every action
+  // permission regardless of what the JSONB column happens to store.
+  const hasPerm = (key: string): boolean => {
+    if (isAdminOrOwner) return true;
+    const v = (bizPerms as any)[key];
+    return v === 'write' || v === true || v === 'true';
+  };
+  // Permission → notification gates. Each notif class maps to one or more
+  // action perms; if the member can't act on the underlying surface, the
+  // toggle is hidden entirely (no greyed-out non-actionable rows in
+  // settings) and — independently — the backend fan-out drops their device
+  // from the push recipient list so disabling on the client isn't the only
+  // line of defence.
+  //   • new orders → anyone who handles incoming orders (confirm_pickup OR
+  //     cancel_order). Acting on a new order IS the action perm.
+  //   • order tracking ("suivi des commandes" — basket-picked-up + biz-side
+  //     cancellations) → view_history. These are AFTER-the-fact updates
+  //     about completed/cancelled orders; the surface they refer to lives in
+  //     the "Historique et statistiques" tab, so a member who can't see that
+  //     tab has nowhere to follow up on the notif.
+  //   • reviews → view_history (reviews list lives in the same tab).
+  //   • messages → messaging (the existing chat permission).
+  //   • offers & news → always on; platform-level announcements aren't
+  //     perm-gated and stay user-controllable via the toggle alone.
+  const canSeeOrderNotifs = hasPerm('confirm_pickup') || hasPerm('cancel_order');
+  const canSeeOrderTracking = hasPerm('view_history');
+  const canSeeReviewNotifs = hasPerm('view_history');
+  const canSeeMessageNotifs = hasPerm('messaging');
 
   const NOTIF_ITEMS: { key: keyof NotifPrefs; labelKey: string; descKey: string }[] = isBusiness
     ? [
-        // New orders keep their own channel — the one notification a business
-        // never wants folded into a quieter "tracking" bucket.
-        ...(hasConfirmPickup ? [{ key: 'newOrders' as keyof NotifPrefs, labelKey: 'settings.newOrders', descKey: 'settings.newOrdersDesc' }] : []),
-        // Grouped order-tracking: basket-picked-up + cancellations at the venue.
-        { key: 'orderUpdates' as keyof NotifPrefs, labelKey: 'settings.orderUpdates', descKey: 'settings.orderUpdatesBizDesc' },
-        // Business gets notified when a customer leaves a review.
-        { key: 'reviews' as keyof NotifPrefs, labelKey: 'settings.reviews', descKey: 'settings.reviewsDesc' },
-        // Business sees messages FROM customers.
-        { key: 'messages' as keyof NotifPrefs, labelKey: 'settings.messagesFromCustomer', descKey: 'settings.messagesFromCustomerDesc' },
+        // New orders — the one notification a business never wants folded
+        // into a quieter "tracking" bucket. Gated on either order-handling
+        // perm: if you can confirm OR cancel, you act on incoming orders.
+        ...(canSeeOrderNotifs ? [{ key: 'newOrders' as keyof NotifPrefs, labelKey: 'settings.newOrders', descKey: 'settings.newOrdersDesc' }] : []),
+        // Grouped order-tracking ("Suivi des commandes"): basket-picked-up
+        // + venue-side cancellations. Gated on view_history because the
+        // surface these notifs refer to (post-pickup details, cancellation
+        // history) lives in the "Historique et statistiques" tab — a member
+        // without that perm has nowhere to act on the notif.
+        ...(canSeeOrderTracking ? [{ key: 'orderUpdates' as keyof NotifPrefs, labelKey: 'settings.orderUpdates', descKey: 'settings.orderUpdatesBizDesc' }] : []),
+        // Business gets notified when a customer leaves a review. Gated on
+        // view_history — that's where the reviews list lives in-app.
+        ...(canSeeReviewNotifs ? [{ key: 'reviews' as keyof NotifPrefs, labelKey: 'settings.reviews', descKey: 'settings.reviewsDesc' }] : []),
+        // Business sees messages FROM customers — gated on the same
+        // messaging perm the chat surface itself uses.
+        ...(canSeeMessageNotifs ? [{ key: 'messages' as keyof NotifPrefs, labelKey: 'settings.messagesFromCustomer', descKey: 'settings.messagesFromCustomerDesc' }] : []),
         // Same storage key as customers' "offers & news", but businesses only
         // ever receive Barakeat platform announcements (never offers/promos).
+        // Always shown — not gated on any action perm.
         { key: 'offersNews' as keyof NotifPrefs, labelKey: 'settings.businessAnnouncements', descKey: 'settings.businessAnnouncementsDesc' },
       ]
     : [
@@ -1033,7 +1162,12 @@ export default function SettingsScreen() {
   const PERMISSION_ITEMS = [
     { labelKey: 'settings.camera', status: cameraStatus, icon: Camera, kind: 'camera' as const },
     { labelKey: 'settings.location', status: locationStatus, icon: MapPin, kind: 'location' as const },
-    { labelKey: 'settings.photoLibrary', status: photoLibraryStatus, icon: ImageIcon, kind: 'photo' as const },
+    // Photos row is iOS-only: on Android we now use the system Photo Picker (no
+    // persistent media permission to show or manage), so a "Photos: Not Set" row
+    // there would be misleading since picking still works per-tap.
+    ...(Platform.OS === 'ios'
+      ? [{ labelKey: 'settings.photoLibrary', status: photoLibraryStatus, icon: ImageIcon, kind: 'photo' as const }]
+      : []),
   ];
 
   return (
@@ -1052,7 +1186,13 @@ export default function SettingsScreen() {
         ]}
       >
         <TouchableOpacity
-          onPress={() => {
+          // Demo guard — when the walkthrough's settings overlay is up
+          // (the final "Démarrer la démo" step), the user must either
+          // dismiss the overlay or start the demo. Letting them back out
+          // here strands the walkthrough on a screen they've already left,
+          // and the overlay re-renders on the next focus with no clear
+          // affordance to escape.
+          onPress={showSettingsOverlay ? undefined : () => {
             // Demo hand-off lands the user on /settings via router.push from
             // various entry points inside the business walkthrough; the
             // router-guards wrapper installs `canGoBack()` and swallows
@@ -1072,10 +1212,11 @@ export default function SettingsScreen() {
               router.replace('/(tabs)/' as never);
             }
           }}
+          disabled={showSettingsOverlay}
           hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}
           accessibilityLabel={t('common.goBack', { defaultValue: 'Go back' })}
           accessibilityRole="button"
-          style={{ position: 'absolute', left: theme.spacing.xl, top: theme.spacing.md }}
+          style={{ position: 'absolute', left: theme.spacing.xl, top: theme.spacing.md, opacity: showSettingsOverlay ? 0.3 : 1 }}
         >
           <ArrowLeft size={24} color={theme.colors.textPrimary} />
         </TouchableOpacity>
@@ -1086,7 +1227,7 @@ export default function SettingsScreen() {
       <ScrollView ref={settingsScrollRef} contentContainerStyle={{ padding: theme.spacing.xl }} showsVerticalScrollIndicator={false}>
         {/* User identity card. Avatar = up-to-two-letter initials drawn
             from the first and last words of the name (e.g.
-            "Mohamed Ben Ali" → "MA", "Sami" → "S"). Falls back to the
+            "Mohamed Ben Salah" → "MA", "Sami" → "S"). Falls back to the
             email prefix's first letter if name is unavailable. Brand
             palette: dark-green (#114b3c) backdrop with the lime accent
             (#e3ff5c) for the letters — replaces the previous
@@ -1214,6 +1355,13 @@ export default function SettingsScreen() {
                 const { registerForPushNotifications } = require('@/src/services/pushNotifications');
                 const token = await registerForPushNotifications();
                 if (!token) {
+                  // Permission denied (or registration failed) → the OS won't
+                  // deliver, so flip the toggle BACK to OFF instead of leaving it
+                  // ON-but-useless, and point the user to system settings (iOS
+                  // can't re-prompt once denied).
+                  setNotifications(false);
+                  void AsyncStorage.setItem(PUSH_ENABLED_KEY, 'false');
+                  setNotifPrefsExpanded(false);
                   Alert.alert(
                     t('settings.pushPermissionDenied', { defaultValue: 'Notifications désactivées' }),
                     t('settings.pushPermissionDeniedDesc', { defaultValue: 'Activez les notifications dans les réglages de votre appareil pour recevoir des alertes.' }),
@@ -1293,6 +1441,7 @@ export default function SettingsScreen() {
                   />
                 </View>
               ))}
+
             </>
           )}
         </View>
@@ -1488,7 +1637,15 @@ export default function SettingsScreen() {
             { label: t('profile.termsAndConditions'), key: 'terms' },
             { label: t('profile.cookies'), key: 'cookies' },
             { label: t('profile.privacyPolicy'), key: 'privacy' },
-          ].map((item, i) => (
+          ]
+            // Business members see only the docs that govern them. The consumer
+            // CGU (réservations, crédits, remboursements) doesn't apply to a
+            // merchant, so it's hidden in the business interface. Privacy stays
+            // — the app stores require it to be reachable from inside the app —
+            // and Cookies stays since it's generic local-storage info that
+            // applies to every user regardless of role.
+            .filter((item) => !(isBusiness && item.key === 'terms'))
+            .map((item, i) => (
             <TouchableOpacity
               key={item.key}
               style={[styles.menuItem, {
@@ -1523,18 +1680,28 @@ export default function SettingsScreen() {
         </TouchableOpacity>
 
         {/* Delete Account — quiet destructive trigger. The loud red confirm
-            lives inside the two-step modal below. */}
-        <TouchableOpacity
-          onPress={deleteAccount}
-          disabled={deleteLoading}
-          style={{ paddingVertical: theme.spacing.md, alignItems: 'center', opacity: deleteLoading ? 0.5 : 1 }}
-          accessibilityLabel={t('profile.deleteAccount')}
-          accessibilityRole="button"
-        >
-          <Text style={{ color: theme.colors.error, fontSize: 14, fontFamily: 'Poppins_600SemiBold', fontWeight: '600' }}>
-            {t('profile.deleteAccount')}
+            lives inside the two-step modal below. Hidden for non-admin
+            business members; for them an org admin removes the seat from
+            the team management screen, which deletes the account. */}
+        {canSelfDelete ? (
+          <TouchableOpacity
+            onPress={deleteAccount}
+            disabled={deleteLoading}
+            style={{ paddingVertical: theme.spacing.md, alignItems: 'center', opacity: deleteLoading ? 0.5 : 1 }}
+            accessibilityLabel={t('profile.deleteAccount')}
+            accessibilityRole="button"
+          >
+            <Text style={{ color: theme.colors.error, fontSize: 14, fontFamily: 'Poppins_600SemiBold', fontWeight: '600' }}>
+              {t('profile.deleteAccount')}
+            </Text>
+          </TouchableOpacity>
+        ) : (
+          <Text style={{ color: theme.colors.muted, fontSize: 12, fontFamily: 'Poppins_400Regular', textAlign: 'center', paddingVertical: theme.spacing.md, paddingHorizontal: theme.spacing.lg, lineHeight: 18 }}>
+            {t('profile.deleteAccountMemberHint', {
+              defaultValue: "Pour quitter l'organisation, contactez l'administrateur de votre commerce — il pourra retirer votre accès et supprimer votre compte.",
+            })}
           </Text>
-        </TouchableOpacity>
+        )}
 
         {/* App Version */}
         <Text style={[{ color: theme.colors.muted, ...theme.typography.caption, textAlign: 'center' as const, marginTop: theme.spacing.xl }]}>

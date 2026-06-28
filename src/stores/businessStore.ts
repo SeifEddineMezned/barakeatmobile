@@ -103,7 +103,7 @@ const defaultOrders: Order[] = [
     pickupCode: 'A3F8K2',
     status: 'reserved',
     createdAt: new Date().toISOString(),
-    customerName: 'Ahmed Ben Ali',
+    customerName: 'Ahmed Ben Salah',
     customerPhone: '+216 55 123 456',
   },
   {

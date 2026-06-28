@@ -64,6 +64,16 @@ function ensureHandler(): void {
 // later legitimate re-registration (post-permission-grant, etc.) still works.
 let inFlightRegistration: Promise<string | null> | null = null;
 
+// Called from signOut so the next user's first registerForPushNotifications()
+// call definitely hits the wire instead of returning a stale in-flight promise
+// that was attaching the device to the PREVIOUS user. (Real-world account
+// switch is slow enough that this race is rare, but the cost of clearing is
+// nil and the symptom — "I just switched accounts and pushes don't come" — is
+// exactly what the user keeps reporting.)
+export function resetInFlightPushRegistration(): void {
+  inFlightRegistration = null;
+}
+
 export async function registerForPushNotifications(): Promise<string | null> {
   if (isExpoGo) {
     console.log('[Push] Skipping push registration in Expo Go');
@@ -78,6 +88,45 @@ export async function registerForPushNotifications(): Promise<string | null> {
     }
   })();
   return inFlightRegistration;
+}
+
+// Per-user "in-app push mute" pref. The OS permission is the technical gate;
+// this pref is the user's *intent* to receive Barakeat pushes when permission
+// is granted. Keying by userId fixes the bug where account A's OFF-toggle
+// permanently muted account B on the same device — the global key carried
+// across logins and the auto-register effect bailed every time.
+const PUSH_PREF_PREFIX = '@barakeat_push_enabled';
+export function pushPrefKeyForUser(userId: string | number | null | undefined): string {
+  return userId == null ? PUSH_PREF_PREFIX : `${PUSH_PREF_PREFIX}:${userId}`;
+}
+
+/**
+ * Idempotent "make sure this device is registered for THIS user" call.
+ *
+ *   - If OS perm is granted AND the per-user pref isn't explicitly 'false',
+ *     (re-)registers — this also force-rebinds the device's row in
+ *     device_push_tokens to the current user (ON CONFLICT DO UPDATE on the
+ *     backend), which is the actual fix for "switched accounts and pushes
+ *     stopped coming until I toggled OFF/ON".
+ *   - Cheap to call repeatedly (foreground resume, screen focus, every login)
+ *     because the in-flight dedupe collapses bursts onto one HTTP round-trip.
+ *
+ * Returns the expo token on success, null on any skip/failure.
+ */
+export async function ensurePushRegistered(userId: string | number | null | undefined): Promise<string | null> {
+  if (isExpoGo) return null;
+  try {
+    const granted = await getPushPermissionGranted();
+    if (!granted) return null;
+    // Read the user-scoped pref. New users (no row) default to ON — that's
+    // the desired behaviour: a fresh account on a permission-granted device
+    // should receive pushes without anyone touching the toggle first.
+    const pref = await AsyncStorage.getItem(pushPrefKeyForUser(userId));
+    if (pref === 'false') return null;
+    return await registerForPushNotifications();
+  } catch {
+    return null;
+  }
 }
 
 async function doRegisterForPushNotifications(): Promise<string | null> {
@@ -106,10 +155,30 @@ async function doRegisterForPushNotifications(): Promise<string | null> {
       });
     }
 
-    const tokenData = await Notifications.getExpoPushTokenAsync({
-      projectId: '9d8ccb2b-0876-491c-bdc4-eab409cb105a',
-    });
-    const token = tokenData.data;
+    // Token resolution: on a cold launch the OS hasn't necessarily finished
+    // its async APNs/FCM rebind by the time we first call getExpoPushTokenAsync,
+    // which can return null/throw. The retry below gives the OS 600ms to catch
+    // up before we report failure — matches the "didn't work until I toggled
+    // OFF then ON" symptom (the user's delay is what gave APNs time).
+    let token: string | null = null;
+    for (let attempt = 0; attempt < 3 && !token; attempt++) {
+      try {
+        const tokenData = await Notifications.getExpoPushTokenAsync({
+          projectId: '9d8ccb2b-0876-491c-bdc4-eab409cb105a',
+        });
+        token = (tokenData?.data as string | undefined) || null;
+        if (!token && attempt < 2) {
+          await new Promise((r) => setTimeout(r, 600));
+        }
+      } catch (e) {
+        console.log(`[Push] getExpoPushTokenAsync attempt ${attempt + 1} failed:`, (e as any)?.message);
+        if (attempt < 2) await new Promise((r) => setTimeout(r, 600));
+      }
+    }
+    if (!token) {
+      console.warn('[Push] Could not obtain Expo push token after 3 attempts (OS APNs/FCM rebind likely incomplete)');
+      return null;
+    }
 
     // Gather the native FCM token too (Android only) so we register BOTH tokens
     // for this device in ONE multi-device row. `.data` IS the FCM registration
@@ -128,10 +197,12 @@ async function doRegisterForPushNotifications(): Promise<string | null> {
 
     // PRIMARY: register THIS device (expo + fcm + platform) so the account can
     // have several live devices that ALL receive pushes (multi-device).
+    let putOk = false;
     try {
       await apiClient.put('/api/auth/device-token', { expoToken: token, fcmToken, platform: Platform.OS });
-    } catch {
-      console.log('[Push] Failed to register device token');
+      putOk = true;
+    } catch (e) {
+      console.warn('[Push] PUT /api/auth/device-token failed:', (e as any)?.message);
     }
     // Remember this device's Expo token so sign-out detaches exactly this device.
     try { await AsyncStorage.setItem(EXPO_TOKEN_KEY, token); } catch {}
@@ -142,9 +213,10 @@ async function doRegisterForPushNotifications(): Promise<string | null> {
     try { await apiClient.put('/api/auth/push-token', { pushToken: token }); } catch {}
     if (fcmToken) { try { await apiClient.put('/api/auth/fcm-token', { fcmToken }); } catch {} }
 
-    return token;
+    console.log(`[Push] Registered device: putOk=${putOk} fcm=${fcmToken ? 'yes' : 'no'} expo=${token.slice(0, 18)}...`);
+    return putOk ? token : null;
   } catch (error) {
-    console.log('[Push] Registration error:', error);
+    console.warn('[Push] Registration error:', (error as any)?.message);
     return null;
   }
 }
@@ -153,6 +225,21 @@ async function doRegisterForPushNotifications(): Promise<string | null> {
 // delivering OS-level (phone) push notifications. Called when the user turns the
 // push toggle OFF. In-app notifications are NOT affected — they are polled from
 // the notifications feed and never depend on the push token.
+// Whether the OS-level notification permission is currently GRANTED. The
+// settings toggle must reflect this, not just the stored app preference — a user
+// who denied the first-launch system prompt has the app default (ON) but the OS
+// blocks delivery, so the toggle would otherwise lie by showing ON.
+export async function getPushPermissionGranted(): Promise<boolean> {
+  if (isExpoGo) return false;
+  try {
+    const Notifications = require('expo-notifications');
+    const { status } = await Notifications.getPermissionsAsync();
+    return status === 'granted';
+  } catch {
+    return false;
+  }
+}
+
 export async function unregisterPushNotifications(): Promise<void> {
   // Detach ONLY this device's multi-device row (the account's other devices keep
   // receiving pushes), then clear the legacy single-token columns too.

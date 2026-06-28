@@ -346,8 +346,12 @@ function CarouselBanner({ moneySaved, co2Saved, totalOrders, upcomingOrders, get
                   meals_saved from gamification (fallback: count of
                   picked_up orders), so "Paniers sauvés" reads true to
                   what the figure actually measures. */}
+              {/* Pluralized via i18next's count rule: 1 → "Panier sauvé",
+                  0 or 2+ → "Paniers sauvés". (i18next's default plural rule
+                  matches the user's preference of plural-for-zero out of
+                  the box — _other covers 0 along with 2+.) */}
               <Text style={{ color: 'rgba(255,255,255,0.7)', ...theme.typography.caption }}>
-                {t('orders.basketsSaved', { defaultValue: 'Paniers sauvés' })}
+                {t('orders.basketsSaved', { count: totalOrders, defaultValue: 'Paniers sauvés' })}
               </Text>
             </View>
           </View>
@@ -1541,7 +1545,7 @@ export default function OrdersScreen() {
                   <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 10 }}>
                     <AlertTriangle size={14} color="#d97706" style={{ marginTop: 3 }} />
                     <Text style={{ color: '#d97706', ...theme.typography.bodySm, fontWeight: '600', flex: 1 }}>
-                      {t('orders.cancelNoRefundCash', { defaultValue: 'Aucun remboursement — paiement en espèces' })}
+                      {t('orders.cancelNoRefundCash', { defaultValue: 'Aucun remboursement — paiement sur place' })}
                     </Text>
                   </View>
                 ) : null}

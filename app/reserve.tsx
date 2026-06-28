@@ -807,7 +807,7 @@ export default function ReserveScreen() {
                 {t('reserve.originalPrice', { defaultValue: 'Prix Original' })}
               </Text>
               <Text style={[{ flexShrink: 0, marginLeft: 8, color: theme.colors.muted, ...theme.typography.bodySm, textDecorationLine: 'line-through' as const }]}>
-                {originalPrice * quantity} TND
+                {originalPrice * quantity} {t('common.currency', { defaultValue: 'TND' })}
               </Text>
             </View>
           )}
@@ -817,7 +817,7 @@ export default function ReserveScreen() {
               {t('reserve.barakeatPrice', { defaultValue: 'Prix sur Barakeat' })}
             </Text>
             <Text style={[{ flexShrink: 0, marginLeft: 8, color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '600' as const }]}>
-              {price * quantity} TND
+              {price * quantity} {t('common.currency', { defaultValue: 'TND' })}
             </Text>
           </View>
           {/* Credits applied — shown as 0 or −X so the math to the total is clear. */}
@@ -827,7 +827,7 @@ export default function ReserveScreen() {
                 {t('reserve.creditsApplied', { defaultValue: 'Crédits appliqués' })}
               </Text>
               <Text style={[{ flexShrink: 0, marginLeft: 8, color: theme.colors.primary, ...theme.typography.bodySm, fontWeight: '600' as const }]}>
-                {creditApplied > 0 ? `−${creditApplied.toFixed(2)}` : '0'} TND
+                {creditApplied > 0 ? `−${creditApplied.toFixed(2)}` : '0'} {t('common.currency', { defaultValue: 'TND' })}
               </Text>
             </View>
           )}
@@ -835,7 +835,7 @@ export default function ReserveScreen() {
           <View style={[styles.totalRow, { marginTop: theme.spacing.lg, paddingTop: theme.spacing.lg, borderTopWidth: 1, borderTopColor: theme.colors.divider }]}>
             <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3 }]}>{t('reserve.total')}</Text>
             <Text style={[{ color: theme.colors.primary, ...theme.typography.h2, fontWeight: '700' as const }]}>
-              {fmtDT(remainingDueDT)} TND
+              {fmtDT(remainingDueDT)} {t('common.currency', { defaultValue: 'TND' })}
             </Text>
           </View>
         </View>
@@ -862,7 +862,7 @@ export default function ReserveScreen() {
               <TouchableOpacity
                 onPress={() => setPaymentMethod('cash')}
                 style={{ flex: 1, backgroundColor: paymentMethod === 'cash' ? theme.colors.primary + '12' : theme.colors.bg, borderRadius: theme.radii.r16, padding: 16, borderWidth: paymentMethod === 'cash' ? 2 : 1, borderColor: paymentMethod === 'cash' ? theme.colors.primary : theme.colors.divider, alignItems: 'center', justifyContent: 'flex-start' }}
-                accessibilityLabel={t('reserve.payCash', { defaultValue: 'Pay in Cash' })}
+                accessibilityLabel={t('reserve.payCash', { defaultValue: 'Pay on-site' })}
                 accessibilityRole="radio"
                 accessibilityState={{ selected: paymentMethod === 'cash' }}
               >
@@ -870,7 +870,7 @@ export default function ReserveScreen() {
                   <Banknote size={24} color={paymentMethod === 'cash' ? theme.colors.primary : theme.colors.textSecondary} />
                 </View>
                 <Text style={{ color: paymentMethod === 'cash' ? theme.colors.primary : theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '600', marginTop: 8, textAlign: 'center' }}>
-                  {t('reserve.payCash', { defaultValue: 'Pay in Cash' })}
+                  {t('reserve.payCash', { defaultValue: 'Pay on-site' })}
                 </Text>
                 <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, marginTop: 4, textAlign: 'center' }}>
                   {t('reserve.payCashDesc', { defaultValue: 'Pay the merchant at pickup' })}
@@ -903,7 +903,7 @@ export default function ReserveScreen() {
               </View>
               <View style={{ flex: 1 }}>
                 <Text style={{ color: theme.colors.primary, ...theme.typography.body, fontWeight: '600' }}>
-                  {t('reserve.payCash', { defaultValue: 'Payer en espèces' })}
+                  {t('reserve.payCash', { defaultValue: 'Payer sur place' })}
                 </Text>
                 <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, marginTop: 2 }}>
                   {t('reserve.payCashDesc', { defaultValue: 'Payez le commerçant au retrait' })}
@@ -970,7 +970,7 @@ export default function ReserveScreen() {
                     style={{ flex: 1, color: theme.colors.textPrimary, ...theme.typography.body, padding: 0 }}
                     accessibilityLabel={t('reserve.useCreditsLabel', { defaultValue: 'Utiliser mes crédits' })}
                   />
-                  <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm, marginLeft: 6 }}>TND</Text>
+                  <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm, marginLeft: 6 }}>{t('common.currency', { defaultValue: 'TND' })}</Text>
                 </View>
                 <TouchableOpacity
                   onPress={() => stepCredits(1)}

@@ -76,6 +76,19 @@ export const FeatureFlags = {
   // ⚠️  Requires ANTHROPIC_API_KEY in backend .env to work.
   ENABLE_AI_BASKET_SUGGESTIONS: false,
 
+  // ── B5b: AI improve + auto-translate for description & pickup instructions ─
+  // ✨ "Améliorer avec l'IA" button under the description and pickup-
+  // instructions fields. The merchant types in any app language, taps the
+  // button, and Claude rewrites it (description uses the interactive Q&A refine
+  // flow) and translates it into FR/EN/AR so the listing renders in each
+  // customer's chosen language. Backed by POST /api/baskets/ai-improve and
+  // /ai-refine (Haiku) with a 30/merchant/day cap.
+  // ⚠️  Requires ANTHROPIC_API_KEY in backend env to actually improve text.
+  // OFF for now — gates every AI-suggestion entry point (description + pickup
+  // buttons in create-basket, pickup button in business-profile, and the
+  // "Traduit en…" notes). Flip to true to re-enable.
+  ENABLE_AI_TEXT_IMPROVE: true,
+
   // ── B6: Easter eggs ──────────────────────────────────────────────────────
   // Master toggle — set false to silently disable ALL easter eggs at once.
   ENABLE_EASTER_EGGS: false,

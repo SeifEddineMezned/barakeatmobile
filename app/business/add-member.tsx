@@ -3,7 +3,15 @@ import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Switch
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import { useRouter, useLocalSearchParams } from 'expo-router';
-import { ChevronLeft, ChevronDown, ChevronUp, Key, MapPin } from 'lucide-react-native';
+import { ChevronLeft, ChevronDown, ChevronUp, Copy, Check, MapPin, Info } from 'lucide-react-native';
+// expo-clipboard is required for the password copy button. Loaded lazily
+// via require() so a bundle that ships before the native module is linked
+// (i.e. an `eas update` to an existing build) still renders the screen —
+// the button just no-ops in that window. Once `npx expo install
+// expo-clipboard` lands in a fresh native build, copy works for real.
+const Clipboard: { setStringAsync?: (text: string) => Promise<void> } | null = (() => {
+  try { return require('expo-clipboard'); } catch { return null; }
+})();
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import {
@@ -17,6 +25,7 @@ import { useCustomAlert } from '@/src/components/CustomAlert';
 import { getErrorMessage } from '@/src/lib/api';
 import { verifyOrAlarm } from '@/src/hooks/useVerifyOnError';
 import { formatLocationName } from '@/src/utils/formatLocation';
+import { BottomSheet } from '@/src/components/BottomSheet';
 
 type PermissionKey = 'confirm_pickup' | 'edit_quantities' | 'edit_basket_info' | 'create_delete_baskets' | 'view_history' | 'messaging' | 'cancel_order';
 // Unified with the change-role popup (TeamRoleChangeModal) — three roles
@@ -86,6 +95,11 @@ export default function AddMemberScreen() {
   const [selectedPreset, setSelectedPreset] = useState<RolePreset | null>('member');
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [sendCredentials, setSendCredentials] = useState(true);
+  const [showSendCredsInfo, setShowSendCredsInfo] = useState(false);
+  // The copy-to-clipboard button flips its icon to a checkmark for ~1.2 s so
+  // the admin gets a clear "yes, it copied" signal — there's no toast on
+  // mobile by default and pasting elsewhere to verify breaks the flow.
+  const [pwCopied, setPwCopied] = useState(false);
   const [permissions, setPermissions] = useState<Record<PermissionKey, boolean>>({
     confirm_pickup: true, edit_quantities: false, edit_basket_info: false, create_delete_baskets: false, view_history: false, messaging: true, cancel_order: false,
   });
@@ -196,14 +210,13 @@ export default function AddMemberScreen() {
       // 409 cross-org refusal short-circuits BEFORE verify — it's a
       // deterministic deny, so the member definitely wasn't added.
       if (err?.data?.error === 'email_already_partner_elsewhere') {
-        const otherOrg =
-          err.data.other_org_name
-          || t('business.team.addMemberError.otherCommerce', { defaultValue: 'un autre commerce' });
+        // Generic message — do NOT name the other organization. Even when the
+        // backend doesn't leak it, the FE template stayed verbatim could
+        // give away that *something else* exists. Keep the wording neutral.
         alert.showAlert(
           t('business.team.addMemberError.title', { defaultValue: 'Email déjà utilisé' }),
-          t('business.team.addMemberError.emailInOtherOrg', {
-            org: otherOrg,
-            defaultValue: `Cet email est déjà associé à ${otherOrg}. Utilisez une adresse différente, ou retirez d'abord ce membre de l'autre commerce.`,
+          t('business.team.addMemberError.emailNotAvailable', {
+            defaultValue: "Cette adresse email n'est pas disponible. Utilisez une adresse différente.",
           }),
         );
         return;
@@ -291,7 +304,7 @@ export default function AddMemberScreen() {
           style={[styles.input, { backgroundColor: theme.colors.surface, borderColor: theme.colors.divider, color: theme.colors.textPrimary }]}
           value={name}
           onChangeText={setName}
-          placeholder={t('business.team.fieldNamePlaceholder', { defaultValue: 'Ex: Ahmed Ben Ali' })}
+          placeholder={t('business.team.fieldNamePlaceholder', { defaultValue: 'Ex: Ahmed Ben Salah' })}
           placeholderTextColor={theme.colors.muted}
           autoCapitalize="words"
         />
@@ -320,15 +333,36 @@ export default function AddMemberScreen() {
           <TextInput
             style={[styles.input, { backgroundColor: theme.colors.surface, borderColor: theme.colors.divider, color: theme.colors.textPrimary, flex: 1 }]}
             value={password}
-            onChangeText={setPassword}
+            onChangeText={(v) => { setPassword(v); if (pwCopied) setPwCopied(false); }}
             placeholder={t('business.team.fieldPasswordPlaceholder', { defaultValue: 'Mot de passe' })}
             placeholderTextColor={theme.colors.muted}
+            selectTextOnFocus
           />
           <TouchableOpacity
-            onPress={() => setPassword(Math.random().toString(36).slice(-8))}
-            style={{ backgroundColor: '#114b3c', borderRadius: 12, paddingHorizontal: 14, height: 48, justifyContent: 'center' }}
+            onPress={async () => {
+              const toCopy = (password ?? '').trim();
+              if (!toCopy) return;
+              if (!Clipboard?.setStringAsync) return;
+              try {
+                await Clipboard.setStringAsync(toCopy);
+                setPwCopied(true);
+                setTimeout(() => setPwCopied(false), 1200);
+              } catch {}
+            }}
+            style={{ backgroundColor: '#114b3c', borderRadius: 12, paddingHorizontal: 14, height: 48, justifyContent: 'center', alignItems: 'center', flexDirection: 'row', gap: 6 }}
+            accessibilityLabel={t('business.team.copyPassword', { defaultValue: 'Copier le mot de passe' })}
+            accessibilityRole="button"
           >
-            <Key size={18} color="#e3ff5c" />
+            {pwCopied ? (
+              <Check size={18} color="#e3ff5c" />
+            ) : (
+              <Copy size={18} color="#e3ff5c" />
+            )}
+            <Text style={{ color: '#e3ff5c', fontSize: 12, fontWeight: '600' }}>
+              {pwCopied
+                ? t('common.copied', { defaultValue: 'Copié' })
+                : t('common.copy', { defaultValue: 'Copier' })}
+            </Text>
           </TouchableOpacity>
         </View>
 
@@ -394,8 +428,9 @@ export default function AddMemberScreen() {
                       setPermissions((prev) => ({ ...prev, [key]: val }));
                       setSelectedPreset(null);
                     }}
-                    trackColor={{ false: theme.colors.divider, true: '#114b3c50' }}
-                    thumbColor={permissions[key] ? '#114b3c' : theme.colors.muted}
+                    trackColor={{ false: theme.colors.divider, true: theme.colors.primary }}
+                    thumbColor={permissions[key] ? '#fff' : (Platform.OS === 'android' ? theme.colors.surface : undefined)}
+                    ios_backgroundColor={theme.colors.divider}
                   />
                 </View>
                 <Text style={{ color: permissions[key] ? theme.colors.textSecondary : theme.colors.muted, fontSize: 11, lineHeight: 15, marginTop: 4 }}>
@@ -463,10 +498,19 @@ export default function AddMemberScreen() {
         )}
 
         {/* ── Send credentials toggle ── */}
-        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 20, paddingVertical: 10 }}>
-          <Text style={{ color: theme.colors.textPrimary, fontSize: 14, flex: 1 }}>
-            {t('business.team.sendCredentials', { defaultValue: 'Envoyer les identifiants par email' })}
-          </Text>
+        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 20, paddingVertical: 10, gap: 10 }}>
+          <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            <Text style={{ color: theme.colors.textPrimary, fontSize: 14, flexShrink: 1 }}>
+              {t('business.team.sendCredentials', { defaultValue: "Envoyer les identifiants directement au nouveau membre par email Barakeat" })}
+            </Text>
+            <TouchableOpacity
+              onPress={() => setShowSendCredsInfo(true)}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              accessibilityLabel={t('common.moreInfo', { defaultValue: 'Plus d’infos' })}
+            >
+              <Info size={16} color={theme.colors.textSecondary} />
+            </TouchableOpacity>
+          </View>
           <Switch
             value={sendCredentials}
             onValueChange={setSendCredentials}
@@ -497,6 +541,32 @@ export default function AddMemberScreen() {
           )}
         </TouchableOpacity>
       </ScrollView>
+
+      {/* Info popup for the "send credentials" toggle. Lives outside the
+          ScrollView so the slide-up animation can't fight the scroll's
+          touch responder. BottomSheet renders inside a native Modal, so
+          touches above the sheet are properly isolated. */}
+      <BottomSheet visible={showSendCredsInfo} onClose={() => setShowSendCredsInfo(false)}>
+        <View style={{ paddingHorizontal: 20, paddingTop: 4, paddingBottom: 8 }}>
+          <Text style={{ color: theme.colors.textPrimary, fontSize: 17, fontWeight: '700', marginBottom: 10 }}>
+            {t('business.team.sendCredentialsInfoTitle', { defaultValue: 'Envoi automatique des identifiants' })}
+          </Text>
+          <Text style={{ color: theme.colors.textSecondary, fontSize: 14, lineHeight: 20, marginBottom: 16 }}>
+            {t('business.team.sendCredentialsInfoBody', {
+              defaultValue:
+                "Activé : nous envoyons directement à l'adresse email du nouveau membre un email Barakeat contenant son rôle, ses emplacements assignés, son adresse email de connexion et son mot de passe temporaire — il pourra se connecter et changer son mot de passe lui-même.\n\nDésactivé : aucun email n'est envoyé au nouveau membre. C'est à vous de lui transmettre ses identifiants par votre propre moyen.\n\nDans tous les cas, vous recevez vous aussi par email une copie complète des identifiants pour votre suivi.",
+            })}
+          </Text>
+          <TouchableOpacity
+            onPress={() => setShowSendCredsInfo(false)}
+            style={{ backgroundColor: '#114b3c', borderRadius: 12, paddingVertical: 12, alignItems: 'center', marginTop: 4 }}
+          >
+            <Text style={{ color: '#fff', fontWeight: '600', fontSize: 14 }}>
+              {t('common.gotIt', { defaultValue: 'Compris' })}
+            </Text>
+          </TouchableOpacity>
+        </View>
+      </BottomSheet>
     </SafeAreaView>
   );
 }

@@ -124,6 +124,15 @@ const queryClient = new QueryClient({
   },
 });
 
+// Hand the QueryClient to the module-level registry so non-React callers can
+// reach it. The api.ts response interceptor uses this to invalidate dependent
+// queries when the backend reports `code: 'location_deleted'` — see
+// handleLocationDeleted in lib/api.ts.
+try {
+  const { setGlobalQueryClient } = require('@/src/lib/queryClientRef');
+  setGlobalQueryClient(queryClient);
+} catch {}
+
 function RootLayoutNav() {
   return (
     <Stack screenOptions={{ headerBackTitle: "Back" }}>
@@ -153,6 +162,7 @@ function RootLayoutNav() {
       <Stack.Screen name="reserve" options={{ presentation: "card", headerShown: false }} />
       <Stack.Screen name="review" options={{ presentation: "card", headerShown: false }} />
       <Stack.Screen name="business/create-basket" options={{ presentation: "card", headerShown: false }} />
+      <Stack.Screen name="business/refine-description" options={{ presentation: "card", headerShown: false }} />
       <Stack.Screen name="business/select-org-basket" options={{ headerShown: false }} />
       <Stack.Screen name="business/set-password" options={{ headerShown: false, gestureEnabled: false }} />
       <Stack.Screen name="business/availability" options={{ presentation: "modal", headerShown: false }} />
@@ -557,6 +567,24 @@ function RootLayoutInner() {
       return;
     }
 
+    // Apple-only first-login NAME step. When Apple withholds the name on first
+    // authorization (the user cleared it on the consent sheet, or this is a
+    // repeat auth the system already authorized), the backend creates the
+    // account with an empty `name` and `nameNeedsInput=true`. We hold the
+    // user on /auth/name-input until they fill it in — quitting the app mid-
+    // step lands them right back here on next launch (the flag persisted in
+    // SecureStore alongside the rest of the user object). Apple-scoped so a
+    // Google account (which always returns a name) is never sent here.
+    const inNameInputScreen = segments[0] === 'auth' && (segments[1] as string) === 'name-input';
+    const isAppleUser =
+      (user as any)?.authProvider === 'apple' || (user as any)?.provider === 'apple';
+    if ((user as any)?.nameNeedsInput === true && isAppleUser) {
+      if (!inNameInputScreen) {
+        router.replace('/auth/name-input' as never);
+      }
+      return;
+    }
+
     // OAuth first-login gender step. Hold the user on /auth/onboarding until
     // the screen flips genderStepCompleted=true and replaces to their home
     // itself. Gated on genderStepCompleted (NOT onboardingCompleted) so the
@@ -810,6 +838,17 @@ function RootLayoutInner() {
     setStreakPopup(null);
   }, [clearOverlaysSeq]);
   useEffect(() => {
+    // First gate: bail the instant the user is signed out, BEFORE inspecting
+    // the still-cached `gamQuery.data` from their last session. The render
+    // gate at the modal already checks `isAuthenticated`, but it can lose a
+    // race against this effect: the cleanup at line 1170 clears `badgePopup`
+    // on logout, then this effect re-fires (because user?.role flipped from
+    // 'buyer' to undefined) and re-sets it — leaving a non-null popup queued
+    // until the next paint. Also covers a more subtle case: a business user's
+    // user?.role gate would not trip post-logout because user is null and
+    // user?.role is undefined (NOT 'business'), so without this guard the
+    // effect would proceed into the badge-set path with stale buyer-era data.
+    if (!isAuthenticated) return;
     if (!splashDone) return; // wait for splash animation to finish
     if (showWelcomeModal) return; // don't overlap with welcome popup
     if (celebrationPending) return; // don't overlap with post-reservation celebration
@@ -841,7 +880,7 @@ function RootLayoutInner() {
         break;
       }
     }
-  }, [gamQuery.data, splashDone, showWelcomeModal, celebrationPending, orderConfirmActive, orderFlowActive, showTutorial, showDemoWelcome, walkthroughStep, user?.role]);
+  }, [gamQuery.data, splashDone, showWelcomeModal, celebrationPending, orderConfirmActive, orderFlowActive, showTutorial, showDemoWelcome, walkthroughStep, user?.role, isAuthenticated]);
 
   // ── Pickup streak celebration ───────────────────────────────────────────
   // Hydrate the last-celebrated pickup date so a cold start doesn't re-fire the
@@ -860,6 +899,9 @@ function RootLayoutInner() {
   // Dedup is on last_pickup_date — the streak only moves at pickup, so a newly
   // seen date means the buyer just had a basket confirmed picked up.
   useEffect(() => {
+    // Same auth-gate as the badge effect above — keep stale buyer-era streak
+    // celebrations from materialising on the sign-in screen post-logout.
+    if (!isAuthenticated) return;
     if (!splashDone || !streakReady) return;
     if (showWelcomeModal || celebrationPending || showTutorial || showDemoWelcome) return;
     if (walkthroughStep !== null) return;
@@ -898,7 +940,7 @@ function RootLayoutInner() {
       Animated.spring(streakScale, { toValue: 1, friction: 5, tension: 60, useNativeDriver: true }).start();
       setTimeout(() => setStreakPopup(null), 4500);
     }, 500);
-  }, [gamQuery.data, streakReady, splashDone, showWelcomeModal, celebrationPending, orderConfirmActive, orderFlowActive, showTutorial, showDemoWelcome, walkthroughStep, user?.role, badgePopup]);
+  }, [gamQuery.data, streakReady, splashDone, showWelcomeModal, celebrationPending, orderConfirmActive, orderFlowActive, showTutorial, showDemoWelcome, walkthroughStep, user?.role, badgePopup, isAuthenticated]);
 
   // Sequence the "Premiers pas" badge popup BEFORE the "add an address" prompt
   // on first login. endDemoSequence() flips `pendingAddressPrompt` true at the
@@ -1140,10 +1182,54 @@ function RootLayoutInner() {
   }, [pendingFirstRun, isAuthenticated]);
 
   // Re-arm the once-per-uid probe guard on sign-out so a subsequent login
-  // (even as the same user within one session) probes again.
+  // (even as the same user within one session) probes again. Also wipe any
+  // probe-derived state so the welcome carousel can't render the previous
+  // user's data during the next sign-in's race window between login and
+  // probe resolution. The reported flash for business members was: the
+  // first slide briefly read the prior owner's org name (held in
+  // `bizWelcome` from their session) before the new probe resolved and
+  // flipped the slide to the member-name branch. Clearing here means a
+  // fresh login starts at the safe default (member name only) and only
+  // flips to the org-name branch once the new probe confirms it.
   useEffect(() => {
-    if (!isAuthenticated) probeRanForUidRef.current = null;
+    if (!isAuthenticated) {
+      probeRanForUidRef.current = null;
+      setBizWelcome(null);
+      setPartnerHasNoLocation(false);
+      // Also drop any badge / streak / welcome popups that were on screen
+      // when the user signed out — see Bug 2 below. Otherwise the celebration
+      // modals can linger over the sign-in screen for the 4-sec auto-clear
+      // window. Cheap reset, no-op when nothing was open.
+      setBadgePopup(null);
+      setStreakPopup(null);
+      badgeShownRef.current = new Set();
+    }
   }, [isAuthenticated]);
+
+  // Companion to the isAuthenticated→false cleanup above. Two purposes:
+  //   1. Reset stale per-user probe state on every user.id change so the
+  //      carousel never paints the prior user's slide.
+  //   2. SEED bizWelcome SYNCHRONOUSLY from organizationName + orgRole on the
+  //      user object — both are now included in the sign-in / google / apple
+  //      login response, so they're available the instant signIn() returns,
+  //      BEFORE the async fetchMyContext probe lands. Previously the probe
+  //      was the sole source of bizWelcome, leaving a ~500ms window where the
+  //      first carousel slide rendered "Bienvenue, <personal name>" then
+  //      snapped to "Bienvenue, <org name>" once the probe resolved — the
+  //      reported "snaps mid-animation" flash. With the seed, an owner gets
+  //      the right greeting on the very first paint; the probe remains as
+  //      the source of truth that confirms / corrects later.
+  useEffect(() => {
+    const orgName = (user as any)?.organizationName as string | null | undefined;
+    const orgRole = String((user as any)?.orgRole ?? '').toLowerCase();
+    if (orgName && (orgRole === 'owner' || orgRole === 'admin')) {
+      setBizWelcome({ orgName: orgName.trim(), isOwner: true });
+    } else {
+      setBizWelcome(null);
+    }
+    setPartnerHasNoLocation(false);
+    probeRanForUidRef.current = null;
+  }, [user?.id]);
 
   // Register for push notifications on startup whenever the user has push ON
   // (the default). Previously this was commented out, so the Expo push token was
@@ -1176,18 +1262,39 @@ function RootLayoutInner() {
     try { require('@/src/services/locale').syncLocaleToBackend(); } catch {}
     (async () => {
       try {
-        const pref = await AsyncStorage.getItem('@barakeat_push_enabled');
-        if (pref === 'false') return; // user explicitly disabled push
-        const { registerForPushNotifications } = require('@/src/services/pushNotifications');
-        await registerForPushNotifications();
+        const { ensurePushRegistered } = require('@/src/services/pushNotifications');
+        await ensurePushRegistered(user?.id);
       } catch {}
     })();
     // NB: user?.id is in the deps so switching accounts (which keeps
-    // isAuthenticated=true) ALSO re-registers — otherwise the newly-logged-in
-    // account never gets its push token saved and receives no notifications
-    // until the user toggles push off/on. That was the recurring "only works
-    // after toggling" bug.
+    // isAuthenticated=true) ALSO re-registers. The pref is now per-user
+    // (pushPrefKeyForUser) so account A's "OFF" no longer suppresses account
+    // B's auto-registration — the global key bug is what made "switched
+    // accounts, no pushes" recur every time.
   }, [isAuthenticated, isRestoringSession, user?.id, showSplash]);
+
+  // Safety net: every foreground resume re-registers if (OS perm granted AND
+  // per-user pref allows). The PUT is idempotent (ON CONFLICT DO UPDATE on
+  // device_push_tokens), so spamming it costs one cheap network call. This
+  // covers the case where the user granted OS push permission outside the
+  // app (system Settings → Barakeat → Notifications) and returned — the
+  // device's token row may still be pinned to a previous user, and without
+  // this resume-time rebind the toggle can show ON while pushes silently
+  // drop. The Settings-screen-only handler we had before missed every
+  // resume the user spent on any other screen.
+  useEffect(() => {
+    if (!isAuthenticated || isRestoringSession) return;
+    const tryRegister = () => {
+      try {
+        const { ensurePushRegistered } = require('@/src/services/pushNotifications');
+        void ensurePushRegistered(user?.id);
+      } catch {}
+    };
+    const sub = AppState.addEventListener('change', (s) => {
+      if (s === 'active') tryRegister();
+    });
+    return () => sub.remove();
+  }, [isAuthenticated, isRestoringSession, user?.id]);
 
   // Reset the home-screen app-icon badge when the app is foregrounded or the
   // signed-in user changes. We DELIBERATELY do NOT wipe the notification tray on
@@ -1453,6 +1560,15 @@ function RootLayoutInner() {
       } catch {}
     };
     const sub = Notifications.addNotificationResponseReceivedListener((response: any) => {
+      // Auth-gate the foreground tap the same way as the cold-start handler
+      // below. A push that lands while the user is on /auth/verify-email or
+      // /auth/sign-in (e.g. a broadcast aimed at their pre-verified account,
+      // or a stray push from a previous session on the device) used to route
+      // unconditionally to /notifications — where the loader spun forever
+      // because the fetch 401'd with no auth header. Bailing here keeps the
+      // user on the auth screen they're actually trying to use.
+      const s = useAuthStore.getState();
+      if (!s.isAuthenticated || s.isRestoringSession) return;
       routeFromData(response?.notification?.request?.content?.data);
     });
     // Cold start: app launched by tapping a notification while it was killed.
@@ -2049,8 +2165,13 @@ function RootLayoutInner() {
       {/* Badge unlocked popup. Gated on splashDone so a fast gamification
           fetch can't flash an unlocked-badge celebration over the splash
           animation. The Modal renders in its own native window and would
-          otherwise sit on top of the splash regardless of zIndex. */}
-      {badgePopup && splashDone && (
+          otherwise sit on top of the splash regardless of zIndex.
+          Also gated on isAuthenticated — without it, a badge that was set
+          mid-session and not yet auto-cleared could render over the sign-in
+          screen after sign-out (the "Premiers Pas" popup-on-logout report).
+          The set-side effect already exits for business users (line 822),
+          but the render-side gate is independent of who set the badge. */}
+      {badgePopup && splashDone && isAuthenticated && (
         <Modal visible transparent animationType="fade" onRequestClose={() => setBadgePopup(null)}>
           <TouchableOpacity
             style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 24 }}
@@ -2086,8 +2207,8 @@ function RootLayoutInner() {
       )}
       {/* Pickup streak celebration — fires once when a basket the buyer reserved
           is confirmed PICKED UP and their streak advances. Mirrors the badge
-          popup styling. */}
-      {streakPopup && splashDone && (
+          popup styling and the same auth-gate guard for the same reason. */}
+      {streakPopup && splashDone && isAuthenticated && (
         <Modal visible transparent animationType="fade" onRequestClose={() => setStreakPopup(null)}>
           <TouchableOpacity
             style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 24 }}

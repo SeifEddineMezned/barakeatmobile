@@ -89,15 +89,13 @@ export default function MenuItemsScreen() {
     );
   };
 
-  const pickItemImage = async (source: 'camera' | 'gallery') => {
-    if (source === 'camera') {
-      if (!(await ensureCameraAccess())) return;
-      const result = await ImagePicker.launchCameraAsync({ mediaTypes: ['images'], quality: 0.8, allowsEditing: true, aspect: [1, 1] });
-      if (!result.canceled && result.assets[0]) setNewItemImageUri(result.assets[0].uri);
-    } else {
-      const uri = await pickAndCrop({ aspect: [1, 1], quality: 0.8 });
-      if (uri) setNewItemImageUri(uri);
-    }
+  // Business image selectors are library-only — `source` is kept for callers
+  // that still thread it through, but both branches end up in pickAndCrop.
+  // (The menu-scan camera flow below is a separate workflow — it's OCR
+  // input, not a selector — so that one keeps its camera entry.)
+  const pickItemImage = async (_source: 'camera' | 'gallery') => {
+    const uri = await pickAndCrop({ aspect: [1, 1], quality: 0.8 });
+    if (uri) setNewItemImageUri(uri);
   };
 
   // Shared scan upload logic (AI menu scan)
@@ -217,10 +215,13 @@ export default function MenuItemsScreen() {
             {t('business.menuItems.addItem')}
           </Text>
 
-          {/* Photo picker for individual item */}
+          {/* Photo picker — library-only on business surfaces. The previous
+              "Take Photo" / "Choose from gallery" two-button layout is
+              replaced by a single button: tapping the thumbnail (or the
+              button) opens the photo library directly. */}
           <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: theme.spacing.md, gap: 10 }}>
             <TouchableOpacity
-              onPress={() => pickItemImage('camera')}
+              onPress={() => pickItemImage('gallery')}
               style={{
                 width: 72,
                 height: 72,
@@ -237,25 +238,16 @@ export default function MenuItemsScreen() {
               {newItemImageUri ? (
                 <Image source={{ uri: newItemImageUri }} style={{ width: 72, height: 72 }} />
               ) : (
-                <Camera size={24} color={theme.colors.muted} />
+                <ImageIcon size={24} color={theme.colors.muted} />
               )}
             </TouchableOpacity>
             <View style={{ flex: 1, gap: 8 }}>
               <TouchableOpacity
-                onPress={() => pickItemImage('camera')}
-                style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: theme.colors.bg, borderRadius: theme.radii.r12, paddingHorizontal: 12, paddingVertical: 8 }}
-              >
-                <Camera size={16} color={theme.colors.primary} />
-                <Text style={{ color: theme.colors.primary, ...theme.typography.bodySm, marginLeft: 6, fontWeight: '600' as const }}>
-                  {t('business.menuItems.takePhoto', { defaultValue: 'Take Photo' })}
-                </Text>
-              </TouchableOpacity>
-              <TouchableOpacity
                 onPress={() => pickItemImage('gallery')}
                 style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: theme.colors.bg, borderRadius: theme.radii.r12, paddingHorizontal: 12, paddingVertical: 8 }}
               >
-                <ImageIcon size={16} color={theme.colors.textSecondary} />
-                <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm, marginLeft: 6 }}>
+                <ImageIcon size={16} color={theme.colors.primary} />
+                <Text style={{ color: theme.colors.primary, ...theme.typography.bodySm, marginLeft: 6, fontWeight: '600' as const }}>
                   {t('business.menuItems.chooseFromGallery', { defaultValue: 'Choose from gallery' })}
                 </Text>
               </TouchableOpacity>
@@ -412,7 +404,7 @@ export default function MenuItemsScreen() {
                     </Text>
                     {item.price != null && (
                       <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm }}>
-                        {item.price} TND
+                        {item.price} {t('common.currency', { defaultValue: 'TND' })}
                       </Text>
                     )}
                   </TouchableOpacity>

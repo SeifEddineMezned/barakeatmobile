@@ -400,19 +400,28 @@ export default function BusinessTabLayout() {
   const canCreateDeleteBaskets = isAdminOrOwner || isLocationAdmin || hasPerm('create_delete_baskets');
   const canEditQuantities = isAdminOrOwner || isLocationAdmin || hasPerm('edit_quantities');
   const canManageBaskets = canCreateDeleteBaskets || canEditQuantities || isLocationAdmin || hasPerm('edit_basket_info');
+  // Messaging gate — used both for the global header chat icon (built below)
+  // and for per-order chat buttons in incoming-orders cards. Hoisted to top-
+  // level so both surfaces read from the same source of truth.
+  const canMessage = isAdminOrOwner || isLocationAdmin || hasPerm('messaging');
   // Profile tab — org admins see the full org profile; location admins see a
   // version scoped to their location only (the team screen enforces the scope).
   const canEditProfile = isOrgAdmin || isLocationAdmin;
 
-  // Compute visible tabs
+  // Compute visible tabs. The "Mes Paniers" tab is now shown to every member
+  // regardless of basket permissions — the page itself reveals the same
+  // catalogue that customers see, with edit affordances simply hidden when
+  // the viewer lacks the permission. Hiding the tab entirely was over-
+  // restrictive (a non-editing member couldn't even glance at what their
+  // commerce was offering).
   const visibleTabs = React.useMemo(() => {
     const tabs: string[] = [];
     if (canViewDashboard) tabs.push('dashboard');
-    if (canManageBaskets) tabs.push('my-baskets');
+    tabs.push('my-baskets');
     if (canViewOrders) tabs.push('incoming-orders');
     if (canEditProfile) tabs.push('business-profile');
     return tabs.length > 0 ? tabs : ['dashboard']; // At minimum show dashboard
-  }, [canViewDashboard, canManageBaskets, canViewOrders, canEditProfile]);
+  }, [canViewDashboard, canViewOrders, canEditProfile]);
   const tabCount = visibleTabs.length;
   const tabWidth = navWidth / tabCount;
 
@@ -741,7 +750,7 @@ export default function BusinessTabLayout() {
           window-space center to the notification store so the
           SpeechBubblePopup that fires on chat notifs springs from this
           exact spot. */}
-      {includeChat && isAuthenticated ? (
+      {includeChat && isAuthenticated && canMessage ? (
         <TouchableOpacity
           onPress={() => router.push('/business/conversations' as never)}
           onLayout={(e) => {
@@ -1313,7 +1322,7 @@ export default function BusinessTabLayout() {
       // they're admins, and the demo (plus real UI) would silently strip
       // their chat / confirm-pickup / basket-management affordances.
       canConfirmPickup={isAdminOrOwner || isLocationAdmin || hasPerm('confirm_pickup')}
-      canMessage={isAdminOrOwner || isLocationAdmin || hasPerm('messaging')}
+      canMessage={canMessage}
       isOrgAdmin={isOrgAdmin}
       isLocationAdmin={isLocationAdmin}
       hasNoLocation={hasNoLocation}
@@ -1388,8 +1397,24 @@ function buildWalkthroughSteps(visibleTabs: string[], canCreateDeleteBaskets: bo
   }
   // ── Baskets — interactive sub-tour through create-basket form ─────────
   const basketIdx = visibleTabs.indexOf('my-baskets');
+  // The "Mes Paniers" tab intro step now shows for EVERY member with the
+  // tab visible (the tab itself is shown to all members so they can browse
+  // the brand's offering). When the viewer can't actually edit baskets we
+  // swap the copy to a viewer-friendly variant — "These are the location's
+  // baskets…" — so the demo doesn't promise capabilities the user doesn't
+  // have. The deep create/quantity-edit sub-steps below stay gated.
+  if (basketIdx >= 0) {
+    const canDoBasketEdits = canCreateDeleteBaskets || canEditQuantities;
+    steps.push({
+      tabIndex: basketIdx,
+      routeName: 'my-baskets',
+      icon: ShoppingBag,
+      titleKey: canDoBasketEdits ? 'walkthrough.biz.baskets.title' : 'walkthrough.biz.basketsView.title',
+      descKey: canDoBasketEdits ? 'walkthrough.biz.baskets.desc' : 'walkthrough.biz.basketsView.desc',
+      highlight: 'tab',
+    });
+  }
   if (basketIdx >= 0 && (canCreateDeleteBaskets || canEditQuantities)) {
-    steps.push({ tabIndex: basketIdx, routeName: 'my-baskets', icon: ShoppingBag, titleKey: 'walkthrough.biz.baskets.title', descKey: 'walkthrough.biz.baskets.desc', highlight: 'tab' });
     // ── Create-basket flow — ONLY for members who can create/delete baskets.
     // A quantity-only member skips straight to the demo basket card + qty edit.
     if (canCreateDeleteBaskets) {

@@ -15,6 +15,7 @@ import { TeamLocationsManagerModal } from '@/src/components/TeamLocationsManager
 import { TeamRemoveMemberDialog } from '@/src/components/TeamRemoveMemberDialog';
 import { ActionMenuCard, ActionMenuItem, ActionMenuDivider } from '@/src/components/ui/ActionMenu';
 import { PermissionIcon8, RoleIcon8, DeleteIcon8 } from '@/src/components/ui/Icon8';
+import { useWalkthroughStore } from '@/src/stores/walkthroughStore';
 
 interface ActivityItem {
   id: number;
@@ -75,6 +76,14 @@ export default function MemberDetailScreen() {
   const router = useRouter();
 
   const [showMenu, setShowMenu] = useState(false);
+  // Walkthrough lock — the 3-dot menu opens destructive flows (remove
+  // member, change role, etc.) that would derail the demo if triggered
+  // mid-tour. Read reactively so the icon's disabled/fade state flips
+  // the moment the walkthrough starts or ends.
+  // `step` is non-null only while a step is actively highlighted; the demo can
+  // land on this screen with no step set, so also read `demoSequencePending`
+  // (true for the whole demo run, across screens) to keep the 3-dot locked.
+  const inWalkthrough = useWalkthroughStore((s) => s.step !== null || s.demoSequencePending);
   const [activityFilter, setActivityFilter] = useState('all');
   // Removal runs through the shared TeamRemoveMemberDialog — this screen is
   // per-user (no filter), so it always targets every membership. Scoped removes
@@ -227,7 +236,12 @@ export default function MemberDetailScreen() {
           {t('business.team.memberDetail', { defaultValue: 'Member' })}
         </Text>
         {isAdminOrOwner && memberRole !== 'owner' ? (
-          <TouchableOpacity onPress={() => setShowMenu(true)} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
+          <TouchableOpacity
+            onPress={inWalkthrough ? undefined : () => setShowMenu(true)}
+            disabled={inWalkthrough}
+            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+            style={{ opacity: inWalkthrough ? 0.3 : 1 }}
+          >
             <MoreVertical size={22} color={theme.colors.textPrimary} />
           </TouchableOpacity>
         ) : (

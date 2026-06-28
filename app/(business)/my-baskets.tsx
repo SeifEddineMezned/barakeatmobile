@@ -14,6 +14,7 @@ import { DemoTapHintToast } from '@/src/components/DemoTapHintToast';
 import { fetchMyContext, fetchOrganizationDetails } from '@/src/services/teams';
 import { NoLocationCTA } from '@/src/components/NoLocationCTA';
 import { isPickupExpiredInTz, effectiveLocationHours } from '@/src/utils/timezone';
+import { localizeI18n } from '@/src/utils/localizeI18n';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { fetchMyBaskets, deleteBasket as deleteBasketAPI, fetchMyProfile, updateQuantity, updateBasket as updateBasketAPI, updateBasketWithImage, type BusinessBasketFromAPI } from '@/src/services/business';
 import { verifyOrAlarm, createVerifyDisappeared } from '@/src/hooks/useVerifyOnError';
@@ -35,7 +36,7 @@ export default function MyBasketsScreen() {
   useStatusBarStyleOnFocus('dark');
   const targetBasketId = useBusinessStore((s) => s.targetBasketId);
   const targetBasketTs = useBusinessStore((s) => s.targetBasketTs);
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const theme = useTheme();
   const router = useRouter();
   const store = useBusinessStore();
@@ -299,6 +300,7 @@ export default function MyBasketsScreen() {
       isActive: b.status !== 'deleted' && b.status !== 'paused' && Number(b.quantity) > 0,
       isPaused: b.status === 'paused',
       description: b.description ?? undefined,
+      descriptionI18n: (b as any).description_i18n ?? null,
       maxPerCustomer: (b as any).max_per_customer ?? 5,
       updatedAt: b.updated_at ?? undefined,
       // Resolve via orgDetails lookup so the label is a pure function of
@@ -786,6 +788,7 @@ export default function MyBasketsScreen() {
     isPaused: false,
     hasPickupOverride: false,
     description: t('walkthrough.biz.demoBasketDesc', { defaultValue: 'Démonstration — modifications sans effet sur vos paniers réels.' }),
+    descriptionI18n: null as Record<string, string> | null,
     maxPerCustomer: 5,
     updatedAt: new Date().toISOString(),
     locationName: undefined as string | undefined,
@@ -849,19 +852,25 @@ export default function MyBasketsScreen() {
         <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h1 }]}>
           {t('business.baskets.title')}
         </Text>
-        <TouchableOpacity
-          ref={addBasketRef as any}
-          onLayout={measureAddBasket}
-          onPress={handleCreate}
-          disabled={(!canCreateDeleteBaskets && !inWalkthrough) || hasNoLocation}
-          style={[styles.addButton, { backgroundColor: theme.colors.primary, borderRadius: theme.radii.r12, paddingHorizontal: 16, paddingVertical: 10, opacity: hasNoLocation ? 0.4 : ((canCreateDeleteBaskets || inWalkthrough) ? 1 : 0.4) }]}
-          activeOpacity={0.8}
-        >
-          <Plus size={18} color="#fff" />
-          <Text style={[{ color: '#fff', ...theme.typography.bodySm, fontWeight: '600' as const, marginLeft: 6 }]}>
-            {t('business.baskets.addBasket')}
-          </Text>
-        </TouchableOpacity>
+        {/* "Ajouter un panier" is now only rendered when the user actually
+            holds the create/delete permission. Previously we showed it greyed
+            for permission-less members and bright green for the demo — both
+            were misleading, since neither path could ever produce a basket. */}
+        {canCreateDeleteBaskets && (
+          <TouchableOpacity
+            ref={addBasketRef as any}
+            onLayout={measureAddBasket}
+            onPress={handleCreate}
+            disabled={hasNoLocation}
+            style={[styles.addButton, { backgroundColor: theme.colors.primary, borderRadius: theme.radii.r12, paddingHorizontal: 16, paddingVertical: 10, opacity: hasNoLocation ? 0.4 : 1 }]}
+            activeOpacity={0.8}
+          >
+            <Plus size={18} color="#fff" />
+            <Text style={[{ color: '#fff', ...theme.typography.bodySm, fontWeight: '600' as const, marginLeft: 6 }]}>
+              {t('business.baskets.addBasket')}
+            </Text>
+          </TouchableOpacity>
+        )}
       </View>
 
       <ScrollView ref={myBasketsScrollRef} style={styles.content} contentContainerStyle={{ paddingHorizontal: theme.spacing.xl, paddingBottom: 100 }} showsVerticalScrollIndicator={false}>
@@ -981,6 +990,13 @@ export default function MyBasketsScreen() {
                         return;
                       }
                     }
+                    // Open the availability popup for EVERY business viewer
+                    // — edit-capable or not. The modal hides its +/- buttons,
+                    // Save button, and 3-dot menu when the viewer lacks the
+                    // matching perm (see the conditional renders below); the
+                    // "View as customer" button at the bottom is the read-only
+                    // path that used to be the default for permission-less
+                    // members.
                     setDetailBasket(basket);
                     setDetailTodayQty(basket.quantityLeft);
                     setShowFullDesc(false);
@@ -1093,10 +1109,10 @@ export default function MyBasketsScreen() {
                       )}
                       <View style={[styles.priceRow, { marginTop: 6 }, isUnavailable && { opacity: 0.65 }]}>
                         <Text style={[{ color: theme.colors.primary, ...theme.typography.body, fontWeight: '700' as const }]}>
-                          {basket.discountedPrice} TND
+                          {basket.discountedPrice} {t('common.currency', { defaultValue: 'TND' })}
                         </Text>
                         <Text style={[{ color: theme.colors.muted, ...theme.typography.caption, textDecorationLine: 'line-through', marginLeft: 8 }]}>
-                          {basket.originalPrice} TND
+                          {basket.originalPrice} {t('common.currency', { defaultValue: 'TND' })}
                         </Text>
                       </View>
                       {/* Meta row: daily reinit qty + custom pickup time (if different from location default) */}
@@ -1271,20 +1287,22 @@ export default function MyBasketsScreen() {
                 </Text>
                 <View style={{ flexDirection: 'row', alignItems: 'baseline', marginTop: 8 }}>
                   <Text style={{ color: theme.colors.primary, ...theme.typography.h2, fontWeight: '700' }}>
-                    {detailBasket?.discountedPrice} TND
+                    {detailBasket?.discountedPrice} {t('common.currency', { defaultValue: 'TND' })}
                   </Text>
                   <Text style={{ color: theme.colors.muted, ...theme.typography.bodySm, textDecorationLine: 'line-through', marginLeft: 10 }}>
-                    {detailBasket?.originalPrice} TND
+                    {detailBasket?.originalPrice} {t('common.currency', { defaultValue: 'TND' })}
                   </Text>
                 </View>
-                {detailBasket?.description ? (
+                {(() => {
+                  const detailDesc = localizeI18n((detailBasket as any)?.descriptionI18n, i18n.language, detailBasket?.description);
+                  return detailDesc ? (
                   <TouchableOpacity onPress={() => setShowFullDesc(!showFullDesc)} style={{ marginTop: 8 }}>
                     <Text
                       style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm, lineHeight: 20 }}
                       numberOfLines={showFullDesc ? undefined : 2}
                       onTextLayout={(e) => { if (!showFullDesc && e.nativeEvent.lines.length > 2) setDescTruncated(true); }}
                     >
-                      {detailBasket.description}
+                      {detailDesc}
                     </Text>
                     {!showFullDesc && descTruncated && (
                       <Text style={{ color: theme.colors.primary, ...theme.typography.caption, marginTop: 2 }}>
@@ -1292,11 +1310,17 @@ export default function MyBasketsScreen() {
                       </Text>
                     )}
                   </TouchableOpacity>
-                ) : null}
+                ) : null;
+                })()}
               </View>
 
-              {/* Availability Controls — only shown to members with edit permissions */}
-              {canEditBaskets && (
+              {/* Availability card. Always rendered for business viewers —
+                  edit-capable users see the +/- controls on Today's Quantity
+                  and the Save button below; read-only members (those without
+                  `edit_quantities`) see today's quantity as a plain info row
+                  styled to match the Tomorrow row beneath, so the card reads
+                  as "here's where you stand" rather than a half-greyed edit
+                  surface. */}
               <View style={{
                 backgroundColor: theme.colors.surface,
                 borderRadius: theme.radii.r16,
@@ -1309,15 +1333,28 @@ export default function MyBasketsScreen() {
                   {t('business.availability.title', { defaultValue: 'Availability' })}
                 </Text>
 
-                {/* Today's Quantity — in demo mode, the active sub-step's
-                    button gets a yellow-green halo. The other buttons stay
-                    plain. Halos are computed from the walkthrough step's
-                    measureKey ('modalQtyMinus' / 'modalQtyPlus'). */}
+                {/* Today's Quantity. With `edit_quantities` perm we render the
+                    +/- buttons (and demo-mode halos on the active step's
+                    button). Without it we drop the buttons and align the
+                    value with the Tomorrow row's typography so the two read
+                    as a clean info pair. */}
                 {(() => {
                   const ms = walkthroughCurrentStep?.measureKey;
                   const haloOn = (key: string) => ms === key ? { borderWidth: 3, borderColor: '#e3ff5c' as const } : null;
+                  if (!canEditQuantities) {
+                    return (
+                      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: modalCardGap }}>
+                        <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm, flex: 1, paddingRight: 12 }}>
+                          {t('business.baskets.todayQty')}
+                        </Text>
+                        <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
+                          {detailTodayQty}
+                        </Text>
+                      </View>
+                    );
+                  }
                   return (
-                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: modalCardGap, opacity: canEditQuantities ? 1 : 0.4 }}>
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: modalCardGap }}>
                       <Text style={{ color: theme.colors.textPrimary, ...theme.typography.body }}>
                         {t('business.baskets.todayQty')}
                       </Text>
@@ -1325,7 +1362,6 @@ export default function MyBasketsScreen() {
                         <TouchableOpacity
                           ref={qtyMinusBtnRef as any}
                           onLayout={measureModalCutout('minus', qtyMinusBtnRef)}
-                          disabled={!canEditQuantities}
                           onPress={() => {
                             setDetailTodayQty(Math.max(0, detailTodayQty - 1));
                             if (detailBasket?.id === 'demo-basket-1') setDemoQtyChanged(true);
@@ -1343,7 +1379,6 @@ export default function MyBasketsScreen() {
                         <TouchableOpacity
                           ref={qtyPlusBtnRef as any}
                           onLayout={measureModalCutout('plus', qtyPlusBtnRef)}
-                          disabled={!canEditQuantities}
                           onPress={() => {
                             setDetailTodayQty(detailTodayQty + 1);
                             if (detailBasket?.id === 'demo-basket-1') setDemoQtyChanged(true);
@@ -1398,14 +1433,18 @@ export default function MyBasketsScreen() {
                   </View>
                 )}
               </View>
-              )}
 
-              {/* Save Changes — only for members with edit permissions.
-                  In demo mode the halo only appears when the walkthrough's
-                  active sub-step is `modalSave` (i.e. AFTER the user has
-                  tapped − and +). The halo border is sized so its 3px
-                  inset border lands flush with the button's outer edge. */}
-              {canEditBaskets && (
+              {/* Save Changes — only for members who can actually edit
+                  today's quantity (the only field this modal writes). A
+                  member with `edit_basket_info` but not `edit_quantities`
+                  still gets the modal but the Save button is hidden — they
+                  can open the full edit-basket form via the 3-dot menu
+                  instead.  In demo mode the halo only appears when the
+                  walkthrough's active sub-step is `modalSave` (i.e. AFTER
+                  the user has tapped − and +). The halo border is sized so
+                  its 3px inset border lands flush with the button's outer
+                  edge. */}
+              {canEditQuantities && (
               <View
                 ref={qtySaveBtnRef as any}
                 onLayout={measureModalCutout('save', qtySaveBtnRef)}

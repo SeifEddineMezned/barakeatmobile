@@ -43,6 +43,12 @@ interface AddressSuggestion {
 interface Props {
   value: LocationFormValue;
   onChange: (patch: Partial<LocationFormValue>) => void;
+  // Optional: caller (e.g. add-location.tsx) passes a callback that scrolls
+  // the parent ScrollView to bring the pickup-instructions textbox above the
+  // keyboard on focus. Without this, Android's adjustResize shrinks the
+  // viewport but never scrolls the focused field into view, and the user
+  // can't see what they're typing in the bottom-most field.
+  onPickupInstructionsFocus?: () => void;
 }
 
 /**
@@ -51,7 +57,7 @@ interface Props {
  * The map step is Nominatim-autocompleted and supports "use current location";
  * the full-screen overlay ensures the picker works inside any scroll container.
  */
-export function LocationFormFields({ value, onChange }: Props) {
+export function LocationFormFields({ value, onChange, onPickupInstructionsFocus }: Props) {
   const { t } = useTranslation();
   const customAlert = useCustomAlert();
   const theme = useTheme();
@@ -525,6 +531,7 @@ export function LocationFormFields({ value, onChange }: Props) {
         placeholder={t('business.createBasket.pickupInstructionsPlaceholder', { defaultValue: "Ex : Sonnez à l'entrée arrière" })}
         placeholderTextColor={theme.colors.muted}
         multiline
+        onFocus={onPickupInstructionsFocus}
       />
 
       {mapPickerModal}

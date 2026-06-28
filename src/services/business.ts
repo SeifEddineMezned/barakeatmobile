@@ -50,14 +50,28 @@ export async function fetchMyProfile(locationId?: number | string | null): Promi
   return data as BusinessProfileFromAPI;
 }
 
-export async function updateMyProfile(formData: FormData, userId?: number): Promise<BusinessProfileFromAPI> {
-  console.log('[Business] Updating my profile');
+export async function updateMyProfile(
+  formData: FormData,
+  userId?: number,
+  locationId?: number | string | null,
+): Promise<BusinessProfileFromAPI> {
+  console.log('[Business] Updating my profile (locationId=', locationId, ')');
   const headers: Record<string, string> = { 'Content-Type': 'multipart/form-data' };
   if (userId) {
     headers['x-admin-token'] = getAdminToken(userId);
     console.log('[Business] Attaching x-admin-token for profile update');
   }
-  const res = await apiClient.put<BusinessProfileFromAPI | { restaurant: BusinessProfileFromAPI }>('/api/locations/my/profile', formData, { headers });
+  // The backend's resolveUserLocation falls back to the user's FIRST
+  // membership when no location_id is on the query string. For a multi-
+  // location org that meant a cover upload from "Location B" silently
+  // wrote to "Location A" — the bug behind "I changed the cover on Chez Joe
+  // - La Marsa and it changed on a different branch instead". Always pass
+  // the selectedLocationId so the backend writes to the intended row.
+  const locId = (locationId && typeof locationId === 'object') ? null : locationId;
+  const url = locId
+    ? `/api/locations/my/profile?location_id=${locId}`
+    : '/api/locations/my/profile';
+  const res = await apiClient.put<BusinessProfileFromAPI | { restaurant: BusinessProfileFromAPI }>(url, formData, { headers });
   const data = res.data;
   if (data && typeof data === 'object' && 'restaurant' in data) return (data as any).restaurant;
   return data as BusinessProfileFromAPI;
@@ -129,6 +143,10 @@ export async function createBasketJSON(payload: {
   menu_item_ids?: number[];
   show_menu_items?: boolean;
   pickup_instructions?: string;
+  // AI-improved multilingual variants: { fr, en, ar }. Stored in the basket's
+  // *_i18n JSONB columns; the plain text fields stay as the source/fallback.
+  description_i18n?: Record<string, string> | null;
+  pickup_instructions_i18n?: Record<string, string> | null;
   location_id?: number;
 }, idempotencyKey?: string): Promise<BusinessBasketFromAPI> {
   console.log('[Business] Creating basket (JSON):', JSON.stringify(payload));

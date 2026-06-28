@@ -6,6 +6,7 @@ import { Heart, Clock, MapPin, Star, ShoppingBag, Layers, Info, X, TimerOff } fr
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { Basket } from '@/src/types';
 import { isPickupExpiredInTz } from '@/src/utils/timezone';
+import { localizeI18n } from '@/src/utils/localizeI18n';
 import { useAddressStore } from '@/src/stores/addressStore';
 import { useSwipeToDismiss } from '@/src/hooks/useSwipeToDismiss';
 
@@ -16,7 +17,7 @@ interface BasketCardProps {
 }
 
 export function BasketCard({ basket, onFavoritePress, isFavorite = false }: BasketCardProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const theme = useTheme();
   const router = useRouter();
   // Distance is only meaningful when the user has a saved address to measure from.
@@ -111,7 +112,10 @@ export function BasketCard({ basket, onFavoritePress, isFavorite = false }: Bask
   const bagsBgColor = isSoldOut ? theme.colors.error : theme.colors.primary;
   const bagsCountColor = '#fff';
 
-  const hasDescription = !!(basket.description && basket.description.trim().length > 0);
+  // Buyer-language description when the merchant ran the AI translate, else the
+  // plain text they typed.
+  const localizedDescription = localizeI18n(basket.descriptionI18n, i18n.language, basket.description);
+  const hasDescription = !!(localizedDescription && localizedDescription.trim().length > 0);
 
   return (
     <>
@@ -123,7 +127,7 @@ export function BasketCard({ basket, onFavoritePress, isFavorite = false }: Bask
           onPressIn={handlePressIn}
           onPressOut={handlePressOut}
           activeOpacity={0.95}
-          accessibilityLabel={`${basket.name}, ${basket.merchantName}, ${basket.discountedPrice} TND`}
+          accessibilityLabel={`${basket.name}, ${basket.merchantName}, ${basket.discountedPrice} ${t('common.currency', { defaultValue: 'TND' })}`}
           accessibilityRole="button"
           accessibilityHint={isUnavailable ? t('basket.soldOut') : t('basket.tapToView', { defaultValue: 'Tap to view details' })}
           style={[
@@ -327,7 +331,7 @@ export function BasketCard({ basket, onFavoritePress, isFavorite = false }: Bask
               </View>
               <View style={styles.priceBlock}>
                 <Text style={[{ color: theme.colors.muted, ...theme.typography.caption, textDecorationLine: 'line-through' }]}>
-                  {basket.originalPrice} TND
+                  {basket.originalPrice} {t('common.currency', { defaultValue: 'TND' })}
                 </Text>
                 <View style={{ flexDirection: 'row', alignItems: 'baseline' }}>
                   {basket.basketTypeCount != null && basket.basketTypeCount > 1 && (
@@ -336,7 +340,7 @@ export function BasketCard({ basket, onFavoritePress, isFavorite = false }: Bask
                     </Text>
                   )}
                   <Text style={[{ color: isUnavailable ? theme.colors.muted : theme.colors.primary, ...theme.typography.h2, fontWeight: '700' as const }]}>
-                    {basket.discountedPrice} TND
+                    {basket.discountedPrice} {t('common.currency', { defaultValue: 'TND' })}
                   </Text>
                 </View>
               </View>
@@ -397,9 +401,7 @@ export function BasketCard({ basket, onFavoritePress, isFavorite = false }: Bask
             <View style={styles.modalDescriptionContainer}>
               <ScrollView showsVerticalScrollIndicator={false}>
                 <Text style={styles.modalDescription}>
-                  {basket.description && basket.description.trim().length > 0
-                    ? basket.description
-                    : 'No description available.'}
+                  {hasDescription ? localizedDescription : 'No description available.'}
                 </Text>
               </ScrollView>
             </View>

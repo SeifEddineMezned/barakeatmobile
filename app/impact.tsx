@@ -385,7 +385,7 @@ export default function ImpactScreen() {
                     },
                   ]}
                 >
-                  {stats.moneySaved.toFixed(0)} TND
+                  {stats.moneySaved.toFixed(0)} {t('common.currency', { defaultValue: 'TND' })}
                 </Text>
                 <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.caption }]}>
                   {t('impact.moneySaved')}

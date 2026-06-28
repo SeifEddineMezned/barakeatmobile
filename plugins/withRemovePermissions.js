@@ -15,6 +15,14 @@ const PERMISSIONS_TO_REMOVE = [
   // "Advertising ID" disclosure on the Play Data Safety form. Strip it so the
   // declaration stays clean (Google's own recommendation when AD_ID is unused).
   'com.google.android.gms.permission.AD_ID',
+  // Photo/video library reads (Android 13+). expo-media-library / expo-image-picker
+  // declare these, but Google's Photo & Video Permissions policy requires the
+  // system Photo Picker for our infrequent "upload a photo" use case — which we
+  // now use on Android (see ImageCropper openGrid). The picker grants access to
+  // the single chosen image with NO permission, so we strip these to comply.
+  // (We have zero video features, so READ_MEDIA_VIDEO was never justifiable.)
+  'android.permission.READ_MEDIA_IMAGES',
+  'android.permission.READ_MEDIA_VIDEO',
 ];
 
 const withRemovePermissions = (config) => {

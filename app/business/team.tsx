@@ -557,6 +557,10 @@ export default function TeamScreen() {
   // first so the halo lands on something visible, then re-measure once
   // the scroll has settled.
   const teamWalkthroughCurrentStep = useWalkthroughStore((s) => s.currentStep);
+  // Block the header back button while the demo is running so the user
+  // can't pop the route mid-walkthrough and leave the SubScreenOverlay
+  // pointing at a screen that's no longer mounted.
+  const inWalkthrough = useWalkthroughStore((s) => s.step !== null);
   useEffect(() => {
     const k = teamWalkthroughCurrentStep?.measureKey;
     if (k !== 'teamOrgCard' && k !== 'teamLocationsSection' && k !== 'teamAddLocationBtn' && k !== 'teamAddMemberBtn' && k !== 'teamMembersSection') return;
@@ -1233,7 +1237,12 @@ export default function TeamScreen() {
   // ── Shared header ─────────────────────────────────────────────────────────
   const renderHeader = (title?: string) => (
     <View style={[styles.header, { paddingHorizontal: theme.spacing.xl, paddingVertical: theme.spacing.md, borderBottomWidth: 1, borderBottomColor: theme.colors.divider }]}>
-      <TouchableOpacity onPress={() => router.back()} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
+      <TouchableOpacity
+        onPress={inWalkthrough ? undefined : () => router.back()}
+        disabled={inWalkthrough}
+        hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+        style={{ opacity: inWalkthrough ? 0.3 : 1 }}
+      >
         <ChevronLeft size={24} color={theme.colors.textPrimary} />
       </TouchableOpacity>
       <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h2, flex: 1, textAlign: 'center' as const }]}>
@@ -1392,13 +1401,24 @@ export default function TeamScreen() {
                       ? formatLocationName(orgName, locations.find((l: any) => l.id === myLocationId)?.name ?? contextQuery.data?.location_name, '--')
                       : (org?.name ?? '--')}
                   </Text>
-                  {!isLocationAdminOnly && org?.category ? (
-                    <View style={{ alignSelf: 'flex-start', marginTop: 4, backgroundColor: 'rgba(227,255,92,0.2)', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 3 }}>
-                      <Text style={{ color: '#e3ff5c', ...theme.typography.caption, fontWeight: '600' }}>
-                        {t(`categories.${org.category.toLowerCase()}`, { defaultValue: org.category })}
-                      </Text>
-                    </View>
-                  ) : null}
+                  {(() => {
+                    // Category is a per-location concept now. Show the chip
+                    // ONLY for the location-admin view, sourcing it from the
+                    // scoped location's row. Org-admin view used to display
+                    // org.category — but orgs no longer carry one (column is
+                    // retained in the schema for safety but no longer read).
+                    if (!isLocationAdminOnly) return null;
+                    const scopedLoc = locations.find((l: any) => l.id === myLocationId);
+                    const locCategory = scopedLoc?.category;
+                    if (!locCategory) return null;
+                    return (
+                      <View style={{ alignSelf: 'flex-start', marginTop: 4, backgroundColor: 'rgba(227,255,92,0.2)', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 3 }}>
+                        <Text style={{ color: '#e3ff5c', ...theme.typography.caption, fontWeight: '600' }}>
+                          {t(`categories.${String(locCategory).toLowerCase()}`, { defaultValue: locCategory })}
+                        </Text>
+                      </View>
+                    );
+                  })()}
                 </View>
               </View>
             </View>
@@ -1503,9 +1523,10 @@ export default function TeamScreen() {
                       </View>
                       {!isOwner && canAccessTeam && (
                         <TouchableOpacity
-                          onPress={(e) => { e.stopPropagation?.(); setMemberMenuId(memberMenuId === menuKey ? null : menuKey); }}
+                          onPress={inWalkthrough ? undefined : (e) => { e.stopPropagation?.(); setMemberMenuId(memberMenuId === menuKey ? null : menuKey); }}
+                          disabled={inWalkthrough}
                           hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}
-                          style={{ padding: 4 }}
+                          style={{ padding: 4, opacity: inWalkthrough ? 0.3 : 1 }}
                         >
                           <MoreVertical size={18} color={theme.colors.textSecondary} />
                         </TouchableOpacity>
@@ -1586,7 +1607,11 @@ export default function TeamScreen() {
                 <TouchableOpacity
                   ref={teamAddLocationBtnRef as any}
                   onLayout={measureTeamRect('teamAddLocationBtn', teamAddLocationBtnRef)}
-                  onPress={() => router.push('/business/add-location' as never)}
+                  // Demo-locked — the walkthrough is the only path that
+                  // should drive route changes from this screen while it's
+                  // running. Stays measured for the demo halo, just inert.
+                  onPress={inWalkthrough ? undefined : () => router.push('/business/add-location' as never)}
+                  disabled={inWalkthrough}
                   style={{
                     backgroundColor: theme.colors.primary + '12',
                     borderRadius: 16,
@@ -1594,6 +1619,7 @@ export default function TeamScreen() {
                     height: 32,
                     justifyContent: 'center',
                     alignItems: 'center',
+                    opacity: inWalkthrough ? 0.3 : 1,
                   }}
                 >
                   <Plus size={18} color={theme.colors.primary} />
@@ -1663,7 +1689,7 @@ export default function TeamScreen() {
                   <View style={{ flex: 1, marginLeft: 12 }}>
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                       <Text style={{ color: isSelected ? '#fff' : theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '500' }}>
-                        {loc.name ?? loc.address ?? `Location ${index + 1}`}
+                        {loc.name ?? loc.address ?? t('business.unnamedLocation', { defaultValue: 'Location' })}
                       </Text>
                       {/* Per-location category chip — sits next to the
                           location name so the user can see the value
@@ -1721,11 +1747,12 @@ export default function TeamScreen() {
                       so Modifier / Supprimer is never adjacent to the count. */}
                   {isOrgAdmin && (
                     <TouchableOpacity
-                      onPress={(e) => {
+                      onPress={inWalkthrough ? undefined : (e) => {
                         e.stopPropagation?.();
                         setLocationMenuId(locationMenuId === loc.id ? null : loc.id);
                       }}
-                      style={{ marginLeft: 8, padding: 4 }}
+                      disabled={inWalkthrough}
+                      style={{ marginLeft: 8, padding: 4, opacity: inWalkthrough ? 0.3 : 1 }}
                       hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                     >
                       <MoreVertical size={18} color={isSelected ? 'rgba(255,255,255,0.8)' : theme.colors.textSecondary} />
@@ -1816,7 +1843,11 @@ export default function TeamScreen() {
                 <TouchableOpacity
                   ref={teamAddMemberBtnRef as any}
                   onLayout={measureTeamRect('teamAddMemberBtn', teamAddMemberBtnRef)}
-                  onPress={handleAddMemberFromLocation}
+                  // Demo-locked — same reason as the add-location button:
+                  // the walkthrough's halo lands here, but only the demo
+                  // can drive the actual action while it's running.
+                  onPress={inWalkthrough ? undefined : handleAddMemberFromLocation}
+                  disabled={inWalkthrough}
                   style={{
                     backgroundColor: theme.colors.primary + '12',
                     borderRadius: 16,
@@ -1824,6 +1855,7 @@ export default function TeamScreen() {
                     height: 32,
                     justifyContent: 'center',
                     alignItems: 'center',
+                    opacity: inWalkthrough ? 0.3 : 1,
                   }}
                   accessibilityLabel={t('business.profile.addMember')}
                 >
@@ -1871,7 +1903,8 @@ export default function TeamScreen() {
                 </Text>
                 {canAccessTeam && (
                 <TouchableOpacity
-                  onPress={handleAddMemberFromLocation}
+                  onPress={inWalkthrough ? undefined : handleAddMemberFromLocation}
+                  disabled={inWalkthrough}
                   style={{
                     backgroundColor: theme.colors.primary,
                     borderRadius: theme.radii.r12,
@@ -1879,6 +1912,7 @@ export default function TeamScreen() {
                     paddingVertical: 12,
                     flexDirection: 'row',
                     alignItems: 'center',
+                    opacity: inWalkthrough ? 0.3 : 1,
                   }}
                 >
                   <UserPlus size={16} color="#fff" />
@@ -1991,9 +2025,10 @@ export default function TeamScreen() {
                     )}
                     {!isOwner && canAccessTeam && (
                       <TouchableOpacity
-                        onPress={(e) => { e.stopPropagation?.(); setMemberMenuId(memberMenuId === userIdKey ? null : userIdKey); }}
+                        onPress={inWalkthrough ? undefined : (e) => { e.stopPropagation?.(); setMemberMenuId(memberMenuId === userIdKey ? null : userIdKey); }}
+                        disabled={inWalkthrough}
                         hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}
-                        style={{ padding: 4 }}
+                        style={{ padding: 4, opacity: inWalkthrough ? 0.3 : 1 }}
                       >
                         <MoreVertical size={18} color={theme.colors.textSecondary} />
                       </TouchableOpacity>
@@ -2042,7 +2077,8 @@ export default function TeamScreen() {
             {/* Bottom add member — icon only, centered */}
             {teamPeople.length > 0 && canAccessTeam && (
               <TouchableOpacity
-                onPress={handleAddMemberFromLocation}
+                onPress={inWalkthrough ? undefined : handleAddMemberFromLocation}
+                disabled={inWalkthrough}
                 accessibilityLabel={t('business.profile.addMember')}
                 style={[{
                   alignItems: 'center',
@@ -2050,6 +2086,7 @@ export default function TeamScreen() {
                   padding: theme.spacing.md,
                   borderTopWidth: 1,
                   borderTopColor: theme.colors.divider,
+                  opacity: inWalkthrough ? 0.3 : 1,
                 }]}
               >
                 <UserPlus size={18} color={theme.colors.primary} />

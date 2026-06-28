@@ -833,11 +833,11 @@ export default function RestaurantScreen() {
                   </Text>
                   <View style={{ flexDirection: 'row', alignItems: 'baseline', marginTop: 4 }}>
                     <Text style={[{ color: unavailable ? theme.colors.muted : theme.colors.primary, ...theme.typography.body, fontWeight: '700' as const }]}>
-                      {basket.discountedPrice} TND
+                      {basket.discountedPrice} {t('common.currency', { defaultValue: 'TND' })}
                     </Text>
                     {basket.originalPrice > 0 && (
                       <Text style={[{ color: theme.colors.muted, ...theme.typography.caption, textDecorationLine: 'line-through', marginLeft: 6 }]}>
-                        {basket.originalPrice} TND
+                        {basket.originalPrice} {t('common.currency', { defaultValue: 'TND' })}
                       </Text>
                     )}
                   </View>

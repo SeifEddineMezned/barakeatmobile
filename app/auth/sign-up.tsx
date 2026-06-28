@@ -1,5 +1,5 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { View, Text, StyleSheet, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, ScrollView, Animated, Modal, Image, ActivityIndicator } from 'react-native';
+import React, { useState } from 'react';
+import { View, Text, StyleSheet, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, ScrollView, Modal, Image, ActivityIndicator } from 'react-native';
 import { PasswordInput } from '@/src/components/PasswordInput';
 import { useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
@@ -10,7 +10,6 @@ import { BarakeatErrorIcon } from '@/src/components/ui/BarakeatErrorIcon';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { useAuthStore } from '@/src/stores/authStore';
 import { register, restaurantAccessRequest, checkEmailAvailable } from '@/src/services/auth';
-import { LOCATION_CATEGORIES } from '@/src/lib/locationCategories';
 import { getErrorMessage } from '@/src/lib/api';
 import { FeatureFlags } from '@/src/lib/featureFlags';
 import type { UserRole, User as UserType } from '@/src/types';
@@ -59,6 +58,11 @@ export default function SignUpScreen() {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [gender, setGender] = useState<'male' | 'female' | null>(null);
   const [tosAccepted, setTosAccepted] = useState(false);
+  // Newsletter opt-in. Defaults to FALSE — the user actively ticks the
+  // checkbox to subscribe. Separate channel from notification_preferences.
+  // offersNews (in-app push) — this controls actual marketing emails
+  // sent via the newsletter_subscribers list.
+  const [newsletterOptIn, setNewsletterOptIn] = useState(false);
   const [loading, setLoading] = useState(false);
   const [checkingEmail, setCheckingEmail] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -71,8 +75,10 @@ export default function SignUpScreen() {
   // code) so the input rendering stays in sync with what the user typed. We
   // strip the spaces and prepend +216 in the submit handler.
   const [bizPhone, setBizPhone] = useState('');
-  const [bizCategory, setBizCategory] = useState<string | null>(null);
-  const [showCategoryPicker, setShowCategoryPicker] = useState(false);
+  // Category was removed from this signup form (handled per-location in the
+  // add-location form once the access request is approved). Keeping the
+  // request payload free of a category lets the admin pick the right one at
+  // approval time without the applicant having to know upfront.
 
   /**
    * Format a Tunisian phone number progressively as the user types — pattern
@@ -87,23 +93,6 @@ export default function SignUpScreen() {
     if (digits.length <= 5) return `${digits.slice(0, 2)} ${digits.slice(2)}`;
     return `${digits.slice(0, 2)} ${digits.slice(2, 5)} ${digits.slice(5)}`;
   };
-
-  // Slide-up offset for the category bottom sheet. The Modal itself fades in
-  // (backdrop appears instantly), while the inner sheet rides this animated
-  // translateY from off-screen up to 0 — so we get the "fade-in scrim + sheet
-  // slides up" combo instead of the default "everything slides together".
-  const categorySheetY = useRef(new Animated.Value(420)).current;
-  useEffect(() => {
-    if (showCategoryPicker) {
-      categorySheetY.setValue(420);
-      Animated.spring(categorySheetY, {
-        toValue: 0,
-        friction: 12,
-        tension: 80,
-        useNativeDriver: true,
-      }).start();
-    }
-  }, [showCategoryPicker, categorySheetY]);
 
   // Step 1 → validate the form, verify the email is free for a customer account,
   // THEN move to the gender step (registration happens there). The email check
@@ -173,6 +162,7 @@ export default function SignUpScreen() {
         gender: selectedGender,
         type: 'buyer' as const,
         locale,
+        newsletter: newsletterOptIn,
       };
       const res = await register(payload);
       // Buyer registration always returns { requiresVerification: true, email }
@@ -194,7 +184,7 @@ export default function SignUpScreen() {
       setErrorMsg(t('auth.prototypeMode', { defaultValue: 'L\'application est en mode prototype. L\'inscription n\'est pas disponible.' }));
       return;
     }
-    if (!contactName.trim() || !restaurantName.trim() || !bizEmail.trim() || !bizPhone.trim() || !bizCategory) {
+    if (!contactName.trim() || !restaurantName.trim() || !bizEmail.trim() || !bizPhone.trim()) {
       setErrorMsg(t('auth.fillAllFields'));
       return;
     }
@@ -214,7 +204,6 @@ export default function SignUpScreen() {
         restaurantName: restaurantName.trim(),
         email: bizEmail.trim(),
         phone: `+216${phoneDigits}`,
-        category: bizCategory,
       });
       // Backend now returns { requiresVerification: true, email } — hand off
       // to the same OTP verify screen the customer flow uses. After verify,
@@ -474,6 +463,33 @@ export default function SignUpScreen() {
                   </Text>
                 </View>
 
+                {/* Newsletter opt-in — separate from in-app notifications.
+                    Unchecked by default; ticking this enrolls the user's
+                    email into the marketing newsletter list. Optional —
+                    does NOT gate the Continue button. The unsubscribe note
+                    sits beneath the main line in a smaller gray caption so
+                    it reads as a reassurance, not a second opt-in. */}
+                <View style={[styles.tosRow, { marginTop: theme.spacing.sm, alignItems: 'flex-start' }]}>
+                  <TouchableOpacity
+                    onPress={() => setNewsletterOptIn(!newsletterOptIn)}
+                    activeOpacity={0.7}
+                    style={[styles.tosCheckbox, { borderColor: newsletterOptIn ? '#114b3c' : '#114b3c40', backgroundColor: newsletterOptIn ? '#114b3c' : 'transparent', marginTop: 2 }]}
+                    accessibilityRole="checkbox"
+                    accessibilityState={{ checked: newsletterOptIn }}
+                    accessibilityLabel={t('auth.newsletterOptIn', { defaultValue: "I'd like to subscribe to Barakeat's newsletter to receive emails about offers, news, and tips." })}
+                  >
+                    {newsletterOptIn && <Check size={14} color="#fff" strokeWidth={3} />}
+                  </TouchableOpacity>
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ color: '#114b3c', ...theme.typography.bodySm, flexWrap: 'wrap' }}>
+                      {t('auth.newsletterOptIn', { defaultValue: "I'd like to subscribe to Barakeat's newsletter to receive emails about offers, news, and tips." })}
+                    </Text>
+                    <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, marginTop: 2, flexWrap: 'wrap' }}>
+                      {t('auth.newsletterUnsubNote', { defaultValue: 'You can unsubscribe at any time.' })}
+                    </Text>
+                  </View>
+                </View>
+
                 <View style={[styles.buttonContainer, { marginTop: theme.spacing.xl }]}>
                   <TouchableOpacity
                     onPress={handleCustomerContinue}
@@ -597,42 +613,6 @@ export default function SignUpScreen() {
         <StatusBar style="dark" />
         {renderErrorModal()}
 
-        {/* Category picker — backdrop FADES in (Modal animationType="fade"),
-            sheet itself SLIDES up via the categorySheetY animated transform.
-            Decoupling the two avoids the default "everything slides together"
-            look which the user found heavy on this screen. */}
-        <Modal visible={showCategoryPicker} transparent animationType="fade" onRequestClose={() => setShowCategoryPicker(false)}>
-          <TouchableOpacity activeOpacity={1} onPress={() => setShowCategoryPicker(false)} style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' }}>
-            <Animated.View style={{ transform: [{ translateY: categorySheetY }] }}>
-              <TouchableOpacity activeOpacity={1} onPress={() => {}} style={{ backgroundColor: '#fffff8', borderTopLeftRadius: 24, borderTopRightRadius: 24, paddingVertical: 16, paddingHorizontal: 4 }}>
-                <View style={{ alignSelf: 'center', width: 36, height: 4, borderRadius: 2, backgroundColor: '#114b3c33', marginBottom: 12 }} />
-                <Text style={{ color: '#114b3c', fontSize: 16, fontWeight: '700', fontFamily: 'Poppins_700Bold', textAlign: 'center', marginBottom: 8 }}>
-                  {t('business.auth.categoryPickerTitle', { defaultValue: 'Choisissez une catégorie' })}
-                </Text>
-                <ScrollView style={{ maxHeight: 360 }}>
-                  {LOCATION_CATEGORIES.map((cat) => {
-                    const selected = bizCategory === cat;
-                    return (
-                      <TouchableOpacity
-                        key={cat}
-                        onPress={() => { setBizCategory(cat); setShowCategoryPicker(false); }}
-                        style={{
-                          paddingVertical: 14, paddingHorizontal: 20,
-                          backgroundColor: selected ? '#114b3c14' : 'transparent',
-                        }}
-                      >
-                        <Text style={{ color: selected ? '#114b3c' : '#114b3cb0', ...theme.typography.body, fontWeight: selected ? '700' : '400' }}>
-                          {t(`categories.${cat}`, { defaultValue: cat })}
-                        </Text>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </ScrollView>
-              </TouchableOpacity>
-            </Animated.View>
-          </TouchableOpacity>
-        </Modal>
-
         <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.keyboardView}>
           <ScrollView contentContainerStyle={styles.scrollContent}>
             <View style={[styles.content, { padding: theme.spacing.xxl }]}>
@@ -692,26 +672,6 @@ export default function SignUpScreen() {
                     keyboardType="email-address" autoCapitalize="none" autoCorrect={false}
                     accessibilityLabel={t('auth.email')}
                   />
-                </View>
-
-                {/* Category dropdown — opens a bottom modal of the 8
-                    LOCATION_CATEGORIES used everywhere else in the app. */}
-                <View style={[styles.inputContainer, { marginBottom: theme.spacing.lg }]}>
-                  <Text style={[styles.label, { color: '#114b3c', ...theme.typography.bodySm }]}>
-                    {t('business.auth.category', { defaultValue: 'Catégorie' })}<Text style={{ color: theme.colors.error }}> *</Text>
-                  </Text>
-                  <TouchableOpacity
-                    onPress={() => setShowCategoryPicker(true)}
-                    style={[styles.input, { backgroundColor: '#fff', borderColor: '#114b3c30', borderWidth: 1.5, borderRadius: 14, justifyContent: 'center' }]}
-                    accessibilityRole="button"
-                    accessibilityLabel={t('business.auth.category', { defaultValue: 'Catégorie' })}
-                  >
-                    <Text style={{ color: bizCategory ? '#114b3c' : '#114b3c40', ...theme.typography.body }}>
-                      {bizCategory
-                        ? t(`categories.${bizCategory}`, { defaultValue: bizCategory })
-                        : t('business.auth.categoryPlaceholder', { defaultValue: 'Sélectionnez une catégorie' })}
-                    </Text>
-                  </TouchableOpacity>
                 </View>
 
                 {/* Phone — Tunisian flag + +216 prefix as a fixed badge on

@@ -194,7 +194,7 @@ export function OrderCard({ order }: OrderCardProps) {
                   },
                 ]}
               >
-                {order.total} TND
+                {order.total} {t('common.currency', { defaultValue: 'TND' })}
               </Text>
             </View>
 

@@ -436,7 +436,7 @@ export const ReservationCard = React.memo(function ReservationCard({ reservation
       ]}
     >
       {/* Collapsed header — always visible */}
-      <TouchableOpacity onPress={handlePress} activeOpacity={0.85} accessibilityLabel={`${basketTypeName}, ${merchantName}, ${total > 0 ? total + ' TND' : ''}, ${getStatusLabel()}`} accessibilityRole="button" accessibilityHint={t('orders.tapToExpand', { defaultValue: 'Tap to expand details' })}>
+      <TouchableOpacity onPress={handlePress} activeOpacity={0.85} accessibilityLabel={`${basketTypeName}, ${merchantName}, ${total > 0 ? total + ' ' + t('common.currency', { defaultValue: 'TND' }) : ''}, ${getStatusLabel()}`} accessibilityRole="button" accessibilityHint={t('orders.tapToExpand', { defaultValue: 'Tap to expand details' })}>
         {/* `alignItems: 'flex-start'` so the right column (chat + chevron)
             sits at the TOP of the card, not vertically centered with the
             text. Per product feedback the icons were "a little under the
@@ -569,7 +569,7 @@ export const ReservationCard = React.memo(function ReservationCard({ reservation
                     priceText = t('orders.toPayShort', { amount: fmtMoney(cashToPay), defaultValue: 'À payer : {{amount}} TND' });
                   }
                 } else {
-                  priceText = `${fmtMoney(total)} TND`;
+                  priceText = `${fmtMoney(total)} ${t('common.currency', { defaultValue: 'TND' })}`;
                 }
                 return (
                   <>
@@ -753,7 +753,7 @@ export const ReservationCard = React.memo(function ReservationCard({ reservation
                   const isCard = pm === 'card';
                   const methodLabel = isCard
                     ? t('orders.paymentByCardShort', { defaultValue: 'En carte' })
-                    : t('orders.paymentInCashShort', { defaultValue: 'En espèces' });
+                    : t('orders.paymentInCashShort', { defaultValue: 'Sur place' });
                   const cancelledBy = (r as any).cancelled_by as 'buyer' | 'business' | string | undefined;
                   const cancellationReason = ((r as any).cancellation_reason as string | undefined) ?? null;
                   const isCancelled = status === 'cancelled' && !overrideExpired;
@@ -844,7 +844,7 @@ export const ReservationCard = React.memo(function ReservationCard({ reservation
                       {total > 0 ? (
                         <DetailRow
                           label={t('orders.orderTotalLabel', { defaultValue: 'Prix de la commande' })}
-                          value={`${fmtMoney(total)} TND`}
+                          value={`${fmtMoney(total)} ${t('common.currency', { defaultValue: 'TND' })}`}
                         />
                       ) : null}
                       <DetailRow
@@ -867,7 +867,7 @@ export const ReservationCard = React.memo(function ReservationCard({ reservation
                                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: theme.colors.primary + '14', borderRadius: theme.radii.pill, paddingHorizontal: 8, height: 22 }}>
                                   <Wallet size={11} color={theme.colors.primary} />
                                   <Text style={{ color: theme.colors.primary, fontSize: 11, fontFamily: 'Poppins_600SemiBold' }}>
-                                    {fmtMoney(creditAmt)} TND
+                                    {fmtMoney(creditAmt)} {t('common.currency', { defaultValue: 'TND' })}
                                   </Text>
                                 </View>
                                 <TouchableOpacity
@@ -938,10 +938,10 @@ export const ReservationCard = React.memo(function ReservationCard({ reservation
               {total > 0 && (
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 8, borderTopWidth: 1, borderTopColor: theme.colors.divider }}>
                   <View style={{ width: 30, height: 30, borderRadius: 15, backgroundColor: '#114b3c', justifyContent: 'center', alignItems: 'center' }}>
-                    <Text style={{ color: '#e3ff5c', fontSize: 9, fontWeight: '700' }}>TND</Text>
+                    <Text style={{ color: '#e3ff5c', fontSize: 9, fontWeight: '700' }}>{t('common.currency', { defaultValue: 'TND' })}</Text>
                   </View>
                   <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, fontWeight: '600', flex: 1 }}>
-                    {t('orders.orderTotalLabel', { defaultValue: 'Prix de la commande' })} : {fmtMoney(total)} TND
+                    {t('orders.orderTotalLabel', { defaultValue: 'Prix de la commande' })} : {fmtMoney(total)} {t('common.currency', { defaultValue: 'TND' })}
                   </Text>
                 </View>
               )}
@@ -950,7 +950,7 @@ export const ReservationCard = React.memo(function ReservationCard({ reservation
                   credits already-applied amount (those were getting read
                   as part of "À payer" before, which was misleading).
                     UPCOMING:
-                      · cash    → "À payer en espèces : (total − credits) TND"
+                      · cash    → "À payer sur place : (total − credits) TND"
                       · card    → "Déjà payé par carte"
                       · credits → "Payé entièrement en crédits"
                     PAST: "Récupéré · Payé : {total} TND" (transaction done)
@@ -961,7 +961,7 @@ export const ReservationCard = React.memo(function ReservationCard({ reservation
                 // Two stacked rows replace what used to be one mixed-concept
                 // line. Row A names the PAYMENT METHOD; Row B tells the
                 // user what's still to do (or what happened).
-                //   Row A — "Paiement en espèces (+ crédits)" / "Paiement
+                //   Row A — "Paiement sur place (+ crédits)" / "Paiement
                 //     par carte (+ crédits)". Cash or card icon — NEVER
                 //     the wallet icon (the full-credit edge case is
                 //     treated as cash with cashSlice=0, per the product
@@ -987,8 +987,8 @@ export const ReservationCard = React.memo(function ReservationCard({ reservation
                       ? t('orders.paymentByCardWithCredits', { defaultValue: 'Paiement par carte (+ crédits)' })
                       : t('orders.paymentByCard', { defaultValue: 'Paiement par carte' }))
                   : (creditAmt > 0
-                      ? t('orders.paymentInCashWithCredits', { defaultValue: 'Paiement en espèces (+ crédits)' })
-                      : t('orders.paymentInCash', { defaultValue: 'Paiement en espèces' }));
+                      ? t('orders.paymentInCashWithCredits', { defaultValue: 'Paiement sur place (+ crédits)' })
+                      : t('orders.paymentInCash', { defaultValue: 'Paiement sur place' }));
                 const showInfo = creditAmt > 0;
                 // Row B — what the user still has to DO, or what
                 // HAPPENED. Reads `cancelled_by` (snake_case from backend,
@@ -1034,7 +1034,7 @@ export const ReservationCard = React.memo(function ReservationCard({ reservation
                       ? t('orders.creditsInfoUpcomingCard', { credits, cash, defaultValue: 'Vous avez utilisé {{credits}} TND de vos crédits Barakeat. Le reste ({{cash}} TND) a été payé par carte au moment de la réservation.' })
                       : t('orders.creditsInfoUpcomingFull', { credits, defaultValue: 'Vous avez réglé toute la commande ({{credits}} TND) avec vos crédits Barakeat. Aucun paiement supplémentaire à la récupération.' });
                     return cashSlice > 0
-                      ? t('orders.creditsInfoUpcomingCash', { credits, cash, defaultValue: 'Vous avez utilisé {{credits}} TND de vos crédits Barakeat. Il vous reste {{cash}} TND à payer en espèces à la récupération.' })
+                      ? t('orders.creditsInfoUpcomingCash', { credits, cash, defaultValue: 'Vous avez utilisé {{credits}} TND de vos crédits Barakeat. Il vous reste {{cash}} TND à payer sur place à la récupération.' })
                       : t('orders.creditsInfoUpcomingFull', { credits, defaultValue: 'Vous avez réglé toute la commande ({{credits}} TND) avec vos crédits Barakeat. Aucun paiement supplémentaire à la récupération.' });
                   }
                   if (isPast) {

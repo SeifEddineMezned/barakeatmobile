@@ -37,19 +37,27 @@ export default function ChangePasswordSetScreen() {
     setLoading(true);
     try {
       await updatePassword(String(currentPwd), newPassword);
-      // Pop BOTH change-password screens off the stack (set + confirm), so
-      // the user lands back on the ORIGINAL /settings entry they were on
-      // before opening the flow. Using `router.replace('/settings')` here
-      // would only swap the current screen and push a SECOND /settings on
-      // top of the stack, leaving the confirm-password page wedged in
-      // between — so the back button from settings would walk the user
-      // through the password flow in reverse instead of returning to the
-      // app they came from. dismiss(2) collapses the whole flow in one
-      // animated step.
-      router.dismiss(2);
+      // Drop the spinner BEFORE the alert so the popup doesn't paint over
+      // a still-loading CTA. The alert's OK handler does the actual
+      // dismiss back to settings.
+      setLoading(false);
+      // Success popup — the user needs an explicit "it worked" before
+      // we yank them back to settings. Previously the screen just popped
+      // and the user was left wondering whether anything happened.
+      // dismiss(2) collapses BOTH change-password screens (set + confirm)
+      // so the user lands back on the ORIGINAL /settings entry — using
+      // router.replace('/settings') would push a second /settings on top
+      // and the back stack would walk them through the password flow in
+      // reverse.
+      customAlert.showAlert(
+        t('account.passwordUpdatedTitle', { defaultValue: 'Mot de passe mis à jour' }),
+        t('account.passwordUpdatedBody', { defaultValue: 'Votre mot de passe a été modifié avec succès.' }),
+        [
+          { text: 'OK', onPress: () => router.dismiss(2) },
+        ],
+      );
     } catch (err) {
       setErrorMsg(getErrorMessage(err));
-    } finally {
       setLoading(false);
     }
   };

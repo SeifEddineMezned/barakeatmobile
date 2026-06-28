@@ -291,7 +291,7 @@ export default function WalletScreen() {
           </Text>
         </View>
         <Text style={{ color: isPositive ? '#22c55e' : theme.colors.error, fontSize: 15, fontWeight: '700' }}>
-          {isPositive ? '+' : ''}{item.amount.toFixed(2)} TND
+          {isPositive ? '+' : ''}{item.amount.toFixed(2)} {t('common.currency', { defaultValue: 'TND' })}
         </Text>
       </View>
     );
@@ -308,7 +308,7 @@ export default function WalletScreen() {
         <Text style={{ color: '#fff', fontSize: 36, fontWeight: '700', fontFamily: 'Poppins_700Bold', marginTop: 4 }}>
           {balance.toFixed(2)}
         </Text>
-        <Text style={{ color: '#e3ff5c', fontSize: 14, fontWeight: '600', marginTop: 2 }}>TND</Text>
+        <Text style={{ color: '#e3ff5c', fontSize: 14, fontWeight: '600', marginTop: 2 }}>{t('common.currency', { defaultValue: 'TND' })}</Text>
       </View>
 
       {/* How to earn */}

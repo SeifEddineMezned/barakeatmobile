@@ -36,10 +36,24 @@ export function InAppNotification() {
   };
   const router = useRouter();
   const user = useAuthStore((s) => s.user);
+  const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
   const isBusiness = user?.role === 'business';
   const scaleAnim = useRef(new Animated.Value(0.85)).current;
   const opacityAnim = useRef(new Animated.Value(0)).current;
   const [currentIdx, setCurrentIdx] = useState(0);
+
+  // When the user is signed out (e.g. they're on /auth/sign-in or
+  // /auth/verify-email after signup) but the popup queue still contains
+  // notifications from a previous session on this device, the carousel
+  // would render anyway and tapping "Voir tout" would push /notifications
+  // — landing the user on a page that immediately bounces them back to
+  // sign-in. Drop the queue silently and render nothing so no popup ever
+  // surfaces over an auth screen.
+  useEffect(() => {
+    if (!isAuthenticated && popupQueue.length > 0) {
+      clearPopups();
+    }
+  }, [isAuthenticated, popupQueue.length, clearPopups]);
 
   const hasPopups = popupQueue.length > 0;
 
@@ -59,6 +73,17 @@ export function InAppNotification() {
   }, [hasPopups, popupQueue.length]);
 
   const handleDismiss = () => {
+    // Demo guard — the orders walkthrough relies on the user tapping
+    // "Voir la commande" to advance. Dismissing here (backdrop tap, X
+    // button, or Android hardware back) would orphan the demo with no
+    // way forward. Reads the store + currentNotif directly to avoid
+    // depending on a render-time computed flag, since this handler is
+    // closed over by Modal's onRequestClose and the backdrop touch.
+    const demoActive = useWalkthroughStore.getState().demoOrderActive;
+    const currentInQueue = popupQueue[currentIdx];
+    if (demoActive && currentInQueue && (currentInQueue as any).id < 0) {
+      return;
+    }
     // Same dismissal contract as handleAction: flip the local gate
     // synchronously so the popup unmounts on the next render commit,
     // even if the fade-out animation's completion callback never fires
@@ -261,6 +286,12 @@ export function InAppNotification() {
     router.push({ pathname: '/notifications', params: { openId: String(id) } } as never);
   };
 
+  // Auth gate (synchronous render-time): drop everything when signed out so
+  // the popup carousel never appears over /auth/sign-in or /auth/verify-email.
+  // The useEffect above already clears the queue, but rendering-time short-
+  // circuit covers the single frame between the queue still holding old
+  // popups and the effect firing.
+  if (!isAuthenticated) return null;
   if (dismissed || !hasPopups || !currentNotif) return null;
 
   // Message / reply notifs short-circuit the centered carousel and render
@@ -396,6 +427,11 @@ export function InAppNotification() {
             onAction={handleAction}
             outerReservedHeight={outerReservedHeight}
             demoHighlightAction={!!isDemoNotif}
+            // Hide the X close button during the demo. handleDismiss above
+            // already early-returns on the demo notif (covers backdrop tap
+            // + Android back), but removing the X visually tells the user
+            // there's only one path forward — the haloed action button.
+            hideClose={!!isDemoNotif}
             topRightAction={
               !isDemoNotif && popupQueue.length === 1 ? (
                 // Bell shortcut sits in the new green title bar — soft-white

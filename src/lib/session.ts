@@ -3,6 +3,20 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const TOKEN_KEY = 'barakeat_auth_token';
 const USER_KEY = 'barakeat_user';
+// Sticky-logout sentinel — written to AsyncStorage by signOut, cleared by
+// signIn, checked by restoreSession. The sentinel is the safety net for a
+// real Android failure mode we hit in testing: signOut wipes both stores,
+// the app backgrounds, Android kills the JS process, the app cold-starts on
+// resume, and SecureStore HAS THE TOKEN BACK (some OEM keystore quirk
+// where the delete didn't fully take). The dualRead + purgeStaleKeychainSession
+// guard then either restores the stale session (both stores have it) or
+// half-recovers (one has it, one doesn't). The sentinel cuts through all of
+// that: if it's set on restoreSession, the user explicitly chose to log
+// out, period — force-clear and present the sign-in screen no matter what
+// the storage layers report. Only AsyncStorage is used because (a) it's
+// fast, (b) it's wiped on app uninstall so a reinstall starts fresh, and
+// (c) it's the most reliable store across Android OEMs.
+const LOGGED_OUT_KEY = 'barakeat_logged_out';
 
 // ── Why we mirror to BOTH SecureStore and AsyncStorage ───────────────────
 //
@@ -158,6 +172,85 @@ export async function clearSession(): Promise<void> {
   await removeToken();
   await removeUser();
   console.log('[Session] Session cleared');
+}
+
+// ── Sticky-logout sentinel ───────────────────────────────────────────────
+// Lives independently of TOKEN_KEY / USER_KEY so a SecureStore/AsyncStorage
+// delete failure on those keys cannot bleed into a silent re-login. Written
+// FIRST in signOut (before any other I/O) so even a JS process kill mid-
+// signOut still leaves the marker on disk for the next launch to see.
+//
+// DUAL-STORAGE: the previous AsyncStorage-only implementation inherited the
+// exact failure mode it was meant to defend against — on certain Android
+// devices the AsyncStorage read transiently returned `null` after a long
+// background, `hasLoggedOutSentinel()` fell back to `false`, and the keystore
+// quirk left the old token in SecureStore so `restoreSession()` re-hydrated
+// the session the user explicitly killed. Mirroring the sentinel to BOTH
+// stores means both have to fail simultaneously for the signal to be lost.
+//
+// FAIL-CLOSED: if BOTH reads throw, we assume the user IS logged out (forcing
+// a one-tap re-login) rather than auto-restoring a session of unclear status.
+// A user who never logged out has neither store reporting the sentinel and
+// the cold-start path still works normally. The only "regression" is a single
+// extra sign-in when both storage layers are broken — strictly safer than
+// silently restoring a session the user thought they killed.
+export async function setLoggedOutSentinel(): Promise<void> {
+  let asyncOk = false;
+  let secureOk = false;
+  try {
+    await AsyncStorage.setItem(LOGGED_OUT_KEY, '1');
+    asyncOk = true;
+  } catch (err) {
+    console.log('[Session] Logged-out sentinel AsyncStorage write FAILED:', err);
+  }
+  try {
+    await SecureStore.setItemAsync(LOGGED_OUT_KEY, '1', WRITE_OPTS);
+    secureOk = true;
+  } catch (err) {
+    console.log('[Session] Logged-out sentinel SecureStore write FAILED:', err);
+  }
+  console.log(`[Session] Logged-out sentinel set (async=${asyncOk}, secure=${secureOk})`);
+}
+
+export async function clearLoggedOutSentinel(): Promise<void> {
+  try {
+    await AsyncStorage.removeItem(LOGGED_OUT_KEY);
+  } catch (err) {
+    console.log('[Session] Logged-out sentinel AsyncStorage clear FAILED (non-fatal):', err);
+  }
+  try {
+    await SecureStore.deleteItemAsync(LOGGED_OUT_KEY);
+  } catch (err) {
+    console.log('[Session] Logged-out sentinel SecureStore clear FAILED (non-fatal):', err);
+  }
+}
+
+export async function hasLoggedOutSentinel(): Promise<boolean> {
+  let asyncErr: unknown = null;
+  let secureErr: unknown = null;
+  try {
+    const v = await AsyncStorage.getItem(LOGGED_OUT_KEY);
+    if (v === '1') return true;
+  } catch (err) {
+    asyncErr = err;
+  }
+  try {
+    const v = await SecureStore.getItemAsync(LOGGED_OUT_KEY);
+    if (v === '1') return true;
+  } catch (err) {
+    secureErr = err;
+  }
+  // Fail-CLOSED: if BOTH reads threw, treat as if the sentinel were set. A
+  // user mid-session who genuinely never logged out had neither store
+  // reporting the sentinel value — they fall through to the negative-return
+  // path BELOW, with no error caught, so they're unaffected. This branch
+  // only fires when storage is simultaneously broken across both layers,
+  // and in that case forcing a fresh sign-in is the safe play.
+  if (asyncErr && secureErr) {
+    console.log('[Session] Logged-out sentinel read FAILED on BOTH stores — failing closed (treat as logged out).');
+    return true;
+  }
+  return false;
 }
 
 // ── Reinstall-stale-session guard ────────────────────────────────────────

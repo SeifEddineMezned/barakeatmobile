@@ -296,8 +296,8 @@ const ADDITIONS = {
     ar: 'كيف أدفع؟',
   },
   'faq.payment.howToPay.a': {
-    en: '« Payment is made either online by credit card, by Barakeat credits, or in cash directly at the merchant\'s establishment upon pickup »',
-    fr: '« Le paiement se fait soit en ligne par carte bancaire, soit par crédits Barakeat, ou en espèces directement à l\'établissement du commerce lors du retrait »',
+    en: '« Payment is made either online by credit card, by Barakeat credits, or on-site directly at the merchant\'s establishment upon pickup »',
+    fr: '« Le paiement se fait soit en ligne par carte bancaire, soit par crédits Barakeat, ou sur place directement à l\'établissement du commerce lors du retrait »',
     ar: '«يتم الدفع إما عبر الإنترنت بالبطاقة البنكية، أو برصيد برَكات، أو نقدا مباشرة في محل التاجر عند الاستلام»',
   },
   'faq.payment.credits.q': {

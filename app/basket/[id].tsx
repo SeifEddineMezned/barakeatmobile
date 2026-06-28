@@ -24,6 +24,7 @@ import {
   buildDemoRawBasketById,
 } from '@/src/lib/demoData';
 import { normalizeRawBasketToBasket } from '@/src/utils/normalizeRestaurant';
+import { localizeI18n } from '@/src/utils/localizeI18n';
 import { submitReport } from '@/src/services/reports';
 import { FeatureFlags } from '@/src/lib/featureFlags';
 import { apiClient } from '@/src/lib/api';
@@ -106,7 +107,7 @@ const reviewStyles = StyleSheet.create({
 export default function BasketDetailsScreen() {
   const { id, businessPreview } = useLocalSearchParams<{ id: string; businessPreview?: string }>();
   const isBizPreview = businessPreview === 'true';
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const { pickPhoto } = useImageCropper();
   const theme = useTheme();
   const router = useRouter();
@@ -351,7 +352,14 @@ export default function BasketDetailsScreen() {
   // the buyer view blank in that case, even though the location had text
   // set and the partner's edit modal correctly previewed the inherited
   // value.
-  const pickupInstructions = rawData?.effective_pickup_instructions ?? rawData?.pickup_instructions ?? null;
+  const pickupInstructions = localizeI18n(
+    rawData?.effective_pickup_instructions_i18n ?? rawData?.pickup_instructions_i18n,
+    i18n.language,
+    rawData?.effective_pickup_instructions ?? rawData?.pickup_instructions ?? null,
+  ) || null;
+  // The merchant's description in the buyer's language when an AI translation
+  // exists; otherwise the plain text the merchant typed.
+  const localizedDescription = localizeI18n(rawData?.description_i18n, i18n.language, basket?.description);
   const locationId = basket?.merchantId;
   const basketId = String(id);
 
@@ -830,10 +838,10 @@ export default function BasketDetailsScreen() {
             {(() => {
               const itemsStr = basket.exampleItems?.length ? basket.exampleItems.join(', ') : null;
               // Avoid duplicating description if items are the same text
-              const descText = basket.description
-                ? (itemsStr && itemsStr !== basket.description ? `${basket.description} — ${itemsStr}` : basket.description)
+              const descText = localizedDescription
+                ? (itemsStr && itemsStr !== localizedDescription ? `${localizedDescription} — ${itemsStr}` : localizedDescription)
                 : (itemsStr || t('basket.whatInsideDefault', { defaultValue: 'Un assortiment surprise de produits frais du jour, sélectionnés par le commerçant.' }));
-              const isPlaceholder = !basket.description && (!basket.exampleItems || basket.exampleItems.length === 0);
+              const isPlaceholder = !localizedDescription && (!basket.exampleItems || basket.exampleItems.length === 0);
               const needsExpand = !isPlaceholder && (descText.length > 140 || /\n/.test(descText));
               return (
                 <TouchableOpacity activeOpacity={needsExpand ? 0.7 : 1} onPress={() => { if (needsExpand) setDescExpanded(!descExpanded); }}>
@@ -980,16 +988,27 @@ export default function BasketDetailsScreen() {
           <View>
             {basket.originalPrice > 0 && basket.originalPrice > basket.discountedPrice && (
               <Text style={{ color: theme.colors.muted, ...theme.typography.caption, textDecorationLine: 'line-through' }}>
-                {basket.originalPrice} TND
+                {basket.originalPrice} {t('common.currency', { defaultValue: 'TND' })}
               </Text>
             )}
             <Text style={{ color: theme.colors.primary, fontSize: 22, fontWeight: '800', fontFamily: 'Poppins_700Bold' }}>
-              {basket.discountedPrice} TND
+              {basket.discountedPrice} {t('common.currency', { defaultValue: 'TND' })}
             </Text>
           </View>
           <View style={{ width: isWideScreen ? 260 : 180 }}>
             <PrimaryCTAButton
-              onPress={() => router.push(`/business/create-basket?editId=${id}` as never)}
+              // No-op when the member lacks edit_basket_info — the button
+              // stays in place (so the layout doesn't jump for members who
+              // *do* have the perm later) but reads as un-actionable: 0.5
+              // opacity from the disabled style, and the press handler is
+              // gated to nothing so a tap won't open the edit form (the
+              // user explicitly didn't want them landing on a screen that
+              // would then fail or show a "not allowed" message).
+              onPress={() => {
+                if (!canEditBasketFromPreview) return;
+                router.push(`/business/create-basket?editId=${id}` as never);
+              }}
+              disabled={!canEditBasketFromPreview}
               compact
               borderRadius={16}
               title={t(
@@ -999,17 +1018,64 @@ export default function BasketDetailsScreen() {
             />
           </View>
         </View>
+      ) : isBusiness ? (
+        // Business user on the customer view — they got here from the
+        // my-baskets / dashboard tap routing when they lack basket-edit
+        // perms. "Reserve" would be nonsensical (they're not buying their
+        // own brand's product), so we keep the same sticky-bar shape but
+        // swap the action half for a non-interactive price display. Left:
+        // original price only (no crossed-out comparison, since there's
+        // no purchase decision being made). Right: a green pill matching
+        // the reserve button's silhouette (height, radius, shadow) so the
+        // bar still feels balanced, but it's a plain View — no onPress,
+        // no scale animation, no ripple.
+        <View style={{ position: 'absolute', bottom: 0, left: 0, right: 0, backgroundColor: theme.colors.surface, paddingHorizontal: bottomBarHPadding, paddingTop: theme.spacing.lg, paddingBottom: bottomSafePadding, borderTopWidth: 1, borderTopColor: theme.colors.divider, ...theme.shadows.shadowLg, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+          <View>
+            <Text style={{ color: theme.colors.muted, ...theme.typography.caption, marginBottom: 2 }}>
+              {t('basket.originalPriceLabel', { defaultValue: "Prix d'origine" })}
+            </Text>
+            {/* Crossed-out original — the business viewer doesn't transact,
+                so the number stays prominent (same size/weight as before)
+                but the strike-through makes it visually clear this isn't
+                what a customer would actually pay; the discounted price
+                on the right is the real "live" amount. Slightly muted
+                colour to match the line-through convention used on the
+                customer view's small crossed-out original above. */}
+            <Text style={{ color: theme.colors.textSecondary, fontSize: 22, fontWeight: '800', fontFamily: 'Poppins_700Bold', textDecorationLine: 'line-through' }}>
+              {basket.originalPrice} {t('common.currency', { defaultValue: 'TND' })}
+            </Text>
+          </View>
+          <View
+            style={{
+              width: isWideScreen ? 260 : 180,
+              height: 46,
+              borderRadius: 16,
+              backgroundColor: theme.colors.primary,
+              justifyContent: 'center',
+              alignItems: 'center',
+              paddingHorizontal: 20,
+              ...theme.shadows.shadowMd,
+            }}
+          >
+            <Text style={{ color: theme.colors.surface, fontSize: 10, fontFamily: 'Poppins_500Medium', opacity: 0.85, letterSpacing: 0.6, marginBottom: 1 }}>
+              {t('basket.currentPriceLabel', { defaultValue: 'Prix actuel' })}
+            </Text>
+            <Text style={{ color: theme.colors.surface, fontSize: 18, fontWeight: '800', fontFamily: 'Poppins_700Bold', lineHeight: 22 }}>
+              {basket.discountedPrice} {t('common.currency', { defaultValue: 'TND' })}
+            </Text>
+          </View>
+        </View>
       ) : (
         // Customer view — price + reserve button
         <View style={{ position: 'absolute', bottom: 0, left: 0, right: 0, backgroundColor: theme.colors.surface, paddingHorizontal: bottomBarHPadding, paddingTop: theme.spacing.lg, paddingBottom: bottomSafePadding, borderTopWidth: 1, borderTopColor: theme.colors.divider, ...theme.shadows.shadowLg, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
           <View>
             {basket.originalPrice > 0 && basket.originalPrice > basket.discountedPrice && (
               <Text style={{ color: theme.colors.muted, ...theme.typography.caption, textDecorationLine: 'line-through' }}>
-                {basket.originalPrice} TND
+                {basket.originalPrice} {t('common.currency', { defaultValue: 'TND' })}
               </Text>
             )}
             <Text style={{ color: theme.colors.primary, fontSize: 22, fontWeight: '800', fontFamily: 'Poppins_700Bold' }}>
-              {basket.discountedPrice} TND
+              {basket.discountedPrice} {t('common.currency', { defaultValue: 'TND' })}
             </Text>
           </View>
           <View

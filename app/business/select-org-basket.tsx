@@ -205,9 +205,13 @@ export default function SelectOrgBasketScreen() {
     <SafeAreaView style={{ flex: 1, backgroundColor: theme.colors.bg }} edges={['top']}>
       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingHorizontal: theme.spacing.lg, paddingVertical: theme.spacing.md, minHeight: 48 }}>
         <TouchableOpacity
-          onPress={() => router.back()}
+          // Locked during the walkthrough so a stray back-tap can't pop the
+          // route and leave the demo overlay pointing at a screen that's
+          // no longer mounted. `walkthroughActive` already exists above.
+          onPress={walkthroughActive ? undefined : () => router.back()}
+          disabled={walkthroughActive}
           hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}
-          style={{ position: 'absolute', left: theme.spacing.lg, top: theme.spacing.md }}
+          style={{ position: 'absolute', left: theme.spacing.lg, top: theme.spacing.md, opacity: walkthroughActive ? 0.3 : 1 }}
         >
           <ArrowLeft size={22} color={theme.colors.textPrimary} />
         </TouchableOpacity>
@@ -333,7 +337,7 @@ export default function SelectOrgBasketScreen() {
                       <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                         <Tag size={11} color={theme.colors.primary} />
                         <Text style={{ color: theme.colors.primary, ...theme.typography.caption, fontFamily: 'Poppins_600SemiBold', marginLeft: 4 }}>
-                          {group.price.toFixed(2)} TND
+                          {group.price.toFixed(2)} {t('common.currency', { defaultValue: 'TND' })}
                         </Text>
                       </View>
                       <View style={{ flexDirection: 'row', alignItems: 'center', minWidth: 0, flexShrink: 1 }}>

@@ -145,6 +145,73 @@ function handleAccountDeleted(): void {
   } catch {}
 }
 
+// ─── Location-deleted handler ──────────────────────────────────────────────
+// The backend returns 410 { code: 'location_deleted', locationId } when an
+// explicit ?location_id=X query refers to a soft-deleted (or hard-deleted)
+// location — e.g. an admin removed it from the admin SPA while a business
+// user was still working on it. We surface a one-time "this location has
+// been deleted" popup, drop the local selectedLocationId if it matches,
+// and invalidate every query that depends on the location so the business
+// layout's auto-pick effect snaps the user to a still-valid location.
+//
+// Dedup per locationId: in a burst of failing queries (profile + baskets +
+// orders all share the same selectedLocationId) only the FIRST one fires
+// the popup; the rest see the id in the set and silently ride along on
+// the invalidation. Reset on a fresh sign-in via resetAccountDeletedGuard()
+// — see signIn in authStore which clears both guards in lockstep.
+const _locationDeletedHandled = new Set<number>();
+export function resetLocationDeletedGuard(): void {
+  _locationDeletedHandled.clear();
+}
+function handleLocationDeleted(locationId: number): void {
+  if (_locationDeletedHandled.has(locationId)) return;
+  _locationDeletedHandled.add(locationId);
+
+  // Synchronous popup so the user sees an explanation BEFORE the screen
+  // re-renders empty.
+  try {
+    const i18n = require('@/src/i18n').default;
+    const { showGlobalAlert } = require('@/src/components/CustomAlert');
+    showGlobalAlert(
+      i18n.t('business.locationDeletedTitle', { defaultValue: 'Emplacement supprimé' }),
+      i18n.t('business.locationDeletedBody', {
+        defaultValue:
+          "Cet emplacement a été supprimé par un administrateur. "
+          + "Un autre emplacement a été sélectionné automatiquement.",
+      }),
+      [{ text: i18n.t('common.continue', { defaultValue: 'Continuer' }) }],
+      'warning',
+    );
+  } catch {}
+
+  // Clear the stale selection so the (business)/_layout auto-pick effect
+  // snaps to the first valid location on its next render. Guarded on a
+  // matching id so a stray 410 from a stale query for a previous selection
+  // doesn't wipe out a still-valid current selection.
+  try {
+    const { useBusinessStore } = require('@/src/stores/businessStore');
+    const store = useBusinessStore.getState();
+    if (Number(store.selectedLocationId) === Number(locationId)) {
+      store.setSelectedLocationId(null);
+    }
+  } catch {}
+
+  // Invalidate every query that's keyed on the location so screens refetch
+  // against the new selection. Prefix-invalidation hits every cached key —
+  // ['my-profile', locationId], ['my-baskets', locationId], etc.
+  try {
+    const { getGlobalQueryClient } = require('@/src/lib/queryClientRef');
+    const qc = getGlobalQueryClient();
+    if (qc) {
+      qc.invalidateQueries({ queryKey: ['my-profile'] });
+      qc.invalidateQueries({ queryKey: ['my-context'] });
+      qc.invalidateQueries({ queryKey: ['org-details'] });
+      qc.invalidateQueries({ queryKey: ['my-baskets'] });
+      qc.invalidateQueries({ queryKey: ['my-orders'] });
+    }
+  } catch {}
+}
+
 apiClient.interceptors.response.use(
   (response) => response,
   async (error) => {
@@ -162,6 +229,16 @@ apiClient.interceptors.response.use(
       // retrying (retrying would just 401 again and spin the polling timers).
       if (status === 401 && (data as any)?.error === 'account_deleted') {
         handleAccountDeleted();
+        return Promise.reject({ status, message, data, isApiError: true });
+      }
+
+      // Location the user was working on was soft- or hard-deleted by the
+      // admin while they were connected. Fire the one-time popup, drop the
+      // local selection, and invalidate dependent queries — the business
+      // layout's auto-pick effect then snaps them to a valid location.
+      if (status === 410 && (data as any)?.code === 'location_deleted') {
+        const deletedId = Number((data as any)?.locationId);
+        if (Number.isFinite(deletedId)) handleLocationDeleted(deletedId);
         return Promise.reject({ status, message, data, isApiError: true });
       }
 

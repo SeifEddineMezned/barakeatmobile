@@ -147,6 +147,19 @@ export default function BusinessConversationsScreen() {
   const orgLocations = orgDetailsQuery.data?.locations ?? [];
   const myRole = teamContextQuery.data?.role ?? '';
   const myPrimaryLocationId = teamContextQuery.data?.location_id;
+  // view_history gates the "Terminées" tab. The reasoning mirrors the
+  // orderUpdates push gate: completed/cancelled threads belong to the order-
+  // history surface, and a member without that perm has nowhere to dig into
+  // the order behind a closed conversation. If they were sitting on the
+  // Terminées tab when their perm was revoked, force them back to "En cours"
+  // so the page doesn't briefly render a tab they're no longer allowed on.
+  const convRawPerms = (teamContextQuery.data?.permissions ?? {}) as Record<string, unknown>;
+  const convHasPerm = (key: string) => { const v = convRawPerms[key]; return v === true || v === 'true' || v === 'write'; };
+  const convIsAdminOrOwner = myRole === 'admin' || myRole === 'owner';
+  const canSeeCompletedTab = convIsAdminOrOwner || convHasPerm('view_history');
+  React.useEffect(() => {
+    if (!canSeeCompletedTab && tab === 'old') setTab('upcoming');
+  }, [canSeeCompletedTab, tab]);
   // Every location this user belongs to. Prefer my-context's `location_ids`
   // (polled, authoritative for membership changes); fall back to org-details
   // members rows; final fallback is the primary location_id from my-context.
@@ -746,7 +759,10 @@ export default function BusinessConversationsScreen() {
       >
         {([
           { key: 'upcoming' as TabKey, label: t('business.chat.tabUpcoming', { defaultValue: 'En cours' }) },
-          { key: 'old' as TabKey, label: t('business.chat.tabOld', { defaultValue: 'Terminées' }) },
+          // Terminées hidden for members without view_history. When the only
+          // visible tab is "En cours" the underline still reads correctly
+          // (single tab, full width — see the flex:1 style below).
+          ...(canSeeCompletedTab ? [{ key: 'old' as TabKey, label: t('business.chat.tabOld', { defaultValue: 'Terminées' }) }] : []),
         ]).map(({ key, label }) => {
           const active = tab === key;
           return (

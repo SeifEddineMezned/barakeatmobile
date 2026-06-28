@@ -365,13 +365,14 @@ export default function SignInScreen() {
       const rawName = credential.fullName
         ? `${credential.fullName.givenName ?? ''} ${credential.fullName.familyName ?? ''}`.trim()
         : '';
-      // Apple only returns the name on the FIRST authorization (and the user can
-      // clear it). When it's absent we send a localized placeholder so the
-      // account has a sensible display name; the user can rename themselves in
-      // their profile afterwards.
-      const fullName = rawName.length > 0
-        ? rawName
-        : t('auth.appleDefaultName', { defaultValue: 'Inconnu' });
+      // Apple only returns the name on the FIRST authorization for each app
+      // install — and on that one chance it can still be empty if the user
+      // clears the name field on the consent sheet. We pass the raw value
+      // verbatim (empty string included). The backend USED to reject new
+      // accounts with empty names; now it creates the account with an empty
+      // `name` + `nameNeedsInput: true`, and we route the user through a
+      // dedicated name-entry screen below before the gender picker.
+      const fullName = rawName;
 
       const res = await loginWithApple(credential.identityToken, fullName);
 
@@ -411,24 +412,32 @@ export default function SignInScreen() {
         onboardingCompleted,
         genderStepCompleted,
         authProvider: (res.user as any).provider ?? 'local',
+        organizationName: (res.user as any).organizationName ?? null,
+        orgRole: (res.user as any).role ?? null,
       };
 
       // First-login routing: when the OAuth user hasn't done the gender step
-      // yet, send them to the gender screen instead of straight into the app.
-      // We do NOT gate this on onboardingCompleted — that flag stays false
-      // through the gender step so the welcome carousel / demo / address prompt
-      // still fires once the user reaches the app. The routing guard ALSO
-      // checks genderStepCompleted on cold reload, so a mid-step process kill
-      // still lands the user back here on next launch.
+      // yet, send them through the dedicated first-login screens (name → gender)
+      // instead of straight into the app. We do NOT gate this on
+      // onboardingCompleted — that flag stays false through the gender step so
+      // the welcome carousel / demo / address prompt still fires once the user
+      // reaches the app. The routing guard ALSO checks nameNeedsInput /
+      // genderStepCompleted on cold reload, so a mid-step process kill still
+      // lands the user back on the right screen on next launch.
+      const nameNeedsInput = (res.user as any).nameNeedsInput === true;
       if (!genderStepCompleted) {
-        console.log('[SignIn] Apple new user — routing to /auth/onboarding (gender step)');
-        // Splash hidden — we want the gender screen visible immediately, not
-        // gated by the celebration animation. Stash the OAuth-supplied flags
-        // on the user object the store reads.
-        (user as any).nameNeedsInput = (res.user as any).nameNeedsInput ?? false;
+        // Stash the OAuth-supplied flags on the user object so the routing
+        // guard in _layout can read them (persists across reload via SecureStore).
+        (user as any).nameNeedsInput = nameNeedsInput;
         (user as any).genderNeedsInput = (res.user as any).genderNeedsInput ?? true;
         await signIn(user, res.token);
-        router.replace('/auth/onboarding' as never);
+        if (nameNeedsInput) {
+          console.log('[SignIn] Apple new user — Apple withheld name, routing to /auth/name-input');
+          router.replace('/auth/name-input' as never);
+        } else {
+          console.log('[SignIn] Apple new user — routing to /auth/onboarding (gender step)');
+          router.replace('/auth/onboarding' as never);
+        }
         return;
       }
 
@@ -559,6 +568,8 @@ export default function SignInScreen() {
         onboardingCompleted,
         genderStepCompleted,
         authProvider: (res.user as any).provider ?? 'local',
+        organizationName: (res.user as any).organizationName ?? null,
+        orgRole: (res.user as any).role ?? null,
       };
 
       // First-login routing for Google. Same logic as the Apple branch above:
@@ -643,6 +654,8 @@ export default function SignInScreen() {
         gender: (res.user as any).gender ?? null,
         onboardingCompleted,
         authProvider: (res.user as any).provider ?? 'local',
+        organizationName: (res.user as any).organizationName ?? null,
+        orgRole: (res.user as any).role ?? null,
       };
       console.log('[SignIn] Success — splash up; routing guard navigates after the animation (role:', user.role, 'backend:', backendRole, ')');
       // First login via email — most often a business account created by admin,

@@ -21,7 +21,7 @@ import { fetchStats, fetchTodayOrders, fetchAnalytics, fetchMyProfile, fetchMyBa
 import { fetchConversations } from '@/src/services/messages';
 import { fetchMyContext, fetchOrganizationDetails } from '@/src/services/teams';
 import { apiClient } from '@/src/lib/api';
-import { resolveTodayWeeklyHours } from '@/src/utils/timezone';
+import { resolveTodayWeeklyHours, getBusinessDayDateStr } from '@/src/utils/timezone';
 import { isPendingReservationActive } from '@/src/utils/orderExpiry';
 import { usePollWhenForegrounded } from '@/src/hooks/usePollWhenFocused';
 import { orderIdToCode } from '@/src/utils/orderCode';
@@ -227,15 +227,30 @@ export default function BusinessDashboard() {
     refetchInterval: dashboardConversationsRefetch,
     refetchOnWindowFocus: true,
   });
+  // Badge count MUST match (business)/_layout.tsx's chat-icon badge so the
+  // user sees the same number across surfaces — previously the dashboard
+  // used a looser 7-day window with no status filter, so a closed thread
+  // with a stale unread inflated the count above what the header showed.
+  // Filters mirror the À venir tab the user lands on when tapping the
+  // icon: status='open' AND last activity inside today's business day
+  // (or no history yet for a brand-new thread). Counts CONVERSATIONS,
+  // not messages — one chatty thread with 5 unreads still reads as 1.
   const msgUnreadsTotal = React.useMemo(() => {
-    const RECENT_CUTOFF_MS = 7 * 24 * 60 * 60 * 1000;
-    const now = Date.now();
+    const now = new Date();
+    const todayBizDateStr = getBusinessDayDateStr(now);
     const convs = conversationsQuery.data ?? [];
     let count = 0;
     for (const c of convs) {
+      const unread = Number(c.unread_count) || 0;
+      if (unread <= 0) continue;
+      if (c.status !== 'open') continue;
       const lastMs = c.last_message_at ? new Date(c.last_message_at).getTime() : 0;
-      if (lastMs > 0 && (now - lastMs) > RECENT_CUTOFF_MS) continue;
-      if ((c.unread_count ?? 0) > 0) count++;
+      if (lastMs === 0) {
+        count += 1;
+        continue;
+      }
+      const lastBizDateStr = getBusinessDayDateStr(new Date(lastMs));
+      if (lastBizDateStr === todayBizDateStr) count += 1;
     }
     return count;
   }, [conversationsQuery.data]);
@@ -631,6 +646,12 @@ export default function BusinessDashboard() {
     return myDashLocationId != null ? [Number(myDashLocationId)] : [];
   }, [user?.id, orgDetailsQuery.data?.members, (teamContextQuery.data as any)?.location_ids, myDashLocationId]);
   const isAdmin = (myDashRole === 'admin' || myDashRole === 'owner') && myDashLocationIds.length === 0;
+  // Messaging gate for the dashboard chat icon — mirrors (business)/_layout's
+  // header gate. Owner/admin always; otherwise the per-member `messaging` perm.
+  const dashRawPerms = (teamContextQuery.data?.permissions ?? {}) as Record<string, unknown>;
+  const dashHasPerm = (key: string) => { const v = dashRawPerms[key]; return v === true || v === 'true' || v === 'write'; };
+  const dashIsAdminOrOwner = myDashRole === 'admin' || myDashRole === 'owner';
+  const canMessage = dashIsAdminOrOwner || dashHasPerm('messaging');
   // True for an org owner/admin who hasn't created a location yet — every
   // partner-screen short-circuits to a single "add your first location" CTA in
   // this state. Wait for orgDetails to finish loading so we don't briefly flash
@@ -714,6 +735,16 @@ export default function BusinessDashboard() {
   const dashPerms = teamContextQuery.data?.permissions ?? {};
   const hasDashPerm = (key: string) => { const v = (dashPerms as any)[key]; return v === true || v === 'true' || v === 'write'; };
   const canViewHistory = isAdmin || hasDashPerm('view_history');
+  // Basket-edit perms — the dashboard's horizontal basket strip routes to the
+  // business detail modal when the viewer can edit, and to the customer view
+  // when they can't. Mirrors the same role-trumps-perms policy as my-baskets
+  // (admins inherit every per-location capability regardless of stored perms).
+  const dashIsAnyAdmin = myDashRole === 'admin' || myDashRole === 'owner';
+  const canEditDashBaskets =
+    dashIsAnyAdmin
+    || hasDashPerm('edit_quantities')
+    || hasDashPerm('edit_basket_info')
+    || hasDashPerm('create_delete_baskets');
   // Org name is the source of truth for the hero greeting + switcher fallback.
   const orgName = teamContextQuery.data?.organization_name ?? orgDetailsQuery.data?.organization?.name ?? '';
   // Match the shared layout's switcher pill ([_layout.tsx:266-275]) — bare
@@ -892,27 +923,29 @@ export default function BusinessDashboard() {
             <TouchableOpacity onPress={() => router.push('/settings' as never)}>
               <Settings size={20} color={theme.colors.textPrimary} />
             </TouchableOpacity>
-            <TouchableOpacity onPress={() => router.push('/business/conversations' as never)}>
-              <MessageCircle size={20} color={theme.colors.textPrimary} />
-              {msgUnreadsTotal > 0 && (
-                <View style={{
-                  position: 'absolute',
-                  top: -4,
-                  right: -6,
-                  backgroundColor: theme.colors.error,
-                  borderRadius: 8,
-                  minWidth: 16,
-                  height: 16,
-                  justifyContent: 'center',
-                  alignItems: 'center',
-                  paddingHorizontal: 4,
-                }}>
-                  <Text style={{ color: '#fff', fontSize: 10, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
-                    {msgUnreadsTotal > 99 ? '99+' : msgUnreadsTotal}
-                  </Text>
-                </View>
-              )}
-            </TouchableOpacity>
+            {canMessage && (
+              <TouchableOpacity onPress={() => router.push('/business/conversations' as never)}>
+                <MessageCircle size={20} color={theme.colors.textPrimary} />
+                {msgUnreadsTotal > 0 && (
+                  <View style={{
+                    position: 'absolute',
+                    top: -4,
+                    right: -6,
+                    backgroundColor: theme.colors.error,
+                    borderRadius: 8,
+                    minWidth: 16,
+                    height: 16,
+                    justifyContent: 'center',
+                    alignItems: 'center',
+                    paddingHorizontal: 4,
+                  }}>
+                    <Text style={{ color: '#fff', fontSize: 10, fontWeight: '700', fontFamily: 'Poppins_700Bold' }}>
+                      {msgUnreadsTotal > 99 ? '99+' : msgUnreadsTotal}
+                    </Text>
+                  </View>
+                )}
+              </TouchableOpacity>
+            )}
             <TouchableOpacity onPress={() => router.push('/notifications' as never)}>
               <Bell size={20} color={theme.colors.textPrimary} />
               {unreadCount > 0 && (
@@ -937,22 +970,37 @@ export default function BusinessDashboard() {
           </View>
         </View>
 
-        {/* Cover photo - extends to absolute top of screen */}
+        {/* Cover photo - extends to absolute top of screen.
+            Fallback chain (highest priority first):
+              1. profileQuery.data.cover_image_url — already COALESCE(location,org)
+                 on the backend, so this normally carries either the per-location
+                 override or the org default for the SELECTED location.
+              2. orgDetailsQuery.data.organization.cover_image_url — the org-level
+                 brand cover. This branch fires when the org has NO locations yet
+                 (just been created via admin "add commerce" with a brand cover)
+                 and profileQuery returns null because the location-scoped endpoint
+                 has nothing to JOIN. Without it the owner stares at a blank gradient
+                 on the very first launch of their brand-new commerce. */}
         <View style={{ position: 'relative', height: 200 + insets.top, backgroundColor: theme.colors.primary + '20', overflow: 'visible', marginTop: 0 }}>
-          {profileQuery.data?.cover_image_url ? (
+          {(profileQuery.data?.cover_image_url ?? orgDetailsQuery.data?.organization?.cover_image_url) ? (
             // expo-image (not RN <Image>): RN's remote-image decode races the
             // first layout on some Android devices, leaving the cover blank
             // until a re-mount (navigating away + back). expo-image paints
             // reliably and caches to disk. `key` on the URL forces a fresh load
             // when the selected location changes.
-            <ExpoImage
-              key={profileQuery.data.cover_image_url}
-              source={{ uri: profileQuery.data.cover_image_url }}
-              style={{ width: '100%', height: '100%' }}
-              contentFit="cover"
-              cachePolicy="memory-disk"
-              transition={150}
-            />
+            (() => {
+              const coverSrc = (profileQuery.data?.cover_image_url ?? orgDetailsQuery.data?.organization?.cover_image_url) as string;
+              return (
+                <ExpoImage
+                  key={coverSrc}
+                  source={{ uri: coverSrc }}
+                  style={{ width: '100%', height: '100%' }}
+                  contentFit="cover"
+                  cachePolicy="memory-disk"
+                  transition={150}
+                />
+              );
+            })()
           ) : (
             <LinearGradient
               colors={['#1a6b54', '#0d3d30']}
@@ -996,7 +1044,14 @@ export default function BusinessDashboard() {
           </View>
           <View style={{ marginLeft: 14, flex: 1 }}>
             <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3 }]} numberOfLines={1}>
-              {orgName || profileQuery.data?.name || ''}
+              {/* Backend's GET /my/profile already returns `name` as the
+                  "OrgName - LocationName" composite (see locations.js — the
+                  `displayName` build). Prefer it when a location is loaded so
+                  a single-location org shows "Chez Joe - La Marsa" instead of
+                  just "Chez Joe" (the previous orgName-first order). Falls
+                  back to bare orgName when no location is selected (admin's
+                  "all locations" view) or before the profile query resolves. */}
+              {profileQuery.data?.name || orgName || ''}
             </Text>
             {hasNoLocation ? (
               <Text style={{ color: '#e67e22', fontSize: 12, fontFamily: 'Poppins_500Medium', marginTop: 4 }}>
@@ -1021,6 +1076,11 @@ export default function BusinessDashboard() {
           {t('business.dashboard.title')}
         </Text>
 
+        {/* "Résumé du jour" — stats card. Hidden for members without the
+            view_history permission, since every metric here (revenue, sold
+            count, pending count, active baskets) is summary stat data they
+            shouldn't see when "Historique et statistiques" is off. */}
+        {canViewHistory && (
         <View>
           <LinearGradient
             colors={['#16604a', '#0c3829']}
@@ -1057,7 +1117,7 @@ export default function BusinessDashboard() {
                 <Text style={{ color: '#fff', fontSize: 18, fontFamily: 'Poppins_700Bold', marginTop: 4, letterSpacing: -0.4 }}>
                   <AnimatedNumber value={stats.totalRevenue} />
                 </Text>
-                <Text style={{ color: 'rgba(255,255,255,0.5)', fontSize: 10, fontFamily: 'Poppins_400Regular', marginTop: 1 }}>TND</Text>
+                <Text style={{ color: 'rgba(255,255,255,0.5)', fontSize: 10, fontFamily: 'Poppins_400Regular', marginTop: 1 }}>{t('common.currency', { defaultValue: 'TND' })}</Text>
               </View>
               <View style={{ width: 1, backgroundColor: 'rgba(255,255,255,0.12)' }} />
               <View style={{ flex: 1, alignItems: 'center' }}>
@@ -1086,6 +1146,7 @@ export default function BusinessDashboard() {
             </View>
           </LinearGradient>
         </View>
+        )}
 
         <View>
           <TouchableOpacity
@@ -1158,7 +1219,7 @@ export default function BusinessDashboard() {
               </Text>
             </View>
             <View style={styles.statsRow}>
-              <StatMiniCard icon={Banknote} value={`${stats.monthlyRevenue}`} suffix="TND" label={t('business.dashboard.revenueThisMonth', { defaultValue: 'Revenus ce mois' })} color={theme.colors.secondaryDark} theme={theme} />
+              <StatMiniCard icon={Banknote} value={`${stats.monthlyRevenue}`} suffix={t('common.currency', { defaultValue: 'TND' })} label={t('business.dashboard.revenueThisMonth', { defaultValue: 'Revenus ce mois' })} color={theme.colors.secondaryDark} theme={theme} />
               <View style={{ width: 10 }} />
               <StatMiniCard
                 icon={ShoppingBag}
@@ -1191,7 +1252,7 @@ export default function BusinessDashboard() {
             {weeklyRevenueTotal > 0 && (
               <View style={{ backgroundColor: theme.colors.secondaryDark + '15', borderRadius: 20, paddingHorizontal: 10, paddingVertical: 4 }}>
                 <Text style={{ color: theme.colors.secondaryDark, fontSize: 11, fontFamily: 'Poppins_700Bold' }}>
-                  {`${weeklyRevenueTotal.toFixed(0)} TND`}
+                  {`${weeklyRevenueTotal.toFixed(0)} ${t('common.currency', { defaultValue: 'TND' })}`}
                 </Text>
               </View>
             )}
@@ -1303,7 +1364,7 @@ export default function BusinessDashboard() {
                     {t('business.dashboard.revenueThisMonthInline', { defaultValue: 'Revenus ce mois\u00A0:\u00A0' })}
                   </Text>
                   <Text style={{ color: theme.colors.secondaryDark, fontSize: 11, fontFamily: 'Poppins_600SemiBold' }}>
-                    {`${stats.monthlyRevenue.toFixed(0)} TND`}
+                    {`${stats.monthlyRevenue.toFixed(0)} ${t('common.currency', { defaultValue: 'TND' })}`}
                   </Text>
                 </View>
               )}
@@ -1351,6 +1412,15 @@ export default function BusinessDashboard() {
                     key={basket.id}
                     activeOpacity={0.85}
                     onPress={() => {
+                      // All business viewers — edit-capable or not — land on
+                      // the same availability popup in my-baskets. For members
+                      // without edit perms the popup hides its +/- buttons,
+                      // save button, and 3-dot menu (see the conditional
+                      // renders inside the modal in my-baskets.tsx) so the
+                      // card is read-only but they still see today's quantity
+                      // aligned with tomorrow's reset value, photo, price,
+                      // description, and a "View as customer" button to jump
+                      // to the customer-facing detail page.
                       useBusinessStore.getState().setTargetBasket(String(basket.id));
                       router.push('/(business)/my-baskets' as never);
                     }}

@@ -139,9 +139,13 @@ interface NotificationDetailProps {
    *  button. The in-app popup uses this to inject a notifications-bell shortcut
    *  on single-popup mode. Undefined leaves the header layout unchanged. */
   topRightAction?: React.ReactNode;
+  // When true the X close button is hidden from the title bar — used by
+  // the demo notif popup so the user can ONLY advance via the haloed
+  // "Voir la commande" action and not break the walkthrough by dismissing.
+  hideClose?: boolean;
 }
 
-export function NotificationDetail({ notif, theme, t, isBusiness, onClose, onAction, outerReservedHeight = 0, demoHighlightAction, topRightAction }: NotificationDetailProps) {
+export function NotificationDetail({ notif, theme, t, isBusiness, onClose, onAction, outerReservedHeight = 0, demoHighlightAction, topRightAction, hideClose }: NotificationDetailProps) {
   const { Icon } = getNotifIcon(notif.type, notif.title);
   const queryClient = useQueryClient();
   // Cap the WHOLE popup card so the inner ScrollView (declared below
@@ -367,9 +371,9 @@ export function NotificationDetail({ notif, theme, t, isBusiness, onClose, onAct
   const qtyPriceLine: string | null = (() => {
     if (qtyNum != null && priceNum != null) {
       const total = qtyNum > 1 ? (priceNum * qtyNum).toFixed(2) : priceNum;
-      return `${qtyNum} × ${total} TND`;
+      return `${qtyNum} × ${total} ${t('common.currency', { defaultValue: 'TND' })}`;
     }
-    if (priceNum != null) return `${priceNum} TND`;
+    if (priceNum != null) return `${priceNum} ${t('common.currency', { defaultValue: 'TND' })}`;
     if (qtyNum != null) return `${qtyNum} ${basketWord}`;
     return null;
   })();
@@ -618,13 +622,15 @@ export function NotificationDetail({ notif, theme, t, isBusiness, onClose, onAct
             of the close X with a small gap. */}
         <View style={{ position: 'absolute', top: 14, right: 14, flexDirection: 'row', alignItems: 'center', gap: 6 }}>
           {topRightAction}
-          <TouchableOpacity
-            onPress={onClose}
-            style={{ width: 28, height: 28, borderRadius: 14, backgroundColor: 'rgba(255,255,255,0.18)', justifyContent: 'center', alignItems: 'center' }}
-            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-          >
-            <XIcon size={17} color="#fff" />
-          </TouchableOpacity>
+          {!hideClose && (
+            <TouchableOpacity
+              onPress={onClose}
+              style={{ width: 28, height: 28, borderRadius: 14, backgroundColor: 'rgba(255,255,255,0.18)', justifyContent: 'center', alignItems: 'center' }}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            >
+              <XIcon size={17} color="#fff" />
+            </TouchableOpacity>
+          )}
         </View>
       </View>
 
@@ -791,15 +797,15 @@ export function NotificationDetail({ notif, theme, t, isBusiness, onClose, onAct
                 {price && !isCancelled ? (
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 8, borderTopWidth: 1, borderTopColor: theme.colors.divider }}>
                     <View style={{ width: 30, height: 30, borderRadius: 15, backgroundColor: '#114b3c', justifyContent: 'center', alignItems: 'center' }}>
-                      <Text style={{ color: '#e3ff5c', fontSize: 9, fontFamily: 'Poppins_700Bold' }}>TND</Text>
+                      <Text style={{ color: '#e3ff5c', fontSize: 9, fontFamily: 'Poppins_700Bold' }}>{t('common.currency', { defaultValue: 'TND' })}</Text>
                     </View>
                     <Text style={{ color: theme.colors.primary, ...theme.typography.body, fontWeight: '700', flex: 1 }}>
-                      {Number(qty ?? 1) > 1 ? (Number(price) * Number(qty ?? 1)).toFixed(2) : price} TND
+                      {Number(qty ?? 1) > 1 ? (Number(price) * Number(qty ?? 1)).toFixed(2) : price} {t('common.currency', { defaultValue: 'TND' })}
                     </Text>
                   </View>
                 ) : null}
                 {/* Combined Paiement row — mirrors the customer expanded
-                    card. Line 1: method label (Paiement en espèces /
+                    card. Line 1: method label (Paiement sur place /
                     Paiement par carte). Line 2 (only when credits were
                     used): the toDoLine — "À payer à la récupération",
                     "Réglée entièrement par crédits" — so the user sees
@@ -816,8 +822,8 @@ export function NotificationDetail({ notif, theme, t, isBusiness, onClose, onAct
                         ? t('orders.paymentByCardWithCredits', { defaultValue: 'Paiement par carte (+ crédits)' })
                         : t('orders.paymentByCard', { defaultValue: 'Paiement par carte' }))
                     : (orderCreditAmount > 0
-                        ? t('orders.paymentInCashWithCredits', { defaultValue: 'Paiement en espèces (+ crédits)' })
-                        : t('orders.paymentInCash', { defaultValue: 'Paiement en espèces' }));
+                        ? t('orders.paymentInCashWithCredits', { defaultValue: 'Paiement sur place (+ crédits)' })
+                        : t('orders.paymentInCash', { defaultValue: 'Paiement sur place' }));
                   const fmt = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(2));
                   let toDoLine: string | null = null;
                   if (!isCard && cashSlice > 0) {
@@ -1065,7 +1071,7 @@ export function NotificationDetail({ notif, theme, t, isBusiness, onClose, onAct
               {price ? (
                 <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
                   <Text style={{ color: theme.colors.textSecondary, ...theme.typography.caption, flex: 1 }}>{t('notifications.price', { defaultValue: 'Prix' })}</Text>
-                  <Text style={{ color: theme.colors.primary, ...theme.typography.body, fontWeight: '700', flex: 2, textAlign: 'right' }}>{price} TND</Text>
+                  <Text style={{ color: theme.colors.primary, ...theme.typography.body, fontWeight: '700', flex: 2, textAlign: 'right' }}>{price} {t('common.currency', { defaultValue: 'TND' })}</Text>
                 </View>
               ) : null}
             </View>

@@ -14,6 +14,11 @@
 //     the actual Tunisian food-commerce landscape.
 //   • Added 'hotel' — hotels with restaurants/buffets are a meaningful source
 //     of surplus food; surfaced on both the mobile and website signup forms.
+//   • Re-added 'produce' — fresh-produce grocers (fruits & légumes) are a
+//     distinct commerce type that does NOT fit "healthy" or "supermarket"
+//     for filtering purposes. The legacy backfill in routes/locations.js
+//     that remapped 'produce' → 'healthy' was scoped to its 'fresh'
+//     sibling to avoid re-coercing newly-saved produce rows on each boot.
 export const LOCATION_CATEGORIES = [
   'bakery',
   'restaurant',
@@ -24,6 +29,7 @@ export const LOCATION_CATEGORIES = [
   'traiteur',
   'hotel',
   'healthy',
+  'produce',
 ] as const;
 
 export type LocationCategory = (typeof LOCATION_CATEGORIES)[number];

@@ -314,7 +314,30 @@ export default function NotificationsScreen() {
   const queryClient = useQueryClient();
   const customAlert = useCustomAlert();
   const { user } = useAuthStore();
+  const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
+  const isRestoringSession = useAuthStore((s) => s.isRestoringSession);
   const isBusiness = user?.role === 'business';
+
+  // Belt-and-suspenders for the push-tap-without-auth case. If we somehow land
+  // here without a session (residual route restoration, a stale deep link,
+  // anything that slipped past the _layout tap-handler gate), bounce to
+  // sign-in immediately instead of hanging the loader on a 401'd fetch.
+  useEffect(() => {
+    if (!isRestoringSession && !isAuthenticated) {
+      router.replace('/auth/sign-in' as never);
+    }
+  }, [isAuthenticated, isRestoringSession, router]);
+
+  // Render-time short-circuit: when this screen is opened without a session,
+  // return null SYNCHRONOUSLY on the first render so the wave loader never
+  // paints while React waits for the useEffect above to fire the redirect.
+  // Without this the user briefly saw "empty page with infinite Barakeat
+  // wave" during the gap between mount and redirect, especially noticeable
+  // when they were on verify-email (pre-auth) and a stale InAppNotification
+  // popup's "see all" pushed them here.
+  if (!isRestoringSession && !isAuthenticated) {
+    return null;
+  }
   // Get cached reservations to find location images for notifications
   const cachedReservations = queryClient.getQueryData<any[]>(['reservations']) ?? [];
   const getReservationImage = useCallback((refId?: number) => {

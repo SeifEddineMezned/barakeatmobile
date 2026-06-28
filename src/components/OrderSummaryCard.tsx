@@ -255,7 +255,7 @@ export function OrderSummaryCard({
                 }}
                 numberOfLines={1}
               >
-                {Number(total).toFixed(2)} TND
+                {Number(total).toFixed(2)} {t('common.currency', { defaultValue: 'TND' })}
               </Text>
             </View>
           ) : null}

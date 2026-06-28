@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, ScrollView, ActivityIndicator, Modal, KeyboardAvoidingView, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { ChevronLeft, ShieldCheck, CheckCircle2 } from 'lucide-react-native';
@@ -27,6 +27,11 @@ export default function AddLocationScreen() {
   });
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  // Held so we can programmatically scroll the focused pickup-instructions
+  // field above the keyboard on Android (see the onPickupInstructionsFocus
+  // wiring below). iOS handles this via KeyboardAvoidingView padding +
+  // built-in keyboard insets; Android needs the explicit scrollToEnd.
+  const scrollViewRef = useRef<ScrollView>(null);
 
   const contextQuery = useQuery({ queryKey: ['my-context'], queryFn: fetchMyContext, staleTime: 60_000 });
   const orgId = contextQuery.data?.organization_id ?? null;
@@ -150,8 +155,19 @@ export default function AddLocationScreen() {
         </Text>
       </View>
 
-      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-        <ScrollView contentContainerStyle={{ padding: 20, paddingBottom: 40 }} keyboardShouldPersistTaps="handled">
+      {/* KeyboardAvoidingView only on iOS — Android's windowSoftInputMode
+          'adjustResize' (the Expo default) already shrinks the visible viewport
+          when the keyboard opens, so we just need to ensure the ScrollView
+          scrolls the focused field above the keyboard. The 'height' /'padding'
+          variants for Android only shrink the container without scrolling,
+          which produced the "band of padding above the keyboard" the user
+          reported. We rely on the ScrollView ref below for both platforms. */}
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}>
+        <ScrollView
+          ref={scrollViewRef}
+          contentContainerStyle={{ padding: 20, paddingBottom: 0 }}
+          keyboardShouldPersistTaps="handled"
+        >
           <Text style={{ color: theme.colors.textSecondary, fontSize: 13, lineHeight: 20, marginBottom: 20 }}>
             {t('business.team.addLocationDesc', { defaultValue: 'Ajoutez un nouvel emplacement pour votre organisation.' })}
           </Text>
@@ -159,6 +175,16 @@ export default function AddLocationScreen() {
           <LocationFormFields
             value={form}
             onChange={(patch) => setForm((prev) => ({ ...prev, ...patch }))}
+            // When the pickup-instructions textbox gains focus, scroll it
+            // to the top of the visible area so the keyboard never covers
+            // what the user is typing. The delay lets the keyboard finish
+            // animating in before we measure — without it the scrollTo
+            // lands on a stale y position and the field re-disappears.
+            onPickupInstructionsFocus={() => {
+              setTimeout(() => {
+                scrollViewRef.current?.scrollToEnd({ animated: true });
+              }, 250);
+            }}
           />
 
           {FeatureFlags.REQUIRE_LOCATION_APPROVAL && (

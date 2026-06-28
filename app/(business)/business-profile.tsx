@@ -1,14 +1,15 @@
 import React, { useCallback, useState, useRef, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Modal, Image, TextInput, Switch, KeyboardAvoidingView, Platform, Animated, Pressable } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Modal, Image, TextInput, Switch, KeyboardAvoidingView, Platform, Animated, Pressable, ActivityIndicator } from 'react-native';
 import { validateBizDayWindow, resolveTodayWeeklyHours } from '@/src/utils/timezone';
 import { TimePicker } from '@/src/components/TimePicker';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
-import { getErrorMessage } from '@/src/lib/api';
+import { getErrorMessage, apiClient } from '@/src/lib/api';
+import { localizeI18n } from '@/src/utils/localizeI18n';
 import { useRouter } from 'expo-router';
 import {
   ChevronRight, MapPin, Clock, Store,
-  Users, UserPlus, Trash2, Shield, CreditCard, ImagePlus, X, UtensilsCrossed, Package, Check
+  Users, UserPlus, Trash2, Shield, CreditCard, ImagePlus, X, UtensilsCrossed, Package, Check, Sparkles, Lightbulb
 } from 'lucide-react-native';
 import { useTheme } from '@/src/theme/ThemeProvider';
 import { EditIcon8 } from '@/src/components/ui/Icon8';
@@ -33,7 +34,7 @@ import { useStatusBarStyleOnFocus } from '@/src/hooks/useStatusBarStyleOnFocus';
 
 export default function BusinessProfileScreen() {
   useStatusBarStyleOnFocus('dark');
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const theme = useTheme();
   const alert = useCustomAlert();
   const router = useRouter();
@@ -272,6 +273,59 @@ export default function BusinessProfileScreen() {
   const [showPickupInstructionsEditor, setShowPickupInstructionsEditor] = useState(false);
   const [pickupInstructionsText, setPickupInstructionsText] = useState(profileQuery.data?.pickup_instructions ?? '');
   const [pickupInstructionsSaving, setPickupInstructionsSaving] = useState(false);
+  // AI improve + translate for the location's pickup instructions. i18n holds
+  // the {fr,en,ar} trio (set on AI accept, cleared on manual edit); aiImproving
+  // gates the button; aiPreview stages the suggestion for confirmation.
+  const [pickupInstructionsI18n, setPickupInstructionsI18n] = useState<Record<string, string> | null>(
+    ((profileQuery.data as any)?.pickup_instructions_i18n as Record<string, string>) ?? null
+  );
+  const [pickupAiImproving, setPickupAiImproving] = useState(false);
+  const [pickupAiPreview, setPickupAiPreview] = useState<null | { fr: string; en: string; ar: string; hint: string }>(null);
+  const pickupPreviewLang: 'fr' | 'en' | 'ar' = (() => {
+    const code = (i18n.language || 'fr').slice(0, 2);
+    return code === 'en' || code === 'ar' ? code : 'fr';
+  })();
+  const translatedLangsLabel = ['FR', 'EN', ...(FeatureFlags.LANGUAGES_AR_ENABLED ? ['AR'] : [])].join(' · ');
+
+  const handlePickupAiImprove = async () => {
+    const source = pickupInstructionsText.trim();
+    if (!source) {
+      alert.showAlert(
+        t('business.createBasket.aiImproveEmptyTitle', { defaultValue: 'Rien à améliorer' }),
+        t('business.createBasket.aiImproveEmptyBody', { defaultValue: "Écrivez d'abord votre texte, puis appuyez sur Améliorer." }),
+      );
+      return;
+    }
+    setPickupAiImproving(true);
+    try {
+      const response = await apiClient.post('/api/baskets/ai-improve', {
+        text: source,
+        field: 'pickup_instructions',
+        category: (profileQuery.data as any)?.category,
+      });
+      const data = response.data as { fr?: string; en?: string; ar?: string; hint?: string };
+      setPickupAiPreview({ fr: data.fr || source, en: data.en || source, ar: data.ar || source, hint: data.hint || '' });
+    } catch (err: any) {
+      if (err?.response?.status === 429) {
+        alert.showAlert(
+          t('business.createBasket.aiLimitTitle', { defaultValue: 'Limite atteinte' }),
+          err?.response?.data?.message || t('business.createBasket.aiLimitBody', { defaultValue: "Vous avez atteint votre limite de suggestions IA pour aujourd'hui. Réessayez demain." }),
+        );
+      } else {
+        alert.showAlert(t('common.error'), getErrorMessage(err));
+      }
+    } finally {
+      setPickupAiImproving(false);
+    }
+  };
+
+  const acceptPickupAiSuggestion = () => {
+    if (!pickupAiPreview) return;
+    const trio = { fr: pickupAiPreview.fr, en: pickupAiPreview.en, ar: pickupAiPreview.ar };
+    setPickupInstructionsText(trio[pickupPreviewLang]);
+    setPickupInstructionsI18n(trio);
+    setPickupAiPreview(null);
+  };
 
   // Optimistic image overrides — the freshly-picked URI is shown immediately
   // after upload so the user sees the new cover/logo without restarting the
@@ -281,13 +335,36 @@ export default function BusinessProfileScreen() {
   const [localCoverUri, setLocalCoverUri] = useState<string | null>(null);
   const [localLogoUri, setLocalLogoUri] = useState<string | null>(null);
 
+  // Clear the optimistic overrides when the user switches location. Otherwise
+  // a cover uploaded for Location A would keep painting itself over Location B
+  // (and confused the "I changed it on A but B looked changed too" report).
+  // The display falls back to profile?.coverPhoto which is location-scoped via
+  // the ['my-profile', selectedLocationId] query key.
+  useEffect(() => {
+    setLocalCoverUri(null);
+    setLocalLogoUri(null);
+  }, [selectedLocationId]);
+
+  // Cover apply modal state. Used only when the org has >1 locations: the
+  // user picks the image, then chooses which locations should get it (current
+  // location pre-checked). Single-location orgs skip this entirely and the
+  // upload fires immediately after cropping.
+  const [coverPickerVisible, setCoverPickerVisible] = useState(false);
+  const [pendingCoverUri, setPendingCoverUri] = useState<string | null>(null);
+  const [pickedLocationIds, setPickedLocationIds] = useState<Set<number>>(new Set());
+
   const handleSavePickupInstructions = async () => {
     setPickupInstructionsSaving(true);
     try {
       const locationId = profileQuery.data?.id;
       if (!locationId) throw new Error('Profil non chargé');
       const userId = user?.id ? Number(user.id) : undefined;
-      await updateLocationById(locationId, { pickup_instructions: pickupInstructionsText.trim() || null } as any, userId, profileQuery.data?.organization_id ?? undefined);
+      await updateLocationById(locationId, {
+        pickup_instructions: pickupInstructionsText.trim() || null,
+        // AI trio when accepted; null when typed by hand → the backend
+        // auto-translates the text so inheriting baskets stay multilingual.
+        pickup_instructions_i18n: pickupInstructionsI18n ?? null,
+      } as any, userId, profileQuery.data?.organization_id ?? undefined);
       void queryClient.invalidateQueries({ queryKey: ['my-profile'] });
       setShowPickupInstructionsEditor(false);
     } catch (err: any) {
@@ -389,16 +466,13 @@ export default function BusinessProfileScreen() {
     mainScrollRef.current?.scrollTo({ y: 0, animated: false });
   }, [demoSequencePending]);
 
-  // Warning flash for location end time exceeding 03:30
-  const [hoursEndWarning, setHoursEndWarning] = useState(false);
-  const hoursEndWarningAnim = useRef(new Animated.Value(0)).current;
-  const flashHoursEndWarning = useCallback(() => {
-    setHoursEndWarning(true);
-    Animated.sequence([
-      Animated.timing(hoursEndWarningAnim, { toValue: 1, duration: 150, useNativeDriver: false }),
-      Animated.timing(hoursEndWarningAnim, { toValue: 0, duration: 2000, useNativeDriver: false }),
-    ]).start(() => setHoursEndWarning(false));
-  }, [hoursEndWarningAnim]);
+  // (The fading "L'heure de fin ne peut pas dépasser 03:30" toast that used
+  // to live here was removed — it stacked with the always-on inline
+  // `sameDayWindowError` caption below the picker, so picking an invalid end
+  // time surfaced TWO error messages saying the same thing. The inline
+  // caption is enough: it says "Le créneau ne peut pas traverser la
+  // réinitialisation quotidienne (03:30). Choisissez un début ≥ 03:30, ou
+  // une fin ≤ 03:29." which is both more actionable and not auto-dismissed.)
 
   const toTimeField = (hhmm: string) => hhmm.includes(':') && hhmm.split(':').length === 2 ? `${hhmm}:00` : hhmm;
 
@@ -739,28 +813,106 @@ export default function BusinessProfileScreen() {
     }
   }, [orgDetailsQuery.data, contextQuery.data, queryClient, t, alert]);
 
+  // Upload the picked cover to the requested set of locations. The same URL
+  // ends up on every listed row (the backend uploads to Cloudinary once and
+  // does a single UPDATE … WHERE id = ANY()). Optimistic UI only fires when
+  // the currently-viewed location is in the target set, so the user sees
+  // their cover update without a flicker; if they apply ONLY to other
+  // locations, the current screen's cover stays as-is until they switch.
+  const uploadCoverToLocations = async (uri: string, locationIds: number[]) => {
+    if (locationIds.length === 0) return;
+    const formData = new FormData();
+    const filename = uri.split('/').pop() ?? 'cover.jpg';
+    formData.append('cover_image', { uri, name: filename, type: 'image/jpeg' } as any);
+    formData.append('cover_target', 'location' as any);
+    formData.append('location_ids', JSON.stringify(locationIds) as any);
+    const selNum = typeof selectedLocationId === 'number' ? selectedLocationId : Number(selectedLocationId);
+    const willTouchCurrent = Number.isFinite(selNum) && locationIds.includes(selNum);
+    if (willTouchCurrent) setLocalCoverUri(uri);
+    try {
+      const userId = (user as any)?.id as number | undefined;
+      await updateMyProfile(formData, userId, selectedLocationId);
+      // invalidateQueries here is doing double duty:
+      //   • marks every ['my-profile', X] cache entry as stale, so when the
+      //     user later switches to a location we covered but isn't currently
+      //     showing, the next read refetches instead of serving the now-wrong
+      //     2-min cached cover.
+      //   • refetches whichever ['my-profile', X] is currently mounted
+      //     (the active one) so the on-screen cover updates without a flicker.
+      // The await lets us clear the optimistic override only AFTER the active
+      // refetch lands — otherwise there'd be a brief "blank cover" gap.
+      await queryClient.invalidateQueries({ queryKey: ['my-profile'] });
+      await queryClient.invalidateQueries({ queryKey: ['org-details'] });
+      if (willTouchCurrent) setLocalCoverUri(null);
+      alert.showAlert(t('common.success'), t('business.profile.imageUpdated'));
+    } catch (err: any) {
+      if (willTouchCurrent) setLocalCoverUri(null);
+      alert.showAlert(t('common.error'), getErrorMessage(err));
+    }
+  };
+
   const handleChangeCover = async () => {
     try {
-      const uri = await pickAndCrop({ aspect: [16, 5], quality: 0.8 });
+      // 16:9 is the standard widescreen ratio and matches what the cover
+      // is actually displayed at in the customer surfaces. The previous
+      // 16:5 (~3.2:1) was so wide it forced every uploaded picture into a
+      // sliver — the "cropping is way too excessive" report. 16:9 keeps
+      // enough vertical for typical storefront photos to fit without
+      // sacrificing too much of the banner shape.
+      const uri = await pickAndCrop({ aspect: [16, 9], quality: 0.8 });
       if (!uri) return;
-      const formData = new FormData();
-      const filename = uri.split('/').pop() ?? 'cover.jpg';
-      formData.append('cover_image', { uri, name: filename, type: 'image/jpeg' } as any);
-      // Optimistic local override so the new cover appears immediately.
-      setLocalCoverUri(uri);
-      try {
-        const userId = (user as any)?.id as number | undefined;
-        await updateMyProfile(formData, userId);
-        await queryClient.invalidateQueries({ queryKey: ['my-profile'] });
-        await queryClient.invalidateQueries({ queryKey: ['org-details'] });
-        alert.showAlert(t('common.success'), t('business.profile.imageUpdated'));
-      } catch (err: any) {
-        setLocalCoverUri(null);
-        alert.showAlert(t('common.error'), getErrorMessage(err));
+      const orgLocations = orgDetailsQuery.data?.locations ?? [];
+      const selNum = typeof selectedLocationId === 'number' ? selectedLocationId : Number(selectedLocationId);
+      // Single-location orgs (and any case where we can't resolve the location
+      // list yet) skip the picker — there's nothing to choose between.
+      if (orgLocations.length <= 1) {
+        const target = Number.isFinite(selNum) ? selNum : (orgLocations[0]?.id ?? null);
+        if (target == null) return;
+        await uploadCoverToLocations(uri, [Number(target)]);
+        return;
       }
+      // Multi-location org → ask which branches get the cover. Current
+      // location pre-checked; user can add/remove from the list or hit
+      // "all locations". A pure single-location intent is one tap away.
+      const initial = new Set<number>();
+      if (Number.isFinite(selNum)) initial.add(selNum);
+      setPickedLocationIds(initial);
+      setPendingCoverUri(uri);
+      setCoverPickerVisible(true);
     } catch (err) {
       alert.showAlert(t('common.error'), getErrorMessage(err));
     }
+  };
+
+  const handleConfirmCoverApply = async () => {
+    const uri = pendingCoverUri;
+    const ids = Array.from(pickedLocationIds).map(Number).filter(Number.isFinite);
+    setCoverPickerVisible(false);
+    setPendingCoverUri(null);
+    if (!uri || ids.length === 0) return;
+    await uploadCoverToLocations(uri, ids);
+  };
+
+  const handleCancelCoverApply = () => {
+    setCoverPickerVisible(false);
+    setPendingCoverUri(null);
+  };
+
+  const toggleCoverLocation = (locId: number) => {
+    setPickedLocationIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(locId)) next.delete(locId);
+      else next.add(locId);
+      return next;
+    });
+  };
+
+  const toggleAllCoverLocations = () => {
+    const orgLocations = orgDetailsQuery.data?.locations ?? [];
+    setPickedLocationIds((prev) => {
+      if (prev.size >= orgLocations.length) return new Set();
+      return new Set(orgLocations.map((l) => Number(l.id)));
+    });
   };
 
   const handleChangeLogo = async () => {
@@ -773,7 +925,10 @@ export default function BusinessProfileScreen() {
       setLocalLogoUri(uri);
       try {
         const userId = (user as any)?.id as number | undefined;
-        await updateMyProfile(formData, userId);
+        // Logo is org-wide, but pass the selected location so the backend's
+        // permission check resolves against the right membership row — and
+        // for consistency with the cover-edit call above.
+        await updateMyProfile(formData, userId, selectedLocationId);
         await queryClient.invalidateQueries({ queryKey: ['my-profile'] });
         await queryClient.invalidateQueries({ queryKey: ['org-details'] });
         alert.showAlert(t('common.success'), t('business.profile.imageUpdated'));
@@ -1104,7 +1259,7 @@ export default function BusinessProfileScreen() {
                 {t('business.profile.pickupInstructions', { defaultValue: 'Instructions de retrait' })}
               </Text>
             </View>
-            {canEditAvailability && <TouchableOpacity onPress={() => { setPickupInstructionsText(profileQuery.data?.pickup_instructions ?? ''); setShowPickupInstructionsEditor(!showPickupInstructionsEditor); }}>
+            {canEditAvailability && <TouchableOpacity onPress={() => { setPickupInstructionsText(profileQuery.data?.pickup_instructions ?? ''); setPickupInstructionsI18n(((profileQuery.data as any)?.pickup_instructions_i18n as Record<string, string>) ?? null); setShowPickupInstructionsEditor(!showPickupInstructionsEditor); }}>
               {/* Pencil while closed (this is an in-place editor, not a
                   navigation), X while open as the cancel/dismiss affordance. */}
               {showPickupInstructionsEditor
@@ -1118,11 +1273,39 @@ export default function BusinessProfileScreen() {
                 <TextInput
                   style={{ backgroundColor: theme.colors.bg, borderRadius: theme.radii.r12, padding: 12, color: theme.colors.textPrimary, ...theme.typography.body, minHeight: 80, borderWidth: 1, borderColor: theme.colors.divider, textAlignVertical: 'top' }}
                   value={pickupInstructionsText}
-                  onChangeText={setPickupInstructionsText}
+                  onChangeText={(v) => { setPickupInstructionsText(v); setPickupInstructionsI18n(null); }}
                   placeholder={t('business.createBasket.pickupInstructionsPlaceholder', { defaultValue: 'Ex: Sonnez à l\'entrée arrière' })}
                   placeholderTextColor={theme.colors.muted}
                   multiline
                 />
+                {/* AI improve — bottom-right under the textbox, so it doesn't
+                    crowd the section title. Edit-mode only (this whole block is). */}
+                {FeatureFlags.ENABLE_AI_TEXT_IMPROVE && (
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 8, gap: 8 }}>
+                    {pickupInstructionsI18n ? (
+                      <Text style={{ color: theme.colors.muted, ...theme.typography.caption, fontStyle: 'italic', flexShrink: 1 }}>
+                        {t('business.createBasket.aiTranslatedNote', { langs: translatedLangsLabel, defaultValue: 'Traduit en {{langs}}' })}
+                      </Text>
+                    ) : <View />}
+                    <TouchableOpacity
+                      onPress={handlePickupAiImprove}
+                      disabled={pickupAiImproving}
+                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                      style={{ flexDirection: 'row', alignItems: 'center', opacity: pickupAiImproving ? 0.4 : 1 }}
+                    >
+                      {pickupAiImproving ? (
+                        <ActivityIndicator size="small" color={theme.colors.primary} />
+                      ) : (
+                        <>
+                          <Sparkles size={14} color={theme.colors.primary} />
+                          <Text style={{ color: theme.colors.primary, ...theme.typography.caption, fontWeight: '700' as const, marginLeft: 4 }}>
+                            {t('business.createBasket.aiImprove', { defaultValue: 'Améliorer avec l\'IA' })}
+                          </Text>
+                        </>
+                      )}
+                    </TouchableOpacity>
+                  </View>
+                )}
                 <TouchableOpacity
                   onPress={handleSavePickupInstructions}
                   disabled={pickupInstructionsSaving}
@@ -1136,7 +1319,7 @@ export default function BusinessProfileScreen() {
               </View>
             ) : (
               <Text style={{ color: profileQuery.data?.pickup_instructions ? theme.colors.textSecondary : theme.colors.muted, ...theme.typography.bodySm, fontStyle: profileQuery.data?.pickup_instructions ? 'normal' : 'italic' }}>
-                {profileQuery.data?.pickup_instructions || t('business.profile.noPickupInstructions', { defaultValue: 'Aucune instruction définie. Appuyez pour en ajouter.' })}
+                {localizeI18n((profileQuery.data as any)?.pickup_instructions_i18n, i18n.language, profileQuery.data?.pickup_instructions) || t('business.profile.noPickupInstructions', { defaultValue: 'Aucune instruction définie. Appuyez pour en ajouter.' })}
               </Text>
             )}
           </View>
@@ -1171,6 +1354,115 @@ export default function BusinessProfileScreen() {
         <View style={{ height: 40 }} />
       </ScrollView>
       </KeyboardAvoidingView>
+
+      <Modal visible={coverPickerVisible} transparent animationType="fade" onRequestClose={handleCancelCoverApply}>
+        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={handleCancelCoverApply}>
+          <View
+            style={[styles.modalContent, { backgroundColor: theme.colors.surface, borderRadius: theme.radii.r24, padding: theme.spacing.xl, maxHeight: '80%', ...theme.shadows.shadowLg }]}
+            onStartShouldSetResponder={() => true}
+          >
+            <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, marginBottom: theme.spacing.xs }]}>
+              {t('business.profile.coverApplyTitle', { defaultValue: 'Appliquer la photo à' })}
+            </Text>
+            <Text style={[{ color: theme.colors.textSecondary, ...theme.typography.body, marginBottom: theme.spacing.lg }]}>
+              {t('business.profile.coverApplySubtitle', { defaultValue: 'Choisissez les boutiques qui afficheront cette photo de couverture.' })}
+            </Text>
+
+            <ScrollView style={{ maxHeight: 320 }} showsVerticalScrollIndicator={false}>
+              {(() => {
+                const orgLocations = orgDetailsQuery.data?.locations ?? [];
+                const allChecked = orgLocations.length > 0 && pickedLocationIds.size >= orgLocations.length;
+                const renderRow = (key: string | number, label: string, checked: boolean, onPress: () => void, emphasized: boolean) => (
+                  <TouchableOpacity
+                    key={key}
+                    onPress={onPress}
+                    activeOpacity={0.7}
+                    style={{
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      paddingVertical: theme.spacing.md,
+                      paddingHorizontal: theme.spacing.md,
+                      borderRadius: theme.radii.r12,
+                      marginBottom: theme.spacing.xs,
+                      backgroundColor: checked ? theme.colors.primary + '12' : theme.colors.bg,
+                    }}
+                  >
+                    <View
+                      style={{
+                        width: 22,
+                        height: 22,
+                        borderRadius: 6,
+                        borderWidth: 2,
+                        borderColor: checked ? theme.colors.primary : theme.colors.textSecondary + '50',
+                        backgroundColor: checked ? theme.colors.primary : 'transparent',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        marginRight: theme.spacing.md,
+                      }}
+                    >
+                      {checked && <Check size={14} color="#fff" strokeWidth={3} />}
+                    </View>
+                    <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.body, flex: 1, fontWeight: emphasized ? '600' : '400' as const }]}>
+                      {label}
+                    </Text>
+                  </TouchableOpacity>
+                );
+                return (
+                  <>
+                    {renderRow(
+                      '__all__',
+                      t('business.profile.coverAllLocations', { defaultValue: 'Toutes les boutiques' }),
+                      allChecked,
+                      toggleAllCoverLocations,
+                      true,
+                    )}
+                    <View style={{ height: 1, backgroundColor: theme.colors.textSecondary + '20', marginVertical: theme.spacing.xs }} />
+                    {orgLocations.map((loc: any) => {
+                      const id = Number(loc.id);
+                      const label = (loc.name ?? '').trim() || `#${id}`;
+                      return renderRow(id, label, pickedLocationIds.has(id), () => toggleCoverLocation(id), false);
+                    })}
+                  </>
+                );
+              })()}
+            </ScrollView>
+
+            <View style={{ flexDirection: 'row', gap: theme.spacing.sm, marginTop: theme.spacing.lg }}>
+              <TouchableOpacity
+                onPress={handleCancelCoverApply}
+                style={{
+                  flex: 1,
+                  paddingVertical: theme.spacing.md,
+                  borderRadius: theme.radii.r12,
+                  borderWidth: 1,
+                  borderColor: theme.colors.textSecondary + '40',
+                  alignItems: 'center',
+                }}
+              >
+                <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.body, fontWeight: '600' as const }]}>
+                  {t('common.cancel', { defaultValue: 'Annuler' })}
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={handleConfirmCoverApply}
+                disabled={pickedLocationIds.size === 0}
+                style={{
+                  flex: 1,
+                  paddingVertical: theme.spacing.md,
+                  borderRadius: theme.radii.r12,
+                  alignItems: 'center',
+                  backgroundColor: theme.colors.primary,
+                  opacity: pickedLocationIds.size === 0 ? 0.4 : 1,
+                }}
+              >
+                <Text style={[{ color: '#fff', ...theme.typography.body, fontWeight: '700' as const }]}>
+                  {t('common.confirm', { defaultValue: 'Confirmer' })}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </TouchableOpacity>
+      </Modal>
 
       <Modal visible={showAddMemberModal} transparent animationType="fade" onRequestClose={() => setShowAddMemberModal(false)}>
         <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setShowAddMemberModal(false)}>
@@ -1265,7 +1557,7 @@ export default function BusinessProfileScreen() {
                         {selected && <Text style={{ color: '#fff', fontSize: 12, fontWeight: '700' }}>✓</Text>}
                       </View>
                       <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, marginLeft: 10 }}>
-                        {loc.name ?? loc.display_name ?? `Location ${loc.id}`}
+                        {loc.name ?? loc.display_name ?? t('business.unnamedLocation', { defaultValue: 'Location' })}
                       </Text>
                     </TouchableOpacity>
                   );
@@ -1387,7 +1679,7 @@ export default function BusinessProfileScreen() {
                           <View style={{ width: 18, height: 18, borderRadius: 9, borderWidth: 2, borderColor: isLocSelected ? theme.colors.primary : theme.colors.muted, backgroundColor: isLocSelected ? theme.colors.primary : 'transparent', justifyContent: 'center', alignItems: 'center' }}>
                             {isLocSelected && <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: '#fff' }} />}
                           </View>
-                          <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, marginLeft: 10 }}>{loc.name ?? `Location ${loc.id}`}</Text>
+                          <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, marginLeft: 10 }}>{loc.name ?? t('business.unnamedLocation', { defaultValue: 'Location' })}</Text>
                         </TouchableOpacity>
                       );
                     })}
@@ -1519,17 +1811,10 @@ export default function BusinessProfileScreen() {
               </TouchableOpacity>
             </View>
 
-            {/* Cross-reset rule reminder — shown UPFRONT (above the
-                editors) so the merchant reads it before configuring
-                and isn't surprised by the cross-03:30 error on save. */}
-            <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 6, marginBottom: 14, paddingHorizontal: 4 }}>
-              <Clock size={12} color={theme.colors.muted} style={{ marginTop: 2 }} />
-              <Text style={{ color: theme.colors.muted, ...theme.typography.caption, flex: 1, lineHeight: 15 }}>
-                {t('business.availability.crossResetHint', {
-                  defaultValue: 'Le créneau ne doit pas traverser 03:30 (réinitialisation quotidienne). Commencez ≥ 03:30 ou terminez ≤ 03:29.',
-                })}
-              </Text>
-            </View>
+            {/* The always-on cross-03:30 rule caption used to live here.
+                Removed by user request — crossing 03:30 is a rare mistake
+                and the save-time validation already explains the violation
+                in plain language when it actually happens. */}
 
             {/* Same for all days toggle */}
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
@@ -1561,23 +1846,13 @@ export default function BusinessProfileScreen() {
                   </View>
                   <View>
                     <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm, marginBottom: 8 }}>{t('business.availability.endTime')}</Text>
-                    <TimePicker value={hoursEnd} onChange={(val) => {
-                      const [h, m] = val.split(':').map(Number);
-                      const mins = (h || 0) * 60 + (m || 0);
-                      const startMins = (() => { const [sh, sm] = hoursStart.split(':').map(Number); return (sh || 0) * 60 + (sm || 0); })();
-                      const MAX_END = 3 * 60 + 30; // 03:30
-                      if (mins > MAX_END && mins < startMins) {
-                        flashHoursEndWarning();
-                        setHoursEnd('03:30');
-                      } else {
-                        setHoursEnd(val);
-                      }
-                    }} label={t('business.availability.endTime')} primaryColor={theme.colors.primary} textColor={theme.colors.textPrimary} bgColor={theme.colors.surface} mutedColor={theme.colors.muted} />
-                    {hoursEndWarning && (
-                      <Animated.Text style={{ color: theme.colors.error, ...theme.typography.caption, marginTop: 6, opacity: hoursEndWarningAnim }}>
-                        {t('business.availability.maxEndTime', { defaultValue: "L'heure de fin ne peut pas dépasser 03:30 (réinitialisation quotidienne)" })}
-                      </Animated.Text>
-                    )}
+                    {/* No auto-clamp on out-of-range picks — let the user's
+                        choice stand and let the inline `sameDayWindowError`
+                        caption below explain what to fix. Silently snapping
+                        the value to 03:30 (which the old code did) made the
+                        picker look broken on top of the duplicate-error
+                        problem. */}
+                    <TimePicker value={hoursEnd} onChange={setHoursEnd} label={t('business.availability.endTime')} primaryColor={theme.colors.primary} textColor={theme.colors.textPrimary} bgColor={theme.colors.surface} mutedColor={theme.colors.muted} />
                   </View>
                   {/* Live window-validation caption — covers all three error
                       modes (zero / too-short / crosses-reset). Save button
@@ -1672,6 +1947,64 @@ export default function BusinessProfileScreen() {
           </Animated.View>
         </View>
         </KeyboardAvoidingView>
+      </Modal>
+
+      {/* AI improve preview for the location's pickup instructions — mirrors the
+          create-basket popup. Shows the rewrite in the merchant's language, the
+          "be more specific" hint, and the AI disclaimer (kept in the popup, not
+          the form). Accepting keeps the full FR/EN/AR trio for the save. */}
+      <Modal visible={!!pickupAiPreview} transparent animationType="fade" onRequestClose={() => setPickupAiPreview(null)}>
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', alignItems: 'center', padding: 24 }}>
+          <View style={{ backgroundColor: theme.colors.surface, borderRadius: 20, padding: 24, width: '100%', maxWidth: 360, ...theme.shadows.shadowLg }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12 }}>
+              <View style={{ backgroundColor: theme.colors.primary + '22', width: 40, height: 40, borderRadius: 20, justifyContent: 'center', alignItems: 'center', marginRight: 12 }}>
+                <Sparkles size={20} color={theme.colors.primary} />
+              </View>
+              <Text style={{ color: theme.colors.textPrimary, ...theme.typography.h3, flex: 1 }}>
+                {t('business.createBasket.aiPreviewTitle', { defaultValue: 'Suggestion IA' })}
+              </Text>
+            </View>
+            <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm, marginBottom: 10 }}>
+              {FeatureFlags.LANGUAGES_AR_ENABLED
+                ? t('business.createBasket.aiPreviewSubtitle', { defaultValue: 'Version améliorée, traduite automatiquement en français, anglais et arabe :' })
+                : t('business.createBasket.aiPreviewSubtitleNoAr', { defaultValue: 'Version améliorée, traduite automatiquement en français et anglais :' })}
+            </Text>
+            <View style={{ backgroundColor: theme.colors.bg, borderRadius: 12, padding: 14, borderWidth: 1, borderColor: theme.colors.divider, marginBottom: 14 }}>
+              <Text style={{ color: theme.colors.textPrimary, ...theme.typography.body, lineHeight: 22 }}>
+                {pickupAiPreview ? pickupAiPreview[pickupPreviewLang] : ''}
+              </Text>
+            </View>
+            {!!pickupAiPreview?.hint && (
+              <View style={{ flexDirection: 'row', backgroundColor: '#e3ff5c22', borderRadius: 12, padding: 12, marginBottom: 14 }}>
+                <Lightbulb size={16} color="#b8a600" style={{ marginRight: 8, marginTop: 1 }} />
+                <Text style={{ color: theme.colors.textSecondary, ...theme.typography.bodySm, lineHeight: 20, flex: 1 }}>
+                  {pickupAiPreview.hint}
+                </Text>
+              </View>
+            )}
+            <Text style={{ color: theme.colors.muted, ...theme.typography.caption, marginBottom: 18 }}>
+              {t('business.createBasket.aiDisclaimer', { defaultValue: 'Les suggestions sont générées par IA — vérifiez-les avant de publier.' })}
+            </Text>
+            <View style={{ flexDirection: 'row', gap: 10, width: '100%' }}>
+              <TouchableOpacity
+                onPress={() => setPickupAiPreview(null)}
+                style={{ flex: 1, backgroundColor: theme.colors.bg, borderRadius: 12, paddingVertical: 14, alignItems: 'center', borderWidth: 1, borderColor: theme.colors.divider }}
+              >
+                <Text style={{ color: theme.colors.textPrimary, ...theme.typography.body, fontWeight: '600' }}>
+                  {t('business.createBasket.aiKeepMine', { defaultValue: 'Garder mon texte' })}
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={acceptPickupAiSuggestion}
+                style={{ flex: 1, backgroundColor: theme.colors.primary, borderRadius: 12, paddingVertical: 14, alignItems: 'center' }}
+              >
+                <Text style={{ color: '#fff', ...theme.typography.body, fontWeight: '600' }}>
+                  {t('business.createBasket.aiUse', { defaultValue: 'Utiliser' })}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
       </Modal>
     </SafeAreaView>
   );

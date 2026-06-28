@@ -1358,7 +1358,13 @@ export default function IncomingOrdersScreen() {
                 textAlign: 'center',
               }}
             >
-              {t('business.orders.pendingPickup', { defaultValue: 'En attente' })}
+              {/* All three stat-cell labels are pluralized via i18next's
+                  count rule. The _one variant fires only for exactly 1;
+                  _other covers 0 along with 2+, matching the user's
+                  preference to keep 0 in the plural form. Defaults stay
+                  in the plural so a missing translation never lands on
+                  the wrong shape. */}
+              {t('business.orders.pendingPickup', { count: incomingBaskets, defaultValue: 'Réservés' })}
             </Text>
           </View>
           {canViewHistory && (
@@ -1372,10 +1378,7 @@ export default function IncomingOrdersScreen() {
                     textAlign: 'center',
                   }}
                 >
-                  {t('business.orders.statusPickedUp', {
-                    count: completedBaskets,
-                    defaultValue: completedBaskets === 1 ? 'Vendu' : 'Vendus',
-                  })}
+                  {t('business.orders.statusPickedUp', { count: completedBaskets, defaultValue: 'Vendus' })}
                 </Text>
               </View>
               <View style={{ flex: 1, alignItems: 'center', paddingHorizontal: 4 }}>
@@ -1387,7 +1390,7 @@ export default function IncomingOrdersScreen() {
                     textAlign: 'center',
                   }}
                 >
-                  {t('business.orders.issues', { defaultValue: 'Problèmes' })}
+                  {t('business.orders.issues', { count: issueOrders.length, defaultValue: 'Problèmes' })}
                 </Text>
               </View>
             </>
@@ -1400,9 +1403,9 @@ export default function IncomingOrdersScreen() {
           and stay in lock-step with the stat-cell copy. */}
       <View style={[styles.tabs, { paddingHorizontal: theme.spacing.xl, marginTop: theme.spacing.sm }]}>
         {(canViewHistory ? ['incoming', 'completed', 'issues'] as const : ['incoming'] as const).map((tab) => {
-          const label = tab === 'incoming' ? t('business.orders.pendingPickup', { defaultValue: 'En attente' })
-            : tab === 'completed' ? t('business.orders.statusPickedUp', { count: completedBaskets, defaultValue: completedBaskets === 1 ? 'Vendu' : 'Vendus' })
-            : t('business.orders.issues', { defaultValue: 'Problèmes' });
+          const label = tab === 'incoming' ? t('business.orders.pendingPickup', { count: incomingBaskets, defaultValue: 'Réservés' })
+            : tab === 'completed' ? t('business.orders.statusPickedUp', { count: completedBaskets, defaultValue: 'Vendus' })
+            : t('business.orders.issues', { count: issueOrders.length, defaultValue: 'Problèmes' });
           const count = tab === 'incoming' ? incomingBaskets : tab === 'completed' ? completedBaskets : issueOrders.length;
           return (
           <TouchableOpacity
@@ -1737,7 +1740,7 @@ export default function IncomingOrdersScreen() {
                       priceText = t('business.orders.toCollectShort', { amount: fmtMoney(cashToCollect), defaultValue: 'À encaisser : {{amount}} TND' });
                     }
                   } else {
-                    priceText = `${fmtMoney(order.total)} TND`;
+                    priceText = `${fmtMoney(order.total)} ${t('common.currency', { defaultValue: 'TND' })}`;
                   }
                   return (
                     <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 6, gap: 8 }}>
@@ -1806,7 +1809,7 @@ export default function IncomingOrdersScreen() {
                           {t('reserve.total')}
                         </Text>
                         <Text style={[{ color: theme.colors.textPrimary, ...theme.typography.body, fontWeight: '600' as const }]}>
-                          {fmtMoney(order.total)} TND
+                          {fmtMoney(order.total)} {t('common.currency', { defaultValue: 'TND' })}
                         </Text>
                       </View>
                       {/* Payment method — ALWAYS rendered now, regardless of
@@ -1839,7 +1842,7 @@ export default function IncomingOrdersScreen() {
                           const PMIcon = isCard ? CreditCard : Banknote;
                           const label = isCard
                             ? t('business.orders.paymentByCardShort', { defaultValue: 'En carte' })
-                            : t('business.orders.paymentInCashShort', { defaultValue: 'En espèces' });
+                            : t('business.orders.paymentInCashShort', { defaultValue: 'Sur place' });
                           return (
                             <View style={{ flex: 1, alignItems: 'flex-end' }}>
                               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
@@ -2777,7 +2780,7 @@ export default function IncomingOrdersScreen() {
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
                     <Banknote size={14} color={theme.colors.textSecondary} />
                     <Text style={{ color: theme.colors.textPrimary, ...theme.typography.bodySm, flex: 1 }}>
-                      {t('business.orders.cancelWarnNoRefundCash', { defaultValue: 'Aucun remboursement — paiement en espèces' })}
+                      {t('business.orders.cancelWarnNoRefundCash', { defaultValue: 'Aucun remboursement — paiement sur place' })}
                     </Text>
                   </View>
                 ) : (

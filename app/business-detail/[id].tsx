@@ -239,10 +239,10 @@ export default function BusinessDetailScreen() {
                   </Text>
                   <View style={{ flexDirection: 'row', alignItems: 'baseline', marginTop: 4 }}>
                     <Text style={{ color: theme.colors.primary, ...theme.typography.body, fontWeight: '700' }}>
-                      {basket.discountedPrice} TND
+                      {basket.discountedPrice} {t('common.currency', { defaultValue: 'TND' })}
                     </Text>
                     <Text style={{ color: theme.colors.muted, ...theme.typography.caption, textDecorationLine: 'line-through', marginLeft: 6 }}>
-                      {basket.originalPrice} TND
+                      {basket.originalPrice} {t('common.currency', { defaultValue: 'TND' })}
                     </Text>
                   </View>
                   <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 6, gap: 8 }}>

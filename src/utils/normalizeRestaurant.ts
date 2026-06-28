@@ -82,6 +82,7 @@ export interface RawBasketFromAPI {
   location_id?: number | string | null;
   name?: string | null;
   description?: string | null;
+  description_i18n?: Record<string, string> | null;
   original_price?: number | string | null;
   selling_price?: number | string | null;
   quantity?: number | null;
@@ -166,6 +167,7 @@ export function normalizeRawBasketToBasket(
     reviewCount: undefined,
     reviews: undefined,
     description: b.description ?? undefined,
+    descriptionI18n: (b.description_i18n as Record<string, string> | undefined) ?? null,
     name: b.name ?? 'Surprise Bag',
     category: mapCategory(typeof b.category === 'string' ? b.category : null),
     originalPrice,
@@ -402,7 +404,7 @@ export function normalizeLocationToBasket(loc: LocationFromAPI): Basket {
  *
  * Returned keys (must match the canonical LOCATION_CATEGORIES list in
  * src/lib/locationCategories.ts):
- *   'all' | 'bakery' | 'restaurant' | 'supermarket' | 'fresh' | 'cafe'
+ *   'all' | 'bakery' | 'restaurant' | 'supermarket' | 'produce' | 'cafe'
  *   | 'fastfood' | 'pizzeria' | 'traiteur' | 'hotel' | 'healthy'
  *
  * IMPORTANT: this function is exported so the home screen can use it for
@@ -468,14 +470,21 @@ export function mapCategory(cat: string | null | undefined): string {
     case 'epicerie':
     case 'épicerie':
       return 'supermarket';
-    // Fresh produce
-    case 'fresh':
-    case 'produits frais':
-    case 'fresh_produce':
+    // Fresh produce — distinct from supermarket. Fruits-&-légumes grocers.
+    case 'produce':
     case 'fruits':
     case 'legumes':
     case 'légumes':
-      return 'fresh';
+    case 'fruits_legumes':
+    case 'fruits et légumes':
+      return 'produce';
+    // Legacy 'fresh' key — pre-Produce-readd it pointed to the same bucket.
+    // Keeps already-tagged rows rendering with a label until they're
+    // re-saved (the route migration no longer rewrites them).
+    case 'fresh':
+    case 'produits frais':
+    case 'fresh_produce':
+      return 'produce';
     // Café / drinks
     case 'cafe':
     case 'café':

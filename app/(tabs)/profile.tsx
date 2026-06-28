@@ -625,12 +625,12 @@ export default function ProfileScreen() {
           {t('impact.myImpact', { defaultValue: 'Mon impact' })}
         </Text>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ overflow: 'visible' }} contentContainerStyle={{ gap: 10, paddingRight: theme.spacing.xl, paddingHorizontal: 4, paddingVertical: 6 }}>
-          <TouchableOpacity onPress={() => setStatModal('money')} accessibilityLabel={`${stats.moneySaved.toFixed(0)} TND ${t('profile.moneySaved')}`} accessibilityRole="button" style={{ width: 110, backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, padding: theme.spacing.md, alignItems: 'center', ...theme.shadows.shadowSm }}>
+          <TouchableOpacity onPress={() => setStatModal('money')} accessibilityLabel={`${stats.moneySaved.toFixed(0)} ${t('common.currency', { defaultValue: 'TND' })} ${t('profile.moneySaved')}`} accessibilityRole="button" style={{ width: 110, backgroundColor: theme.colors.surface, borderRadius: theme.radii.r16, padding: theme.spacing.md, alignItems: 'center', ...theme.shadows.shadowSm }}>
             <View style={[styles.statIcon, { backgroundColor: theme.colors.primary + '15', borderRadius: theme.radii.r12, width: 36, height: 36 }]}>
               <Banknote size={18} color={theme.colors.primary} />
             </View>
             <Text numberOfLines={2} style={[{ color: theme.colors.textPrimary, ...theme.typography.h3, marginTop: 8, textAlign: 'center' }]}>
-              {stats.moneySaved.toFixed(0)} TND
+              {stats.moneySaved.toFixed(0)} {t('common.currency', { defaultValue: 'TND' })}
             </Text>
             <Text adjustsFontSizeToFit minimumFontScale={0.6} numberOfLines={2} textBreakStrategy="simple" style={[{ color: theme.colors.textSecondary, ...theme.typography.caption, textAlign: 'center' }]}>
               {twoLineLabel(t('profile.moneySaved'))}
@@ -1096,7 +1096,7 @@ export default function ProfileScreen() {
                 : statModal === 'co2' ? t('profile.co2Saved')
                 : statModal === 'baskets' ? t('profile.basketsBought')
                 : t('profile.businessesTried', { defaultValue: 'Places Tried' });
-              const valueText = statModal === 'money' ? `${stats.moneySaved.toFixed(0)} TND`
+              const valueText = statModal === 'money' ? `${stats.moneySaved.toFixed(0)} ${t('common.currency', { defaultValue: 'TND' })}`
                 : statModal === 'co2' ? `${stats.co2Saved.toFixed(1)} kg`
                 : statModal === 'baskets' ? String(stats.basketsBought)
                 : String(stats.businessesTried);

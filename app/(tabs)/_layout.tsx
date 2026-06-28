@@ -640,18 +640,17 @@ export default function TabLayout() {
               flexDirection: 'row',
               alignItems: 'center',
               justifyContent: 'center',
-              backgroundColor: mapBtnStyleAnim.interpolate({
-                // Keep the pill fully transparent for the first half of the
-                // animation, then fade the surface bg in. The previous range
-                // [0, 0.15, 1] crossfaded the bg within the first 15 % — so
-                // when returning to the search tab (1 → 0), a small round
-                // pill with a soft shadow lingered for a frame before the
-                // icon settled, reading as "someone tapped the map button".
-                // Pushing both fades to the back half hides them while the
-                // pill is still small.
-                inputRange: [0, 0.5, 1],
-                outputRange: ['transparent', 'transparent', theme.colors.surface],
-              }),
+              // Background colour is now painted by a child overlay whose
+              // OPACITY is driven by the NATIVE-driver `mapBtnAnim` (see
+              // below), not by interpolating backgroundColor on the JS-driver
+              // `mapBtnStyleAnim`. On Android the JS-driver fade ran in
+              // sync with the position on iOS but lagged behind the native
+              // translateX by several frames, so the white pill visibly
+              // slid across the green hero before the colour caught up —
+              // the user's "white button on top of green hero section"
+              // report. Opacity on a child View is supported by the native
+              // driver and stays locked to the position animation.
+              backgroundColor: 'transparent',
               borderRadius: 17,
               paddingHorizontal: mapBtnStyleAnim.interpolate({
                 inputRange: [0, 1],
@@ -661,12 +660,11 @@ export default function TabLayout() {
                 inputRange: [0, 1],
                 outputRange: [0, 6],
               }),
-              // Shadow only when expanded (not on bare icon)
+              // Shadow only when expanded (not on bare icon). Aligned with
+              // the bg fade window below.
               shadowColor: '#000',
               shadowOffset: { width: 0, height: 2 },
               shadowOpacity: mapBtnStyleAnim.interpolate({
-                // Aligned with the bg fade window above so the shadow doesn't
-                // appear before the pill fills in.
                 inputRange: [0, 0.5, 1],
                 outputRange: [0, 0, 0.08],
               }),
@@ -679,6 +677,30 @@ export default function TabLayout() {
               minHeight: 20,
             }}
           >
+            {/* Pill background — native-driver opacity crossfade. Sits
+                behind the icon + text so they paint on top. The interpolation
+                stays transparent for the first half (same look as the prior
+                JS-driver color tween) so the pill is invisible while it's
+                still translating across the green hero, then fades to the
+                surface colour as the pill settles into its left position.
+                `pointerEvents="none"` so taps still flow through to the
+                outer TouchableOpacity. */}
+            <Animated.View
+              pointerEvents="none"
+              style={{
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                right: 0,
+                bottom: 0,
+                borderRadius: 17,
+                backgroundColor: theme.colors.surface,
+                opacity: mapBtnAnim.interpolate({
+                  inputRange: [0, 0.5, 1],
+                  outputRange: [0, 0, 1],
+                }),
+              }}
+            />
             {/* Map glyph — on the search tab we render TWO stacked copies and
                 crossfade them via `heroProgress` so the colour eases from
                 neon (over the dark green hero) to textPrimary (over the
@@ -901,10 +923,10 @@ export default function TabLayout() {
                   {orderConfirmPopup?.price ? (
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 8, borderTopWidth: 1, borderTopColor: theme.colors.divider }}>
                       <View style={{ width: 30, height: 30, borderRadius: 15, backgroundColor: '#114b3c', justifyContent: 'center', alignItems: 'center' }}>
-                        <Text style={{ color: '#e3ff5c', fontSize: 9, fontWeight: '700' }}>TND</Text>
+                        <Text style={{ color: '#e3ff5c', fontSize: 9, fontWeight: '700' }}>{t('common.currency', { defaultValue: 'TND' })}</Text>
                       </View>
                       <Text style={{ color: theme.colors.primary, fontSize: 15, fontWeight: '700', flex: 1 }}>
-                        {(orderConfirmPopup.quantity ?? 1) > 1 ? (orderConfirmPopup.price * (orderConfirmPopup.quantity ?? 1)).toFixed(2) : orderConfirmPopup.price} TND
+                        {(orderConfirmPopup.quantity ?? 1) > 1 ? (orderConfirmPopup.price * (orderConfirmPopup.quantity ?? 1)).toFixed(2) : orderConfirmPopup.price} {t('common.currency', { defaultValue: 'TND' })}
                       </Text>
                     </View>
                   ) : null}
@@ -928,8 +950,8 @@ export default function TabLayout() {
                           ? t('orders.paymentByCardWithCredits', { defaultValue: 'Paiement par carte (+ crédits)' })
                           : t('orders.paymentByCard', { defaultValue: 'Paiement par carte' }))
                       : (creditAmt > 0
-                          ? t('orders.paymentInCashWithCredits', { defaultValue: 'Paiement en espèces (+ crédits)' })
-                          : t('orders.paymentInCash', { defaultValue: 'Paiement en espèces' }));
+                          ? t('orders.paymentInCashWithCredits', { defaultValue: 'Paiement sur place (+ crédits)' })
+                          : t('orders.paymentInCash', { defaultValue: 'Paiement sur place' }));
                     const fmt = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(2));
                     let toDoLine: string | null = null;
                     if (!isCard && cashSlice > 0) {

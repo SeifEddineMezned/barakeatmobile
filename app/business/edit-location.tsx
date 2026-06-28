@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, ScrollView, ActivityIndicator, KeyboardAvoidingView, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { ChevronLeft } from 'lucide-react-native';
@@ -35,6 +35,7 @@ export default function EditLocationScreen() {
     name: '', address: '', coords: null, phone: '', category: '',
     pickupStart: '', pickupEnd: '', pickupInstructions: '', bagDescription: '',
   });
+  const scrollViewRef = useRef<ScrollView>(null);
 
   // Hydrate from cached org details. Seeding `coords` from the saved lat/lng
   // means the map picker opens at the current spot instead of default Tunis.
@@ -177,11 +178,20 @@ export default function EditLocationScreen() {
         </Text>
       </View>
 
-      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-        <ScrollView contentContainerStyle={{ padding: 20, paddingBottom: 60 }} keyboardShouldPersistTaps="handled">
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}>
+        <ScrollView
+          ref={scrollViewRef}
+          contentContainerStyle={{ padding: 20, paddingBottom: 0 }}
+          keyboardShouldPersistTaps="handled"
+        >
           <LocationFormFields
             value={form}
             onChange={(patch) => setForm((prev) => ({ ...prev, ...patch }))}
+            onPickupInstructionsFocus={() => {
+              setTimeout(() => {
+                scrollViewRef.current?.scrollToEnd({ animated: true });
+              }, 250);
+            }}
           />
 
           <TouchableOpacity

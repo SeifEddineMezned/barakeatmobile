@@ -38,6 +38,8 @@ export interface Basket {
   reviewCount?: number;
   reviews?: ReviewRatings;
   description?: string;
+  /** AI-translated description variants `{fr,en,ar}`; falls back to `description`. */
+  descriptionI18n?: Record<string, string> | null;
   name: string;
   category: string;
   originalPrice: number;
@@ -134,6 +136,18 @@ export interface User {
   // their provider (no password) — the app hides email/password change for them.
   // Missing on older stored sessions → treat as 'local'.
   authProvider?: 'local' | 'google' | 'apple';
+  // Bare org name (without any "OrgName - LocName" composite). Carried on
+  // the user object so the first-login welcome carousel can greet a
+  // restaurant owner with "Bienvenue, <org name>" on the FIRST paint,
+  // instead of flashing the personal name for ~500ms while the async
+  // my-context probe lands. NULL for customers and for restaurant users
+  // whose membership row hasn't resolved an org yet.
+  organizationName?: string | null;
+  // Backend's organization role ('owner' | 'admin' | other team_role) for
+  // restaurant accounts. Distinct from `role` (which is the mobile-side
+  // UserRole 'business'/'customer'/'admin'). Used by the welcome carousel
+  // to pick owner-greeting vs member-greeting synchronously at first paint.
+  orgRole?: string | null;
 }
 
 export interface BusinessProfile {
